@@ -19,20 +19,30 @@ Runnable in isolation via ``--checkpoint WD-DA-PKG-001``.
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import validate_agent_slug
 from auth import query_all, AuthExpiredError  # scripts/auth.py, on path via cli.py
+from workday_da_contract import (
+    architecture_for_agent_schema,
+    assess_package_version,
+    load_definition,
+)
 
 
-_DA_HR_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedahr"
-_DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
-_DA_HR_WORKDAY_CHILD_SCHEMA = "msdyn_EssDAHRWorkday"
-_MOS_WORKDAY_RUNTIME_SCHEMA = "msdyn_EssWorkdayRuntime"
-_DA_HR_AGENT_SCHEMAS = {
-    _DA_HR_PARENT_SCHEMA,
-    "gptagent_copilotforemployeeselfservicehr",
+_WORKDAY_DEFINITION = load_definition()
+_ARCHITECTURE_BY_ID = {
+    architecture["id"]: architecture
+    for architecture in _WORKDAY_DEFINITION["architectures"]
 }
-_DA_IT_AGENT_SCHEMAS = {
-    _DA_IT_PARENT_SCHEMA,
-    "gptagent_copilotforemployeeselfserviceit",
-}
+_DA_HR_PARENT_SCHEMA = _ARCHITECTURE_BY_ID["classic-da"]["agentSchemaNames"][0]
+_NATIVE_DA_HR_SCHEMA = _ARCHITECTURE_BY_ID["native-da"]["agentSchemaNames"][0]
+_DA_IT_PARENT_SCHEMA = _WORKDAY_DEFINITION["unsupportedAgentSchemaNames"][0]
+_NATIVE_DA_IT_SCHEMA = _WORKDAY_DEFINITION["unsupportedAgentSchemaNames"][1]
+_DA_HR_WORKDAY_CHILD_SCHEMA = _WORKDAY_DEFINITION["packages"]["legacy-da"][
+    "solutionSchemaName"
+]
+_MOS_WORKDAY_RUNTIME_SCHEMA = _WORKDAY_DEFINITION["packages"]["runtime"][
+    "solutionSchemaName"
+]
+_DA_HR_AGENT_SCHEMAS = {_DA_HR_PARENT_SCHEMA, _NATIVE_DA_HR_SCHEMA}
+_DA_IT_AGENT_SCHEMAS = {_DA_IT_PARENT_SCHEMA, _NATIVE_DA_IT_SCHEMA}
 
 _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
@@ -151,11 +161,14 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         s.get("uniquename", "").casefold(): s for s in all_solutions
     }
 
-    required_schema = (
-        _MOS_WORKDAY_RUNTIME_SCHEMA
-        if selected_schema == "gptagent_copilotforemployeeselfservicehr"
-        else _DA_HR_WORKDAY_CHILD_SCHEMA
+    architecture = architecture_for_agent_schema(
+        selected_schema,
+        definition=_WORKDAY_DEFINITION,
     )
+    package_flavor = architecture["packageFlavor"]
+    required_schema = _WORKDAY_DEFINITION["packages"][package_flavor][
+        "solutionSchemaName"
+    ]
     child = installed_names.get(required_schema.casefold())
     if not child:
         return [_result(
@@ -165,6 +178,32 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
             remediation=(
                 "Run /connect workday to install the required Workday package "
                 "in this environment, then re-run this check."
+            ),
+        )]
+
+    assessment = assess_package_version(
+        package_flavor,
+        child.get("version"),
+        definition=_WORKDAY_DEFINITION,
+    )
+    if assessment.outcome == "invalid":
+        return [_result(
+            Status.FAILED.value,
+            f"The Workday package required by the ESS HR agent is installed, "
+            f"but its version cannot be validated: {assessment.message}",
+            remediation=(
+                "Repair or upgrade the Workday package, confirm Dataverse "
+                "reports a four-part numeric solution version, and rerun this "
+                "checkpoint."
+            ),
+        )]
+    if assessment.outcome == "unsupported":
+        return [_result(
+            Status.FAILED.value,
+            assessment.message,
+            remediation=(
+                "Upgrade or repair the Workday package to a version supported "
+                "by this kit, then rerun this checkpoint."
             ),
         )]
 

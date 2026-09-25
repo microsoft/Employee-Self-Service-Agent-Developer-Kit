@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -22,10 +24,22 @@ DEFAULT_DEFINITION_SCHEMA_PATH = (
     DEFINITION_ROOT / "workday-da.definition.schema.json"
 )
 DEFAULT_STATE_SCHEMA_PATH = DEFINITION_ROOT / "workday-da.state.schema.json"
+_SOLUTION_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 class WorkdayDAContractError(ValueError):
     """Raised when a Workday DA definition or state document is invalid."""
+
+
+@dataclass(frozen=True)
+class PackageVersionAssessment:
+    """Result of evaluating one installed solution version."""
+
+    outcome: str
+    installed_version: str | None
+    minimum_inclusive: str | None
+    maximum_exclusive: str | None
+    message: str
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -75,6 +89,21 @@ def _validate_schema(
 
 def _validate_definition_semantics(document: Mapping[str, Any]) -> None:
     packages = document["packages"]
+    for flavor, package in packages.items():
+        policy = package["versionPolicy"]
+        minimum = policy["minimumInclusive"]
+        maximum = policy["maximumExclusive"]
+        if policy["status"] == "enforced" and minimum is None:
+            raise WorkdayDAContractError(
+                f"Enforced package policy {flavor} must define "
+                "minimumInclusive"
+            )
+        if minimum is not None and maximum is not None:
+            if parse_solution_version(minimum) >= parse_solution_version(maximum):
+                raise WorkdayDAContractError(
+                    f"Package policy {flavor} minimumInclusive must be lower "
+                    "than maximumExclusive"
+                )
     architecture_ids: set[str] = set()
     supported_agent_schemas: set[str] = set()
     for architecture in document["architectures"]:
@@ -202,3 +231,101 @@ def validate_state(
 ) -> None:
     """Validate one migrated Workday DA persisted-state document."""
     _validate_schema(document, schema_path, label="state")
+
+
+def parse_solution_version(value: str) -> tuple[int, int, int, int]:
+    """Parse the four-part numeric version emitted by Dataverse solutions."""
+    if not isinstance(value, str) or not _SOLUTION_VERSION_RE.fullmatch(value):
+        raise WorkdayDAContractError(
+            f"Invalid Dataverse solution version {value!r}; expected "
+            "four numeric components such as 2.1.0.0."
+        )
+    return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+
+
+def architecture_for_agent_schema(
+    agent_schema_name: str,
+    *,
+    definition: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any] | None:
+    """Resolve the supported DA architecture for one exact agent schema."""
+    active_definition = definition or load_definition()
+    normalized = agent_schema_name.casefold()
+    for architecture in active_definition["architectures"]:
+        if normalized in {
+            schema_name.casefold()
+            for schema_name in architecture["agentSchemaNames"]
+        }:
+            return architecture
+    return None
+
+
+def assess_package_version(
+    package_flavor: str,
+    installed_version: str | None,
+    *,
+    definition: Mapping[str, Any] | None = None,
+) -> PackageVersionAssessment:
+    """Evaluate one installed version against its product-owned policy."""
+    active_definition = definition or load_definition()
+    try:
+        package = active_definition["packages"][package_flavor]
+    except KeyError as exc:
+        raise WorkdayDAContractError(
+            f"Unknown Workday DA package flavor: {package_flavor}"
+        ) from exc
+    policy = package["versionPolicy"]
+    minimum = policy["minimumInclusive"]
+    maximum = policy["maximumExclusive"]
+    if installed_version is None:
+        return PackageVersionAssessment(
+            "invalid",
+            None,
+            minimum,
+            maximum,
+            "The installed solution did not report a version.",
+        )
+    try:
+        parsed = parse_solution_version(installed_version)
+    except WorkdayDAContractError as exc:
+        return PackageVersionAssessment(
+            "invalid",
+            installed_version,
+            minimum,
+            maximum,
+            str(exc),
+        )
+    if policy["status"] != "enforced":
+        return PackageVersionAssessment(
+            "pending-policy",
+            installed_version,
+            minimum,
+            maximum,
+            "Package version policy is awaiting product confirmation.",
+        )
+    parsed_minimum = parse_solution_version(minimum)
+    if parsed < parsed_minimum:
+        return PackageVersionAssessment(
+            "unsupported",
+            installed_version,
+            minimum,
+            maximum,
+            f"Installed version {installed_version} is below the supported "
+            f"minimum {minimum}.",
+        )
+    if maximum is not None and parsed >= parse_solution_version(maximum):
+        return PackageVersionAssessment(
+            "unsupported",
+            installed_version,
+            minimum,
+            maximum,
+            f"Installed version {installed_version} is not below the supported "
+            f"maximum {maximum}.",
+        )
+    return PackageVersionAssessment(
+        "supported",
+        installed_version,
+        minimum,
+        maximum,
+        f"Installed version {installed_version} is supported.",
+    )

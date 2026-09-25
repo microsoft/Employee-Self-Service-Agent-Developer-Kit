@@ -51,8 +51,8 @@
     }
   ],
   "unsupportedAgentSchemaNames": [
-    "gptagent_copilotforemployeeselfserviceit",
-    "msdyn_copilotforemployeeselfservicedait"
+    "msdyn_copilotforemployeeselfservicedait",
+    "gptagent_copilotforemployeeselfserviceit"
   ],
   "completion": {
     "providerStatus": "ready",

@@ -14,21 +14,16 @@ import shutil
 import subprocess
 import sys
 
-from flightcheck.checks.workday_da import (
-    _DA_HR_WORKDAY_CHILD_SCHEMA,
-    _MOS_WORKDAY_RUNTIME_SCHEMA,
-)
+from workday_da_contract import load_definition
 
 
+_WORKDAY_DEFINITION = load_definition()
 WORKDAY_PACKAGES = {
-    "runtime": {
-        "applicationName": _MOS_WORKDAY_RUNTIME_SCHEMA,
-        "schemaName": _MOS_WORKDAY_RUNTIME_SCHEMA,
-    },
-    "legacy-da": {
-        "applicationName": "msdyn_EssDAHRWorkdayHCM",
-        "schemaName": _DA_HR_WORKDAY_CHILD_SCHEMA,
-    },
+    flavor: {
+        "applicationName": package["applicationName"],
+        "schemaName": package["solutionSchemaName"],
+    }
+    for flavor, package in _WORKDAY_DEFINITION["packages"].items()
 }
 CLOUD_FOR_RING = {
     "preprod": "Preprod",

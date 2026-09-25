@@ -14,7 +14,9 @@ import pytest
 from workday_da_contract import (
     DEFAULT_DEFINITION_PATH,
     WorkdayDAContractError,
+    assess_package_version,
     load_definition,
+    parse_solution_version,
     validate_definition,
     validate_state,
 )
@@ -151,3 +153,49 @@ def test_state_schema_rejects_invalid_completion_marker() -> None:
                 },
             }
         )
+
+
+def test_solution_versions_require_four_numeric_components() -> None:
+    assert parse_solution_version("2.10.3.4") == (2, 10, 3, 4)
+    with pytest.raises(WorkdayDAContractError, match="four numeric components"):
+        parse_solution_version("2.10.3")
+    with pytest.raises(WorkdayDAContractError, match="four numeric components"):
+        parse_solution_version("2.10.preview.4")
+
+
+def test_pending_package_policy_records_without_claiming_support() -> None:
+    assessment = assess_package_version("runtime", "2.1.0.0")
+
+    assert assessment.outcome == "pending-policy"
+    assert "awaiting product confirmation" in assessment.message
+
+
+def test_enforced_package_policy_applies_inclusive_minimum_and_exclusive_maximum() -> None:
+    definition = load_definition()
+    definition["packages"]["runtime"]["versionPolicy"] = {
+        "status": "enforced",
+        "minimumInclusive": "2.1.0.0",
+        "maximumExclusive": "3.0.0.0",
+    }
+    validate_definition(definition)
+
+    assert assess_package_version(
+        "runtime", "2.1.0.0", definition=definition
+    ).outcome == "supported"
+    assert assess_package_version(
+        "runtime", "2.9.9.9", definition=definition
+    ).outcome == "supported"
+    assert assess_package_version(
+        "runtime", "2.0.9.9", definition=definition
+    ).outcome == "unsupported"
+    assert assess_package_version(
+        "runtime", "3.0.0.0", definition=definition
+    ).outcome == "unsupported"
+
+
+def test_enforced_package_policy_requires_a_minimum() -> None:
+    definition = load_definition()
+    definition["packages"]["runtime"]["versionPolicy"]["status"] = "enforced"
+
+    with pytest.raises(WorkdayDAContractError, match="minimumInclusive"):
+        validate_definition(definition)

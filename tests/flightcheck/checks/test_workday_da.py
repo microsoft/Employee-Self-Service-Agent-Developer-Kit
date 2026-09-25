@@ -262,6 +262,38 @@ def test_passed_when_hr_workday_child_present(runner: _MinimalRunner) -> None:
 
 
 @responses.activate
+def test_failed_when_installed_package_version_is_missing(
+    runner: _MinimalRunner,
+) -> None:
+    _select_classic_hr(runner)
+    solution = _solution_record("msdyn_EssDAHRWorkday")
+    solution.pop("version")
+    _register_solutions([solution])
+
+    result = _check_workday_da_package_installed(runner)[0]
+
+    assert result.status == "Failed"
+    assert "version cannot be validated" in result.result
+    assert "four-part numeric solution version" in result.remediation
+
+
+@responses.activate
+def test_failed_when_installed_package_version_is_malformed(
+    runner: _MinimalRunner,
+) -> None:
+    _select_classic_hr(runner)
+    _register_solutions([
+        _solution_record("msdyn_EssDAHRWorkday", version="2.preview"),
+    ])
+
+    result = _check_workday_da_package_installed(runner)[0]
+
+    assert result.status == "Failed"
+    assert "four numeric components" in result.result
+    assert "Repair or upgrade" in result.remediation
+
+
+@responses.activate
 def test_it_agent_does_not_block_supported_hr_package(
     runner: _MinimalRunner,
 ) -> None:
