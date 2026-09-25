@@ -311,7 +311,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "flightcheck.prompt.md",
         "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
@@ -346,13 +345,19 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     assert "`.local/config.json`'s" in instructions
 
 
-def test_global_gate_preserves_flightcheck_only_mode() -> None:
+def test_global_gate_allows_bounded_flightcheck_diagnostics() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     normalized = " ".join(instructions.split())
 
-    assert "typed `/flightcheck`" in normalized
-    assert "`flightCheckOnly: true`" in normalized
-    assert "This exception applies only to `/flightcheck`" in normalized
+    assert (
+        "typed `/flightcheck` or explicitly asked to run a readiness check"
+        in normalized
+    )
+    assert "This includes the FlightCheck trigger phrases below" in normalized
+    assert "FlightCheck owns readiness diagnosis" in normalized
+    assert "FlightCheck also owns the maker-facing response" in normalized
+    assert "materialized workspaces with outstanding runtime readiness" in normalized
+    assert "Authoring and customization continue to use" in normalized
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -1298,11 +1303,69 @@ def test_da_local_capabilities_remain_available() -> None:
         assert "unchanged deployed" in normalized, name
 
 
-def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
+def test_flightcheck_uses_ordered_state_and_composed_full_scope() -> None:
     prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
     normalized = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
-    assert "flightCheckOnly: true" in normalized
-    assert "proceed without canonical setup state" in normalized
-    assert "only the local-files FlightCheck scope" in normalized
-    assert "scope fixed to `local`" in normalized
+    assert "FlightCheck diagnoses readiness for every supported configuration state" in (
+        normalized
+    )
+    assert "ordered Start decision, supported scope, and reporting contract" in normalized
+    assert "Classify the active configuration before choosing a state" in normalized_skill
+    assert (
+        "A config with `dataverseEndpoint` uses the Dataverse-backed FlightCheck scopes"
+        in normalized_skill
+    )
+    assert "Take the first case that applies" in normalized_skill
+    assert "**Standalone FlightCheck installation:**" in skill
+    assert "scopes supported by its configured environment and selected agent" in (
+        normalized_skill
+    )
+    assert "without a selected agent omits the local-files scope" in normalized_skill
+    assert "**Canonical setup ready:**" in skill
+    assert "workspace has both `folder` and `agent_path`" in normalized_skill
+    assert "**Workspace materialized with readiness outstanding:**" in skill
+    assert "**Local agent workspace unavailable:**" in skill
+    assert "`agent.workspace_slug` matches local config's `activeAgent`" in normalized_skill
+    assert "`connect_ready` equal to `false`" in normalized_skill
+    assert "Run `/setup` to create or resume it" in normalized_skill
+    assert "Readiness recovery routing" in normalized_skill
+    assert "Full FlightCheck during incomplete DA setup" in normalized_skill
+    assert "Recheck setup readiness" in normalized_skill
+    assert "Run full FlightCheck" in normalized_skill
+    assert "Run all four setup-owned checkpoints" in normalized_skill
+    assert (
+        "agent access, environment capacity, native connections, and agent content"
+        in normalized_skill
+    )
+    assert (
+        "This recovery consists of the four checkpoint commands and their "
+        "corresponding `maintain-flightcheck` calls"
+    ) in normalized_skill
+    assert (
+        "the `results.json` written by that checkpoint command during this recovery"
+        in normalized_skill
+    )
+    assert (
+        "The latest maintenance result supplies `connectReady` and determines "
+        "canonical runtime readiness"
+    ) in normalized_skill
+    assert (
+        "including a `maintain-flightcheck` call for every checkpoint that produced "
+        "results"
+    ) in normalized_skill
+    assert "Continue at **Step 1.5** with scope fixed to `full`" in normalized_skill
+    assert "standard target-selection and Step 2 consent rules" in normalized_skill
+    assert "The maintenance phase determines `connect_ready`" in normalized_skill
+    assert (
+        "Every full-scope result independently contributes to the broader FlightCheck "
+        "verdict"
+        in normalized_skill
+    )
+    assert "single setup-readiness rendering for the composed path" in normalized_skill
+    assert "Populate it from the canonical setup maintenance results" in normalized_skill
+    assert "without a selected agent, omit \"Local files only\"" in normalized_skill

@@ -86,6 +86,12 @@ test('setup has no requirements', () => {
     assert.deepStrictEqual(setup.requires, []);
 });
 
+test('flightcheck is available at every setup stage', () => {
+    const flightcheck = ACTIONS.find(a => a.id === 'flightcheck');
+    assert.deepStrictEqual(flightcheck.requires, []);
+    assert.strictEqual(actionState(flightcheck, new Set()).enabled, true);
+});
+
 test('evaluate and push require setup', () => {
     const evaluate = ACTIONS.find(a => a.id === 'evaluate');
     const push = ACTIONS.find(a => a.id === 'push');

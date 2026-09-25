@@ -11,25 +11,129 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## Start
 
-Read `.local/config.json` to confirm setup is complete and get the agent context.
+Read `.local/setup/config.json` and `.local/config.json`.
 
-If setup is not complete, show:
+Classify the active configuration before choosing a state:
+
+- A config with `releaseLine: "da"` and no `dataverseEndpoint` is a native
+  no-Dataverse agent. Its supported scopes are `full`, `environment`,
+  `servicenow`, `workday`, `local`, and `infrastructure`.
+- A config with `dataverseEndpoint` uses the Dataverse-backed FlightCheck
+  scopes, including when its release line is `da`.
+
+Take the first case that applies:
+
+1. **Standalone FlightCheck installation:** local config has
+   `flightCheckOnly: true`. Continue at **Step 1** with the scopes supported by
+   its configured environment and selected agent. A standalone configuration
+   without a selected agent omits the local-files scope; its full run remains
+   available and reports agent-specific checks as not configured. Canonical
+   authoring setup and a materialized authoring workspace are not prerequisites
+   for this mode.
+2. **Canonical setup ready:** canonical state has `schema_version: 4` and an
+   `agents` entry whose `agent.workspace_slug` matches local config's
+   `activeAgent`, whose workspace has both `folder` and `agent_path`, and whose
+   `connect_ready` is `true`. Continue at **Step 1**.
+3. **Workspace materialized with readiness outstanding:** the matching
+   canonical agent has both `workspace.folder` and `workspace.agent_path`, with
+   `connect_ready` equal to `false`. Follow **Readiness recovery routing**
+   below.
+4. **Local agent workspace unavailable:** every other state, including a
+   missing canonical agent or missing `workspace.folder` or
+   `workspace.agent_path`, shows the following message and finishes the request.
 
 **Message:**
 
-You need to run `/setup` first before running a readiness check.
+FlightCheck needs a local agent workspace. Run `/setup` to create or resume it,
+then run FlightCheck again.
 
 **End message.**
 
-Stop here.
+### Readiness recovery routing
 
-If setup is complete, proceed.
+Select the path from the maker's request:
 
-Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
-no-Dataverse agent. Its supported scopes are `full`, `environment`,
-`servicenow`, `workday`, `local`, and `infrastructure`. If
-`dataverseEndpoint` is present, use the existing hybrid/legacy path even when
-the release line is `da`.
+- When the maker explicitly requests a full FlightCheck or supplies
+  `--scope full`, follow **Full FlightCheck during incomplete DA setup** below.
+- When the maker invokes `/flightcheck` without a scope, use
+  `vscode_askQuestions`:
+
+  ```json
+  [
+    {
+      "header": "Readiness scope",
+      "question": "Your local workspace is ready, but setup readiness still needs attention. What would you like to check?",
+      "options": [
+        {
+          "label": "Recheck setup readiness",
+          "description": "Check agent access, environment capacity, connections, and agent content.",
+          "recommended": true
+        },
+        {
+          "label": "Run full FlightCheck",
+          "description": "Recheck setup readiness, then also validate local agent files and configuration."
+        }
+      ],
+      "allowFreeformInput": false
+    }
+  ]
+  ```
+
+  Follow **DA setup readiness recovery** for the first choice and **Full
+  FlightCheck during incomplete DA setup** for the second.
+- For other setup or environment readiness requests, follow **DA setup
+  readiness recovery**.
+
+### DA setup readiness recovery
+
+Read **Maintain native FlightCheck evidence** in
+`src/skills/foundation-setup/da-existing-dev.md` for the checkpoint commands and
+maintenance calls. Use the paragraphs beginning **Use the same five rows and
+order** and **Use the most consequential current evidence** under **Interpret
+results** for the status mapping. Use the active canonical agent ID and
+workspace evidence throughout this recovery.
+
+This recovery consists of the four checkpoint commands and their corresponding
+`maintain-flightcheck` calls:
+
+1. Run all four setup-owned checkpoints whose prerequisites remain available:
+   agent access, environment capacity, native connections, and agent content.
+2. For each checkpoint that produced evidence, pass `maintain-flightcheck` the
+   `results.json` written by that checkpoint command during this recovery at the
+   path defined under **Maintain native FlightCheck evidence**.
+3. Render the five-row runtime-readiness table from the fresh evidence.
+4. Explain the specific observed blocker and its supported remediation in
+   maker-facing language.
+
+For a setup-readiness request, present the runtime-readiness table and complete
+the request. The latest maintenance result supplies `connectReady` and
+determines canonical runtime readiness.
+
+The FlightCheck response for this path consists of the `### Setup readiness`
+section defined at **Step 3a.1**, populated from the fresh maintenance results.
+
+### Full FlightCheck during incomplete DA setup
+
+Run two ordered phases and use the files written by the existing FlightCheck
+CLI as the authoritative result documents:
+
+1. Follow **DA setup readiness recovery** steps 1–2 for the active canonical
+   agent, including a `maintain-flightcheck` call for every checkpoint that
+   produced results.
+2. Build the five-row runtime-readiness table and blocker explanation for the
+   final combined response.
+3. Continue at **Step 1.5** with scope fixed to `full`. Follow the standard
+   target-selection and Step 2 consent rules for the active configuration. The
+   native no-Dataverse path naturally skips target selection and consent
+   because its supported checks are read-only.
+4. Present the normal full FlightCheck output and include the retained setup
+   table at **Step 3a.1**.
+
+The maintenance phase determines `connect_ready` and may complete canonical
+setup readiness. Every full-scope result independently contributes to the
+broader FlightCheck verdict, including local-file findings. When a repeated
+remote row differs between the two phases, report the newer observation as a
+timing difference and recommend refreshing setup readiness.
 
 ---
 
@@ -67,6 +171,10 @@ For a native no-Dataverse agent, omit "Prerequisites only". Its full scope
 runs exact-agent access, authored-content, native connection readiness,
 environment capacity, and applicable local-file checks; it does not run
 Dataverse, Graph, Power Platform Admin, or legacy flow checks.
+For that native picker, replace the "Full check" description with "Agent
+access, environment capacity, connections, agent content, and local files."
+For a standalone FlightCheck configuration without a selected agent, omit
+"Local files only". Its full scope remains available.
 
 ---
 
@@ -276,6 +384,31 @@ Where VERDICT_EMOJI and VERDICT_TEXT are:
 - READY → ✅ and "Your agent is ready for deployment"
 - READY_WITH_WARNINGS → ⚠️ and "Ready with warnings"
 - NOT_READY → ❌ and "Issues found — not ready for deployment"
+
+### 3a.1 — Setup readiness after an incomplete-setup full run
+
+For a setup-readiness request, this section is the complete response. When
+**Full FlightCheck during incomplete DA setup** retained a fresh
+runtime-readiness table, place this section after the summary banner and before
+the detailed results table:
+
+```text
+### Setup readiness
+
+| Check | Status | Details |
+|---|---|---|
+| Agent access | {agent access status} | {agent access evidence summary} |
+| Environment capacity | {environment capacity status} | {environment capacity evidence summary} |
+| Connections | {connections status} | {connections evidence summary} |
+| Agent content | {agent content status} | {agent content evidence summary} |
+| **Overall** | **{overall readiness status}** | **{maker-facing readiness summary}** |
+```
+
+Use the statuses, evidence, row order, and overall interpretation from
+`src/skills/foundation-setup/da-existing-dev.md`. Put the retained blocker and
+remediation explanation in the applicable Details cell and the Overall
+summary. This is the single setup-readiness rendering for the composed path.
+Populate it from the canonical setup maintenance results.
 
 ### 3b — Detailed results table
 
