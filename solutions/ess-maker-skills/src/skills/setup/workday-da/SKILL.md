@@ -97,16 +97,18 @@ ID, App ID URI) are safe to capture in chat — see
 
 2. **Working copy.** The canonical checklist is
    `.local/connect/workday-da/tasks.md`, next to the provider config it
-   represents. If it does not exist:
-   - When the legacy `.local/setup/workday-da/tasks.md` exists, create
-     `.local/connect/workday-da/` if needed and move that exact file to the
-     canonical path. Preserve its contents and timestamps; never replace it
-     with a fresh template or overwrite an existing canonical checklist.
-   - Otherwise render it by copying the template
-     `src/skills/setup/workday-da/tasks.md`.
+   represents. Initialize and validate both through the deterministic helper:
 
-   Do not hand-edit its status markers — the shared checklist-updater writes
-   them. After a successful legacy move, the old path is no longer used.
+   ```powershell
+   python scripts/workday_da_state.py --root . initialize
+   ```
+
+   When the legacy `.local/setup/workday-da/tasks.md` exists, the helper will
+   move that exact file to the canonical path while preserving its contents and
+   timestamps. It refuses conflicting dual copies, migrates version fields, and
+   creates canonical config/checklist state when absent. Do not hand-edit
+   status markers or provider state. After a successful legacy move, the old
+   path is no longer used.
 
 3. **Resume point.** Read `setupStatus` in `.local/connect/workday-da/config.json`
    (the durable source of truth; the tasks file is only the view). If the file or

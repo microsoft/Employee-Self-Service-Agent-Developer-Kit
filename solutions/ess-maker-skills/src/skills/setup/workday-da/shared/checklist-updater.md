@@ -5,6 +5,11 @@ in the DA master checklist. Centralizing it means each skill records status the
 same way, and the **MANUAL/attestation rule** below is enforced in exactly one
 place.
 
+The executable authority for migration, gate transitions, locking, validation,
+and persistence is `scripts/workday_da_state.py`. This file defines the user
+interaction and evidence inputs supplied to that helper; it never authorizes
+direct model edits to either state file.
+
 Forked from the CEA `setup/shared/checklist-updater.md` with DA-scoped state
 paths (`.local/connect/workday-da/tasks.md`, `.local/connect/workday-da/config.json`).
 The logic is identical — only the persisted files differ — so the two skills can
@@ -186,10 +191,12 @@ comment has `id:` equal to `STEP_ID`.
 
 ---
 
-## U.2 — Determine the new Status (the MANUAL/attestation rule)
+## U.2 — Gather deterministic transition inputs
 
 This is the load-bearing rule. **A `MANUAL` or attestation-gated row is never
-auto-completed by a flightcheck pass.**
+auto-completed by a flightcheck pass.** Gather the checkpoint result,
+acknowledgement, row evidence, and gate evidence described below. The state
+helper applies the table; do not reproduce the transition by editing files.
 
 First apply failure precedence: for every non-advisory row,
 `CHECKPOINT_RESULT = FAILED` or `ERROR` always produces `blocked`, regardless
@@ -246,64 +253,37 @@ done". Never infer acknowledgement from a flightcheck pass.
 
 ---
 
-## U.3 — Write the item + mirror
+## U.3 — Persist through the state helper
 
-**Persist immediately — never batch.** Write **both** files below **now**, as part
-of this call, before returning control to the caller and before the caller proceeds
-to its next row. A completed row must be durable the instant its checkpoint passes,
-so that if a later row in the same skill errors, the progress already made is not
-lost — the orchestrator resumes from the first non-`done` row in `setupStatus`.
+**Persist immediately — never batch.** Invoke the deterministic helper now,
+before returning to the caller or proceeding to another row:
 
-1. Update the located item in `.local/connect/workday-da/tasks.md` to the state
-   from U.2:
-   - Set the checkbox marker: `- [x]` when the resulting status is `done`,
-     otherwise `- [ ]`.
-   - Set the hidden `status:` field in that item's comment to the full value
-     (`pending` / `in-progress` / `done` / `blocked`).
+```powershell
+python scripts/workday_da_state.py --root . update-row `
+  --step-id "<STEP_ID>" `
+  --checkpoint-result "<CHECKPOINT_RESULT>" `
+  --result-source "<flightcheck|external|user-acknowledgement|advisory>" `
+  [--ack] `
+  [--evidence-json '<ROW_EVIDENCE JSON>'] `
+  [--gate-evidence-json '<GATE_EVIDENCE JSON>']
+```
 
-   Leave the visible title/description and every other item untouched. Do not add
-   any Step ID, checkpoint ID, or status text to the visible line — the checkbox is
-   the only at-a-glance marker the user sees.
-2. Update the mirror in `.local/connect/workday-da/config.json`:
-   ```json
-   {
-     "setupStatus": {
-       "{STEP_ID}": {
-         "state": "<resulting status>",
-         "checkpoint": "<the item's checkpoint ID>",
-         "gate": "<prog|manual|attest|advisory>",
-         "verifiedBy": "<programmatic|attested|reviewed|null>",
-         "evidence": {
-           "outcome": "<checkpoint status or operation outcome>",
-           "provenance": "<flightcheck|user-acknowledgement|external-operation|advisory>",
-           "note": "<safe evidence summary>",
-           "capturedAt": "<UTC timestamp>"
-         },
-         "gateEvidence": {
-           "method": "<programmatic|attested>",
-           "outcome": "<pass|stop>",
-           "provenance": "<role-query|user-attestation>",
-           "note": "<safe role evidence summary>",
-           "capturedAt": "<UTC timestamp>"
-         }
-       }
-     }
-   }
-   ```
-   Set scalar `verifiedBy` from the resulting completed state:
-   - `programmatic` for a completed `prog` row,
-   - `attested` for a completed `manual`/`attest` row,
-   - `reviewed` for a completed `advisory` row,
-   - `null` for any row that is not `done`.
+Omit `--checkpoint-result` only when the row has no checkpoint result. Include
+`--ack` only after the explicit acknowledgement in U.2. Pass safe structured
+evidence exactly as gathered; never include credentials, tokens, or raw
+Workday employee data.
 
-   Persist `ROW_EVIDENCE` as `evidence` and `GATE_EVIDENCE` as
-   `gateEvidence` when supplied. Merge these fields with the existing row;
-   never replace `verifiedBy` with an object. When a row regresses to
-   `in-progress` or `blocked`, clear stale completion `verifiedBy` and
-   `evidence`, while retaining current failure evidence and any still-valid
-   `gateEvidence`.
-   Merge — do not drop other `setupStatus` keys (round-trip contract in
-   `config-schema.md`).
+The helper validates the row against `workday-da.definition.json`, enforces the
+gate table, serializes concurrent writers, atomically commits authoritative
+`config.json`, derives the checklist view, preserves unrelated fields, and
+regresses dependent completion when a previously completed prerequisite no
+longer passes. Completed programmatic, attested, and advisory rows are recorded
+as `programmatic`, `attested`, and `reviewed`, respectively. If it reports that
+config was saved but the checklist could not be refreshed, run:
+
+```powershell
+python scripts/workday_da_state.py --root . reconcile
+```
 
 Return control to the calling file. Do not announce file paths or internal
 mechanics to the user.
