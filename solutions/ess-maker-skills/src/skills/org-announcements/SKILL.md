@@ -387,7 +387,7 @@ before calling again.
 
 | Code | What to tell the maker |
 |---|---|
-| `AuthenticationRequired` | Renew credentials for the intended authoring tenant and account. Shared authoring refresh is silent and account-preserving; Graph sign-in must match that same account. A missing account context requires matching delegated credentials, not repeated retries. |
+| `AuthenticationRequired` | Follow `retryable` and the configured credential source. For the normal cached-MSAL path, renew the intended authoring tenant/account and then re-issue the request. For an explicit environment token, token file, or token missing required identity claims, do not repeat the same call until that credential is replaced or repaired. Restart the MCP provider only when it must read a changed environment value. |
 | `AuthorizationDenied` | Their account cannot author announcements in this tenant. They need an administrator to grant access. |
 | `FeatureUnavailable` | Organization announcements are not enabled for this tenant yet. |
 | `NotFound` | That announcement no longer exists. Offer to open management. |
@@ -450,20 +450,37 @@ The announcement tools and audience search use two different sign-ins:
 - audience search uses Microsoft Graph.
 
 When a maker sees an unexpected tenant or an authorization failure, tell them
-which of the two failed and that signing out and back in with the right work
-account resolves it. Never print a token, a claim, or a tenant endpoint.
+which of the two failed. For the normal cached-MSAL path, signing out and back
+in with the correct work account resolves the mismatch. If the provider uses
+`AGENTCONFIG_ACCESS_TOKEN`, `AGENTCONFIG_ACCESS_TOKEN_FILE`, or
+`GRAPH_ACCESS_TOKEN`, the configured credential must instead be replaced with
+one for the intended tenant and account. Restart the MCP provider after changing
+an environment token so the process receives the new value; a repaired token
+file can be reread without changing its path. Never print a token, a claim, a
+credential-file path, or a tenant endpoint.
 
-### Expired sign-in
+### Authentication recovery
 
-Both sign-ins are cached, and both caches expire. When either side returns
-`AuthenticationRequired`, the expired credential is discarded automatically — so
-the fix is always **run the command again**, never "restart the editor" or
-"reload the MCP server". The retry normally refreshes from the cache with no
-prompt at all; if the refresh token has also expired, a browser sign-in opens.
+First honor the result's `retryable` value. `AuthenticationRequired` does not
+prove that a renewable cached sign-in was used:
 
-Note that the failed request itself is not retried automatically, so the maker
-does have to re-issue the action. Say so plainly rather than implying it may
-have gone through.
+- With the normal cached-MSAL path, the rejected cached credential is discarded.
+  Re-issue the request once; refresh is normally silent, and a browser sign-in
+  opens if interactive renewal is required.
+- With `AGENTCONFIG_ACCESS_TOKEN` or `GRAPH_ACCESS_TOKEN`, repeating the command
+  sends the same environment-provided credential. Replace it, restart the MCP
+  provider so it receives the new environment, and only then re-issue the
+  request.
+- With `AGENTCONFIG_ACCESS_TOKEN_FILE`, repair or replace the file contents with
+  a matching delegated credential before re-issuing the request.
+- A credential missing the required tenant or account identity claims must be
+  replaced; repeated calls cannot add those claims.
+
+When `retryable` is `false`, do not offer an immediate repeat of the unchanged
+request. Explain the required credential repair first. After authentication is
+repaired, the maker may re-issue an ordinary read or a request that definitely
+did not commit. `IndeterminateWrite` and `CommittedRefreshFailed` remain
+different: refresh and inspect state, and never replay those writes.
 
 ## Invalid saved audiences
 

@@ -754,3 +754,22 @@ def test_announcements_errors_distinguish_sdk_errors_from_coded_feature_errors()
     assert "Malformed opener arguments also produce SDK tool errors" in skill
     assert "Do not expect a structured code from these SDK errors" in skill
     assert "never treat failed discovery as an empty result" in skill
+
+
+def test_announcements_auth_recovery_is_credential_source_aware() -> None:
+    skill = _ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    assert "First honor the result's `retryable` value." in skill
+    assert "normal cached-MSAL path" in skill
+    assert "`AGENTCONFIG_ACCESS_TOKEN` or `GRAPH_ACCESS_TOKEN`" in skill
+    assert "`AGENTCONFIG_ACCESS_TOKEN_FILE`" in skill
+    assert "restart the MCP provider so it receives the new environment" in normalized
+    assert "credential missing the required tenant or account identity claims" in (
+        normalized
+    )
+    assert "When `retryable` is `false`" in skill
+    assert "`IndeterminateWrite` and `CommittedRefreshFailed` remain different" in (
+        normalized
+    )
+    assert "the fix is always **run the command again**" not in skill
