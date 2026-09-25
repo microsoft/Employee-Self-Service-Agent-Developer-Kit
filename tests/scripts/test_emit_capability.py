@@ -73,7 +73,9 @@ def test_worker_emits_synchronously(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "adk_telemetry.emit_capability_use",
-        lambda capability, block: emitted.append((capability, block)),
+        lambda capability, connector, block: emitted.append(
+            (capability, connector, block)
+        ),
     )
 
     result = emit_capability.main([
@@ -83,4 +85,30 @@ def test_worker_emits_synchronously(monkeypatch) -> None:
     ])
 
     assert result == 0
-    assert emitted == [("setup", True)]
+    assert emitted == [("setup", "", True)]
+
+
+def test_worker_emits_synchronously_with_connector(monkeypatch) -> None:
+    # Attribution round-trip: parent shim -> detached worker subprocess ->
+    # emit_capability_use must carry the ``--connector`` value through the
+    # subprocess argv (ADO 7943641). Missing the flag was silently emitting
+    # the Connect capability with no attribution.
+    emitted = []
+
+    monkeypatch.setattr(
+        "adk_telemetry.emit_capability_use",
+        lambda capability, connector, block: emitted.append(
+            (capability, connector, block)
+        ),
+    )
+
+    result = emit_capability.main([
+        "emit_capability.py",
+        "--worker",
+        "connect",
+        "--connector",
+        "workday",
+    ])
+
+    assert result == 0
+    assert emitted == [("connect", "workday", True)]
