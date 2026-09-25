@@ -75,5 +75,8 @@ def test_declarative_agents_do_not_enter_cea_lifecycle() -> None:
     route = (_CONNECT / "step1.md").read_text(encoding="utf-8")
 
     assert "releaseLine: \"da\"" in route
+    assert "gptagent_copilotforemployeeselfservicehr" in route
+    assert "gptagent_copilotforemployeeselfserviceit" in route
+    assert "WD-DA-PKG-001" in route
     assert "Do not create CEA Workday lifecycle state" in route
-    assert "setup/workday-da/SKILL.md" not in route
+    assert "setup/workday-da/SKILL.md" in route

@@ -362,6 +362,36 @@ def _select_cached_account(
     return accounts[0] if len(accounts) == 1 else None
 
 
+def _authenticated_account_name(
+    result: dict[str, Any],
+    selected_account: dict[str, Any] | None,
+    available_accounts: list[dict[str, Any]],
+) -> str | None:
+    """Return the sign-in name used for a successful token acquisition."""
+    selected_identifiers = _account_identifiers(selected_account)
+    if selected_identifiers:
+        return selected_identifiers[0]
+
+    claims = result.get("id_token_claims")
+    if isinstance(claims, dict):
+        for key in ("preferred_username", "upn", "email"):
+            value = str(claims.get(key) or "").strip()
+            if value:
+                return value
+
+    result_account = result.get("account")
+    result_identifiers = _account_identifiers(result_account)
+    if result_identifiers:
+        return result_identifiers[0]
+
+    usernames = {
+        str(account.get("username") or "").strip()
+        for account in available_accounts
+        if str(account.get("username") or "").strip()
+    }
+    return next(iter(usernames)) if len(usernames) == 1 else None
+
+
 def cached_account_names(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
 ) -> list[str]:
@@ -457,6 +487,16 @@ def _acquire_token(
         )
     if cache.has_state_changed:
         _persist_token_cache(cache, cache_path)
+    account_name = _authenticated_account_name(
+        result,
+        selected_account,
+        app.get_accounts(),
+    )
+    if account_name:
+        print(
+            "DA_AGENTBUILDER_AUTH_JSON:"
+            f"{json.dumps({'account': account_name}, ensure_ascii=True)}"
+        )
     return token
 
 

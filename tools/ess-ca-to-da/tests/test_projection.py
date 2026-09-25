@@ -6,12 +6,17 @@ import pytest
 
 from conftest import ca_component
 from essmig.projection import (
+    ConnectedAgentLink,
+    ManualConfigurationRequired,
     ProjectionError,
     _normalize_copilot_yaml,
     as_new_component,
+    connected_agent_link,
+    connected_agent_message,
     parse_ca_data,
     project,
     rewrite_prefixes,
+    shape_for,
 )
 
 TOPIC = """kind: AdaptiveDialog
@@ -22,6 +27,18 @@ beginDialog:
     - kind: BeginDialog
       id: a1
       dialog: msdyn_copilotforemployeeselfservicecore.topic.Shared
+"""
+
+CONNECTED_AGENT = """kind: TaskDialog
+suppressPlannerResponse: true
+modelDisplayName: Employee Self-Service HR
+modelDescription: Get personalized HR support.
+action:
+  kind: InvokeConnectedAgentTaskAction
+  botSchemaName: msdyn_copilotforemployeeselfservicehr
+  historyType:
+    kind: ConversationHistory
+  shouldSendStartConversation: true
 """
 
 
@@ -73,6 +90,54 @@ def test_gpt_metadata_projects_into_a_gpt_component() -> None:
 def test_a_kind_that_contradicts_the_component_type_is_refused() -> None:
     with pytest.raises(ProjectionError, match="declares kind"):
         project(ca_component("topic.Foo", "kind: Variable\nname: X\n"), "hr")
+
+
+def test_a_connected_agent_task_dialog_is_detected_with_its_da_target() -> None:
+    component = ca_component(
+        "InvokeConnectedAgentTaskAction.EmployeeSelf-ServiceHR", CONNECTED_AGENT
+    )
+    link = connected_agent_link(component)
+    assert link == ConnectedAgentLink(
+        display_name="Employee Self-Service HR",
+        ca_bot_schemaname="msdyn_copilotforemployeeselfservicehr",
+        da_bot_schemaname="gptagent_copilotforemployeeselfservicehr",
+    )
+
+
+def test_a_connected_agent_outside_this_release_has_no_da_target() -> None:
+    data = CONNECTED_AGENT.replace(
+        "msdyn_copilotforemployeeselfservicehr",
+        "msdyn_copilotforemployeeselfservicefacilities",
+    ).replace("Employee Self-Service HR", "Employee Self-Service Facilities")
+    link = connected_agent_link(ca_component("InvokeConnectedAgentTaskAction.Facilities", data))
+    assert link is not None
+    assert link.display_name == "Employee Self-Service Facilities"
+    assert link.da_bot_schemaname is None
+
+
+def test_an_ordinary_topic_is_not_a_connected_agent() -> None:
+    assert connected_agent_link(ca_component("topic.Foo", TOPIC)) is None
+
+
+def test_a_connected_agent_task_dialog_migrates_by_hand_instead_of_crashing() -> None:
+    # Previously this raised the "kind TaskDialog but type 9 implies AdaptiveDialog"
+    # ProjectionError; now it is a manual reconnect task that names the target agent.
+    component = ca_component(
+        "InvokeConnectedAgentTaskAction.EmployeeSelf-ServiceHR", CONNECTED_AGENT
+    )
+    with pytest.raises(ManualConfigurationRequired) as excinfo:
+        shape_for(component)
+    assert "Employee Self-Service HR" in str(excinfo.value)
+    assert "gptagent_copilotforemployeeselfservicehr" in str(excinfo.value)
+
+
+def test_the_reconnect_message_names_the_target_and_flags_out_of_release_agents() -> None:
+    known = connected_agent_message(
+        ConnectedAgentLink("HR", "msdyn_...hr", "gptagent_...hr")
+    )
+    assert "Agents settings" in known and "gptagent_...hr" in known
+    unknown = connected_agent_message(ConnectedAgentLink("Facilities", "msdyn_...fac", None))
+    assert "Confirm the agent exists" in unknown
 
 
 CONNECTOR_TOPIC = """kind: AdaptiveDialog

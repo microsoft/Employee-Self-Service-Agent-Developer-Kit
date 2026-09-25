@@ -33,7 +33,8 @@ def test_connect_workday_routes_installed_cea_packages_to_lifecycle() -> None:
     assert "src/skills/connect/workday/SKILL.md" in step1
     assert "--checkpoint WD-PKG-001" in step1
     assert "Passed` + simplified-install result" in step1
-    assert "Declarative Agent isn't supported" in step1
+    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "ESS IT Agent isn't supported" in step1
     assert "connect/workday/step" not in step1
     assert "connect/workday/step" not in connect
     assert "connect/shared/lifecycle-runner.md" in connect

@@ -696,9 +696,9 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REDIRECT_DESC,
             result=(
-                "The selected agent's user-context topic does not redirect to "
-                "any installed Workday user-context system topic. Installed "
-                f"candidate(s): {', '.join(installed_dialogs)}."
+                f"The selected agent '{agent_slug}' user-context topic does "
+                "not redirect to any installed Workday user-context system "
+                f"topic. Installed candidate(s): {', '.join(installed_dialogs)}."
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,

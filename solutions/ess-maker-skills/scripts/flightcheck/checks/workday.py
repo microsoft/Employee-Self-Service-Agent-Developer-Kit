@@ -1186,7 +1186,14 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    workday_refs = [r for r in refs if _is_workday_soap_connector(r.get("connectorid"))]
+    workday_refs = [
+        r
+        for r in refs
+        if _is_workday_soap_connector(r.get("connectorid"))
+        and not _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
     runner._workday_connection_refs = workday_refs
 
     # Classify each Workday row's suffix (some may not match the
@@ -2760,9 +2767,27 @@ def _select_active_workday_cert(
     return (active, others)
 
 
-def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+def _format_preferred_thumbprint(preferred_thumbprint: str | None) -> str | None:
+    """Format Graph's colon-free SHA-1 preferred signing thumbprint."""
+    normalized = (preferred_thumbprint or "").strip().replace(":", "")
+    if not re.fullmatch(r"[0-9A-Fa-f]{40}", normalized):
+        return None
+    return ":".join(
+        normalized[index:index + 2].upper()
+        for index in range(0, len(normalized), 2)
+    )
+
+
+def _format_cert_detail_line(
+    cert: dict,
+    now: datetime,
+    *,
+    thumbprint_override: str | None = None,
+) -> str:
     """Render one cert group as a one-line summary for result text."""
-    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    display = thumbprint_override
+    if display is None:
+        display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
     end = cert["end"]
     if end is None:
         expiry_str = "NotAfter=(unknown)"
@@ -3016,7 +3041,19 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             (c["end"] is not None and c["end"] < now) for c in cert_groups
         )
 
-        cert_line = _format_cert_detail_line(active, now)
+        preferred_display = _format_preferred_thumbprint(
+            sp.get("preferredTokenSigningKeyThumbprint")
+        )
+        # Graph tenants can surface a non-SHA-1 customKeyIdentifier even though
+        # preferredTokenSigningKeyThumbprint is the authoritative SHA-1 value.
+        # With one logical certificate there is no ambiguity, so show the
+        # preferred thumbprint rather than incorrectly calling the key malformed.
+        active_thumbprint = preferred_display if len(cert_groups) == 1 else None
+        cert_line = _format_cert_detail_line(
+            active,
+            now,
+            thumbprint_override=active_thumbprint,
+        )
         rollover_lines = [
             f"      rollover: {_format_cert_detail_line(c, now)}"
             for c in others
