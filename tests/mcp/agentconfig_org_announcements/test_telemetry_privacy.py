@@ -152,8 +152,10 @@ def test_the_endpoint_dimension_is_the_tool_name_not_a_url(emitted) -> None:
 @pytest.mark.parametrize(
     "operation",
     [
+        "list_agent_configs",
         "open_org_announcements",
         "save_bulletin",
+        "search_agents",
         "transition_bulletin",
         "duplicate_bulletin",
         "search_audience_groups",
@@ -172,6 +174,12 @@ def test_an_unknown_operation_is_bucketed_rather_than_emitted(emitted) -> None:
     )
 
     assert emitted[0]["api_endpoint"] == org_telemetry.OPERATION_UNKNOWN
+
+
+def test_every_registered_tool_has_an_observability_policy() -> None:
+    tools = {tool.name for tool in asyncio.run(org_server.mcp.list_tools())}
+
+    assert tools == org_telemetry._OPERATIONS
 
 
 def test_an_unknown_error_source_is_bucketed(emitted) -> None:
@@ -306,6 +314,12 @@ class _FakeClient:
     def __init__(self, *, save_error: Exception | None = None) -> None:
         self.save_error = save_error
 
+    async def list_agent_configs(self) -> list[dict]:
+        return [{"titleId": TITLE_ID, "displayName": "Secret agent"}]
+
+    async def search_agents(self, search_string: str) -> list[dict]:
+        return [{"titleId": TITLE_ID, "displayName": "Secret agent"}]
+
     async def list_bulletins(self, title_id: str) -> list[dict]:
         return [_config()]
 
@@ -354,7 +368,11 @@ def _install_fakes(monkeypatch, *, client=None) -> None:
 
 
 def _call(tool: str, arguments: dict) -> dict:
-    if tool != "search_audience_groups":
+    if tool not in {
+        "list_agent_configs",
+        "search_agents",
+        "search_audience_groups",
+    }:
         arguments = {"titleId": TITLE_ID, **arguments}
     async def run():
         return await org_server.mcp.call_tool(tool, arguments)
@@ -465,6 +483,25 @@ def test_search_telemetry_never_carries_the_query(monkeypatch, emitted) -> None:
     assert emitted
     for event in emitted:
         assert SECRET_TITLE not in _flatten(event)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("list_agent_configs", {}),
+        ("search_agents", {"searchString": SECRET_TITLE}),
+    ],
+)
+def test_discovery_telemetry_records_success_without_input(
+    monkeypatch, emitted, tool, arguments
+) -> None:
+    _install_fakes(monkeypatch)
+
+    _call(tool, arguments)
+
+    assert emitted[-1]["api_endpoint"] == tool
+    assert emitted[-1]["outcome"] == "success"
+    assert SECRET_TITLE not in _flatten(emitted[-1])
 
 
 def test_a_transition_emits_no_identifier(monkeypatch, emitted) -> None:
