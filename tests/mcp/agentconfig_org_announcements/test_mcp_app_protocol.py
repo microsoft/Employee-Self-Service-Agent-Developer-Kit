@@ -304,11 +304,69 @@ def test_the_resource_shell_loads_the_hosted_bundle_from_the_origin() -> None:
     )
 
 
-def test_widget_origin_override_is_validated() -> None:
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://workforceinsights.m365.cloud.dev.microsoft",
+        "https://df.workforceinsights.m365.cloud.microsoft",
+        "https://workforceinsights.m365.cloud.microsoft",
+    ],
+)
+def test_widget_origin_accepts_known_vorpal_deployment_rings(origin) -> None:
+    assert org_server._resolve_widget_origin(origin) == origin
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://example.com",
+        "https://workforceinsights.m365.cloud.microsoft.evil.example",
+        "https://vorpal.devtunnels.ms.evil.example",
+    ],
+)
+def test_widget_origin_rejects_unapproved_https_hosts(origin) -> None:
+    for allow_development in [False, True]:
+        with pytest.raises(ValueError, match="approved Vorpal deployment origin"):
+            org_server._resolve_widget_origin(
+                origin,
+                allow_development=allow_development,
+            )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://localhost:4200",
+        "https://127.0.0.1:4200",
+        "https://[::1]:4200",
+        "https://vorpal-sophie-5173.euw.devtunnels.ms",
+    ],
+)
+def test_widget_origin_allows_local_hosts_only_under_the_development_gate(
+    origin,
+) -> None:
+    with pytest.raises(ValueError, match="approved Vorpal deployment origin"):
+        org_server._resolve_widget_origin(origin, allow_development=False)
+
     assert (
-        org_server._resolve_widget_origin("https://localhost:4200")
-        == "https://localhost:4200"
+        org_server._resolve_widget_origin(origin, allow_development=True) == origin
     )
+
+
+def test_widget_origin_development_gate_can_be_enabled_by_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(org_server.DEVELOPMENT_WIDGET_ORIGIN_ENV, "1")
+
+    assert (
+        org_server._resolve_widget_origin(
+            "https://vorpal-sophie-5173.euw.devtunnels.ms"
+        )
+        == "https://vorpal-sophie-5173.euw.devtunnels.ms"
+    )
+
+
+def test_widget_origin_shape_is_validated() -> None:
     for bad in [
         "http://localhost:4200",
         "https://user:pw@example.com",
@@ -2000,6 +2058,30 @@ def test_invalid_title_never_acquires_a_client(monkeypatch, title_id, tool, argu
     assert payload.get("code") == "InvalidRequest" or payload["errors"][0]["code"] == "InvalidRequest"
 
 
+@pytest.mark.parametrize("bulletin_id", [".", "..", "a/b", "a%2Fb"])
+@pytest.mark.parametrize("tool", ["save_bulletin", "transition_bulletin", "duplicate_bulletin"])
+def test_invalid_mutation_id_never_acquires_a_client(
+    monkeypatch, bulletin_id, tool
+) -> None:
+    async def forbidden_client():
+        pytest.fail("invalid bulletin ID attempted authentication")
+
+    arguments = {
+        "save_bulletin": _save_arguments(id=bulletin_id),
+        "transition_bulletin": {"id": bulletin_id, "transition": "archive"},
+        "duplicate_bulletin": {"id": bulletin_id},
+    }
+    monkeypatch.setattr(org_server, "get_client", forbidden_client)
+
+    payload = _structured(_call(tool, arguments[tool]))
+
+    assert payload["errors"][0]["code"] == "InvalidRequest"
+    assert payload["titleId"] == TITLE_ID
+    assert "tenantId" not in payload
+    assert "item" not in payload
+    assert "manager" not in payload
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
@@ -2333,6 +2415,10 @@ def test_directory_tenant_binding_does_not_add_mcp_arguments() -> None:
 _PRIVATE_CACHE_DETAIL = "/private/msal-cache PRIVATE_CREDENTIAL_DETAIL"
 
 
+def _local_credential_error(message: str) -> Exception:
+    return org_server.LocalCredentialError(message, object())
+
+
 def _install_failing_graph_acquisition(monkeypatch, error, *, before_failure=None):
     directory = org_server.GraphDirectoryClient(tenant_id=TENANT_ID, object_id=OBJECT_ID)
     acquisitions = []
@@ -2439,7 +2525,10 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
     _assert_no_private_cache_detail(result, caplog)
 
 
-@pytest.mark.parametrize("error_type", [LockException, PermissionError])
+@pytest.mark.parametrize(
+    "error_factory",
+    [LockException, PermissionError, _local_credential_error],
+)
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
@@ -2451,13 +2540,13 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
     ],
 )
 def test_authoring_cache_failure_preserves_feature_envelopes(
-    monkeypatch, caplog, error_type, tool, arguments
+    monkeypatch, caplog, error_factory, tool, arguments
 ) -> None:
     attempts = []
 
     def construct():
         attempts.append(True)
-        raise error_type(_PRIVATE_CACHE_DETAIL)
+        raise error_factory(_PRIVATE_CACHE_DETAIL)
 
     monkeypatch.setattr(org_server, "_client", None)
     monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
@@ -2480,9 +2569,14 @@ def test_authoring_cache_failure_preserves_feature_envelopes(
     _assert_no_private_cache_detail(result, caplog)
 
 
-@pytest.mark.parametrize("error_type", [LockException, PermissionError])
-def test_authoring_cache_failure_preserves_its_private_cause(monkeypatch, error_type) -> None:
-    original = error_type(_PRIVATE_CACHE_DETAIL)
+@pytest.mark.parametrize(
+    "error_factory",
+    [LockException, PermissionError, _local_credential_error],
+)
+def test_authoring_cache_failure_preserves_its_private_cause(
+    monkeypatch, error_factory
+) -> None:
+    original = error_factory(_PRIVATE_CACHE_DETAIL)
 
     def construct():
         raise original
@@ -2498,3 +2592,25 @@ def test_authoring_cache_failure_preserves_its_private_cause(monkeypatch, error_
         assert _PRIVATE_CACHE_DETAIL not in caught.value.message
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("list_agent_configs", {}),
+        ("search_agents", {"searchString": "Finance"}),
+    ],
+)
+def test_discovery_credential_failure_is_a_safe_tool_error(
+    monkeypatch, tool, arguments
+) -> None:
+    def construct():
+        raise _local_credential_error(_PRIVATE_CACHE_DETAIL)
+
+    monkeypatch.setattr(org_server, "_client", None)
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
+
+    with pytest.raises(ToolError, match="sign-in could not be completed") as caught:
+        _call(tool, arguments, include_scope=False)
+
+    assert _PRIVATE_CACHE_DETAIL not in str(caught.value)

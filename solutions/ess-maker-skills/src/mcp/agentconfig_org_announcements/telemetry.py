@@ -58,6 +58,22 @@ _SOURCES = frozenset({SOURCE_BACKEND, SOURCE_GRAPH, SOURCE_MCP})
 # Stable codes are short identifiers, never free text. This bound is a
 # belt-and-braces guard so a malformed code can never carry a payload.
 _MAX_CODE_LENGTH = 64
+_ERROR_CODES = frozenset(
+    {
+        "AudienceMetadataUnavailable",
+        "AuthenticationRequired",
+        "AuthorizationDenied",
+        "BackendValidationError",
+        "CommittedRefreshFailed",
+        "FeatureUnavailable",
+        "IndeterminateWrite",
+        "InvalidRequest",
+        "NetworkError",
+        "NotFound",
+        "SearchUnavailable",
+        "ServiceError",
+    }
+)
 
 # Emitting is opt-out through the same switch the rest of the ADK honours; the
 # module-level import is resolved lazily so a server started outside the kit
@@ -87,18 +103,22 @@ def normalize_source(source: str) -> str:
 
 
 def normalize_error_code(error_code: str) -> str:
-    """Keep only a short, identifier-shaped stable code.
+    """Clamp an error code to the fixed diagnostic allowlist.
 
-    A backend code arrives as an identifier such as ``AudienceGroupInvalid``.
-    Anything containing whitespace or punctuation is a message, not a code, so
-    it is replaced rather than truncated — a truncated message is still content.
+    Backend values can be caller-controlled even when they look like short
+    identifiers, so shape validation alone is not a privacy boundary.
     """
     if not isinstance(error_code, str):
         return ""
     candidate = error_code.strip()
     if not candidate:
         return ""
-    if len(candidate) > _MAX_CODE_LENGTH or not candidate.replace("_", "").isalnum():
+    if (
+        len(candidate) > _MAX_CODE_LENGTH
+        or not candidate.isascii()
+        or not candidate.replace("_", "").isalnum()
+        or candidate not in _ERROR_CODES
+    ):
         return "UnknownError"
     return candidate
 

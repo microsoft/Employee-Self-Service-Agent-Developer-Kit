@@ -35,6 +35,7 @@ from _mcp_modules import load_org_announcements_client_modules  # noqa: E402
 _ORG_MODULES = load_org_announcements_client_modules()
 
 org_client = _ORG_MODULES["client"]
+org_validation = _ORG_MODULES["validation"]
 
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
@@ -43,6 +44,16 @@ BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
 COLLECTION_PATH = f"/weveb2/api/v1.1/tenants('{TENANT_ID}')/EmployeeAgents('{TITLE_ID}')/essbulletins"
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 _UNSET = object()
+
+
+def test_request_validators_are_shared_public_boundary_helpers() -> None:
+    assert org_validation.validate_title_id(TITLE_ID) == TITLE_ID
+    assert org_validation.validate_bulletin_id("bulletin-1") == "bulletin-1"
+
+    with pytest.raises(ValueError, match="titleId"):
+        org_validation.validate_title_id(" padded")
+    with pytest.raises(ValueError, match="bulletinId"):
+        org_validation.validate_bulletin_id("bad/id")
 
 
 def _token(tenant_id: str = TENANT_ID) -> str:
@@ -158,7 +169,10 @@ def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> Non
     assert captured[0].url.query == b""
 
 
-@pytest.mark.parametrize("bad_id", ["", " a", "a/b", "a\\b", "a?b", "a\x01b"])
+@pytest.mark.parametrize(
+    "bad_id",
+    ["", " a", ".", "..", "a/b", "a\\b", "a?b", "a#b", "a%2Fb", "a\x01b"],
+)
 def test_rejects_ids_that_could_reshape_the_route(monkeypatch, bad_id) -> None:
     client = _make_client(
         monkeypatch, lambda request: httpx.Response(200, json=_config("a"))
