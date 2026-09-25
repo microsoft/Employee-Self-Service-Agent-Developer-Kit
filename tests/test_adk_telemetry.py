@@ -461,7 +461,7 @@ def test_common_dimensions_shape():
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
         "session_id", "surface", "adk_version",
-        "toolkit_git_sha", "toolkit_git_branch",
+        "toolkit_git_sha", "toolkit_git_branch", "agent_type",
         "timestamp",
     ):
         assert key in dims
@@ -492,6 +492,34 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["toolkit_git_sha"] == "abcdef0"
     assert dims["toolkit_git_branch"] == "other"
+
+
+def test_common_dimensions_agent_type_maps_from_branch(monkeypatch):
+    """agent_type (custom_agent | declarative_agent | unknown) is derived
+    from toolkit_git_branch — ADO #7830949. Every ADK event carries it so
+    a single query can split adoption / capability / build / deploy / api
+    dashboards by CA vs DA maker audience without a downstream join.
+    """
+    _fc = __import__("flightcheck.telemetry", fromlist=["telemetry"])
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "abcdef0")
+
+    for branch, expected in (
+        ("main-ca", adk.AGENT_TYPE_CUSTOM),
+        ("main", adk.AGENT_TYPE_DECLARATIVE),
+        ("amilandin/adk-telemetry-x", adk.AGENT_TYPE_UNKNOWN),
+        ("detached", adk.AGENT_TYPE_UNKNOWN),
+        ("unknown", adk.AGENT_TYPE_UNKNOWN),
+    ):
+        monkeypatch.setenv("ESS_ADK_GIT_BRANCH", branch)
+        _fc.get_toolkit_git_sha.cache_clear()
+        _fc.get_toolkit_git_branch.cache_clear()
+        dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+        assert dims["agent_type"] == expected, (branch, dims["agent_type"])
+
+
+def test_adk_schema_version_bumped_for_agent_type():
+    """Version-gate the new dimension so dashboards can pin on schema 1.5.0."""
+    assert adk.SCHEMA_VERSION == "1.5.0"
 
 
 def test_build_event_is_common_schema_4_0():
