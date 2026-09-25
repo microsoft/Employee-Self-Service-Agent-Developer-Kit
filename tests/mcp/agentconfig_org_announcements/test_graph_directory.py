@@ -247,6 +247,58 @@ def test_search_stops_after_twenty_eligible_results() -> None:
     assert len(pages) == 1
 
 
+def test_search_reports_exhaustion_at_exactly_twenty_final_results() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "value": [
+                    _group(f"group-{index}")
+                    for index in range(graph.MAX_ELIGIBLE_RESULTS)
+                ]
+            },
+        )
+
+    client = _make_client(handler)
+
+    async def run() -> dict:
+        result = await client.search_groups("finance")
+        await client.aclose()
+        return result
+
+    result = asyncio.run(run())
+
+    assert len(result["groups"]) == graph.MAX_ELIGIBLE_RESULTS
+    assert result["exhausted"] is True
+    assert result["pagesExamined"] == 1
+
+
+def test_search_does_not_claim_exhaustion_with_more_matches_on_the_final_page() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "value": [
+                    _group(f"group-{index}")
+                    for index in range(graph.MAX_ELIGIBLE_RESULTS + 1)
+                ]
+            },
+        )
+
+    client = _make_client(handler)
+
+    async def run() -> dict:
+        result = await client.search_groups("finance")
+        await client.aclose()
+        return result
+
+    result = asyncio.run(run())
+
+    assert len(result["groups"]) == graph.MAX_ELIGIBLE_RESULTS
+    assert result["exhausted"] is False
+    assert result["pagesExamined"] == 1
+
+
 def test_search_stops_at_the_three_page_cap_without_claiming_exhaustion() -> None:
     pages: list[httpx.Request] = []
 
@@ -520,6 +572,37 @@ def test_resolve_groups_excludes_ineligible_categories() -> None:
     resolved = asyncio.run(run())
 
     assert set(resolved) == {"sg"}
+
+
+def test_resolve_groups_follows_next_link_without_repeating_query_options() -> None:
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if len(urls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "value": [_group("g1")],
+                    "@odata.nextLink": (
+                        "https://graph.microsoft.com/v1.0/groups?$skiptoken=abc"
+                    ),
+                },
+            )
+        return httpx.Response(200, json={"value": [_group("g2")]})
+
+    client = _make_client(handler)
+
+    async def run() -> dict:
+        result = await client.resolve_groups(["g1", "g2"])
+        await client.aclose()
+        return result
+
+    resolved = asyncio.run(run())
+
+    assert set(resolved) == {"g1", "g2"}
+    assert len(urls) == 2
+    assert urls[1] == "https://graph.microsoft.com/v1.0/groups?$skiptoken=abc"
 
 
 def test_hydration_preserves_order_multiplicity_and_invalid_ids() -> None:
@@ -999,6 +1082,42 @@ def test_resolved_group_metadata_is_served_from_cache_on_repeat_lookups() -> Non
     assert len(requests) == 1, "the second lookup hit Graph again"
     assert first == second
     assert first[GROUP_A]["displayName"] == f"Group {GROUP_A}"
+
+
+def test_fully_cached_repeat_resolution_does_not_reacquire_a_token(
+    monkeypatch,
+) -> None:
+    acquisitions: list[int] = []
+    requests: list[int] = []
+
+    def acquire(tenant_id, object_id) -> str:
+        assert tenant_id == TENANT_ID
+        assert object_id == OBJECT_ID
+        acquisitions.append(1)
+        return _token("lazy-token")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(1)
+        return httpx.Response(200, json={"value": [_group(GROUP_A)]})
+
+    monkeypatch.setattr(graph, "acquire_graph_token", acquire)
+    client = graph.GraphDirectoryClient(
+        tenant_id=TENANT_ID,
+        object_id=OBJECT_ID,
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def run() -> tuple[dict, dict]:
+        first = await client.resolve_groups([GROUP_A])
+        second = await client.resolve_groups([GROUP_A])
+        await client.aclose()
+        return first, second
+
+    first, second = asyncio.run(run())
+
+    assert first == second
+    assert acquisitions == [1]
+    assert requests == [1]
 
 
 def test_only_uncached_ids_are_sent_to_graph() -> None:

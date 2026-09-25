@@ -528,7 +528,9 @@ class GraphDirectoryClient:
         Paging stops at 20 eligible results, at result-set exhaustion, or after
         three pages, whichever comes first. ``exhausted`` distinguishes an
         exhausted result set from a search that stopped at the page cap, so the
-        caller never reports "no more matches" for a capped search.
+        caller never reports "no more matches" for a capped search. Once the
+        result limit is reached, the remainder of that already-fetched page is
+        inspected only to distinguish exact exhaustion from omitted matches.
         """
         escaped = escape_search_value(query)
         client = await self._ensure_client()
@@ -548,6 +550,7 @@ class GraphDirectoryClient:
         while pages < MAX_SEARCH_PAGES:
             payload = await self._get(url, params, client=client)
             pages += 1
+            has_unreturned_eligible_group = False
             for item in payload["value"]:
                 if not is_eligible_group(item):
                     continue
@@ -556,16 +559,22 @@ class GraphDirectoryClient:
                 seen.add(item["id"])
                 # Graph's relevance order is preserved; dedupe keeps the first
                 # occurrence so repeated runs return the same ordering.
-                groups.append(to_audience_group(item))
-                if len(groups) >= MAX_ELIGIBLE_RESULTS:
-                    return {
-                        "groups": groups,
-                        "exhausted": False,
-                        "pagesExamined": pages,
-                    }
+                if len(groups) < MAX_ELIGIBLE_RESULTS:
+                    groups.append(to_audience_group(item))
+                else:
+                    has_unreturned_eligible_group = True
 
             next_link = payload.get("@odata.nextLink")
-            if not isinstance(next_link, str) or not next_link:
+            has_next_page = isinstance(next_link, str) and bool(next_link)
+            if len(groups) >= MAX_ELIGIBLE_RESULTS:
+                return {
+                    "groups": groups,
+                    "exhausted": (
+                        not has_unreturned_eligible_group and not has_next_page
+                    ),
+                    "pagesExamined": pages,
+                }
+            if not has_next_page:
                 exhausted = True
                 break
             # The nextLink already carries every query option; re-sending params
@@ -626,16 +635,25 @@ class GraphDirectoryClient:
             )
             if not clause:
                 continue
-            payload = await self._get(
-                "/groups",
-                {"$filter": clause, "$select": _GROUP_SELECT, "$top": str(len(batch))},
-                client=client,
-            )
-            for item in payload["value"]:
-                if is_eligible_group(item):
-                    metadata = to_audience_group(item)
-                    resolved[item["id"]] = metadata
-                    metadata_cache.put(item["id"], metadata)
+            url = "/groups"
+            params: Optional[dict[str, Any]] = {
+                "$filter": clause,
+                "$select": _GROUP_SELECT,
+                "$top": str(len(batch)),
+            }
+            while True:
+                payload = await self._get(url, params, client=client)
+                for item in payload["value"]:
+                    if is_eligible_group(item):
+                        metadata = to_audience_group(item)
+                        resolved[item["id"]] = metadata
+                        metadata_cache.put(item["id"], metadata)
+
+                next_link = payload.get("@odata.nextLink")
+                if not isinstance(next_link, str) or not next_link:
+                    break
+                url = next_link
+                params = None
 
         return resolved
 
