@@ -98,9 +98,11 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 
 # Bump when the emitted field set changes so dashboards can version-gate.
 # 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
-# 1.2: added derived ``connector`` (workday|servicenow|"") on run + check —
+# 1.2: added ``toolkitGitSha`` + ``toolkitGitBranch`` for precise
+#      upgrade-posture and CA-vs-DA attribution — ADO 7943642.
+# 1.3: added derived ``connector`` (workday|servicenow|"") on run + check —
 #      ADO 7943641.
-TELEMETRY_SCHEMA_VERSION = "1.2"
+TELEMETRY_SCHEMA_VERSION = "1.3"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -518,6 +520,228 @@ def get_adk_version() -> str:
     return "unknown"
 
 
+def _find_git_dir() -> str:
+    """Walk up from this file until a ``.git`` directory (or file) is
+    found. Returns the absolute path of the ``.git`` entry, or ``""`` if
+    no repo is found within a safe walk depth.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur = here
+    for _ in range(10):
+        candidate = os.path.join(cur, ".git")
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return ""
+
+
+# Bounded set of branch classifications emitted as toolkit_git_branch.
+# Anything outside this set (personal branches, fork names, customer
+# labels, aliases) collapses to "other" to avoid leaking free-form
+# identifiers per the privacy contract documented in CONTRIBUTING.md and
+# solutions/ess-maker-skills/README.md. Extend this set only after a
+# privacy review approves the new value(s).
+_ALLOWED_BRANCHES = frozenset({"main", "main-ca"})
+
+
+def _classify_branch(branch: str) -> str:
+    """Collapse an arbitrary branch string to one of the allowed values.
+
+    Returns one of: ``main``, ``main-ca``, ``detached``, ``other``,
+    ``unknown``. All personal / fork / topic branch names collapse to
+    ``other`` so branch names never appear in telemetry.
+    """
+    if not branch:
+        return "unknown"
+    if branch == "detached" or branch == "unknown":
+        return branch
+    if branch in _ALLOWED_BRANCHES:
+        return branch
+    return "other"
+
+
+def _is_short_sha(value: str) -> bool:
+    """True if ``value`` looks like a hex commit ID (>=7 chars, all hex)."""
+    if not value or len(value) < 7 or len(value) > 40:
+        return False
+    return all(c in "0123456789abcdef" for c in value)
+
+
+def _resolve_git_dirs(git_dir: str) -> tuple[str, str]:
+    """Return ``(gitdir, commondir)`` for a ``.git`` entry.
+
+    ``gitdir`` is the per-worktree administrative directory (holds
+    ``HEAD``); ``commondir`` is the shared directory that holds
+    ``refs/`` and ``packed-refs`` for real linked worktrees. For a
+    plain non-worktree checkout the two are identical.
+
+    Returns ``("", "")`` on any error so callers fail open.
+    """
+    try:
+        # ``.git`` may be a file for worktrees / submodules pointing at
+        # the real per-worktree gitdir via ``gitdir: <path>``.
+        if os.path.isfile(git_dir):
+            with open(git_dir, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            prefix = "gitdir:"
+            if not content.startswith(prefix):
+                return ("", "")
+            real = content[len(prefix):].strip()
+            if not os.path.isabs(real):
+                real = os.path.normpath(
+                    os.path.join(os.path.dirname(git_dir), real)
+                )
+            git_dir = real
+        # Linked worktrees drop a ``commondir`` file in the per-worktree
+        # gitdir pointing at the shared administrative directory (which
+        # holds refs/ and packed-refs). Plain checkouts have no
+        # ``commondir`` file, so gitdir IS commondir.
+        commondir = git_dir
+        commondir_file = os.path.join(git_dir, "commondir")
+        if os.path.exists(commondir_file):
+            with open(commondir_file, "r", encoding="utf-8") as f:
+                rel = f.read().strip()
+            if rel:
+                if not os.path.isabs(rel):
+                    rel = os.path.normpath(os.path.join(git_dir, rel))
+                commondir = rel
+        return (git_dir, commondir)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return ("", "")
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_sha() -> str:
+    """Best-effort short git SHA of the ADK clone (System Metadata).
+
+    Precise upgrade-posture signal: ``adk_version`` (extension package.json
+    version) can lag the actual toolkit state — for example a hotfix on the
+    same extension version, or an install that was cloned before the version
+    bump landed. The short SHA lets dashboards distinguish "install is on
+    latest bits" from "install is on last-week's tree at the same version".
+
+    Order: ``ESS_ADK_GIT_SHA`` env override (used by CI to inject a known
+    build SHA) -> ``.git/HEAD`` + ref file read (no subprocess) -> ``"unknown"``.
+
+    Overrides go through the same canonicalization as repo-derived values
+    (lowercased, validated hex, truncated to 7 chars) so an env-injected
+    build SHA doesn't create a distinct telemetry bucket from the same
+    commit resolved via ``.git``.
+
+    Fail-open: any error (missing repo, malformed HEAD, unreadable file)
+    resolves to ``"unknown"`` so telemetry never blocks the CLI.
+    """
+    override = os.environ.get("ESS_ADK_GIT_SHA", "").strip().lower()
+    if override:
+        # Apply the same validation as repo-derived values so an
+        # env-injected build SHA and a git-resolved SHA land in the
+        # same telemetry bucket for the same commit.
+        return override[:7] if _is_short_sha(override) else "unknown"
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    gitdir, commondir = _resolve_git_dirs(git_dir)
+    if not gitdir:
+        return "unknown"
+    try:
+        # HEAD is per-worktree — read it from gitdir. Refs and packed-refs
+        # live in the common directory for real linked worktrees, so read
+        # them from commondir.
+        head_path = os.path.join(gitdir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # Resolve the ref file in the common directory; fall back to
+            # packed-refs if unpacked.
+            ref_path = os.path.join(commondir, ref)
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    sha = f.read().strip()
+            else:
+                packed = os.path.join(commondir, "packed-refs")
+                if not os.path.exists(packed):
+                    return "unknown"
+                sha = ""
+                with open(packed, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.endswith(" " + ref):
+                            sha = line.split(" ", 1)[0].strip()
+                            break
+                if not sha:
+                    return "unknown"
+        else:
+            # Detached HEAD: HEAD contains the SHA directly.
+            sha = head
+        sha = sha.lower()
+        if not _is_short_sha(sha):
+            return "unknown"
+        return sha[:7]
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_branch() -> str:
+    """Best-effort git branch classification of the ADK clone (System Metadata).
+
+    Returns one of a **bounded** set of strings so raw branch names —
+    which can carry aliases, personal names, customer labels, or other
+    free-form content — are never emitted:
+
+    * ``"main"``      — on the shipping DA branch (or an override says so)
+    * ``"main-ca"``   — on the shipping CA branch (used by ADO #7830949
+      for CA vs DA attribution)
+    * ``"detached"``  — HEAD points directly at a commit (no branch),
+      confirmed by a valid hex commit ID in HEAD
+    * ``"other"``     — on some other branch (topic / fork / customer
+      label); collapsed to a single bucket for privacy
+    * ``"unknown"``   — no repo, malformed HEAD, or any error
+
+    Order: ``ESS_ADK_GIT_BRANCH`` env override (also classified against
+    the bounded set) -> ``.git/HEAD`` ref parse -> ``"unknown"``.
+
+    Fail-open: any error resolves to ``"unknown"``.
+    """
+    override = os.environ.get("ESS_ADK_GIT_BRANCH", "").strip()
+    if override:
+        return _classify_branch(override)
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    gitdir, _commondir = _resolve_git_dirs(git_dir)
+    if not gitdir:
+        return "unknown"
+    try:
+        head_path = os.path.join(gitdir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # ``refs/heads/<branch>`` -> ``<branch>``. Anything else
+            # (tag ref, remote-tracking) falls through to unknown.
+            prefix = "refs/heads/"
+            if ref.startswith(prefix):
+                return _classify_branch(ref[len(prefix):])
+            return "unknown"
+        # No ``ref:`` prefix: HEAD contains a commit ID directly, IFF it
+        # actually parses as one. A malformed HEAD (empty, garbage,
+        # partial write) shouldn't masquerade as "detached HEAD" — that
+        # would emit ``branch=detached`` alongside ``sha=unknown``, which
+        # is a lie about the checkout state.
+        return "detached" if _is_short_sha(head.lower()) else "unknown"
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -688,6 +912,8 @@ def _run_data(
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
+        "toolkitGitSha": get_toolkit_git_sha(),
+        "toolkitGitBranch": get_toolkit_git_branch(),
         "scope": scope,
         "invocationSource": invocation_source,
         "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
@@ -852,6 +1078,8 @@ def selftest() -> int:
             "runId": str(uuid.uuid4()),
             "instanceId": get_instance_id(),
             "adkVersion": get_adk_version(),
+            "toolkitGitSha": get_toolkit_git_sha(),
+            "toolkitGitBranch": get_toolkit_git_branch(),
         },
     )
     print(f"Posting selftest event to env='{env}' "
