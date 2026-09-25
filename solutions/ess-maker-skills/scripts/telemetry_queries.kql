@@ -306,3 +306,130 @@ adk_client_event
           client_operation_id,
           client_properties,
           client_prop_dropped_count
+
+
+// =============================================================================
+// 9) TOOLKIT VERSION COVERAGE — INVESTIGATION QUERIES ONLY
+// =============================================================================
+//
+// POSITION (please read before adding a chart on top of these fields):
+//   The `toolkitGitSha` / `toolkitGitBranch` dimensions are System Metadata
+//   for INVESTIGATION-TIME questions: "for this specific tenant / instance /
+//   event, was the emitter on an up-to-date clone of the ADK, and if not, how
+//   far behind?" They are NOT meant to back an Aria dashboard tile.
+//
+//   The ADK is a source-only repo — makers clone `main` (DA) or `main-ca` (CA)
+//   directly from GitHub and pull whenever they choose. There is no formal
+//   "release" cadence, so cardinality of `toolkitGitSha` grows with every
+//   commit to those branches and any donut/split-by tile on SHA turns into
+//   a mess of single-count wedges within days. Dashboards should keep using
+//   `adk_version` for coarse cohorting; `toolkitGitSha` + `toolkitGitBranch`
+//   are for the queries below and for reactive per-tenant investigations.
+//
+// COLUMN NAMING BY TABLE FAMILY:
+//   FlightCheck tables (`essmakerkit_flightcheck_run` / `_check`) use
+//   camelCase: `toolkitGitSha`, `toolkitGitBranch`, `tenantId`, `tenantName`,
+//   `instanceId`.
+//   ADK platform tables (`adk_session_start`, `adk_capability_use`,
+//   `adk_agent_create`, `adk_agent_deploy`, `adk_build_complete`,
+//   `adk_api_call`) use snake_case: `toolkit_git_sha`, `toolkit_git_branch`,
+//   `tenant_id`, `tenant_name`, `instance_id`.
+//   Every query below is written against a specific table family — pick the
+//   one that matches your investigation.
+//
+// COMMITS-BEHIND (out-of-band, since KQL can't call GitHub):
+//   Kusto stores the SHA and branch as strings; it cannot compute distance
+//   from `main` HEAD. To answer "how many commits behind is this emitter?",
+//   follow up the SHA lookup below with GitHub's compare API:
+//
+//     GET https://api.github.com/repos/microsoft/Employee-Self-Service-Agent-Developer-Kit/compare/{tenant_sha}...{branch_head}
+//
+//   where `{branch_head}` is `main` for `toolkitGitBranch == "main"` (DA) or
+//   `main-ca` for `toolkitGitBranch == "main-ca"` (CA). The response's
+//   `behind_by` field is the exact commits-behind count; `commits[].commit
+//   .author.date` gives the age of each commit in between.
+//   Agents/scripts running this pattern should batch by (branch, sha) so
+//   the same compare isn't repeated across many events from the same install.
+
+
+// -----------------------------------------------------------------------------
+// 9a. Per-tenant SHA + branch inventory (FlightCheck runs)
+//     For a specific tenant GUID, list every (SHA, branch, install) combo
+//     observed in the window. This is the starting query for the
+//     Agency/agent workflow: KQL → GitHub compare API → behind-by.
+// -----------------------------------------------------------------------------
+let tenantOfInterest = "<tenant-guid>";  // e.g., "72f988bf-86f1-41af-91ab-2d7cd011db47"
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d) and tenantId == tenantOfInterest
+| summarize Runs = count(),
+            FirstSeen = min(EventInfo_Time),
+            LastSeen = max(EventInfo_Time)
+    by instanceId, toolkitGitSha, toolkitGitBranch, adkVersion
+| order by LastSeen desc
+// Feed each (toolkitGitSha, toolkitGitBranch) row into
+//   GET /repos/.../compare/{toolkitGitSha}...{main|main-ca}
+// to get commits-behind.
+
+
+// -----------------------------------------------------------------------------
+// 9b. Same inventory across ADK platform events (for API / build / deploy
+//     investigations rather than FlightCheck run investigations)
+// -----------------------------------------------------------------------------
+let tenantOfInterest = "<tenant-guid>";
+union adk_session_start, adk_capability_use, adk_agent_create,
+      adk_agent_deploy, adk_build_complete, adk_api_call
+| where EventInfo_Time > ago(30d) and tenant_id == tenantOfInterest
+| summarize Events = count(),
+            FirstSeen = min(EventInfo_Time),
+            LastSeen = max(EventInfo_Time)
+    by instance_id, toolkit_git_sha, toolkit_git_branch, adk_version
+| order by LastSeen desc
+
+
+// -----------------------------------------------------------------------------
+// 9c. Coverage adoption — what fraction of active installs report a
+//     non-blank toolkitGitSha? Useful for watching PR #335 roll out as
+//     makers pull the latest ADK. Older installs (pre-#335) will report
+//     an empty / "unknown" SHA until they pull.
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize TotalInstalls = dcount(instanceId),
+            InstallsReportingSha = dcountif(instanceId,
+                isnotempty(toolkitGitSha) and toolkitGitSha != "unknown")
+| extend CoveragePct = round(100.0 * InstallsReportingSha / TotalInstalls, 1)
+
+
+// -----------------------------------------------------------------------------
+// 9d. Multi-install variance within a single tenant — spot the case where
+//     one tenant has installs on different SHAs (some behind, some ahead).
+//     Highlights tenants where a "posture" answer requires looking at each
+//     install individually, not a tenant-level rollup.
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+     and isnotempty(toolkitGitSha) and toolkitGitSha != "unknown"
+| summarize DistinctShas = dcount(toolkitGitSha),
+            DistinctInstalls = dcount(instanceId),
+            Shas = make_set(toolkitGitSha, 10),
+            Branches = make_set(toolkitGitBranch, 10)
+    by Tenant = iff(isempty(tenantName), tenantId, tenantName)
+| where DistinctShas > 1
+| order by DistinctShas desc, DistinctInstalls desc
+
+
+// -----------------------------------------------------------------------------
+// 9e. Investigating a specific event — from an event you care about, extract
+//     the (install, SHA, branch) triple so you can ask "was this event
+//     emitted from a stale clone?". Replace the where-clause with your
+//     event-specific filter (agentId, correlation id, error signature, …).
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+     // and agentId == "<agent-guid>"
+     // and runId == "<run-id>"
+| project EventInfo_Time, tenantId, tenantName, instanceId,
+          toolkitGitSha, toolkitGitBranch, adkVersion, runId
+| take 50
+// Take toolkitGitSha + toolkitGitBranch to the GitHub compare API to
+// determine how far behind the event's emitter was.

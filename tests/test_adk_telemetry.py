@@ -443,13 +443,66 @@ def test_common_dimensions_shape():
     for key in (
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
-        "session_id", "surface", "adk_version", "timestamp",
+        "session_id", "surface", "adk_version",
+        "toolkit_git_sha", "toolkit_git_branch", "agent_type",
+        "timestamp",
     ):
         assert key in dims
     assert dims["schema_version"] == adk.SCHEMA_VERSION
     assert dims["surface"] == "cli"
     assert dims["session_id"] == "sid-1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", dims["timestamp"])
+
+
+def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
+    """toolkit_git_sha and toolkit_git_branch are precise upgrade-posture
+    signals — ADO #7943642. They must be present on every ADK event so
+    dashboards can distinguish "install is on latest bits" from "install
+    is on an older tree at the same extension version".
+    """
+    # The env overrides are the deterministic entry point used by CI and
+    # tests; the real git-walk code path is exercised in the FlightCheck
+    # test module against a fabricated .git dir.
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "abcdef0")
+    # Branch overrides now go through the bounded classifier — a
+    # personal-name override collapses to "other" so free-form values
+    # never appear in the emitted dimension.
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "amilandin/adk-telemetry-x")
+    _fc = __import__("flightcheck.telemetry", fromlist=["telemetry"])
+    _fc.get_toolkit_git_sha.cache_clear()
+    _fc.get_toolkit_git_branch.cache_clear()
+
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["toolkit_git_sha"] == "abcdef0"
+    assert dims["toolkit_git_branch"] == "other"
+
+
+def test_common_dimensions_agent_type_maps_from_branch(monkeypatch):
+    """agent_type (custom_agent | declarative_agent | unknown) is derived
+    from toolkit_git_branch — ADO #7830949. Every ADK event carries it so
+    a single query can split adoption / capability / build / deploy / api
+    dashboards by CA vs DA maker audience without a downstream join.
+    """
+    _fc = __import__("flightcheck.telemetry", fromlist=["telemetry"])
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "abcdef0")
+
+    for branch, expected in (
+        ("main-ca", adk.AGENT_TYPE_CUSTOM),
+        ("main", adk.AGENT_TYPE_DECLARATIVE),
+        ("amilandin/adk-telemetry-x", adk.AGENT_TYPE_UNKNOWN),
+        ("detached", adk.AGENT_TYPE_UNKNOWN),
+        ("unknown", adk.AGENT_TYPE_UNKNOWN),
+    ):
+        monkeypatch.setenv("ESS_ADK_GIT_BRANCH", branch)
+        _fc.get_toolkit_git_sha.cache_clear()
+        _fc.get_toolkit_git_branch.cache_clear()
+        dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+        assert dims["agent_type"] == expected, (branch, dims["agent_type"])
+
+
+def test_adk_schema_version_bumped_for_agent_type():
+    """Version-gate the new dimension so dashboards can pin on schema 1.6.0."""
+    assert adk.SCHEMA_VERSION == "1.6.0"
 
 
 def test_build_event_is_common_schema_4_0():
@@ -2075,7 +2128,7 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
 def test_schema_version_bump_records_connector_dim():
     # The connector dimension was added in 1.4.0. Older cubes / dashboards
     # can version-gate on this to know whether "connector" will be present.
-    assert adk.SCHEMA_VERSION == "1.4.0"
+    assert adk.SCHEMA_VERSION == "1.6.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------
