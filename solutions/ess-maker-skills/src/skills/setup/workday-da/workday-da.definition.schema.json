@@ -14,6 +14,7 @@
     "packages",
     "architectures",
     "unsupportedAgentSchemaNames",
+    "failurePolicy",
     "completion",
     "steps"
   ],
@@ -93,6 +94,47 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "failurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxAttempts",
+        "backoffSeconds",
+        "categories"
+      ],
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "backoffSeconds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "maxItems": 4
+        },
+        "categories": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "retryable"
+            ],
+            "properties": {
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
     },
     "completion": {
       "type": "object",

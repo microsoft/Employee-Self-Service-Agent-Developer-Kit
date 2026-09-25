@@ -54,6 +54,42 @@
     "msdyn_copilotforemployeeselfservicedait",
     "gptagent_copilotforemployeeselfserviceit"
   ],
+  "failurePolicy": {
+    "maxAttempts": 3,
+    "backoffSeconds": [
+      2,
+      5
+    ],
+    "categories": {
+      "transient": {
+        "retryable": true
+      },
+      "authentication": {
+        "retryable": false
+      },
+      "permission": {
+        "retryable": false
+      },
+      "validation": {
+        "retryable": false
+      },
+      "unsupported": {
+        "retryable": false
+      },
+      "conflict": {
+        "retryable": false
+      },
+      "ambiguous-mutation": {
+        "retryable": false
+      },
+      "manual-action": {
+        "retryable": false
+      },
+      "verification-failed": {
+        "retryable": false
+      }
+    }
+  },
   "completion": {
     "providerStatus": "ready",
     "finalStepId": "DA5.1",

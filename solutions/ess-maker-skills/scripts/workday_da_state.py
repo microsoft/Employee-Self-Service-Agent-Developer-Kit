@@ -409,6 +409,9 @@ class WorkdayDAStateStore:
                 "provenance": result_source,
                 "note": "The current verification did not pass.",
                 "capturedAt": _utc_now(),
+                "failureCategory": "verification-failed",
+                "retryable": False,
+                "attemptCount": 1,
             }
         if (
             step["gate"] == "prog"

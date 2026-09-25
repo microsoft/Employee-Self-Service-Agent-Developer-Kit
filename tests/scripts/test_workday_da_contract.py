@@ -17,6 +17,7 @@ from workday_da_contract import (
     assess_package_version,
     load_definition,
     parse_solution_version,
+    retry_schedule,
     validate_definition,
     validate_state,
 )
@@ -199,3 +200,18 @@ def test_enforced_package_policy_requires_a_minimum() -> None:
 
     with pytest.raises(WorkdayDAContractError, match="minimumInclusive"):
         validate_definition(definition)
+
+
+def test_failure_policy_retries_only_safe_transient_operations() -> None:
+    assert retry_schedule("transient", "read") == (2, 5)
+    assert retry_schedule("transient", "idempotent") == (2, 5)
+    assert retry_schedule("transient", "mutation") == ()
+    assert retry_schedule("permission", "read") == ()
+    assert retry_schedule("ambiguous-mutation", "idempotent") == ()
+
+
+def test_failure_policy_rejects_unknown_categories_and_operations() -> None:
+    with pytest.raises(WorkdayDAContractError, match="failure category"):
+        retry_schedule("mystery", "read")
+    with pytest.raises(WorkdayDAContractError, match="operation kind"):
+        retry_schedule("transient", "guess")

@@ -289,6 +289,10 @@ def test_failure_overrides_ack_and_regresses_transitive_dependents(tmp_path) -> 
     assert failed["setupStatus"]["DA2.1"]["state"] == "in-progress"
     assert failed["setupStatus"]["DA5.1"]["state"] == "in-progress"
     assert failed["status"] == "in-progress"
+    evidence = failed["setupStatus"]["DA1.1"]["evidence"]
+    assert evidence["failureCategory"] == "verification-failed"
+    assert evidence["retryable"] is False
+    assert evidence["attemptCount"] == 1
 
 
 def test_unknown_config_fields_survive_round_trip(tmp_path) -> None:

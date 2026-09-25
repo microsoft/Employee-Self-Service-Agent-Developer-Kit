@@ -104,6 +104,28 @@
         },
         "scenario": {
           "$ref": "#/$defs/readinessScenario"
+        },
+        "failureCategory": {
+          "type": "string",
+          "enum": [
+            "transient",
+            "authentication",
+            "permission",
+            "validation",
+            "unsupported",
+            "conflict",
+            "ambiguous-mutation",
+            "manual-action",
+            "verification-failed"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
         }
       }
     },

@@ -206,6 +206,16 @@ immediately — and **must not** batch those writes to the end of its run. This
 keeps progress crash-safe: if a step errors midway, the rows already verified
 stay complete and this router resumes at the first row that isn't.
 
+**Failure and retry policy.** Classify failures using the categories in
+`workday-da.definition.json`. Only `transient` failures from read-only or
+explicitly idempotent operations may retry, using the definition's bounded
+attempt count and backoff. Authentication, permission, validation,
+unsupported-state, conflict, manual-action, and verification failures stop
+with remediation. An `ambiguous-mutation` always stops for reconciliation;
+never repeat a mutation when the prior outcome is unknown. Persist the safe
+category, retryability, and attempt count in row evidence without raw service
+responses or secrets.
+
 ### DA1.1 — Install the Workday extension package (DA-1)
 
 Read `src/skills/setup/workday-da/install-extension.md` and follow it. That

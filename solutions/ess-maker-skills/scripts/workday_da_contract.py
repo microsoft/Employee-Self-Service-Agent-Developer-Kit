@@ -329,3 +329,30 @@ def assess_package_version(
         maximum,
         f"Installed version {installed_version} is supported.",
     )
+
+
+def retry_schedule(
+    failure_category: str,
+    operation_kind: str,
+    *,
+    definition: Mapping[str, Any] | None = None,
+) -> tuple[int, ...]:
+    """Return bounded retry delays for a safe operation, else no retries."""
+    active_definition = definition or load_definition()
+    policy = active_definition["failurePolicy"]
+    try:
+        category = policy["categories"][failure_category]
+    except KeyError as exc:
+        raise WorkdayDAContractError(
+            f"Unknown Workday DA failure category: {failure_category}"
+        ) from exc
+    if operation_kind not in {"read", "idempotent"}:
+        if operation_kind != "mutation":
+            raise WorkdayDAContractError(
+                f"Unknown Workday DA operation kind: {operation_kind}"
+            )
+        return ()
+    if not category["retryable"]:
+        return ()
+    retry_count = max(policy["maxAttempts"] - 1, 0)
+    return tuple(policy["backoffSeconds"][:retry_count])
