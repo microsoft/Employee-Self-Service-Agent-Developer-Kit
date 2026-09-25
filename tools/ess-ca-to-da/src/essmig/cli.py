@@ -35,7 +35,7 @@ from essmig.discovery import (
     installed_targets,
 )
 from essmig.ess import TARGETS
-from essmig.instructions import keep_target_instructions
+from essmig.instructions import keep_target_instructions, skip_instruction_reconciliation
 from essmig.merge import Outcome, merge
 from essmig.packaging import check_pointers, package_bytes, write_package, zip_package
 from essmig.report import summarize, write_reports
@@ -282,7 +282,7 @@ def _migrate_one(
         discovery.components,
         vertical,
         agent_metadata=discovery.agent,
-        merge_instructions=keep_target_instructions if args.keep_instructions else None,
+        merge_instructions=skip_instruction_reconciliation if args.keep_instructions else None,
         resolver_factory=console_resolver_factory() if interactive else None,
     )
 

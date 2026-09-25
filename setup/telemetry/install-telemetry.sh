@@ -135,7 +135,7 @@ ess_tel_send() {
     ms=$(( (10#$ns / 1000000) % 1000 ))
     ts="$(date -u +%Y-%m-%dT%H:%M:%S).$(printf '%03d' "$ms")Z"
     local data
-    data="{\"schemaVersion\":\"$ESS_TEL_SCHEMA\",\"env\":\"$ESS_TEL_ENV\",\"installer\":\"$ESS_TEL_INSTALLER\",\"invocationSource\":\"installer\",\"platform\":\"$ESS_TEL_PLATFORM\",\"os\":\"$(_ess_tel_jesc "$ESS_TEL_OS")\",\"instanceId\":\"$ESS_TEL_INSTANCE\",\"adkVersion\":\"$(_ess_tel_jesc "$ESS_TEL_ADKVER")\",\"firstRun\":$ESS_TEL_FIRSTRUN$extra}"
+    data="{\"schemaVersion\":\"$ESS_TEL_SCHEMA\",\"env\":\"$ESS_TEL_ENV\",\"installer\":\"$ESS_TEL_INSTALLER\",\"installMode\":\"$ESS_TEL_INSTALL_MODE\",\"invocationSource\":\"installer\",\"platform\":\"$ESS_TEL_PLATFORM\",\"os\":\"$(_ess_tel_jesc "$ESS_TEL_OS")\",\"instanceId\":\"$ESS_TEL_INSTANCE\",\"adkVersion\":\"$(_ess_tel_jesc "$ESS_TEL_ADKVER")\",\"firstRun\":$ESS_TEL_FIRSTRUN$extra}"
     local body="{\"ver\":\"4.0\",\"name\":\"$name\",\"time\":\"$ts\",\"iKey\":\"$envtoken\",\"data\":$data}"
     local uploadms; uploadms="$(( $(date +%s) * 1000 ))"
     # Circuit breaker: an unreachable/slow collector must not add its timeout to
@@ -160,10 +160,16 @@ ess_tel_send() {
 # --- public API ------------------------------------------------------------
 ess_tel_init() {
     # $1 = installer (adk|lite|flightcheck)
+    # $2 = install mode (maker|developer|prompt; or legacy lite|standard).
+    #      Defaults to 'prompt' to match the Windows installer contract.
     ESS_TEL_INSTALLER="${1:-adk}"
+    ESS_TEL_INSTALL_MODE="${2:-prompt}"
     ess_tel_enabled || { ESS_TEL_READY=0; return 0; }
-    # The Lite-mode installer is being merged into the standard ADK installer
-    # (mode will become an onboarding prompt), so it is no longer instrumented.
+    # The legacy 'lite' installer identity (bootstrap-lite-mac.sh sets it
+    # explicitly via ESS_TEL_INSTALLER_OVERRIDE) is not instrumented yet;
+    # macOS consolidation is deferred to a follow-up US. The unified
+    # installer identity is 'adk' with the maker/developer/prompt mode
+    # carried by the installMode dimension.
     [[ "$ESS_TEL_INSTALLER" == "lite" ]] && { ESS_TEL_READY=0; return 0; }
     ess_tel_ensure_config
     local envname

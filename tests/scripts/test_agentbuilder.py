@@ -1020,6 +1020,7 @@ def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
 def test_first_run_authentication_returns_selected_token_tenant(
     tmp_path,
     monkeypatch,
+    capsys,
 ) -> None:
     tenant_id = "00000000-0000-4000-8000-000000009999"
     payload = base64.urlsafe_b64encode(
@@ -1040,7 +1041,12 @@ def test_first_run_authentication_returns_selected_token_tenant(
         def acquire_token_interactive(self, *, scopes, prompt):
             observed["scopes"] = scopes
             observed["prompt"] = prompt
-            return {"access_token": token}
+            return {
+                "access_token": token,
+                "id_token_claims": {
+                    "preferred_username": "maker@example.test",
+                },
+            }
 
     monkeypatch.setattr(
         agentbuilder.msal,
@@ -1060,11 +1066,17 @@ def test_first_run_authentication_returns_selected_token_tenant(
         "https://api.powerplatform.com/"
         "CopilotStudio.MinimalBot.ReadWrite"
     ]
+    assert (
+        "DA_AGENTBUILDER_AUTH_JSON:"
+        '{"account": "maker@example.test"}'
+        in capsys.readouterr().out
+    )
 
 
 def test_selected_tenant_authentication_reuses_one_cached_account(
     tmp_path,
     monkeypatch,
+    capsys,
 ) -> None:
     tenant_id = "00000000-0000-4000-8000-000000009999"
     payload = base64.urlsafe_b64encode(
@@ -1103,6 +1115,11 @@ def test_selected_tenant_authentication_reuses_one_cached_account(
 
     assert result == (token, tenant_id)
     assert observed["account"] is account
+    assert (
+        "DA_AGENTBUILDER_AUTH_JSON:"
+        '{"account": "maker@example.test"}'
+        in capsys.readouterr().out
+    )
 
 
 def test_cached_account_names_are_distinct_and_sorted(
