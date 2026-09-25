@@ -10,14 +10,12 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 import uuid
 
 from ..runner import CheckResult, Priority, Role, Status
-from ._agent_connection_refs import build_agent_ref_scope
-from ._dlp_utils import iter_effective_policies, normalize_connector_id
-from ._maker_urls import (
-    maker_connections_url,
-    maker_solution_url,
-    maker_solutions_url,
+from ._da_connection_refs import (
+    agent_bot_ids,
+    read_all_agents_connection_references,
 )
-from .connections import get_connection_status
+from ._dlp_utils import iter_effective_policies
+from ._maker_urls import maker_solutions_url
 from .licensing import (
     _CAPACITY_DOC,
     _CAPACITY_PORTAL,
@@ -29,186 +27,200 @@ from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
 
-def _resolve_ref_solutions(
-    *, env_url: str, dv_token: str, env_id: str, refs: list[dict],
-) -> dict[str, dict[str, str]]:
-    """Resolve the containing solutions for a set of connection refs.
+_ENV004_GRS_DESCRIPTION = "ESS agent GRS commit pin"
+_ENV004_GRS_EXPECTED_COMMIT_KEYS = (
+    "expectedGrsCommitSha",
+    "grsExpectedCommitSha",
+    "expectedMinimalBotsCommitSha",
+    "expectedEssSolutionCommitSha",
+)
+_ENV004_GRS_REALM_KEYS = ("minimalBotsAlmRealm", "grsRealm", "almRealm")
+_ENV004_GRS_DEFAULT_REALM = "Dev"
+# Config realm string -> the numeric realm the AgentBuilder ALM configure API
+# expects (mirrors agentbuilder.REALM_NAMES: 0=Dev, 1=Test, 2=Prod).
+_ENV004_GRS_REALMS = {"dev": 0, "test": 1, "prod": 2, "production": 2}
+_ENV004_REALM_DISPLAY = {0: "Dev", 1: "Test", 2: "Prod"}
 
-    Returns a map ``{connectionreferenceid: {"url": <maker url>, "label": <name>}}``
-    so each ENV-004 detail row can deep-link to the specific solution
-    that holds its broken ref, instead of dumping the operator on the
-    env-wide solutions list.
 
-    Two Dataverse round-trips are required because the
-    ``connectionreference`` entity carries no solution column — solution
-    membership is only exposed via the ``solutioncomponent`` intersect:
-      1. ``solutioncomponents`` filtered only by ``objectid eq <ref-guid>``
-         → maps each ref GUID to its owning ``_solutionid_value``. We
-         deliberately omit a ``componenttype`` filter because Microsoft's
-         published enum does not document a stable value for Connection
-         Reference (earlier guesses such as 10047 returned empty in real
-         environments). A GUID is universally unique, so filtering on
-         ``objectid`` alone cannot collide with another component kind.
-      2. ``solutions`` filtered by the distinct solution GUIDs from
-         step 1 *and* ``uniquename eq 'Default'`` → resolves
-         friendlyname/ismanaged for ranking, and ensures we always know
-         the Default Solution's GUID for the managed-only fallback.
-
-    Link selection prefers (in order): a named unmanaged solution
-    containing the ref → the Default Solution (always unmanaged, always
-    present, can edit any component as customization) → no link. We
-    never link to a managed solution because Power Apps blocks edits
-    with "You cannot directly edit the objects within a managed
-    solution.", which is a dead end for the maker.
-
-    Best-effort: any Dataverse failure returns ``{}`` so callers cleanly
-    fall back to the env-wide solutions URL.
-    """
-    ref_ids = {
-        ref.get("connectionreferenceid") for ref in refs
-        if ref.get("connectionreferenceid")
-    }
-    if not ref_ids:
+def _env004_active_agent_config(config: dict) -> dict:
+    """Return the active agent block from the setup config, if present."""
+    if not isinstance(config, dict):
         return {}
+    agent = config.get("agent")
+    if isinstance(agent, dict) and agent:
+        return agent
 
-    # Step 1: ref-guid -> solution-guid via solutioncomponents.
-    # No componenttype filter — see docstring above for rationale.
-    sc_filter = " or ".join(f"objectid eq {rid}" for rid in ref_ids)
-    try:
-        components = query_all(
-            env_url, dv_token,
-            "solutioncomponents",
-            "objectid,_solutionid_value",
-            filter_expr=sc_filter,
-        )
-    except Exception:
-        return {}
+    agents = config.get("agents") or []
+    active = config.get("activeAgent", "")
+    if isinstance(agents, list):
+        for candidate in agents:
+            if isinstance(candidate, dict) and candidate.get("slug") == active:
+                return candidate
+        for candidate in agents:
+            if isinstance(candidate, dict):
+                return candidate
+    return {}
 
-    # A single ref typically appears in multiple solution layers (the
-    # base managed solution that defined it plus any unmanaged layer
-    # that customized it). Collect every solution per ref so step 2 can
-    # pick the one the maker can actually edit in the portal.
-    ref_to_solutions: dict[str, list[str]] = {}
-    for comp in components:
-        oid = comp.get("objectid")
-        sid = comp.get("_solutionid_value")
-        if oid and sid:
-            ref_to_solutions.setdefault(oid, []).append(sid)
-    if not ref_to_solutions:
-        return {}
 
-    # Step 2: solution-guid -> {friendlyname, ismanaged} via solutions.
-    # We also unconditionally include the **Default Solution** (uniquename
-    # 'Default'), which is the unmanaged customization layer that always
-    # exists in every Dataverse environment. It's the only place a maker
-    # can edit a connection reference that was defined in a managed
-    # solution — Power Apps refuses direct edits there with "You cannot
-    # directly edit the objects within a managed solution." So when a ref
-    # only lives in managed solutions, we fall back to Default Solution.
-    distinct_sids = {sid for sids in ref_to_solutions.values() for sid in sids}
-    sid_clauses = [f"solutionid eq {sid}" for sid in distinct_sids]
-    sol_filter = "(" + " or ".join(sid_clauses) + ") or uniquename eq 'Default'"
-    try:
-        solutions = query_all(
-            env_url, dv_token,
-            "solutions",
-            "solutionid,uniquename,friendlyname,ismanaged",
-            filter_expr=sol_filter,
-        )
-    except Exception:
-        return {}
-
-    sid_to_info: dict[str, dict] = {}
-    default_sid: str | None = None
-    for sol in solutions:
-        sid = sol.get("solutionid")
-        if not sid:
+def _env004_config_value(config: dict, keys: tuple[str, ...]) -> str:
+    """Read a string setting from active-agent config first, then top-level."""
+    active_agent = _env004_active_agent_config(config)
+    for source in (active_agent, config):
+        if not isinstance(source, dict):
             continue
-        uname = sol.get("uniquename") or ""
-        sid_to_info[sid] = {
-            "label": (
-                sol.get("friendlyname") or uname or sid
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _env004_grs_commit_pin_result(runner) -> CheckResult:
+    """Validate the minimalBots ALM commit pin (ENV-004-GRS).
+
+    Opt-in component-layer check: verifies the deployed Declarative Agent's ALM
+    commit matches an expected GRS commit SHA when one is recorded in config.
+    Validated-tier read (GET .../alm/{id}/configure?realm={int} -> ``commitSha``;
+    cassette ``agentbuilder_readiness.yaml``). SKIPs when no expected SHA is
+    configured (the pin is inert until an operator records the intended release
+    commit), so this never blocks a run that does not use pinning.
+    """
+    config = getattr(runner, "config", None) or {}
+    expected_commit = _env004_config_value(
+        config, _ENV004_GRS_EXPECTED_COMMIT_KEYS
+    )
+    realm_raw = (
+        _env004_config_value(config, _ENV004_GRS_REALM_KEYS)
+        or _ENV004_GRS_DEFAULT_REALM
+    )
+    # 0 (Dev) is a valid realm and falsy, so test membership explicitly.
+    realm = _ENV004_GRS_REALMS.get(realm_raw.lower())
+
+    if not expected_commit:
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS",
+            category="Environment",
+            priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result=(
+                "No expected GRS commit SHA is configured, so the minimalBots "
+                "ALM commit pin was not judged."
             ),
-            "uniquename": uname,
-            "ismanaged": bool(sol.get("ismanaged")),
-        }
-        if uname == "Default":
-            default_sid = sid
-
-    # Internal/system solutions a maker never opens in the portal — skip
-    # them when ranking. (Note: 'Default' is the user-facing Default
-    # Solution and IS editable, so it's NOT in this set.)
-    SYSTEM_UNIQUENAMES = {"Active", "Basic", "System"}
-
-    def _solution_rank(sid: str) -> tuple[int, int, int, str]:
-        info = sid_to_info.get(sid, {})
-        uname = info.get("uniquename", "")
-        is_system = uname in SYSTEM_UNIQUENAMES
-        is_managed = info.get("ismanaged", False)
-        is_default = uname == "Default"
-        # Lowest tuple wins. Prefer (in order):
-        #   1. not-system over system,
-        #   2. unmanaged over managed (maker can edit directly),
-        #   3. a named unmanaged solution over Default (more focused
-        #      view; Default is the catch-all),
-        #   4. alphabetical for stability.
-        return (
-            1 if is_system else 0,
-            1 if is_managed else 0,
-            1 if is_default else 0,
-            uname,
+            remediation=(
+                "Record the expected ESS solution commit SHA in "
+                ".local/config.json using expectedGrsCommitSha (top-level or on "
+                "the active agent), then re-run FlightCheck."
+            ),
         )
 
-    out: dict[str, dict[str, str]] = {}
-    for rid, sids in ref_to_solutions.items():
-        # Only consider sids we successfully resolved in step 2.
-        known = [sid for sid in sids if sid in sid_to_info]
-        if known:
-            best = sorted(known, key=_solution_rank)[0]
-            # If the best candidate is still managed (i.e. every solution
-            # containing this ref is managed), redirect the link to the
-            # Default Solution so the maker actually has somewhere to
-            # edit. The label changes too so the report doesn't mislead
-            # the maker into clicking through to a read-only solution.
-            if sid_to_info[best].get("ismanaged"):
-                if default_sid:
-                    out[rid] = {
-                        "url": maker_solution_url(env_id, default_sid),
-                        "label": sid_to_info[default_sid]["label"],
-                    }
-                # Else: nothing editable to link to. Skip so the caller
-                # falls back to the env-wide URL — better to give the
-                # maker the solutions list than dump them on a managed
-                # solution page that refuses edits.
-                continue
-            out[rid] = {
-                "url": maker_solution_url(env_id, best),
-                "label": sid_to_info[best]["label"],
-            }
-        elif default_sid:
-            # No containing solution resolved — Default Solution is still
-            # the right editable fallback (better than the env-wide list).
-            out[rid] = {
-                "url": maker_solution_url(env_id, default_sid),
-                "label": sid_to_info[default_sid]["label"],
-            }
-    return out
+    if realm is None:
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS",
+            category="Environment",
+            priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result=(
+                f"Configured minimalBots ALM realm '{realm_raw}' is invalid. "
+                "Expected one of Dev, Test, or Prod."
+            ),
+            remediation=(
+                "Set minimalBotsAlmRealm, grsRealm, or almRealm in "
+                ".local/config.json to Dev, Test, or Prod."
+            ),
+        )
 
+    realm_name = _ENV004_REALM_DISPLAY[realm]
+    client = getattr(runner, "agentbuilder", None)
+    bot_ids = agent_bot_ids(config)
+    if client is None or not bot_ids:
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS",
+            category="Environment",
+            priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result=(
+                "AgentBuilder client or agent botId not available, so the "
+                "minimalBots ALM commit pin was not judged."
+            ),
+            remediation=(
+                "Run /setup so .local/config.json records the agent botId, and "
+                "ensure FlightCheck is signed in to Copilot Studio (AgentBuilder), "
+                "then re-run FlightCheck."
+            ),
+        )
 
-def _solution_link_parts(
-    ref: dict, solution_info: dict[str, dict[str, str]], fallback_url: str,
-) -> tuple[str, str]:
-    """Pick the best (url, label) for the solution containing a ref.
+    mismatches: list[tuple[str, str]] = []
+    missing_commit: list[str] = []
+    for bot_id in bot_ids:
+        try:
+            data = client.get_realm_configuration(bot_id, realm)
+        except Exception as e:  # noqa: BLE001 — surface a read failure as WARNING
+            return CheckResult(
+                roles=[Role.ESS_MAKER.value],
+                checkpoint_id="ENV-004-GRS",
+                category="Environment",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description=_ENV004_GRS_DESCRIPTION,
+                result=(
+                    f"Could not read minimalBots ALM configure for realm "
+                    f"{realm_name}: {type(e).__name__}: {e}"
+                ),
+                remediation=(
+                    "Ensure the agent is opted into minimalBots ALM for this realm "
+                    "and that FlightCheck is signed in to Copilot Studio (AgentBuilder)."
+                ),
+            )
+        observed_commit = (data or {}).get("commitSha") or ""
+        if not observed_commit:
+            missing_commit.append(bot_id)
+        elif observed_commit.lower() != expected_commit.lower():
+            mismatches.append((bot_id, observed_commit))
 
-    Returns a deep link to the specific solution when we resolved its
-    metadata; otherwise falls back to the env-wide solutions list so
-    the remediation never produces a 404.
-    """
-    rid = ref.get("connectionreferenceid")
-    if rid and rid in solution_info:
-        info = solution_info[rid]
-        return info["url"], f"Power Apps \u2192 Solutions \u2192 {info['label']}"
-    return fallback_url, "Power Apps \u2192 Solutions"
+    if mismatches or missing_commit:
+        parts = [
+            f"botId {bot_id} has commitSha {observed}"
+            for bot_id, observed in mismatches
+        ]
+        parts.extend(
+            f"botId {bot_id} returned no commitSha" for bot_id in missing_commit
+        )
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS",
+            category="Environment",
+            priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result=(
+                f"Expected GRS commit SHA {expected_commit} for realm "
+                f"{realm_name}, but " + "; ".join(parts)
+            ),
+            remediation=(
+                "Publish or import the ESS agent solution built from the expected "
+                "commit, or update expectedGrsCommitSha only after confirming the "
+                "new commit is the intended release."
+            ),
+        )
+
+    return CheckResult(
+        roles=[Role.ESS_MAKER.value],
+        checkpoint_id="ENV-004-GRS",
+        category="Environment",
+        priority=Priority.HIGH.value,
+        status=Status.PASSED.value,
+        description=_ENV004_GRS_DESCRIPTION,
+        result=(
+            f"minimalBots ALM configure for realm {realm_name} reports the "
+            f"expected GRS commit SHA {expected_commit}."
+        ),
+    )
 
 
 def run_environment_checks(runner) -> list[CheckResult]:
@@ -445,462 +457,158 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
 # ---------------------------------------------------------------------------
 
 def _check_connections_and_refs(runner) -> list[CheckResult]:
-    """Report the agent's connection references with binding state.
+    """Report the Declarative Agent's connection references, plus the GRS pin.
 
-    Scope: only the connection references the ESS agent(s) under check
-    actually use are judged — resolved from each agent's enabled topics
-    -> InvokeFlowAction flowIds -> BAP flow ``connectionReferences``
-    (see ``_agent_connection_refs.build_agent_ref_scope``). References
-    belonging to other apps in the same environment, and the ESS-shipped
-    placeholder references that ship unbound-by-design on a Workday
-    simplified install, are excluded so they don't produce false FAILs.
-    When the agent's ref set can't be resolved, the check SKIPs rather
-    than judging environment-wide references.
+    Re-pointed from the Dataverse ``connectionreference`` table to the
+    Declarative Agent minimalBots components API (validated tier; the same
+    ``connectionReferenceChanges`` shape the shipped native ``DA-CONN-001``
+    check consumes, read via ``_da_connection_refs``). The DA components
+    changeset IS each agent's declared reference set, so this reads every
+    configured agent's references and classifies each:
 
-    Detects broken bindings in both directions:
-      - Connection references pointing to a connection that doesn't exist
-        (orphan reference).
-      - Connection references the agent's flows expect that have no row in
-        the environment (missing reference).
-      - Connections (of a connector the agent uses) with no corresponding
-        in-scope connection reference (unbound connection).
+      - **Unbound reference** (FAIL) \u2014 a reference with no ``connectionId``.
+        Topics/flows using it fail immediately at runtime.
+      - **Bound reference** (PASS) \u2014 a reference with a ``connectionId`` set.
 
-    Terminology:
-      **Orphan reference** (FAIL) — An in-scope connection reference points
-      to a connection ID that no longer exists in the environment. This
-      occurs when a connection was deleted, the solution was imported from
-      another environment, or a connection was recreated with a new ID.
-      Topics/flows using this reference will fail at runtime with auth errors.
+    Unlike the former Dataverse-backed check, the DA changeset carries no
+    environment-wide connection inventory, so the orphan-reference,
+    missing-reference, and unbound-connection branches are not applicable and
+    are not emitted.
 
-      **Unbound reference** (FAIL) — An in-scope connection reference exists
-      but has no connection ID set (empty ``connectionid`` field). This
-      occurs after a solution import where references were never configured,
-      or a new reference was added but not bound. Topics/flows using this
-      reference will fail immediately.
-
-      **Missing reference** (FAIL) — The agent's flow references a connection
-      reference logical name that has no ``connectionreference`` row in this
-      environment at all. The flow fails at runtime with an unresolved
-      reference; re-importing the agent's solution recreates it.
-
-      **Unbound connection** (WARN) — A connection whose connector the agent
-      uses exists in the environment but no in-scope connection reference
-      points to it. Common after troubleshooting (test connections),
-      re-binding references to newer connections, or manual connection
-      creation. No runtime impact, but adds clutter.
+    A separate GRS commit-pin sub-check (``ENV-004-GRS``) verifies the deployed
+    agent's ALM commit matches an expected SHA when one is configured; its
+    verdict folds into the ENV-004 summary status and it is also emitted as a
+    detail row (so a scope run shows it; a targeted ``--checkpoint ENV-004`` run
+    filters the detail row out but still sees the folded verdict in the summary).
 
     Signal:
-      SKIP  — the agent's connection-reference set could not be resolved.
-      PASS  — all in-scope references bound to existing connections.
-      WARN  — unbound connections of an agent connector exist (may be intentional).
-      FAIL  — orphan, unbound, or missing references found (broken bindings).
+      SKIP  \u2014 no AgentBuilder client or no configured agent botId.
+      PASS  \u2014 every reference is bound (and the GRS pin passed or was not judged).
+      WARN  \u2014 the components read or GRS configure read errored.
+      FAIL  \u2014 one or more unbound references (or the GRS pin failed).
     """
-
     results: list[CheckResult] = []
-    pp = runner.pp_admin
-    env_id = runner.env_id
-    env_url = getattr(runner, "env_url", None)
-    dv_token = getattr(runner, "dv_token", None)
+    roles = [Role.POWER_PLATFORM_ADMIN.value]
+    description = "Connections & connection references"
 
-    if not pp or not env_id:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-004", category="Environment",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="Connections & connection references",
-            result="Power Platform Admin API not available — skipping",
-            remediation="Requires Power Platform Administrator role.",
-        ))
-        return results
-
-    if not env_url or not dv_token:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-004", category="Environment",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="Connections & connection references",
-            result="Dataverse token not available — cannot query connection references",
-            remediation="Ensure Dataverse authentication is configured.",
-        ))
-        return results
-
-    # --- Fetch connections from PP Admin API ---
+    # Validated-tier read via the shared DA reader. Fail loudly: a malformed
+    # changeset raises (degrade to WARNING) rather than reporting a confident
+    # but wrong verdict; an unavailable client/botId returns None (SKIP).
     try:
-        all_conns = pp.get_connections(env_id)
-        if isinstance(all_conns, dict) and "_error" in all_conns:
-            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-                checkpoint_id="ENV-004", category="Environment",
-                priority=Priority.HIGH.value, status=Status.WARNING.value,
-                description="Connections & connection references",
-                result=f"Unable to list connections: {all_conns['_error']}",
-                remediation="Requires Power Platform Admin role.",
-            ))
-            return results
-    except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        refs = read_all_agents_connection_references(runner)
+    except Exception as e:  # noqa: BLE001 \u2014 fail loudly as a WARNING
+        results.append(CheckResult(roles=roles,
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="Connections & connection references",
-            result=f"Error fetching connections: {e}",
-        ))
-        return results
-
-    # --- Fetch connection references from Dataverse ---
-    #
-    # `connectionreference` carries no solution column — solution
-    # membership is only exposed via the `solutioncomponent` intersect.
-    # The deep-link resolution (`_resolve_ref_solutions`) does the
-    # extra round-trip downstream, only for the broken refs we need
-    # to remediate, not for every ref in the env.
-    try:
-        conn_refs = query_all(
-            env_url, dv_token,
-            "connectionreferences",
-            "connectionreferenceid,connectionreferencelogicalname,"
-            "connectorid,connectionid,connectionreferencedisplayname,statuscode",
-        )
-    except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-004", category="Environment",
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="Connections & connection references",
-            result=f"Error querying connection references: {e}",
-            remediation="Ensure Dataverse access permissions.",
-        ))
-        return results
-
-    # --- Scope to the connection references THIS agent actually uses ---
-    #
-    # Judging every ref in the environment produces false FAILs on refs
-    # the ESS agent never touches (other apps' refs, and the ESS-shipped
-    # placeholder refs that ship unbound-by-design on a Workday
-    # simplified install). `build_agent_ref_scope` resolves the agent's
-    # used refs from its enabled topics -> InvokeFlowAction flowIds ->
-    # BAP flow connectionReferences. See _agent_connection_refs.py.
-    #
-    #   - None  -> we can't establish the agent's ref set. SKIP rather
-    #              than judge env-wide (a misleading FAIL is worse than
-    #              an honest SKIP).
-    #   - raise -> genuine API error; surface as WARNING (principle 3).
-    #
-    # Catch only RuntimeError: that's the exception type the builder
-    # raises for genuine API failures (see build_agent_ref_scope's
-    # contract). Letting any other exception type propagate means a
-    # future programming defect surfaces loudly as an ERROR (via the
-    # runner) instead of being disguised as a benign WARNING here.
-    try:
-        ref_scope = build_agent_ref_scope(runner)
-    except RuntimeError as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-004", category="Environment",
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="Connections & connection references",
-            result=f"Unable to determine which connection references this agent uses: {e}",
-            remediation=(
-                "Re-run FlightCheck with Power Platform Administrator access so the "
-                "agent's cloud flows can be listed and its connection references scoped."
-            ),
-        ))
-        return results
-
-    if ref_scope is None:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-004", category="Environment",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="Connections & connection references",
+            description=description,
             result=(
-                "Could not determine which connection references belong to this agent "
-                "(no configured agent botId, or the agent's cloud flows could not be "
-                "resolved), so environment-wide references were not judged."
+                f"Unable to read the agent's connection references: "
+                f"{type(e).__name__}: {e}"
             ),
             remediation=(
-                "Ensure .local/config.json carries the agent's botId and that FlightCheck "
-                "is signed in with Power Platform Administrator access, then re-run so the "
-                "agent's flows (and their connection references) can be enumerated."
+                "Re-run FlightCheck; if this persists, ensure FlightCheck is "
+                "signed in to Copilot Studio (AgentBuilder) and report the error above."
             ),
         ))
         return results
 
-    # Keep only the Dataverse refs whose logical name is one the agent's
-    # flows bind to. Presence of the full env-wide set is retained
-    # separately so we can still detect references the flows expect but
-    # that don't exist in the environment at all (missing refs, below).
-    all_ref_logical_names = {
-        (r.get("connectionreferencelogicalname") or "").lower()
-        for r in conn_refs
-    }
-    in_scope_refs = [
-        r for r in conn_refs
-        if (r.get("connectionreferencelogicalname") or "").lower()
-        in ref_scope.logical_names
-    ]
+    if refs is None:
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="ENV-004", category="Environment",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                "AgentBuilder client or agent botId not available, so connection "
+                "references were not judged."
+            ),
+            remediation=(
+                "Run /setup so .local/config.json records the agent botId, and "
+                "ensure FlightCheck is signed in to Copilot Studio (AgentBuilder), "
+                "then re-run FlightCheck."
+            ),
+        ))
+        return results
 
-    # Missing references: a logical name the agent's flows reference but
-    # that has no `connectionreference` row anywhere in the environment.
-    # The flow will fail at runtime with an unresolved-reference error.
-    missing_ref_names = sorted(
-        name for name in ref_scope.logical_names
-        if name and name not in all_ref_logical_names
-    )
+    unbound_refs = [r for r in refs if not (r.get("connectionid") or "")]
+    bound_refs = [r for r in refs if (r.get("connectionid") or "")]
 
-    # --- Build lookup: connection name (GUID) → connection object ---
-    conn_map = {}
-    for c in all_conns:
-        conn_name = c.get("name", "")
-        if conn_name:
-            conn_map[conn_name] = c
+    # The GRS commit pin is a distinct ENV-004 sub-check; fold its verdict into
+    # the summary status so a targeted run (which filters the detail row) still
+    # surfaces a GRS failure.
+    grs_result = _env004_grs_commit_pin_result(runner)
 
-    # --- Analyze binding state (agent-scoped refs only) ---
-    bound_conn_ids = set()
-    orphan_refs = []   # References pointing to non-existent connections
-    unbound_refs = []  # References with no connectionid set
-
-    for ref in in_scope_refs:
-        conn_id = ref.get("connectionid") or ""
-        if not conn_id:
-            unbound_refs.append(ref)
-        elif conn_id in conn_map:
-            bound_conn_ids.add(conn_id)
-        else:
-            orphan_refs.append(ref)
-
-    # Unbound connections: connections no in-scope reference points to.
-    # Scope this to connectors the agent actually uses so unrelated
-    # apps' connections in the same environment aren't flagged.
-    unbound_conns = [
-        c for c in all_conns
-        if c.get("name", "")
-        and c.get("name", "") not in bound_conn_ids
-        and normalize_connector_id(
-            (c.get("properties", {}) or {}).get("apiId", "")
-        ) in ref_scope.connectors
-    ]
-
-    # --- Determine overall status ---
-    has_failing_refs = (
-        len(orphan_refs) > 0 or len(unbound_refs) > 0 or len(missing_ref_names) > 0
-    )
-    has_unbound_conns = len(unbound_conns) > 0
-
-    if has_failing_refs:
+    if unbound_refs or grs_result.status == Status.FAILED.value:
         overall_status = Status.FAILED.value
-    elif has_unbound_conns:
+    elif grs_result.status == Status.WARNING.value:
         overall_status = Status.WARNING.value
     else:
         overall_status = Status.PASSED.value
 
-    # --- Summary (agent-scoped) ---
-    bound_refs = len(in_scope_refs) - len(orphan_refs) - len(unbound_refs)
     summary_parts = [
-        f"{len(all_conns)} connection(s) in environment",
-        f"{len(in_scope_refs)} reference(s) used by this agent",
-        f"{bound_refs} bound ({len(bound_conn_ids)} distinct conn(s))",
+        f"{len(refs)} reference(s) declared by the agent(s)",
+        f"{len(bound_refs)} bound",
     ]
-    if orphan_refs:
-        summary_parts.append(f"{len(orphan_refs)} orphan ref(s)")
     if unbound_refs:
-        summary_parts.append(f"{len(unbound_refs)} unbound ref(s)")
-    if missing_ref_names:
-        summary_parts.append(f"{len(missing_ref_names)} missing ref(s)")
-    if unbound_conns:
-        summary_parts.append(f"{len(unbound_conns)} unbound conn(s)")
+        summary_parts.append(f"{len(unbound_refs)} unbound")
+    if grs_result.status != Status.SKIPPED.value:
+        summary_parts.append(f"GRS commit pin: {grs_result.status}")
 
-    remediation = ""
-    solutions_url = maker_solutions_url(env_id)
-    connections_url = maker_connections_url(env_id)
-    # Microsoft's official walkthrough for binding / editing a
-    # connection reference. We surface this as doc_link so the
-    # operator can follow the canonical flow if the abbreviated
-    # in-remediation instructions aren't enough.
+    env_id = getattr(runner, "env_id", None)
+    solutions_url = maker_solutions_url(env_id) if env_id else None
     conn_ref_doc = (
         "https://learn.microsoft.com/en-us/power-apps/maker/"
         "data-platform/create-connection-reference"
     )
 
-    # --- Resolve containing solution for each problematic ref ---
-    #
-    # The env-wide solutions list dumps every first-party + ISV solution
-    # in the env on the operator and leaves them guessing which one
-    # holds the broken ref. Query the `solutioncomponent` intersect
-    # (componenttype 10047 = Connection Reference) to map each broken
-    # ref's GUID to its owning solution, then look up the friendly
-    # display name + solution GUID so the per-row remediation can
-    # deep-link straight to the right solution's detail page.
-    #
-    # The lookup is best-effort: any failure (Dataverse error, missing
-    # field, missing solution) cleanly falls back to the env-wide
-    # solutions list URL so the remediation never silently 404s.
-    problematic_refs = orphan_refs + unbound_refs
-    solution_info = _resolve_ref_solutions(
-        env_url=env_url, dv_token=dv_token,
-        env_id=env_id, refs=problematic_refs,
-    )
-
-    if has_failing_refs:
-        # Build the most specific summary remediation we can:
-        #   - All broken refs in ONE resolved solution → deep-link to it
-        #   - Broken refs span MULTIPLE resolved solutions → name them
-        #     all, but the link has to fall back to the env-wide list
-        #     (no single deep link covers multiple solutions)
-        #   - Lookup didn't resolve any solution → generic prose
-        distinct_solutions = {
-            (info["url"], info["label"])
-            for info in solution_info.values()
-        }
-        if len(distinct_solutions) == 1:
-            sol_url, sol_label = next(iter(distinct_solutions))
-            remediation = (
-                f"Fix broken connection references: open [Power Apps \u2192 Solutions "
-                f"\u2192 {sol_label}]({sol_url}) \u2192 in the left nav choose "
-                f"**Objects \u2192 Connection references** \u2192 re-bind each broken "
-                f"reference to a valid connection, or remove stale references."
-            )
-        elif len(distinct_solutions) > 1:
-            names = ", ".join(sorted(label for _, label in distinct_solutions))
-            remediation = (
-                f"Fix broken connection references (spread across solutions: {names}). "
-                f"Open [Power Apps \u2192 Solutions]({solutions_url}), open each "
-                f"affected solution, and in the left nav choose **Objects \u2192 "
-                f"Connection references** to re-bind each broken reference or remove "
-                f"stale ones. See the ENV-004-OR-* / ENV-004-UR-* detail rows below "
-                f"for per-reference deep links."
-            )
-        else:
-            remediation = (
-                f"Fix broken connection references: open [Power Apps \u2192 Solutions]({solutions_url}) "
-                f"\u2192 click the solution that contains your agent \u2192 in the left nav choose "
-                f"**Objects \u2192 Connection references** \u2192 re-bind each broken reference to a "
-                f"valid connection, or remove stale references."
-            )
-    elif has_unbound_conns:
+    if unbound_refs and solutions_url:
         remediation = (
-            f"Unbound connections may be intentional (e.g. test connections). "
-            f"Review them in [the environment connections list]({connections_url}) and remove unused entries."
+            f"Bind the unbound connection reference(s): open [Power Apps \u2192 "
+            f"Solutions]({solutions_url}) \u2192 open the solution that contains "
+            f"your agent \u2192 in the left nav choose **Objects \u2192 Connection "
+            f"references** \u2192 bind each unbound reference to a valid connection."
         )
+    elif unbound_refs:
+        remediation = (
+            "Bind the unbound connection reference(s) in Power Apps \u2192 "
+            "Solutions \u2192 your agent's solution \u2192 Objects \u2192 "
+            "Connection references."
+        )
+    else:
+        remediation = ""
 
-    # When the summary is FAILED, the operator needs to fix connection
-    # references; surface Microsoft's canonical walkthrough as doc_link
-    # so they have the full reference next to the abbreviated steps.
     summary_doc_link = (
         conn_ref_doc
         if overall_status == Status.FAILED.value
         else f"{DOC_BASE}/prepare#set-up-your-power-platform-environment"
     )
-    results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+    results.append(CheckResult(roles=roles,
         checkpoint_id="ENV-004", category="Environment",
         priority=Priority.HIGH.value, status=overall_status,
-        description="Connections & connection references",
+        description=description,
         result=" | ".join(summary_parts),
         remediation=remediation,
         doc_link=summary_doc_link,
     ))
 
-    # --- Detail: orphan references (point to missing connections) ---
-    for i, ref in enumerate(orphan_refs):
-        ref_name = ref.get("connectionreferencedisplayname") or ref.get(
-            "connectionreferencelogicalname", "Unknown"
-        )
-        dead_conn_id = ref.get("connectionid", "?")
-        sol_url, sol_label = _solution_link_parts(ref, solution_info, solutions_url)
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id=f"ENV-004-OR-{i + 1:03d}", category="Environment",
-            priority=Priority.HIGH.value, status=Status.FAILED.value,
-            description=f"Orphan reference: {ref_name}",
-            result=f"Points to missing connection '{dead_conn_id}'",
-            remediation=(
-                f"Open [{sol_label}]({sol_url}) \u2192 in the left nav choose **Objects "
-                f"\u2192 Connection references** \u2192 re-bind '{ref_name}' to an active "
-                f"connection, or delete the reference."
-            ),
-            doc_link=conn_ref_doc,
-        ))
-
-    # --- Detail: unbound references (no connectionid set) ---
+    # --- Detail: unbound references (no connectionId set) ---
     for i, ref in enumerate(unbound_refs):
-        ref_name = ref.get("connectionreferencedisplayname") or ref.get(
-            "connectionreferencelogicalname", "Unknown"
-        )
-        sol_url, sol_label = _solution_link_parts(ref, solution_info, solutions_url)
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        ref_name = ref.get("connectionreferencelogicalname") or "Unknown"
+        connector = ref.get("connectorid") or "?"
+        results.append(CheckResult(roles=roles,
             checkpoint_id=f"ENV-004-UR-{i + 1:03d}", category="Environment",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=f"Unbound reference: {ref_name}",
-            result="No connection bound to this reference",
+            result=f"No connection bound to this reference (connector {connector})",
             remediation=(
-                f"Open [{sol_label}]({sol_url}) \u2192 in the left nav choose **Objects "
-                f"\u2192 Connection references** \u2192 bind '{ref_name}' to a valid connection."
+                f"Open your agent's solution in Power Apps \u2192 Solutions \u2192 "
+                f"**Objects \u2192 Connection references** \u2192 bind '{ref_name}' to "
+                f"a valid connection."
             ),
             doc_link=conn_ref_doc,
         ))
 
-    # --- Detail: missing references (agent flow references a connection
-    # reference logical name that has no row in this environment) ---
-    # The flow expects this reference to exist; without it the flow fails
-    # at runtime with an unresolved-connection-reference error. Unlike an
-    # unbound ref (row exists, no connection bound), here the row itself
-    # is absent — importing/re-deploying the agent's solution recreates it.
-    for i, logical_name in enumerate(missing_ref_names):
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id=f"ENV-004-MR-{i + 1:03d}", category="Environment",
-            priority=Priority.HIGH.value, status=Status.FAILED.value,
-            description=f"Missing reference: {logical_name}",
-            result=(
-                f"An agent cloud flow references connection reference "
-                f"'{logical_name}', but no such reference exists in this environment"
-            ),
-            remediation=(
-                f"The agent's flow expects a connection reference named "
-                f"'{logical_name}' that is not present in this environment, so the flow "
-                f"fails at runtime with an unresolved-reference error. Re-import (or push) "
-                f"the agent's solution so the missing reference is recreated, then open "
-                f"[Power Apps \u2192 Solutions]({solutions_url}) \u2192 **Objects \u2192 "
-                f"Connection references** and bind it to a valid connection."
-            ),
-            doc_link=conn_ref_doc,
-        ))
-
-    # --- Detail: unbound connections (no reference in THIS agent's solution
-    # points to them). ``unbound`` here is scoped to the agent under check:
-    # the connection might still be in use by another agent, a Power Automate
-    # flow that connects directly without a connection reference, or a
-    # canvas/model-driven app. We don't query env-wide to confirm true
-    # disuse, so the remediation MUST be explicit about that limitation
-    # and walk the maker through verifying before deletion. Deleting a
-    # connection that something else depends on breaks that resource
-    # silently \u2014 the platform does not warn.
-    for i, conn in enumerate(unbound_conns):
-        props = conn.get("properties", {})
-        conn_name = props.get("displayName", conn.get("name", "Unknown"))
-        api_id = props.get("apiId", "")
-        connector_label = api_id.split("/")[-1] if api_id else "unknown"
-        conn_status = get_connection_status(conn)
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id=f"ENV-004-UC-{i + 1:03d}", category="Environment",
-            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
-            description=f"Unbound connection: {conn_name}",
-            result=(
-                f"Connector: {connector_label} | Status: {conn_status} | "
-                f"Not referenced by this agent's solution"
-            ),
-            remediation=(
-                f"This connection is not referenced by THIS agent's solution, "
-                f"but it may still be used by another agent, a Power Automate "
-                f"flow, or an app in this environment. **Verify it is unused "
-                f"before deleting** \u2014 the platform does not warn if you "
-                f"delete a connection that something else depends on. "
-                f"To verify: "
-                f"(1) open [Power Automate \u2192 Connections]({connections_url}) "
-                f"and click '{conn_name}' \u2014 the detail page lists apps "
-                f"that depend on it; "
-                f"(2) open [Power Automate \u2192 My flows]"
-                f"(https://make.powerautomate.com/environments/{runner.env_id}/flows) "
-                f"and check whether any flow authenticates via the "
-                f"'{connector_label}' connector; "
-                f"(3) open other [solutions in this environment]"
-                f"(https://make.powerapps.com/environments/{runner.env_id}/solutions) "
-                f"and check their **Objects \u2192 Connection references**. "
-                f"If nothing depends on '{conn_name}', delete it from the "
-                f"Power Automate Connections list."
-            ),
-        ))
+    # --- Detail: GRS commit pin (also folded into the summary status above) ---
+    results.append(grs_result)
 
     return results
 

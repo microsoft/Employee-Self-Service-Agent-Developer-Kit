@@ -22,6 +22,9 @@ MOCK_AGENT_ID = "00000000-0000-0000-0000-000000002222"
 MOCK_FAMILY_ID = "00000000-0000-0000-0000-000000003333"
 MOCK_CONNECTION_ID = "mock-servicenow-connection"
 MOCK_WORKDAY_CONNECTION_ID = "mock-workday-connection"
+# The GRS commit pin captured in the validated ALM configure response
+# (agentbuilder_readiness.yaml line 82).
+COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
 MOCK_AGENTBUILDER_BASE = (
     "https://00000000000000000000000000000000."
     "0.environment.api.test.powerplatform.com"
@@ -37,12 +40,21 @@ def agent() -> dict[str, Any]:
     }
 
 
-def configuration() -> dict[str, Any]:
+def configuration(*, commit_sha: str = COMMIT_SHA) -> dict[str, Any]:
+    """The minimalBots ALM ``configure`` response (realm Dev).
+
+    ``commitSha`` is the GRS commit pin ``ENV-004-GRS`` reads.
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml line 82
+      (``realm``/``cdsBotId``/``schemaName``/``grsRepositoryId``/``commitSha``).
+    """
     return {
         "realm": "Dev",
         "cdsBotId": MOCK_AGENT_ID,
         "schemaName": "gptagent_mockemployeeselfservice",
         "grsRepositoryId": MOCK_FAMILY_ID,
+        "commitSha": commit_sha,
     }
 
 

@@ -31,9 +31,12 @@ target.
 
 **Scope:** the ESS + Workday *setup* checkpoints only — not the entire
 FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` /
-``ENV-004`` (+ detail) rows stay validated by the existing ``--scope``
-runs and are deliberately out of registry scope. See
+connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` row stay
+validated by the existing ``--scope`` runs and are deliberately out of
+registry scope. ``ENV-004`` was re-pointed to the Declarative Agent
+minimalBots components + ALM API and is now registered here (clients
+``AGENTBUILDER``) so it can run via the plan/``--checkpoint`` path like the
+other DA checks. See
 ``plans/workday-setup/flightcheck-single-checkpoint.md``.
 """
 
@@ -540,17 +543,36 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the Workday SOAP connection reference from the
+    # Declarative Agent minimalBots components API (AGENTBUILDER), plus a
+    # best-effort BAP owner echo (PP_ADMIN).
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset({AGENTBUILDER, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+    ),
+    # ENV-004 — re-pointed from the Dataverse connectionreference table to the
+    # Declarative Agent minimalBots components + ALM configure API
+    # (AGENTBUILDER). Reads every configured agent's connection references
+    # (bound/unbound) and, when an expected GRS commit SHA is configured, pins
+    # the deployed ALM commit (ENV-004-GRS). category_fn is
+    # run_environment_checks; the plan path filters emitted rows to the ENV-004
+    # target (the ENV-004-UR-* / ENV-004-GRS detail rows are supplementary, and
+    # the GRS verdict also folds into the ENV-004 summary status).
+    CheckpointSpec(
+        key="ENV-004",
+        category_fn=run_environment_checks,
+        category_label="Environment",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value, Role.ESS_MAKER.value),
     ),
     # WD-REST-001 — pure config check (restBaseUrl trimmed to /api), no client.
     CheckpointSpec(
