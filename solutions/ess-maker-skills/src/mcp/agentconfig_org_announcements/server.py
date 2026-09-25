@@ -50,6 +50,7 @@ from client import (
     build_manager_state,
     is_deleted_item,
 )
+from base_client import LocalCredentialError
 from drafts import (
     AnnouncementEditorDraft,
     AudienceGroup,
@@ -282,6 +283,8 @@ mcp = FastMCP(
 )
 
 _client: Optional[OrgAnnouncementsClient] = None
+_client_users: dict[OrgAnnouncementsClient, int] = {}
+_retired_clients: set[OrgAnnouncementsClient] = set()
 _graph_client: Optional[GraphDirectoryClient] = None
 _graph_client_users: dict[GraphDirectoryClient, int] = {}
 
@@ -291,7 +294,7 @@ _client_lock = asyncio.Lock()
 
 
 async def get_client() -> OrgAnnouncementsClient:
-    """Return the authoring client, constructing it lazily off the event loop.
+    """Lease the authoring client, constructing it lazily off the event loop.
 
     ``OrgAnnouncementsClient.__init__`` resolves a delegated token through the
     shared core, which is synchronous and — on a cold cache — blocks for as long
@@ -299,27 +302,58 @@ async def get_client() -> OrgAnnouncementsClient:
     inline would run all of that *inside* the asyncio event loop, freezing every
     other in-flight request and the MCP stdio transport itself for the duration.
 
-    So construction happens in a worker thread, behind a lock, exactly like the
-    Graph client's token acquisition.
+    Construction and lease registration happen behind the same lock. Callers
+    must release the returned client, normally through ``get_client_lease``, so
+    a 401 reset can retire the client without closing it during another request.
     """
     global _client
-    if _client is not None:
-        return _client
     async with _client_lock:
         if _client is None:
             try:
                 _client = await asyncio.to_thread(OrgAnnouncementsClient)
-            except (LockException, OSError) as error:
+            except (LocalCredentialError, LockException, OSError) as error:
                 # Cache details stay on the exception cause, not in tool payloads.
                 raise _FailureResult(
                     "AuthenticationRequired",
                     "Organization announcement sign-in could not be completed. Try again.",
                     source=SOURCE_MCP,
                 ) from error
-    return _client
+        client = _client
+        _client_users[client] = _client_users.get(client, 0) + 1
+        return client
 
 
-async def reset_client() -> None:
+async def release_client(client: OrgAnnouncementsClient) -> None:
+    """Release one authoring-client lease and close a retired final user."""
+    close_client = None
+    async with _client_lock:
+        users = _client_users.get(client)
+        if users is None:
+            return
+        if users > 1:
+            _client_users[client] = users - 1
+            return
+        del _client_users[client]
+        if client in _retired_clients:
+            _retired_clients.remove(client)
+            close_client = client
+    if close_client is not None:
+        await close_client.aclose()
+
+
+@asynccontextmanager
+async def get_client_lease() -> AsyncIterator[OrgAnnouncementsClient]:
+    """Keep one authoring client alive for the complete tool operation."""
+    client = await get_client()
+    try:
+        yield client
+    finally:
+        await release_client(client)
+
+
+async def reset_client(
+    failed_client: Optional[OrgAnnouncementsClient] = None,
+) -> bool:
     """Drop the authoring client so the next call reauthenticates.
 
     The shared core resolves its token once, in ``__init__``, and holds it for
@@ -329,13 +363,27 @@ async def reset_client() -> None:
     Dropping the object is therefore the reauthentication mechanism: the next
     ``get_client()`` builds a fresh one and re-runs silent-first MSAL, which
     normally refreshes from the shared cache with no prompt.
+
+    ``failed_client`` makes invalidation compare-and-swap: a delayed 401 from a
+    retired client cannot evict a healthy replacement. Active users retain a
+    lease, so the retired client closes only after its final operation exits.
     """
     global _client
+    close_client = None
     async with _client_lock:
-        client, _client = _client, None
-    # Closed outside the lock so teardown never blocks a concurrent rebuild.
-    if client is not None:
-        await client.aclose()
+        client = _client
+        if client is None or (
+            failed_client is not None and failed_client is not client
+        ):
+            return False
+        _client = None
+        if _client_users.get(client):
+            _retired_clients.add(client)
+        else:
+            close_client = client
+    if close_client is not None:
+        await close_client.aclose()
+    return True
 
 
 @asynccontextmanager
@@ -794,8 +842,16 @@ def org_announcements_widget() -> str:
 )
 async def list_agent_configs() -> str:
     """List configured deployed ESS agents; never initialize configuration."""
-    client = await get_client()
-    return json.dumps(await client.list_agent_configs(), indent=2)
+    try:
+        async with get_client_lease() as client:
+            try:
+                result = await client.list_agent_configs()
+            except AgentConfigApiError as error:
+                failure = await _failure_from(error, client)
+                raise ToolError(failure.message) from None
+    except _FailureResult as failure:
+        raise ToolError(failure.message) from None
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool(
@@ -803,8 +859,16 @@ async def list_agent_configs() -> str:
 )
 async def search_agents(searchString: str) -> str:
     """Find deployed ESS agents by name to resolve their titleId."""
-    client = await get_client()
-    return json.dumps(await client.search_agents(searchString), indent=2)
+    try:
+        async with get_client_lease() as client:
+            try:
+                result = await client.search_agents(searchString)
+            except AgentConfigApiError as error:
+                failure = await _failure_from(error, client)
+                raise ToolError(failure.message) from None
+    except _FailureResult as failure:
+        raise ToolError(failure.message) from None
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool(
@@ -849,6 +913,7 @@ async def open_org_announcements(
 
     started = time.monotonic()
     scope = {"titleId": titleId}
+    client = None
     request = validated.model_dump(exclude_none=True, exclude={"suggestedDraft"})
     if suggestedDraft is not None:
         request["suggestedDraft"] = suggestedDraft.retry_payload()
@@ -856,53 +921,68 @@ async def open_org_announcements(
     try:
         # Capture once even for an empty create. Subsequent reads and post-save
         # refreshes must never adopt a different global client's tenant.
-        client = await get_client()
-        scope = {"tenantId": client.tenant_id, "titleId": titleId}
+        async with get_client_lease() as client:
+            scope = {"tenantId": client.tenant_id, "titleId": titleId}
 
-        if view == "manager":
-            async with get_graph_client(scope["tenantId"], client.object_id) as graph_client:
-                state = await _manager_state(client, scope, graph_client)
-            return _open_success(
-                {"view": "manager", **state},
-                "Opened announcements for the selected ESS agent.",
-                started,
-            )
+            if view == "manager":
+                async with get_graph_client(
+                    scope["tenantId"], client.object_id
+                ) as graph_client:
+                    state = await _manager_state(client, scope, graph_client)
+                return _open_success(
+                    {"view": "manager", **state},
+                    "Opened announcements for the selected ESS agent.",
+                    started,
+                )
 
-        if mode == "create":
-            async with get_graph_client(scope["tenantId"], client.object_id) as graph_client:
+            if mode == "create":
+                async with get_graph_client(
+                    scope["tenantId"], client.object_id
+                ) as graph_client:
+                    audience_metadata = await _resolve_audience_metadata(
+                        graph_client,
+                        list(suggestedDraft.audience)
+                        if suggestedDraft is not None and suggestedDraft.audience
+                        else [],
+                    )
+                draft = build_create_draft(suggestedDraft, audience_metadata)
+                return _open_success(
+                    _editor_payload("create", None, draft, scope),
+                    "Opened a new organization announcement for review. Nothing is "
+                    "saved until you publish or save a draft in the editor.",
+                    started,
+                )
+
+            config = await client.get_bulletin(titleId, bulletinId)
+            audience = config.get("audience")
+            async with get_graph_client(
+                scope["tenantId"], client.object_id
+            ) as graph_client:
                 audience_metadata = await _resolve_audience_metadata(
                     graph_client,
-                    list(suggestedDraft.audience)
-                    if suggestedDraft is not None and suggestedDraft.audience
+                    [
+                        group_id
+                        for group_id in audience
+                        if isinstance(group_id, str)
+                    ]
+                    if isinstance(audience, list)
                     else [],
                 )
-            draft = build_create_draft(suggestedDraft, audience_metadata)
+            draft = build_editor_draft_from_config(config, audience_metadata)
+            message = "Opened the announcement for editing."
             return _open_success(
-                _editor_payload("create", None, draft, scope),
-                "Opened a new organization announcement for review. Nothing is "
-                "saved until you publish or save a draft in the editor.",
-                started,
+                _editor_payload("edit", config, draft, scope), message, started
             )
-
-        config = await client.get_bulletin(titleId, bulletinId)
-        audience = config.get("audience")
-        async with get_graph_client(scope["tenantId"], client.object_id) as graph_client:
-            audience_metadata = await _resolve_audience_metadata(
-                graph_client,
-                [group_id for group_id in audience if isinstance(group_id, str)]
-                if isinstance(audience, list)
-                else [],
-            )
-        draft = build_editor_draft_from_config(config, audience_metadata)
-        message = "Opened the announcement for editing."
-        return _open_success(
-            _editor_payload("edit", config, draft, scope), message, started
-        )
 
     except _FailureResult as failure:
         return _open_failure(request, failure, started, scope)
     except AgentConfigApiError as error:
-        return _open_failure(request, await _failure_from(error), started, scope)
+        return _open_failure(
+            request,
+            await _failure_from(error, client),
+            started,
+            scope,
+        )
     except httpx.RequestError:
         return _open_failure(
             request,
@@ -947,7 +1027,10 @@ def _mutation_failure(
     )
 
 
-async def _failure_from(error: Exception) -> _FailureResult:
+async def _failure_from(
+    error: Exception,
+    authoring_client: Optional[OrgAnnouncementsClient],
+) -> _FailureResult:
     """Classify a failure and reauthenticate the authoring client on a 401.
 
     A 401 from the authoring API means the cached delegated token is expired or
@@ -962,7 +1045,7 @@ async def _failure_from(error: Exception) -> _FailureResult:
     """
     failure = _to_failure(error)
     if failure.code == "AuthenticationRequired" and failure.source == SOURCE_BACKEND:
-        await reset_client()
+        await reset_client(authoring_client)
     return failure
 
 
@@ -1019,7 +1102,9 @@ async def _saved_item_result(
             )
             manager = await _manager_state(client, scope, graph_client)
     except _MUTATION_ERRORS as error:
-        raise _CommittedRefreshError(await _failure_from(error)) from error
+        raise _CommittedRefreshError(
+            await _failure_from(error, client)
+        ) from error
 
     return _text_result(
         {
@@ -1072,43 +1157,48 @@ async def save_bulletin(
         )
 
     payload = request.model_dump(mode="json", exclude_none=True)
+    client = None
     try:
-        client = await get_client()
-        scope = {"tenantId": client.tenant_id, "titleId": titleId}
-        saved = await client.save_bulletin(titleId, payload)
+        async with get_client_lease() as client:
+            scope = {"tenantId": client.tenant_id, "titleId": titleId}
+            saved = await client.save_bulletin(titleId, payload)
+
+            try:
+                result = await _saved_item_result(
+                    client,
+                    scope,
+                    saved,
+                    "Published the organization announcement."
+                    if status == "published"
+                    else "Saved the organization announcement draft.",
+                )
+            except _CommittedRefreshError as error:
+                # The write is committed. Report the explicit partial success so the
+                # widget tells the maker to refresh instead of offering a retry that
+                # would create a second announcement.
+                _LOGGER.warning(
+                    "save_bulletin refresh failed after commit: %s",
+                    error.cause.code,
+                )
+                return _fail(
+                    "save_bulletin",
+                    _committed_refresh_failure(error.cause),
+                    started,
+                    scope,
+                )
+
+            record_operation(
+                "save_bulletin",
+                outcome="success",
+                latency_ms=_elapsed_ms(started),
+            )
+            return result
     except _MUTATION_ERRORS as error:
-        failure = await _failure_from(error)
+        failure = await _failure_from(error, client)
         _LOGGER.warning(
             "save_bulletin failed: %s (create=%s)", failure.code, id is None
         )
         return _fail("save_bulletin", failure, started, scope)
-
-    try:
-        result = await _saved_item_result(
-            client,
-            scope,
-            saved,
-            "Published the organization announcement."
-            if status == "published"
-            else "Saved the organization announcement draft.",
-        )
-    except _CommittedRefreshError as error:
-        # The write is committed. Report the explicit partial success so the
-        # widget tells the maker to refresh instead of offering a retry that
-        # would create a second announcement.
-        _LOGGER.warning(
-            "save_bulletin refresh failed after commit: %s", error.cause.code
-        )
-        return _fail(
-            "save_bulletin", _committed_refresh_failure(error.cause), started, scope
-        )
-
-    record_operation(
-        "save_bulletin",
-        outcome="success",
-        latency_ms=_elapsed_ms(started),
-    )
-    return result
 
 
 @mcp.tool(
@@ -1143,55 +1233,63 @@ async def transition_bulletin(
     """
     started = time.monotonic()
     scope = {"titleId": titleId}
+    client = None
     try:
         validate_title_id(titleId)
         validate_bulletin_id(id)
-        client = await get_client()
-        scope = {"tenantId": client.tenant_id, "titleId": titleId}
-        changed = await client.transition_bulletin(
-            titleId, id, TRANSITION_STATUS[transition]
-        )
+        async with get_client_lease() as client:
+            scope = {"tenantId": client.tenant_id, "titleId": titleId}
+            changed = await client.transition_bulletin(
+                titleId, id, TRANSITION_STATUS[transition]
+            )
+
+            # The transition is committed from here on. A refresh failure must never be
+            # reported as a retryable normal failure, because the lifecycle change has
+            # already been applied and re-issuing it could fail validation or move the
+            # record again.
+            try:
+                async with get_graph_client(
+                    scope["tenantId"], client.object_id
+                ) as graph_client:
+                    manager = await _manager_state(client, scope, graph_client)
+            except _MUTATION_ERRORS as error:
+                cause = await _failure_from(error, client)
+                _LOGGER.warning(
+                    "transition_bulletin refresh failed after commit: %s (%s)",
+                    cause.code,
+                    transition,
+                )
+                return _fail(
+                    "transition_bulletin",
+                    _committed_refresh_failure(cause),
+                    started,
+                    scope,
+                )
+
+            record_operation(
+                "transition_bulletin",
+                outcome="success",
+                latency_ms=_elapsed_ms(started),
+            )
+            # The canonical changed row is included alongside the manager state. It is
+            # additive: the widget's existing manager-shaped contract is untouched, so a
+            # host that strips unknown fields simply ignores ``item`` and still gets a
+            # correct refresh.
+            return _text_result(
+                {
+                    **scope,
+                    "status": "success",
+                    "item": {"config": changed},
+                    "manager": manager,
+                },
+                "Updated the organization announcement.",
+            )
     except _MUTATION_ERRORS as error:
-        failure = await _failure_from(error)
+        failure = await _failure_from(error, client)
         _LOGGER.warning(
             "transition_bulletin failed: %s (%s)", failure.code, transition
         )
         return _fail("transition_bulletin", failure, started, scope)
-
-    # The transition is committed from here on. A refresh failure must never be
-    # reported as a retryable normal failure, because the lifecycle change has
-    # already been applied and re-issuing it could fail validation or move the
-    # record again.
-    try:
-        async with get_graph_client(scope["tenantId"], client.object_id) as graph_client:
-            manager = await _manager_state(client, scope, graph_client)
-    except _MUTATION_ERRORS as error:
-        cause = await _failure_from(error)
-        _LOGGER.warning(
-            "transition_bulletin refresh failed after commit: %s (%s)",
-            cause.code,
-            transition,
-        )
-        return _fail(
-            "transition_bulletin", _committed_refresh_failure(cause), started, scope
-        )
-
-    record_operation(
-        "transition_bulletin",
-        outcome="success",
-        latency_ms=_elapsed_ms(started),
-    )
-    # The canonical changed row is included alongside the manager state. It is
-    # additive: the widget's existing manager-shaped contract is untouched, so a
-    # host that strips unknown fields simply ignores ``item`` and still gets a
-    # correct refresh.
-    return _text_result(
-        {
-            **scope, "status": "success",
-            "item": {"config": changed}, "manager": manager,
-        },
-        "Updated the organization announcement.",
-    )
 
 
 @mcp.tool(
@@ -1211,67 +1309,76 @@ async def duplicate_bulletin(
     """
     started = time.monotonic()
     scope = {"titleId": titleId}
+    client = None
     try:
         validate_title_id(titleId)
         validate_bulletin_id(id)
-        client = await get_client()
-        scope = {"tenantId": client.tenant_id, "titleId": titleId}
-        source = await client.get_bulletin(titleId, id)
+        async with get_client_lease() as client:
+            scope = {"tenantId": client.tenant_id, "titleId": titleId}
+            source = await client.get_bulletin(titleId, id)
+
+            # Stored content is forwarded verbatim, so it never passes through
+            # BulletinInput. The blank-schedule sentinel is stripped explicitly here for
+            # the same reason it is coerced there: "" is not a DateTimeOffset, and
+            # sending it would fail model binding on a copy the maker never edited.
+            bulletin = without_blank_schedule(
+                {
+                    key: value
+                    for key, value in source["bulletin"].items()
+                    if key not in _COPY_STRIPPED_FIELDS
+                }
+            )
+            audience = source.get("audience")
+            payload = {
+                "bulletin": bulletin,
+                "audience": [
+                    group_id
+                    for group_id in (
+                        audience if isinstance(audience, list) else []
+                    )
+                    if isinstance(group_id, str)
+                ],
+                "status": "draft",
+            }
+
+            try:
+                created = await client.save_bulletin(titleId, payload)
+            except _MUTATION_ERRORS as error:
+                failure = await _failure_from(error, client)
+                _LOGGER.warning("duplicate_bulletin failed: %s", failure.code)
+                return _fail("duplicate_bulletin", failure, started, scope)
+
+            try:
+                result = await _saved_item_result(
+                    client,
+                    scope,
+                    created,
+                    "Created a draft copy of the organization announcement.",
+                )
+            except _CommittedRefreshError as error:
+                # The copy exists. This is an unkeyed create, so a retry would produce a
+                # second copy; report the committed partial success instead.
+                _LOGGER.warning(
+                    "duplicate_bulletin refresh failed after commit: %s",
+                    error.cause.code,
+                )
+                return _fail(
+                    "duplicate_bulletin",
+                    _committed_refresh_failure(error.cause),
+                    started,
+                    scope,
+                )
+
+            record_operation(
+                "duplicate_bulletin",
+                outcome="success",
+                latency_ms=_elapsed_ms(started),
+            )
+            return result
     except _MUTATION_ERRORS as error:
-        failure = await _failure_from(error)
+        failure = await _failure_from(error, client)
         _LOGGER.warning("duplicate_bulletin source load failed: %s", failure.code)
         return _fail("duplicate_bulletin", failure, started, scope)
-
-    # Stored content is forwarded verbatim, so it never passes through
-    # BulletinInput. The blank-schedule sentinel is stripped explicitly here for
-    # the same reason it is coerced there: "" is not a DateTimeOffset, and
-    # sending it would fail model binding on a copy the maker never edited.
-    bulletin = without_blank_schedule(
-        {
-            key: value
-            for key, value in source["bulletin"].items()
-            if key not in _COPY_STRIPPED_FIELDS
-        }
-    )
-    audience = source.get("audience")
-    payload = {
-        "bulletin": bulletin,
-        "audience": [
-            group_id
-            for group_id in (audience if isinstance(audience, list) else [])
-            if isinstance(group_id, str)
-        ],
-        "status": "draft",
-    }
-
-    try:
-        created = await client.save_bulletin(titleId, payload)
-    except _MUTATION_ERRORS as error:
-        failure = await _failure_from(error)
-        _LOGGER.warning("duplicate_bulletin failed: %s", failure.code)
-        return _fail("duplicate_bulletin", failure, started, scope)
-
-    try:
-        result = await _saved_item_result(
-            client, scope, created,
-            "Created a draft copy of the organization announcement.",
-        )
-    except _CommittedRefreshError as error:
-        # The copy exists. This is an unkeyed create, so a retry would produce a
-        # second copy; report the committed partial success instead.
-        _LOGGER.warning(
-            "duplicate_bulletin refresh failed after commit: %s", error.cause.code
-        )
-        return _fail(
-            "duplicate_bulletin", _committed_refresh_failure(error.cause), started, scope
-        )
-
-    record_operation(
-        "duplicate_bulletin",
-        outcome="success",
-        latency_ms=_elapsed_ms(started),
-    )
-    return result
 
 
 @mcp.tool(
@@ -1291,15 +1398,16 @@ async def search_audience_groups(query: str) -> CallToolResult:
     group does not exist when it simply was not reached.
     """
     started = time.monotonic()
+    authoring_client = None
     try:
         escape_search_value(query)
-        authoring_client = await get_client()
-        async with get_graph_client(
-            authoring_client.tenant_id, authoring_client.object_id
-        ) as graph_client:
-            result = await graph_client.search_groups(query)
+        async with get_client_lease() as authoring_client:
+            async with get_graph_client(
+                authoring_client.tenant_id, authoring_client.object_id
+            ) as graph_client:
+                result = await graph_client.search_groups(query)
     except (_FailureResult, GraphDirectoryError, AgentConfigApiError, httpx.RequestError) as error:
-        failure = await _failure_from(error)
+        failure = await _failure_from(error, authoring_client)
         _LOGGER.warning("search_audience_groups failed: %s", failure.code)
         record_operation(
             "search_audience_groups",

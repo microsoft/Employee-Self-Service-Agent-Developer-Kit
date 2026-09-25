@@ -40,8 +40,12 @@ org_client = _ORG_MODULES["client"]
 def _reset_globals():
     """Never leak a fake client between tests or into another module."""
     org_server._client = None
+    org_server._client_users.clear()
+    org_server._retired_clients.clear()
     yield
     org_server._client = None
+    org_server._client_users.clear()
+    org_server._retired_clients.clear()
 
 
 class _FakeAuthoringClient:
@@ -84,7 +88,8 @@ def test_the_authoring_client_is_constructed_off_the_event_loop(
 
     async def run() -> int:
         loop_thread = threading.get_ident()
-        await org_server.get_client()
+        client = await org_server.get_client()
+        await org_server.release_client(client)
         return loop_thread
 
     loop_thread = asyncio.run(run())
@@ -106,6 +111,8 @@ def test_the_authoring_client_is_built_once_and_reused(monkeypatch) -> None:
         first = await org_server.get_client()
         second = await org_server.get_client()
         assert first is second
+        await org_server.release_client(first)
+        await org_server.release_client(second)
 
     asyncio.run(run())
 
@@ -123,11 +130,14 @@ def test_concurrent_first_calls_share_one_construction(monkeypatch) -> None:
     monkeypatch.setattr(org_server, "OrgAnnouncementsClient", _construct)
 
     async def run() -> list:
-        return await asyncio.gather(
+        clients = await asyncio.gather(
             org_server.get_client(),
             org_server.get_client(),
             org_server.get_client(),
         )
+        for client in clients:
+            await org_server.release_client(client)
+        return clients
 
     clients = asyncio.run(run())
 
@@ -140,15 +150,17 @@ def test_concurrent_first_calls_share_one_construction(monkeypatch) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_reset_drops_and_closes_the_authoring_client(monkeypatch) -> None:
+def test_reset_defers_close_until_the_final_lease_is_released(monkeypatch) -> None:
     monkeypatch.setattr(
         org_server, "OrgAnnouncementsClient", _FakeAuthoringClient
     )
 
     async def run() -> _FakeAuthoringClient:
         client = await org_server.get_client()
-        await org_server.reset_client()
+        assert await org_server.reset_client(client)
         assert org_server._client is None
+        assert not client.closed
+        await org_server.release_client(client)
         return client
 
     client = asyncio.run(run())
@@ -173,9 +185,12 @@ def test_the_call_after_a_reset_builds_a_fresh_client(monkeypatch) -> None:
 
     async def run() -> None:
         first = await org_server.get_client()
-        await org_server.reset_client()
+        assert await org_server.reset_client(first)
         second = await org_server.get_client()
         assert first is not second
+        assert not first.closed
+        await org_server.release_client(first)
+        await org_server.release_client(second)
 
     asyncio.run(run())
 
@@ -191,10 +206,13 @@ def test_an_authoring_401_resets_the_client(monkeypatch) -> None:
     async def run() -> None:
         client = await org_server.get_client()
         failure = await org_server._failure_from(
-            org_client.AgentConfigApiError("HttpError: HTTP 401", http_status=401)
+            org_client.AgentConfigApiError("HttpError: HTTP 401", http_status=401),
+            client,
         )
         assert failure.code == "AuthenticationRequired"
         assert org_server._client is None
+        assert not client.closed
+        await org_server.release_client(client)
         assert client.closed
 
     asyncio.run(run())
@@ -215,11 +233,12 @@ def test_a_graph_401_does_not_reset_the_authoring_client(monkeypatch) -> None:
 
     async def run() -> None:
         client = await org_server.get_client()
-        failure = await org_server._failure_from(graph_error)
+        failure = await org_server._failure_from(graph_error, client)
         assert failure.code == "AuthenticationRequired"
         assert failure.source == org_server.SOURCE_GRAPH
         assert org_server._client is client
         assert not client.closed
+        await org_server.release_client(client)
 
     asyncio.run(run())
 
@@ -235,20 +254,87 @@ def test_non_401_authoring_failures_keep_the_client(monkeypatch, status) -> None
         await org_server._failure_from(
             org_client.AgentConfigApiError(
                 f"HttpError: HTTP {status}", http_status=status
-            )
+            ),
+            client,
         )
         assert org_server._client is client
         assert not client.closed
+        await org_server.release_client(client)
 
     asyncio.run(run())
 
 
 def test_resetting_when_no_client_exists_is_a_no_op() -> None:
     async def run() -> None:
-        await org_server.reset_client()
+        assert not await org_server.reset_client()
         assert org_server._client is None
 
     asyncio.run(run())
+
+
+def test_reset_does_not_close_a_client_used_by_another_operation(monkeypatch) -> None:
+    built: list[_FakeAuthoringClient] = []
+
+    def _construct() -> _FakeAuthoringClient:
+        client = _FakeAuthoringClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", _construct)
+
+    async def run() -> None:
+        failed_client = await org_server.get_client()
+        overlapping_client = await org_server.get_client()
+        assert failed_client is overlapping_client
+
+        assert await org_server.reset_client(failed_client)
+        replacement = await org_server.get_client()
+
+        assert replacement is not failed_client
+        assert not failed_client.closed
+        await org_server.release_client(failed_client)
+        assert not failed_client.closed
+        await org_server.release_client(overlapping_client)
+        assert failed_client.closed
+        assert not replacement.closed
+        await org_server.release_client(replacement)
+
+    asyncio.run(run())
+
+    assert len(built) == 2
+
+
+def test_a_stale_401_cannot_evict_a_replacement_client(monkeypatch) -> None:
+    built: list[_FakeAuthoringClient] = []
+
+    def _construct() -> _FakeAuthoringClient:
+        client = _FakeAuthoringClient()
+        built.append(client)
+        return client
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", _construct)
+    unauthorized = org_client.AgentConfigApiError(
+        "HttpError: HTTP 401", http_status=401
+    )
+
+    async def run() -> None:
+        old_first = await org_server.get_client()
+        old_second = await org_server.get_client()
+        await org_server._failure_from(unauthorized, old_first)
+
+        replacement = await org_server.get_client()
+        await org_server._failure_from(unauthorized, old_second)
+
+        assert org_server._client is replacement
+        assert not replacement.closed
+        await org_server.release_client(old_first)
+        await org_server.release_client(old_second)
+        assert old_first.closed
+        await org_server.release_client(replacement)
+
+    asyncio.run(run())
+
+    assert len(built) == 2
 
 
 # --------------------------------------------------------------------------
@@ -378,7 +464,9 @@ def test_constructing_the_authoring_client_writes_nothing_to_stdout(
 
     async def run() -> Any:
         with contextlib.redirect_stdout(captured_out):
-            return await org_server.get_client()
+            client = await org_server.get_client()
+            await org_server.release_client(client)
+            return client
 
     client = asyncio.run(run())
 

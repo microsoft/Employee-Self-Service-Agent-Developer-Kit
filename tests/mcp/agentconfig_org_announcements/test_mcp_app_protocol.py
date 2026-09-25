@@ -2415,6 +2415,10 @@ def test_directory_tenant_binding_does_not_add_mcp_arguments() -> None:
 _PRIVATE_CACHE_DETAIL = "/private/msal-cache PRIVATE_CREDENTIAL_DETAIL"
 
 
+def _local_credential_error(message: str) -> Exception:
+    return org_server.LocalCredentialError(message, object())
+
+
 def _install_failing_graph_acquisition(monkeypatch, error, *, before_failure=None):
     directory = org_server.GraphDirectoryClient(tenant_id=TENANT_ID, object_id=OBJECT_ID)
     acquisitions = []
@@ -2521,7 +2525,10 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
     _assert_no_private_cache_detail(result, caplog)
 
 
-@pytest.mark.parametrize("error_type", [LockException, PermissionError])
+@pytest.mark.parametrize(
+    "error_factory",
+    [LockException, PermissionError, _local_credential_error],
+)
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
@@ -2533,13 +2540,13 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
     ],
 )
 def test_authoring_cache_failure_preserves_feature_envelopes(
-    monkeypatch, caplog, error_type, tool, arguments
+    monkeypatch, caplog, error_factory, tool, arguments
 ) -> None:
     attempts = []
 
     def construct():
         attempts.append(True)
-        raise error_type(_PRIVATE_CACHE_DETAIL)
+        raise error_factory(_PRIVATE_CACHE_DETAIL)
 
     monkeypatch.setattr(org_server, "_client", None)
     monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
@@ -2562,9 +2569,14 @@ def test_authoring_cache_failure_preserves_feature_envelopes(
     _assert_no_private_cache_detail(result, caplog)
 
 
-@pytest.mark.parametrize("error_type", [LockException, PermissionError])
-def test_authoring_cache_failure_preserves_its_private_cause(monkeypatch, error_type) -> None:
-    original = error_type(_PRIVATE_CACHE_DETAIL)
+@pytest.mark.parametrize(
+    "error_factory",
+    [LockException, PermissionError, _local_credential_error],
+)
+def test_authoring_cache_failure_preserves_its_private_cause(
+    monkeypatch, error_factory
+) -> None:
+    original = error_factory(_PRIVATE_CACHE_DETAIL)
 
     def construct():
         raise original
@@ -2580,3 +2592,25 @@ def test_authoring_cache_failure_preserves_its_private_cause(monkeypatch, error_
         assert _PRIVATE_CACHE_DETAIL not in caught.value.message
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("list_agent_configs", {}),
+        ("search_agents", {"searchString": "Finance"}),
+    ],
+)
+def test_discovery_credential_failure_is_a_safe_tool_error(
+    monkeypatch, tool, arguments
+) -> None:
+    def construct():
+        raise _local_credential_error(_PRIVATE_CACHE_DETAIL)
+
+    monkeypatch.setattr(org_server, "_client", None)
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
+
+    with pytest.raises(ToolError, match="sign-in could not be completed") as caught:
+        _call(tool, arguments, include_scope=False)
+
+    assert _PRIVATE_CACHE_DETAIL not in str(caught.value)
