@@ -284,9 +284,9 @@ def test_a_telemetry_failure_does_not_fail_the_tool_call(
 
 def _config(bulletin_id: str = BULLETIN_ID, *, status: str = "draft") -> dict:
     return {
+        "id": bulletin_id,
         "titleId": TITLE_ID,
         "bulletin": {
-            "id": bulletin_id,
             "type": "standard",
             "priority": 1,
             "title": SECRET_TITLE,
@@ -483,6 +483,11 @@ def test_a_transition_emits_no_identifier(monkeypatch, emitted) -> None:
     )
 
     assert payload["status"] == "success"
+    assert payload["item"]["config"]["id"] == BULLETIN_ID
+    assert "id" not in payload["item"]["config"]["bulletin"]
+    manager_item = payload["manager"]["items"][0]
+    assert manager_item["config"]["id"] == BULLETIN_ID
+    assert manager_item["audienceMetadata"][0]["id"] == SECRET_GROUP_ID
     assert emitted
     for event in emitted:
         assert BULLETIN_ID not in _flatten(event)
@@ -503,6 +508,8 @@ def test_no_event_field_is_outside_the_agreed_set(monkeypatch, emitted) -> None:
 
     assert transition["status"] == "success"
     assert duplicate["status"] == "success"
+    assert duplicate["item"]["config"]["id"] == CREATED_BULLETIN_ID
+    assert "id" not in duplicate["item"]["config"]["bulletin"]
     allowed = {
         "api_endpoint",
         "outcome",
