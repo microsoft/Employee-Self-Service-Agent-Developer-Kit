@@ -19,15 +19,15 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files and Workday to the hybrid-extension boundary
-in `src/skills/setup/SKILL.md`.)
+ServiceNow to its own step files and Workday either to the lightweight
+already-installed lifecycle or the existing unsupported-install boundary.)
 
 ---
 
 ## Routing
 
 Each integration routes differently — ServiceNow has its own step files;
-Workday delegates to the setup orchestrator:
+Workday first checks the active agent and installed package:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
   - Steps template: `src/skills/connect/servicenow/steps.md`
@@ -43,10 +43,18 @@ Workday delegates to the setup orchestrator:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: routes to `src/skills/setup/SKILL.md`, which reports that the
-  separately owned hybrid-extension setup contract is not yet available. It
-  does not execute the retained legacy Workday playbooks or any retired
-  foundation setup operation.
+- **Workday**:
+  - **CEA simplified extension already installed** — use
+    `src/skills/connect/workday/SKILL.md`, driven by the generic
+    `src/skills/connect/shared/lifecycle-runner.md` and
+    `src/skills/connect/workday/contract.json`.
+  - **CEA full/legacy package or no package** — stop at the current unsupported
+    installation boundary without changing state.
+  - **Declarative Agent** — remains unsupported in this PR and stops before
+    entering the CEA lifecycle.
+
+  Per-agent lifecycle state is stored at
+  `.local/connect/workday/agents/{agent-slug}/lifecycle.json`.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
