@@ -167,21 +167,23 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_prompt = " ".join(prompt.split())
     normalized_foundation = " ".join(foundation.split())
-    runtime_message = """> **Setup command approvals**
->
-> VS Code will ask you to approve commands that:
->
-> - check Python and prepare the required local tools;
-> - sign you in and inspect the selected environment and agent;
-> - perform the setup actions you confirm and prepare the local workspace;
-> - download required Microsoft components when needed.
->
-> To avoid repeated prompts, open the permissions menu below the chat input and
-> select **Allow all** for this chat session. This applies to every tool used in
-> the session, not only setup. Provide a screenshot of your chat input if you
-> need guidance finding the setting.
->
-> When you're ready, choose:"""
+    runtime_message = """**Message:**
+
+**Setup command approvals**
+
+VS Code will ask you to approve commands that:
+
+- check Python and prepare the required local tools;
+- sign you in and inspect the selected environment and agent;
+- perform the setup actions you confirm and prepare the local workspace;
+- download required Microsoft components when needed.
+
+To avoid repeated prompts, open the permissions menu below the chat input and
+select **Allow all** for this chat session. This applies to every tool used in
+the session, not only setup. Provide a screenshot of your chat input if you
+need guidance finding the setting.
+
+**End message.**"""
     declined_command_message = """> **Run this command manually**
 >
 > Setup paused before running this command:
@@ -200,11 +202,14 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert foundation.index(runtime_message) < foundation.index(
         '{PYTHON} -c "import sys; print(sys.executable)"'
     )
-    assert foundation.index("- **Continue setup**") < foundation.index(
-        "- **Cancel setup**"
+    command_runtime = foundation.split("## Command runtime", 1)[1].split(
+        "## Shared workspace choices", 1
+    )[0]
+    assert "informational disclosure, not another setup confirmation" in (
+        " ".join(command_runtime.split())
     )
-    assert "Do not preselect a choice." in foundation
-    assert "For **Cancel setup**, run no commands and stop." in foundation
+    assert "**Continue setup**" not in command_runtime
+    assert "**Cancel setup**" not in command_runtime
     assert "### When command approval is declined" in foundation
     assert declined_command_message in foundation
     assert (
@@ -374,9 +379,9 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "**Setup readiness outstanding:**" in instructions
     assert "**Workspace preparation required:**" in instructions
     assert "exact maker-facing copy" in normalized
-    assert "FlightCheck is available when setup prepares the local agent workspace" in (
-        normalized
-    )
+    assert "Running FlightCheck requires Setup to be complete." in instructions
+    assert "Some setup items still require attention:" in normalized
+    assert "Setup needs to prepare the local agent workspace." in normalized
     assert "Collect every non-empty `failure_causes` entry" in normalized
     assert "**Environment capacity**" in instructions
     assert "**Connections**" in instructions
@@ -385,18 +390,31 @@ def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     assert "{READINESS_ISSUES}" in instructions
     assert "{READINESS_ITEM}" in instructions
     assert "{READINESS_DETAIL}" in instructions
-    assert "Setup readiness requires attention:" in instructions
-    assert "performs the next readiness run" in normalized
+    assert '"question": "Would you like to return to Setup now?"' in instructions
+    assert '"label": "Return to Setup"' in instructions
+    assert '"question": "Would you like to run Setup now?"' in instructions
+    assert '"label": "Run Setup"' in instructions
+    assert instructions.count('"label": "Not now"') == 2
+    assert instructions.count('"allowFreeformInput": false') >= 2
+    assert "treat the selection as a `/setup` invocation" in normalized
+    assert "src/skills/foundation-setup/SKILL.md" in instructions
+    assert "selection already confirms setup intent" in normalized
+    assert "Carry forward the active agent" in instructions
+    assert "Do not ask the maker to select **Resume setup for this agent**" in normalized
+    assert "first setup decision or operation not already established" in normalized
+    assert "normal target-selection flow" in normalized
+    assert "canonical setup state unchanged" in normalized
 
     assert "Follow the **FlightCheck entry contract**" in normalized_prompt
     assert "Standalone FlightCheck" in normalized_prompt
     assert "Canonical setup ready" in normalized_prompt
-    assert "complete maker-facing response" in normalized_skill
+    assert "owns the maker interaction and next route" in normalized_skill
 
     entry_contract = instructions.split("#### FlightCheck entry contract", 1)[1]
     entry_contract = entry_contract.split("### If canonical setup is ready", 1)[0]
     assert entry_contract.count("**Message:**") == 2
     assert entry_contract.count("**End message.**") == 2
+    assert entry_contract.count("```json") == 2
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -445,6 +463,12 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/product-line-reconciliation.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
+    assert (
+        "Never route from `/setup` into an integration or topic playbook" in normalized
+    )
+    assert "**Finish setup** advertises separate commands and ends the current request" in (
+        normalized
+    )
     assert "src/reference/native-alm-import.md" in import_text
     assert "DA_ALM_IMPORT_JSON:" in import_text
     assert "setup_existing_da.py validate-agent" in import_text
@@ -995,10 +1019,24 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Continue customizing this agent",
-        "Finish for now",
+        "Finish setup",
     ):
         assert f"**{choice}**" in text
+    completion_choices = text.split(
+        "The final handoff is the sole completion summary.", 1
+    )[1].split("## Start", 1)[0]
+    assert "- **Continue customizing this agent**" not in completion_choices
+    assert "- **Finish for now**" not in completion_choices
+    assert "The {agent display name} agent is now active." in completion_choices
+    assert (
+        "- Run `/landing-page` to configure branding and the content employees see."
+        in completion_choices
+    )
+    assert "- Run `/connect` to choose an integration." in completion_choices
+    assert "- Type `/menu` to see all available capabilities." in completion_choices
+    assert "What would you like to customize?" not in completion_choices
+    assert "**Create a topic**" not in completion_choices
+    assert "Then end the request." in completion_choices
     assert "Create a new workspace without opening it" not in text
     assert "setup_existing_da.py select-agent" in text
     assert "one Power Platform environment" in normalized
@@ -1044,7 +1082,7 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "a blocked state that requires maker action" in normalized
     assert "A sequence of setup operations that retains the same markers" in normalized
     assert "The final handoff is the sole completion summary" in normalized
-    assert "**Finish for now** ends immediately" in normalized
+    assert "**Finish setup** closes the setup flow" in normalized
     assert "first decision surface rather than rendering another completion summary" in (
         normalized
     )

@@ -16,8 +16,8 @@ The calling prompt applies the **FlightCheck entry contract** in
 that contract before continuing.
 
 Continue with this skill for the contract's **Standalone FlightCheck** and
-**Canonical setup ready** states. The contract supplies the complete
-maker-facing response for its other states.
+**Canonical setup ready** states. The contract owns the maker interaction and
+next route for its other states.
 
 Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
 no-Dataverse agent. Its supported scopes are `full`, `environment`,

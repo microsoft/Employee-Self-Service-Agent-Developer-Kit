@@ -117,27 +117,78 @@ Build `{READINESS_ISSUES}` as follows:
 
 **Message:**
 
-FlightCheck is available when setup readiness is complete.
-
-Setup readiness requires attention:
+Running FlightCheck requires Setup to be complete. Some setup items still
+require attention:
 
 {READINESS_ISSUES}
 
-Type `/setup` to refresh the readiness checks and work through each item.
-
 **End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to return to Setup now?",
+    "options": [
+      {
+        "label": "Return to Setup",
+        "description": "Continue Setup and work through these readiness items",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
 Use the following Message block for workspace preparation:
 
 **Message:**
 
-FlightCheck is available when setup prepares the local agent workspace. Type
-`/setup` to prepare the workspace.
+Running FlightCheck requires Setup to be complete. Setup needs to prepare the
+local agent workspace.
 
 **End message.**
 
-After rendering either Message block, the request is complete. `/setup`
-performs the next readiness run.
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to run Setup now?",
+    "options": [
+      {
+        "label": "Run Setup",
+        "description": "Prepare the local agent workspace",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+When the maker selects **Return to Setup** or **Run Setup**, treat the selection
+as a `/setup` invocation and read `src/skills/foundation-setup/SKILL.md`. The
+selection already confirms setup intent. Carry forward the active agent,
+environment, and canonical setup state resolved by this contract. Do not ask
+the maker to select **Resume setup for this agent** or otherwise reconfirm the
+same known target. Start at the first setup decision or operation not already
+established by that context. If no usable target identity was resolved, follow
+the normal target-selection flow. When the maker selects **Not now** or
+dismisses the question, finish the request with canonical setup state
+unchanged.
 
 ### If canonical setup is ready
 

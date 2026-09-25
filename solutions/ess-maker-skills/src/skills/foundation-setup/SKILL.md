@@ -115,32 +115,29 @@ Do not describe an authorization wait as service processing, start a second comm
 
 Establish a working Python invocation before running setup commands.
 
-Before checking the available Python invocation, render this exact message as a
-completed response:
+Before checking the available Python invocation, render this exact Message
+block as a completed response. This is an informational disclosure, not another
+setup confirmation. The current `/setup` request or the explicit choice that
+entered this skill already confirms the maker's intent. After rendering the
+message, proceed directly with runtime discovery:
 
-> **Setup command approvals**
->
-> VS Code will ask you to approve commands that:
->
-> - check Python and prepare the required local tools;
-> - sign you in and inspect the selected environment and agent;
-> - perform the setup actions you confirm and prepare the local workspace;
-> - download required Microsoft components when needed.
->
-> To avoid repeated prompts, open the permissions menu below the chat input and
-> select **Allow all** for this chat session. This applies to every tool used in
-> the session, not only setup. Provide a screenshot of your chat input if you
-> need guidance finding the setting.
->
-> When you're ready, choose:
+**Message:**
 
-Offer exactly:
+**Setup command approvals**
 
-- **Continue setup**
-- **Cancel setup**
+VS Code will ask you to approve commands that:
 
-Do not preselect a choice. For **Continue setup**, proceed with runtime
-discovery. For **Cancel setup**, run no commands and stop.
+- check Python and prepare the required local tools;
+- sign you in and inspect the selected environment and agent;
+- perform the setup actions you confirm and prepare the local workspace;
+- download required Microsoft components when needed.
+
+To avoid repeated prompts, open the permissions menu below the chat input and
+select **Allow all** for this chat session. This applies to every tool used in
+the session, not only setup. Provide a screenshot of your chat input if you
+need guidance finding the setting.
+
+**End message.**
 
 - Run setup commands from the current ESS Maker Skills workspace folder.
 - From the kit root, check each candidate with
@@ -229,14 +226,31 @@ Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectRe
 
 The final handoff is the sole completion summary. After it, offer exactly these context-appropriate choices:
 
-- **Continue customizing this agent**
+- **Finish setup**
 - **Switch to another configured agent** -- only when another configured agent exists.
 - **Install another product in this environment**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
-- **Finish for now**
 
-Do not preselect a choice. **Install another product in this environment** begins `da-mos-starter.md` at its first product-installation decision surface with the recorded environment and ring. **Finish for now** ends immediately. Every other selected follow-up begins at that follow-up's first decision surface rather than rendering another completion summary.
+Do not preselect a choice. **Finish setup** closes the setup flow. Do not render
+another setup completion summary. After the maker selects it, show:
+
+**Message:**
+
+The {agent display name} agent is now active.
+
+- Run `/landing-page` to configure branding and the content employees see.
+- Run `/connect` to choose an integration.
+- Type `/menu` to see all available capabilities.
+
+**End message.**
+
+Then end the request.
+
+**Install another product in this environment** begins `da-mos-starter.md` at
+its first product-installation decision surface with the recorded environment
+and ring. Every other selected follow-up begins at that follow-up's first
+decision surface rather than rendering another completion summary.
 
 ## Start
 
@@ -360,4 +374,7 @@ Offer exactly:
 - **Yes, I have an agent** — ask for its Copilot Studio URL.
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
 
-Do not run Dataverse foundation or onboarding playbooks. Never route from `/setup` into an integration or topic playbook.
+Do not run Dataverse foundation or onboarding playbooks. Never route from
+`/setup` into an integration or topic playbook. **Finish setup** advertises
+separate commands and ends the current request; a command selected afterward
+begins its own prompt flow.
