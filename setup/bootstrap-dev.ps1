@@ -1,15 +1,22 @@
 <#
 .SYNOPSIS
-    Irreducible one-liner bootstrap for the ESS Agent Developer Kit.
+    One-liner bootstrap that pins the installer to Developer Mode.
 
 .DESCRIPTION
-    Downloads the winget config + installer script into a temp folder and runs them.
-    Designed to be invoked from a single command (see README.md):
+    Downloads the installer and runs it with -InstallMode developer, giving
+    the maker the default VS Code layout (activity bar, file explorer,
+    status bar visible) plus automatic /setup injection into the Copilot
+    Chat side panel. This is the shortcut for makers who already know they
+    want the developer experience and want to skip the Maker/Developer
+    terminal prompt.
 
-        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+    New customers should use bootstrap.ps1, which asks in the terminal
+    which experience to install and defaults to Maker (chat-first) mode.
+
+        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-dev.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine first.
+    onto the customer's machine and pins the mode to developer.
 
 .PARAMETER InstallRoot
     Forwarded to Install-EssAdk.ps1. See that script for details.
@@ -19,15 +26,13 @@
 
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
-    this folder once it lands in the upstream repo. Override for testing.
+    the setup folder. Override for testing.
 #>
 
 [CmdletBinding()]
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
-    [ValidateSet('maker','developer','prompt','lite','standard','')]
-    [string] $InstallMode = '',
     [string] $SourceBaseUrl
 )
 
@@ -59,7 +64,7 @@ foreach ($f in $files) {
         Write-Host "  [ERR] Failed to download: $url" -ForegroundColor Red
         Write-Host "  If raw.githubusercontent.com is blocked by your firewall/proxy," -ForegroundColor Yellow
         Write-Host "  download the repo manually and run:" -ForegroundColor Yellow
-        Write-Host "    .\setup\Install-EssAdk.ps1" -ForegroundColor Yellow
+        Write-Host "    .\setup\Install-EssAdk.ps1 -InstallMode developer" -ForegroundColor Yellow
         throw $_
     }
 }
@@ -83,11 +88,11 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch }
-# Forward -InstallMode when the caller pinned one; otherwise leave the
-# installer to fall back to its own default (prompt), which asks the
-# maker to pick Maker or Developer in the terminal before VS Code launches.
-if ($InstallMode) { $installerArgs.InstallMode = $InstallMode }
+# Developer mode: pass -InstallMode developer so the installer's terminal
+# mode prompt is skipped and the maker lands directly in the default VS Code
+# layout with /setup requested via `code chat`. Same physical installer as
+# the other bootstraps; just a different pinned mode.
+$installerArgs = @{ Branch = $Branch; InstallMode = 'developer' }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs
