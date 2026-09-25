@@ -38,13 +38,6 @@ CONNECTIVITY_API_VERSION = "1"
 SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
-CONNECT_FOUNDATION_STEPS = (
-    "SETUP-01",
-    "SETUP-02.1",
-    "SETUP-03",
-    "SETUP-04",
-    "SETUP-07",
-)
 
 
 class ServiceNowConnectError(RuntimeError):
@@ -166,20 +159,9 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
         raise ServiceNowConnectError(
             "This prototype supports only Employee Self-Service (HR)."
         )
-    steps = canonical.get("steps")
-    if not isinstance(steps, dict):
-        raise ServiceNowConnectError("The setup record has no foundation steps.")
-    incomplete = [
-        step_id
-        for step_id in CONNECT_FOUNDATION_STEPS
-        if not isinstance(steps.get(step_id), dict)
-        or steps[step_id].get("state") != "done"
-    ]
-    if incomplete:
+    if canonical.get("authoring_ready") is not True:
         raise ServiceNowConnectError(
-            "DA foundation setup is incomplete for /connect: "
-            + ", ".join(incomplete)
-            + "."
+            "DA foundation setup is not ready for authoring."
         )
     workspace = canonical.get("workspace")
     if (

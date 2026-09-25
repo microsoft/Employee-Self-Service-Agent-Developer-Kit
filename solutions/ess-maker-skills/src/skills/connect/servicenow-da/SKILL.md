@@ -1,4 +1,4 @@
-z# Connect ServiceNow HRSD to a DA-GA HR Agent
+# Connect ServiceNow HRSD to a DA-GA HR Agent
 
 This prototype uses the DA foundation handoff, MinimalBot Components, and the
 Power Platform Connectivity API. It does not query Dataverse or activate cloud

@@ -399,6 +399,7 @@ def test_load_context_requires_matching_schema_v4_hr_agent(
                 },
                 "agents": {
                     AGENT_ID: {
+                        "authoring_ready": True,
                         "connect_ready": False,
                         "agent": {
                             "id": AGENT_ID,
@@ -455,11 +456,12 @@ def test_load_context_rejects_incomplete_foundation_step(
     setup_path = tmp_path / snow.SETUP_STATE
     setup = json.loads(setup_path.read_text(encoding="utf-8"))
     setup["agents"][AGENT_ID]["steps"]["SETUP-03"]["state"] = "blocked"
+    setup["agents"][AGENT_ID]["authoring_ready"] = False
     setup_path.write_text(json.dumps(setup), encoding="utf-8")
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="incomplete.*SETUP-03",
+        match="not ready for authoring",
     ):
         snow.load_context(tmp_path)
 
