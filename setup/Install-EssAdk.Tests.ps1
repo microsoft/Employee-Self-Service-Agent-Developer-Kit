@@ -101,12 +101,19 @@ Test 'Install-EssAdk.ps1 parses under Windows PowerShell 5.1' {
     # (which is PS7 in this suite) catches nothing; we have to invoke
     # ``powershell.exe`` (5.1) explicitly with -NoProfile -Command and let
     # its Language.Parser::ParseFile look at the file.
-    $pwsh5 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-Path $pwsh5)) {
-        # Non-Windows test host: skip (macOS / Linux CI). Windows CI hits this.
+    if (-not $IsWindows) {
+        # Non-Windows test host: skip (macOS / Linux CI). Windows CI hits
+        # the parser probe below. Guarding on $IsWindows before touching
+        # $env:SystemRoot avoids a Join-Path null-Path throw on Linux,
+        # where SystemRoot does not exist.
         return
     }
-    $scriptPath = Join-Path $PSScriptRoot 'Install-EssAdk.ps1'
+    $pwsh5 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $pwsh5)) {
+        # Windows host without inbox PowerShell 5.1 (unusual): skip.
+        return
+    }
+    $scriptPath = $installerPath
     $probe = @'
 $errors = $null
 $tokens = $null
