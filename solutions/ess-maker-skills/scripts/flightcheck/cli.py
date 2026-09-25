@@ -154,6 +154,16 @@ def _endpoint_systems_for_offer(runner) -> list[str]:
         return []
 
 
+# Checkpoints whose single-checkpoint run reaches a mutating, consent-gated
+# runtime-reachability probe. WD-RUN-001's active Workday connector probe is the
+# only such fixed checkpoint today; INFRA-003 has no registry spec, so it is
+# never a single-checkpoint target. run_workday_checks backs ~15 non-probe
+# Workday checkpoints too, so _run_single_checkpoint must gate consent on the
+# TARGET selecting one of these — not merely on run_workday_checks being in the
+# plan. Keep in sync with the active-probe checks.
+_ACTIVE_PROBE_CHECKPOINTS = ("WD-RUN-001",)
+
+
 def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     """Resolve consent for the mutating runtime-reachability probe and record the
     decision on the runner. Consent is ALWAYS surfaced when the egress probe is
@@ -816,12 +826,20 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
 
-    # No runtime-reachability consent here: INFRA-003 is not individually
-    # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
-    # registry.py, and plan.ordered_fns holds only leaf check fns, never
-    # run_infrastructure_checks), so the egress probe never runs on this path.
-    # Consent is resolved on the --scope path only. If an INFRA checkpoint is
-    # ever registered, wire _apply_runtime_reachability_consent here then.
+    # Runtime-reachability consent for the mutating egress probe. WD-RUN-001's
+    # active Workday connector probe runs inside run_workday_checks (which
+    # plan.ordered_fns registers for the whole Workday family), so consent MUST
+    # be surfaced here too — otherwise `--checkpoint WD-RUN-001
+    # --runtime-reachability` silently stays read-only. Gate on the TARGET
+    # actually selecting an active-probe checkpoint, not merely on
+    # run_workday_checks being in the plan: run_workday_checks also backs ~15
+    # non-probe Workday checkpoints (WD-CONN-*, WD-FLOW-*, WD-PKG-001, ...), and
+    # their WD-RUN-001 row is filtered out — enabling the probe for them would
+    # mutate the tenant for a discarded row. INFRA-003 has no registry spec, so
+    # it is never reachable here. For non-active-probe targets, runtime
+    # reachability stays unset (read-only) via the runner's getattr default.
+    if any(registry.matches(target, cid) for cid in _ACTIVE_PROBE_CHECKPOINTS):
+        _apply_runtime_reachability_consent(args, runner, plan.ordered_fns)
 
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)

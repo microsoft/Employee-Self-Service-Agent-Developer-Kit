@@ -394,3 +394,77 @@ class TestCheckpointTelemetry:
         # consulted so a previously-seen tenant still gets its display name.
         assert captured["kwargs"]["tenant_name"] == "Contoso Cached"
         assert captured["kwargs"]["tenant_id"] == cached_tid
+
+
+class TestSingleCheckpointRuntimeReachabilityConsent:
+    """`--checkpoint WD-RUN-001` must reach the runtime-reachability consent
+    gate: its active Workday connector probe runs inside run_workday_checks,
+    so single-checkpoint mode has to wire consent (previously it never did,
+    so `--checkpoint WD-RUN-001 --runtime-reachability` silently stayed
+    read-only).
+
+    Checkpoints that merely SHARE run_workday_checks but are not the active
+    probe (WD-CONN-012, WD-PKG-001, ...) must NOT reach the gate — enabling
+    the probe for them would mutate the tenant for a WD-RUN-001 row that
+    run()'s post-filter discards.
+    """
+
+    @staticmethod
+    def _spy_consent(monkeypatch: pytest.MonkeyPatch) -> list:
+        calls: list = []
+
+        def _spy(args, runner, checks):  # noqa: ANN001
+            calls.append(checks)
+            runner.runtime_reachability = False
+            runner.runtime_reachability_declined = False
+
+        monkeypatch.setattr(cli, "_apply_runtime_reachability_consent", _spy)
+        return calls
+
+    def test_wd_run_001_reaches_consent_gate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("WD-RUN-001", Status.PASSED.value)]
+        )
+        calls = self._spy_consent(monkeypatch)
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("WD-RUN-001", tmp_path))
+        assert exc.value.code == 0
+        assert len(calls) == 1
+
+    def test_non_probe_workday_checkpoint_skips_consent_gate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("WD-CONN-012", Status.PASSED.value)]
+        )
+        calls = self._spy_consent(monkeypatch)
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("WD-CONN-012", tmp_path))
+        assert exc.value.code == 0
+        assert calls == []
+
+    def test_unrelated_checkpoint_skips_consent_gate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("ENV-001", Status.PASSED.value)]
+        )
+        calls = self._spy_consent(monkeypatch)
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("ENV-001", tmp_path))
+        assert exc.value.code == 0
+        assert calls == []
