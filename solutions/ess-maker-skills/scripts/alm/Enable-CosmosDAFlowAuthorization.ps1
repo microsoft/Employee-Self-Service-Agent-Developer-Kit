@@ -88,7 +88,7 @@ function Test-DataverseToken {
         Invoke-RestMethod `
             -Method GET `
             -Uri "$($Resource.TrimEnd('/'))/api/data/v9.1/WhoAmI" `
-            -Headers @{ Authorization = "******"; Accept = 'application/json' } `
+            -Headers @{ Authorization = "Bearer $Token"; Accept = 'application/json' } `
             -ErrorAction Stop | Out-Null
         return $true
     } catch {
@@ -174,6 +174,23 @@ Write-Step "Connecting to $OrgUrl"
 $script:Token = Get-DataverseToken -Resource $OrgUrl
 $who = Invoke-Dv -Path 'WhoAmI'
 Write-Ok "Authenticated. UserId $($who.UserId), OrgId $($who.OrganizationId)"
+
+# Validate every requested workflow before creating authorization records.
+$workflowRows = @{}
+$missingWorkflow = $false
+foreach ($wf in $WorkflowId) {
+    $wfRow = (Invoke-Dv -Path "workflows?`$select=workflowid,name,statecode&`$filter=workflowid eq $wf").value
+    if (-not $wfRow) {
+        Write-Fail "workflow $wf not found in this organization"
+        $missingWorkflow = $true
+        continue
+    }
+    $workflowRows[$wf.ToString()] = $wfRow[0]
+}
+if ($missingWorkflow) {
+    Write-Fail 'One or more requested workflows were not found. No authorization records were changed.'
+    exit 1
+}
 
 # --------------------------------------------------------------------------------------------
 Write-Step "Step 2/4 - delegatedauthorization for bot $BotId"
@@ -273,12 +290,7 @@ Write-Step "Step 4/4 - share each workflow with the team"
 
 foreach ($wf in $WorkflowId) {
 
-    $wfRow = (Invoke-Dv -Path "workflows?`$select=workflowid,name,statecode&`$filter=workflowid eq $wf").value
-    if (-not $wfRow) {
-        Write-Fail "workflow $wf not found in this organization - skipping"
-        continue
-    }
-    $wfName = $wfRow[0].name
+    $wfName = $workflowRows[$wf.ToString()].name
 
     $shared = $false
     if ($teamId -ne '<whatif>') {

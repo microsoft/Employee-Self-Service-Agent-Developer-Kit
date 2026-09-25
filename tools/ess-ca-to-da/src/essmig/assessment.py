@@ -140,11 +140,15 @@ def _worklist(results: list[ComponentResult]) -> list[str]:
                 f"{'place' if count == 1 else f'{count} places'} in this topic."
             )
         if result.outcome is Outcome.MANUAL:
-            worklist.append(
-                f"{name}: re-create this {result.component_type_label.lower()} in the "
-                "agent's settings after importing — the package cannot carry it. Your "
-                "configuration is reproduced in the report."
-            )
+            detail = result.detail.strip()
+            if detail:
+                worklist.append(f"{name}: {detail}")
+            else:
+                worklist.append(
+                    f"{name}: re-create this {result.component_type_label.lower()} in the "
+                    "agent's settings after importing — the package cannot carry it. Your "
+                    "configuration is reproduced in the report."
+                )
         if result.deprecated and result.needs_maker_work:
             worklist.append(
                 f"{name}: rebuild on supported building blocks — "

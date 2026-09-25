@@ -58,3 +58,21 @@ def test_token_fallback_uses_the_kit_authentication_helper() -> None:
     assert script.count("Test-DataverseToken -Resource $Resource -Token $tok") == 2
     assert "returned a token that was rejected" in script
     assert "auth.authenticate(args.environment.rstrip(\"/\"))" in helper
+
+
+def test_candidate_tokens_are_attached_to_dataverse_requests() -> None:
+    script = _script_text()
+
+    assert 'Authorization = "Bearer $Token"' in script
+    assert 'Authorization      = "Bearer $script:Token"' in script
+
+
+def test_all_requested_workflows_are_validated_before_mutation() -> None:
+    script = _script_text()
+
+    preflight = script.index("$workflowRows = @{}")
+    mutation = script.index('Write-Step "Step 2/4')
+    assert preflight < mutation
+    assert "$missingWorkflow = $true" in script
+    assert "No authorization records were changed." in script
+    assert "workflow $wf not found in this organization - skipping" not in script

@@ -81,7 +81,11 @@ Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authen
 - Ask exactly one account question: **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in.
 - Build the choices in this order: **Skip — Use the Microsoft account picker** first, followed by every cached sign-in name. Do not preselect or recommend an option. Allow a different account sign-in name as free-form input. Do not add a separate **Use another account** choice or a follow-up account question.
 
-Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, and `setup_alm_import.py` command in this invocation. Never infer a corp account. When the maker selects **Skip — Use the Microsoft account picker**, omit `--account` and append `--select-account` to those commands so a cached identity is not selected silently.
+Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
+
+When the maker selects **Skip — Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
+
+If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and ask which sign-in name the maker selected before continuing.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
@@ -111,6 +115,33 @@ Do not describe an authorization wait as service processing, start a second comm
 
 Establish a working Python invocation before running setup commands.
 
+Before checking the available Python invocation, render this exact message as a
+completed response:
+
+> **Setup command approvals**
+>
+> VS Code will ask you to approve commands that:
+>
+> - check Python and prepare the required local tools;
+> - sign you in and inspect the selected environment and agent;
+> - perform the setup actions you confirm and prepare the local workspace;
+> - download required Microsoft components when needed.
+>
+> To avoid repeated prompts, open the permissions menu below the chat input and
+> select **Allow all** for this chat session. This applies to every tool used in
+> the session, not only setup. Provide a screenshot of your chat input if you
+> need guidance finding the setting.
+>
+> When you're ready, choose:
+
+Offer exactly:
+
+- **Continue setup**
+- **Cancel setup**
+
+Do not preselect a choice. For **Continue setup**, proceed with runtime
+discovery. For **Cancel setup**, run no commands and stop.
+
 - Run setup commands from the current ESS Maker Skills workspace folder.
 - From the kit root, check each candidate with
   `{PYTHON} -c "import sys; print(sys.executable)"`, one terminal command at a
@@ -127,6 +158,27 @@ Establish a working Python invocation before running setup commands.
   and its single recovery action.
 
   When child guidance shows `python`, substitute the resolved invocation.
+
+### When command approval is declined
+
+A declined VS Code command approval pauses the current setup operation before
+the command runs. Render this exact response, substituting the declined command
+and the shell language appropriate for the current platform:
+
+> **Run this command manually**
+>
+> Setup paused before running this command:
+
+```{SHELL}
+{COMMAND}
+```
+
+> Run it from the current workspace. When it finishes, return here with the
+> result and I'll continue setup from this step.
+
+Resume from the paused operation when the maker returns. Continue from a
+successful result; apply the command-failure recovery guidance to a failed
+result.
 
 ## Shared workspace choices
 

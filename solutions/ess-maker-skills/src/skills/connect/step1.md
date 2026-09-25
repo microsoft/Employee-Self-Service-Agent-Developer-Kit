@@ -11,9 +11,11 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if `.local/connect/workday/config.json` exists and its
-  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
-  setup orchestrator owns this state).
+- **Workday** — connected only if
+  `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
+  its `agentSlug` exactly matches the active agent, and every phase is `done`.
+  Shared provider setup state is not agent connection state and must not make
+  a sibling or newly selected agent appear connected.
 
 ---
 
@@ -206,8 +208,90 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Now read `src/skills/setup/SKILL.md` and follow its hybrid-extension
-availability boundary. Do not run the retained Workday playbooks directly.
+Read `.local/config.json`, resolve `activeAgent` against `agents`, and fall back
+to the legacy `agent` object only when needed. For a DA agent, also read the
+canonical `.local/setup/config.json` `agents` record keyed by the active
+`botId`. Require canonical workspace evidence and
+`steps.SETUP-07.state: "done"`; do not require `connect_ready: true`, because
+Workday connection configuration may be the remaining readiness blocker.
+
+If there is no concrete active agent, its architecture cannot be resolved, or
+the DA workspace is not materialized, show:
+
+**Message:**
+
+I don't see a setup-complete Employee Self-Service agent selected in this
+workspace yet. Run `/setup` or select the intended agent first, then come
+back and run `/connect workday` again.
+
+**End message.**
+
+Stop without creating integration state.
+
+Treat these current MOS schemas and legacy DA aliases as Declarative Agents:
+
+- `gptagent_copilotforemployeeselfservicehr`
+- `gptagent_copilotforemployeeselfserviceit`
+- `msdyn_copilotforemployeeselfservicedahr`
+- `msdyn_copilotforemployeeselfservicedait`
+
+Also treat another active agent with `releaseLine: "da"` as Declarative.
+Never infer architecture from retired product inventory or the first installed
+agent.
+
+For the ESS DA IT Agent, show:
+
+**Message:**
+
+Workday integration with the ESS IT Agent isn't supported in this release.
+Please contact your administrator.
+
+**End message.**
+
+Stop immediately without creating Workday state or running a package check.
+
+For another unsupported DA target, show:
+
+**Message:**
+
+Workday integration is available for the ESS HR Agent in this release.
+Please select the ESS HR Agent or contact your administrator.
+
+**End message.**
+
+Stop immediately without creating Workday state or entering a lifecycle.
+
+For `gptagent_copilotforemployeeselfservicehr` or the legacy
+`msdyn_copilotforemployeeselfservicedahr` alias, read
+`src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
+`WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
+`WD-PKG-001`: DA packages share some Workday connection-reference names with
+CEA, so the CEA package fingerprint is not an architecture discriminator.
+
+For a CEA agent, check the currently installed Workday extension before
+honoring lifecycle state:
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
+```
+
+Read the `WD-PKG-001` row from `workspace/flightcheck/results.json` and route
+by both its status and detected flavor:
+
+- **`Passed` + simplified-install result** — read
+  `src/skills/connect/workday/SKILL.md` and follow it, whether or not a
+  lifecycle state file already exists.
+- **`Passed` + full / legacy result** — do not run the simplified V2 lifecycle.
+  Explain that this installation requires the legacy CEA setup experience and
+  stop without changing state.
+- **`NotConfigured`** — fresh CEA Workday installation is not available from
+  the current boundary. Explain that this release supports the DA HR Workday
+  path and stop without changing state.
+- **`Failed`** — show the checkpoint remediation and stop; do not treat a
+  partial install as a fresh environment.
+- **`Warning` / `Skipped` / `Error`**, or a `Passed` result whose flavor cannot
+  be determined — show the result and stop. Never start a lifecycle from an
+  inconclusive package check.
 
 ### If the user said something else
 

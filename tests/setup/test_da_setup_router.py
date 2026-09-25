@@ -167,9 +167,49 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_prompt = " ".join(prompt.split())
     normalized_foundation = " ".join(foundation.split())
+    runtime_message = """> **Setup command approvals**
+>
+> VS Code will ask you to approve commands that:
+>
+> - check Python and prepare the required local tools;
+> - sign you in and inspect the selected environment and agent;
+> - perform the setup actions you confirm and prepare the local workspace;
+> - download required Microsoft components when needed.
+>
+> To avoid repeated prompts, open the permissions menu below the chat input and
+> select **Allow all** for this chat session. This applies to every tool used in
+> the session, not only setup. Provide a screenshot of your chat input if you
+> need guidance finding the setting.
+>
+> When you're ready, choose:"""
+    declined_command_message = """> **Run this command manually**
+>
+> Setup paused before running this command:
+
+```{SHELL}
+{COMMAND}
+```
+
+> Run it from the current workspace. When it finishes, return here with the
+> result and I'll continue setup from this step."""
 
     assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
         prompt.index("{PYTHON} -m pip install")
+    )
+    assert runtime_message in foundation
+    assert foundation.index(runtime_message) < foundation.index(
+        '{PYTHON} -c "import sys; print(sys.executable)"'
+    )
+    assert foundation.index("- **Continue setup**") < foundation.index(
+        "- **Cancel setup**"
+    )
+    assert "Do not preselect a choice." in foundation
+    assert "For **Cancel setup**, run no commands and stop." in foundation
+    assert "### When command approval is declined" in foundation
+    assert declined_command_message in foundation
+    assert (
+        "Resume from the paused operation when the maker returns."
+        in normalized_foundation
     )
     object_model_check = (
         "{PYTHON} -c \"import sys; sys.path.insert(0, 'scripts'); "
@@ -184,8 +224,11 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert normalized_prompt.index(object_model_check) < normalized_prompt.index(
         "{PYTHON} scripts/install_agentbuilder_object_model.py"
     )
-    assert "If the check fails" in prompt
+    assert "If the check fails, run:" in prompt
     assert "Then rerun the check" in prompt
+    assert "without showing it to the user" not in prompt
+    assert "Prepare the local setup tools" not in prompt
+    assert "Prepare agent-file support" not in prompt
     assert "python -m pip install" not in prompt
     assert "python scripts/mcp_config.py" not in prompt
     assert "For any command failure" in normalized_prompt
@@ -268,7 +311,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
 
     gated_prompts = (
         "backup-template-configs.prompt.md",
-        "connect.prompt.md",
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
@@ -298,6 +340,12 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
             not in normalized
         ), path
 
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert "schema_version: 4" in connect_prompt
+    assert 'steps.SETUP-07.state: "done"' in connect_prompt
+    assert "Do not require\n`connect_ready: true`" in connect_prompt
+    assert "workspace evidence" in connect_prompt
+
     assert "`.local/config.json`'s" in instructions
 
 
@@ -324,11 +372,15 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
     assert "configPattern" not in text
 
 
-def test_workday_routing_remains_separate() -> None:
+def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/SKILL.md" in step1
+    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "gptagent_copilotforemployeeselfservicehr" in step1
+    assert "Workday integration with the ESS IT Agent isn't supported" in step1
+    assert "or run `WD-PKG-001`" in normalized_step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
     assert _WORKDAY.is_file()
     assert "Hybrid Workday extension setup is not available" in workday
@@ -758,9 +810,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "omit `--account`"
     ) in normalized_foundation
     assert (
-        "append `--select-account` to those commands so a cached identity is "
-        "not selected silently"
+        "append `--select-account` only to the first command that can authenticate"
     ) in normalized_foundation
+    assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
+    assert (
+        "later commands reuse its cached token and sign-in name"
+        in normalized_foundation
+    )
+    assert "setup_existing_da.py cached-accounts` again" in foundation
     assert "Do you have a test tenant user?" not in foundation
     assert "does not prove that the maker holds a particular administrator role" in (
         normalized_foundation
@@ -768,6 +825,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_existing_da.py cached-accounts" in foundation
     assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
     assert '--account "{SETUP_ACCOUNT}"' in foundation
+    assert "reconcile_setup_agent.py" in foundation
     assert "Never infer a corp account" in normalized_foundation
     assert "Present account confirmation once" in normalized_foundation
     assert "Continue in an occupied workspace" in normalized
@@ -1296,7 +1354,6 @@ def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "DA-GA agent is not yet available",
         "delete.prompt.md": "DA-GA agent is not yet available",
-        "connect.prompt.md": "requires the corresponding product extension",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),
@@ -1306,6 +1363,10 @@ def test_da_commands_degrade_by_operation() -> None:
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
         assert "transport" not in prompt.casefold(), name
+
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert "src/skills/connect/SKILL.md" in connect_prompt
+    assert "Extension setup is not yet available" not in connect_prompt
 
 
 def test_hybrid_workday_config_commands_remain_available() -> None:
