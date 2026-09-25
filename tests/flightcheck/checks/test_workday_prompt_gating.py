@@ -239,3 +239,64 @@ class TestIsuCredentialPromptGating:
         # Tenant suffix appended by concatenation (never logged).
         assert username == "isu_flightcheck@mocktenant"
         assert password == "secret"
+
+
+class TestNonInteractiveStdinDegradesToSkip:
+    """``isatty()`` can report True on a wrapped/non-interactive stdin (a piped
+    subprocess or a test/automation harness), where ``input()`` / ``getpass()``
+    raise ``EOFError`` immediately. That used to crash the whole Workday
+    category with an unhandled EOFError, aborting every later Workday check.
+    Both runtime prompts must instead degrade to an empty value so the caller
+    records a clean SKIP.
+
+    Pure-logic tests (no external API); the cassette/mock-tier cardinal rule in
+    tests/AGENTS.md does not apply.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        for var in (
+            "WORKDAY_BASE_URL",
+            "WORKDAY_TENANT",
+            "WORKDAY_TEST_EMPLOYEE_ID",
+            "WORKDAY_USERNAME",
+            "WORKDAY_PASSWORD",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.chdir(tmp_path)
+        # isatty() True so the gate reaches the prompt; the read then EOFs.
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    def test_employee_id_prompt_eof_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from flightcheck.checks.workday import _resolve_workday_metadata
+
+        def _eof(prompt: str = "") -> str:
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _eof)
+
+        _, _, test_employee = _resolve_workday_metadata(_full_runner())
+
+        assert test_employee == ""
+
+    def test_credential_prompt_eof_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from flightcheck.checks.workday import _resolve_workday_credentials
+
+        def _eof(prompt: str = "") -> str:
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _eof)
+        monkeypatch.setattr("getpass.getpass", _eof)
+
+        username, password = _resolve_workday_credentials(
+            _full_runner(), "mocktenant"
+        )
+
+        assert username == ""
+        assert password == ""

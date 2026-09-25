@@ -181,6 +181,15 @@ def _endpoint_systems_for_offer(runner) -> list[str]:
         return []
 
 
+# Checkpoints whose category function runs the mutating runtime-reachability
+# egress probe. In single-checkpoint mode consent must be wired for these so
+# the --runtime-reachability flag is honored (WD-RUN-001's active Workday probe
+# was silently skipped otherwise). Gate on the TARGET being one of these, not
+# merely on the category fn being in the plan: run_workday_checks also backs
+# ~15 non-probe Workday checkpoints that must never trigger the mutation.
+_ACTIVE_PROBE_CHECKPOINTS = ("WD-RUN-001",)
+
+
 def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     """Resolve consent for the mutating runtime-reachability probe and record the
     decision on the runner. Consent is ALWAYS surfaced when the egress probe is
@@ -992,12 +1001,16 @@ def _run_single_checkpoint(args):
     runner.agentbuilder = agentbuilder
     runner.connectivity = connectivity
 
-    # No runtime-reachability consent here: INFRA-003 is not individually
-    # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
-    # registry.py, and plan.ordered_fns holds only leaf check fns, never
-    # run_infrastructure_checks), so the egress probe never runs on this path.
-    # Consent is resolved on the --scope path only. If an INFRA checkpoint is
-    # ever registered, wire _apply_runtime_reachability_consent here then.
+    # Runtime-reachability consent for single-checkpoint mode. INFRA-003 is not
+    # individually targetable here (no INFRA CheckpointSpec in registry.py), but
+    # WD-RUN-001 IS: its category fn (run_workday_checks) runs the active
+    # Workday egress probe. plan.ordered_fns holds (label, category_fn) pairs,
+    # so _apply_runtime_reachability_consent can detect the probe fn and resolve
+    # consent. Gate strictly on the target being an active-probe checkpoint so a
+    # non-probe Workday target (e.g. WD-CONN-012), which shares
+    # run_workday_checks, never fires the mutation.
+    if any(registry.matches(target, cid) for cid in _ACTIVE_PROBE_CHECKPOINTS):
+        _apply_runtime_reachability_consent(args, runner, plan.ordered_fns)
 
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
