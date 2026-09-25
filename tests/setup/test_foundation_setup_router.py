@@ -13,6 +13,12 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
+_REPO_INSTRUCTIONS = _REPO_ROOT / ".github" / "copilot-instructions.md"
+_SETUP_README = _REPO_ROOT / "setup" / "README.md"
+_PROFILE_README = _REPO_ROOT / "tools" / "ess-maker-profile" / "README.md"
+_PROFILE_EXTENSION = (
+    _REPO_ROOT / "tools" / "ess-maker-profile" / "extension" / "extension.js"
+)
 _FOUNDATION = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
 )
@@ -534,6 +540,24 @@ def test_org_announcements_is_registered_across_entry_points() -> None:
     assert "`/org-announcements`" in handoff
 
 
+def test_org_announcements_routes_from_every_workspace_entry_point() -> None:
+    repo_instructions = _REPO_INSTRUCTIONS.read_text(encoding="utf-8")
+    solution_instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    extension = _PROFILE_EXTENSION.read_text(encoding="utf-8")
+    setup_readme = _SETUP_README.read_text(encoding="utf-8")
+    profile_readme = _PROFILE_README.read_text(encoding="utf-8")
+
+    assert "`/org-announcements`" in repo_instructions
+    assert '"Create an organization announcement"' in repo_instructions
+    assert '"Post an announcement"' in repo_instructions
+    assert "src/skills/org-announcements/SKILL.md" in solution_instructions
+    assert "query: 'Create an organization announcement'" in extension
+    assert "label: 'Post an announcement'" in extension
+    assert "(Setup, Customize landing page, Post an announcement" in setup_readme
+    assert "**Setup** → `/setup`" in profile_readme
+    assert "**Post an announcement**" in profile_readme
+
+
 def test_setup_installs_org_announcements_runtime_dependencies() -> None:
     onboarding_step1 = _ONBOARDING_STEP1.read_text(encoding="utf-8")
     requirements = _ORG_ANNOUNCEMENTS_REQUIREMENTS.read_text(encoding="utf-8")
@@ -546,6 +570,20 @@ def test_setup_installs_org_announcements_runtime_dependencies() -> None:
     assert "httpx>=0.27.0,<1.0" in requirements
     assert "pydantic>=2.0,<3.0" in requirements
     assert "msal>=1.35.0" in requirements
+
+
+def test_completed_workspace_refreshes_all_runtime_dependencies() -> None:
+    onboarding = _ONBOARDING.read_text(encoding="utf-8")
+
+    assert "pip install -r scripts/requirements.txt" in onboarding
+    assert (
+        "pip install -r src/mcp/agentconfig_landing_page/requirements.txt"
+        in onboarding
+    )
+    assert (
+        "pip install -r src/mcp/agentconfig_org_announcements/requirements.txt"
+        in onboarding
+    )
 
 
 def test_all_mcp_writers_use_the_shared_materializer() -> None:

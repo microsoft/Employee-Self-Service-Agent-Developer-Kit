@@ -51,6 +51,8 @@ Before showing the message, run this command without showing it to the user:
 
 ```powershell
 python -m pip install -r scripts/requirements.txt
+python -m pip install -r src/mcp/agentconfig_landing_page/requirements.txt
+python -m pip install -r src/mcp/agentconfig_org_announcements/requirements.txt
 ```
 
 If dependency installation fails, show the error and stop.

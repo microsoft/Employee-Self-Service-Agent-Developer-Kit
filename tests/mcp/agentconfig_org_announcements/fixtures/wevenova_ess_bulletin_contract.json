@@ -1,0 +1,35 @@
+{
+  "source": {
+    "repository": "WeveNova",
+    "branch": "users/sophiesong/essbulletin-api-tools",
+    "commit": "fa4679cf74",
+    "dto": "EssBulletinResource / EssBulletinContent / EssBulletinAction"
+  },
+  "identity": {
+    "resourceIdType": "Guid",
+    "resourceIdLocation": "root",
+    "contentHasId": false
+  },
+  "audience": {
+    "nullable": false,
+    "default": []
+  },
+  "statusValues": [
+    "draft",
+    "published",
+    "retired",
+    "deleted"
+  ],
+  "bulletinTypeValues": [
+    "standard",
+    "alert"
+  ],
+  "actionTypeValues": [
+    "externalLink",
+    "copilotChat"
+  ],
+  "priorityValues": [
+    0,
+    1
+  ]
+}

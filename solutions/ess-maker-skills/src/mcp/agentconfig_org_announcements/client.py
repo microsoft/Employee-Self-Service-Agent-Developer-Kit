@@ -16,6 +16,7 @@ This new backend surface must never fall back to tenant-only routes.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timezone
@@ -49,6 +50,13 @@ DEFAULT_ORG_ANNOUNCEMENTS_BASE_URL = "https://substrate.office.com/weveb2/api/v1
 # items, with no envelope metadata. Hitting the cap means the archived window is
 # truncated; it does not reveal an exact archived total.
 ARCHIVED_WINDOW_SIZE = 50
+STATUS_DELETED = "deleted"
+
+_VALID_STATUSES = frozenset({"draft", "published", "retired", STATUS_DELETED})
+_VALID_BULLETIN_TYPES = frozenset({"standard", "alert"})
+_VALID_ACTION_TYPES = frozenset({"externalLink", "copilotChat"})
+_VALID_PRIORITIES = frozenset({0, 1})
+_COMMITTED_RELOAD_404_DELAYS = (0.05, 0.15)
 
 
 class IndeterminateWriteError(AgentConfigApiError):
@@ -62,7 +70,7 @@ class IndeterminateWriteError(AgentConfigApiError):
 
 
 class BulletinValidationError(AgentConfigApiError):
-    """The save endpoint returned HTTP 200 carrying structured field errors.
+    """The OData ``Save`` action returned HTTP 200 with field errors.
 
     WeveNova's ``EssBulletinSaveResult`` reports validation failure *inside* a
     success response: ``Errors`` is non-empty and ``Id`` is absent. Every
@@ -110,6 +118,30 @@ _ACTION_FIELD_MAP = {
 }
 
 
+def _require_odata_enum(
+    value: Any, field: str, allowed: frozenset[Any]
+) -> Any:
+    if not any(
+        type(value) is type(candidate) and value == candidate
+        for candidate in allowed
+    ):
+        raise AgentConfigApiError(
+            f"Org Announcements API returned an invalid {field}"
+        )
+    return value
+
+
+def _require_input_enum(
+    value: Any, field: str, allowed: frozenset[Any]
+) -> Any:
+    if not any(
+        type(value) is type(candidate) and value == candidate
+        for candidate in allowed
+    ):
+        raise ValueError(f"{field} has an unsupported value")
+    return value
+
+
 def _from_odata_action(payload: Any) -> Optional[dict[str, Any]]:
     if payload is None:
         return None
@@ -117,6 +149,9 @@ def _from_odata_action(payload: Any) -> Optional[dict[str, Any]]:
         raise AgentConfigApiError(
             "Org Announcements API returned an invalid bulletin action"
         )
+    _require_odata_enum(
+        payload.get("ActionType"), "action type", _VALID_ACTION_TYPES
+    )
     return {
         target: payload[source]
         for source, target in _ACTION_FIELD_MAP.items()
@@ -141,6 +176,14 @@ def _from_odata_bulletin(payload: Any) -> dict[str, Any]:
         value = payload[source]
         if source in ("PrimaryAction", "SecondaryAction"):
             value = _from_odata_action(value)
+        elif source == "Type":
+            value = _require_odata_enum(
+                value, "bulletin type", _VALID_BULLETIN_TYPES
+            )
+        elif source == "Priority":
+            value = _require_odata_enum(
+                value, "bulletin priority", _VALID_PRIORITIES
+            )
         result[target] = value
     return result
 
@@ -150,6 +193,9 @@ def _to_odata_action(payload: Any) -> Optional[dict[str, Any]]:
         return None
     if not isinstance(payload, dict):
         raise ValueError("bulletin actions must be objects")
+    _require_input_enum(
+        payload.get("actionType"), "actionType", _VALID_ACTION_TYPES
+    )
     return {
         source: payload[target]
         for source, target in _ACTION_FIELD_MAP.items()
@@ -167,6 +213,14 @@ def _to_odata_bulletin(payload: Any) -> dict[str, Any]:
         value = payload[target]
         if target in ("primaryAction", "secondaryAction"):
             value = _to_odata_action(value)
+        elif target == "type":
+            value = _require_input_enum(
+                value, "type", _VALID_BULLETIN_TYPES
+            )
+        elif target == "priority":
+            value = _require_input_enum(
+                value, "priority", _VALID_PRIORITIES
+            )
         result[source] = value
     return result
 
@@ -181,7 +235,9 @@ def _to_odata_save_input(payload: dict[str, Any]) -> dict[str, Any]:
         result["Audience"] = payload["audience"]
     if "status" not in payload:
         raise ValueError("status is required")
-    result["Status"] = payload["status"]
+    result["Status"] = _require_input_enum(
+        payload["status"], "status", _VALID_STATUSES
+    )
     return result
 
 
@@ -308,11 +364,9 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             raise AgentConfigApiError(
                 "Org Announcements API returned an invalid audience"
             )
-        status = payload.get("Status")
-        if not isinstance(status, str) or not status:
-            raise AgentConfigApiError(
-                "Org Announcements API returned an invalid status"
-            )
+        status = _require_odata_enum(
+            payload.get("Status"), "status", _VALID_STATUSES
+        )
 
         config = {
             "id": bulletin_id,
@@ -452,7 +506,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
     async def save_bulletin(
         self, title_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Create or update through the authoring ``save`` endpoint.
+        """Create or update through the authoring OData ``Save`` action.
 
         Returns the canonical configuration from a keyed GET after validating
         the ``EssBulletinSaveResult`` receipt. A payload without ``id`` is an
@@ -483,10 +537,25 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             result,
             requested_id=requested_id if not is_create else None,
         )
-        try:
-            return await self.get_bulletin(title_id, saved_id)
-        except (AgentConfigApiError, httpx.RequestError) as error:
-            raise CommittedCanonicalReloadError(error) from error
+        return await self._reload_committed_bulletin(title_id, saved_id)
+
+    async def _reload_committed_bulletin(
+        self, title_id: str, bulletin_id: str
+    ) -> dict[str, Any]:
+        """Reload a committed row, retrying only short-lived keyed GET 404s."""
+        for attempt in range(len(_COMMITTED_RELOAD_404_DELAYS) + 1):
+            try:
+                return await self.get_bulletin(title_id, bulletin_id)
+            except (AgentConfigApiError, httpx.RequestError) as error:
+                is_retryable_404 = (
+                    isinstance(error, AgentConfigApiError)
+                    and error.http_status == 404
+                    and attempt < len(_COMMITTED_RELOAD_404_DELAYS)
+                )
+                if not is_retryable_404:
+                    raise CommittedCanonicalReloadError(error) from error
+                await asyncio.sleep(_COMMITTED_RELOAD_404_DELAYS[attempt])
+        raise AssertionError("committed reload retry loop exhausted")
 
     async def transition_bulletin(
         self, title_id: str, bulletin_id: str, status: str
@@ -504,6 +573,9 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         delete is a tombstone and therefore has no readable canonical resource.
         """
         validated_id = validate_bulletin_id(bulletin_id)
+        validated_status = _require_input_enum(
+            status, "status", _VALID_STATUSES
+        )
         saved_id = self._unwrap_save_result(
             await self._request(
                 "POST",
@@ -511,7 +583,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
                 json={
                     "input": {
                         "Id": validated_id,
-                        "Status": status,
+                        "Status": validated_status,
                     }
                 },
                 transform_payload=False,
@@ -519,12 +591,9 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             ),
             requested_id=validated_id,
         )
-        if status == "deleted":
+        if validated_status == STATUS_DELETED:
             return None
-        try:
-            return await self.get_bulletin(title_id, saved_id)
-        except (AgentConfigApiError, httpx.RequestError) as error:
-            raise CommittedCanonicalReloadError(error) from error
+        return await self._reload_committed_bulletin(title_id, saved_id)
 
 
 def _is_ambiguous_write_failure(

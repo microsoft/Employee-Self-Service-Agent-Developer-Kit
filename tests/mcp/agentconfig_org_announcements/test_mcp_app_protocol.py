@@ -2696,3 +2696,63 @@ def test_discovery_credential_failure_is_a_safe_tool_error(
         _call(tool, arguments, include_scope=False)
 
     assert _PRIVATE_CACHE_DETAIL not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "status"),
+    [
+        ("list_agent_configs", {}, 400),
+        ("search_agents", {"searchString": "Finance"}, 422),
+    ],
+)
+def test_discovery_backend_failure_is_a_safe_tool_error(
+    fake_clients, tool, arguments, status
+) -> None:
+    private_marker = "SECRET_BACKEND_MARKER"
+
+    class _FailingDiscoveryClient(_FakeClient):
+        async def list_agent_configs(self):
+            raise org_client.AgentConfigApiError(
+                f"PrivateCode: {private_marker}",
+                http_status=status,
+            )
+
+        async def search_agents(self, search_string):
+            raise org_client.AgentConfigApiError(
+                f"PrivateCode: {private_marker}",
+                http_status=status,
+            )
+
+    fake_clients(client=_FailingDiscoveryClient())
+
+    with pytest.raises(ToolError, match="service rejected the request") as caught:
+        _call(tool, arguments, include_scope=False)
+
+    assert private_marker not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("list_agent_configs", {}),
+        ("search_agents", {"searchString": "Finance"}),
+    ],
+)
+def test_discovery_transport_failure_is_a_safe_tool_error(
+    fake_clients, tool, arguments
+) -> None:
+    private_marker = "https://private-backend.example/secret"
+
+    class _FailingDiscoveryClient(_FakeClient):
+        async def list_agent_configs(self):
+            raise httpx.ConnectError(private_marker)
+
+        async def search_agents(self, search_string):
+            raise httpx.ConnectError(private_marker)
+
+    fake_clients(client=_FailingDiscoveryClient())
+
+    with pytest.raises(ToolError, match="temporarily unavailable") as caught:
+        _call(tool, arguments, include_scope=False)
+
+    assert private_marker not in str(caught.value)

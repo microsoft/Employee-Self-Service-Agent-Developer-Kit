@@ -49,6 +49,11 @@ OTHER_BULLETIN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 CREATED_BULLETIN_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 VALID_BULLETIN_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+CONTRACT_FIXTURE = (
+    Path(__file__).with_name("fixtures")
+    / "wevenova_ess_bulletin_contract.json"
+)
+PROVIDER_CONTRACT = json.loads(CONTRACT_FIXTURE.read_text(encoding="utf-8"))
 
 
 def test_request_validators_are_shared_public_boundary_helpers() -> None:
@@ -59,6 +64,114 @@ def test_request_validators_are_shared_public_boundary_helpers() -> None:
         org_validation.validate_title_id(" padded")
     with pytest.raises(ValueError, match="bulletinId"):
         org_validation.validate_bulletin_id("bad/id")
+
+
+def test_provider_contract_fixture_records_authoritative_provenance() -> None:
+    source = PROVIDER_CONTRACT["source"]
+    identity = PROVIDER_CONTRACT["identity"]
+
+    assert source == {
+        "repository": "WeveNova",
+        "branch": "users/sophiesong/essbulletin-api-tools",
+        "commit": "fa4679cf74",
+        "dto": "EssBulletinResource / EssBulletinContent / EssBulletinAction",
+    }
+    assert identity == {
+        "resourceIdType": "Guid",
+        "resourceIdLocation": "root",
+        "contentHasId": False,
+    }
+    assert PROVIDER_CONTRACT["audience"]["nullable"] is False
+
+
+def test_provider_contract_values_are_accepted_at_the_odata_boundary() -> None:
+    for status in PROVIDER_CONTRACT["statusValues"]:
+        assert _canonical_config(status=status)["status"] == status
+
+    for bulletin_type in PROVIDER_CONTRACT["bulletinTypeValues"]:
+        payload = _config()
+        payload["Bulletin"]["Type"] = bulletin_type
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["type"]
+            == bulletin_type
+        )
+
+    for priority in PROVIDER_CONTRACT["priorityValues"]:
+        payload = _config()
+        payload["Bulletin"]["Priority"] = priority
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["priority"]
+            == priority
+        )
+
+    for action_type in PROVIDER_CONTRACT["actionTypeValues"]:
+        payload = _config()
+        payload["Bulletin"]["PrimaryAction"] = {
+            "ActionType": action_type,
+            "Label": "Open",
+        }
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["primaryAction"]["actionType"]
+            == action_type
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("Status",), "Draft", "invalid status"),
+        (("Bulletin", "Type"), "Standard", "invalid bulletin type"),
+        (("Bulletin", "Priority"), 2, "invalid bulletin priority"),
+        (
+            ("Bulletin", "PrimaryAction", "ActionType"),
+            "ExternalLink",
+            "invalid action type",
+        ),
+    ],
+)
+def test_unknown_provider_enum_values_are_rejected(
+    path, value, message
+) -> None:
+    payload = _config()
+    payload["Bulletin"]["PrimaryAction"] = {
+        "ActionType": "externalLink",
+        "Label": "Open",
+    }
+    target = payload
+    for segment in path[:-1]:
+        target = target[segment]
+    target[path[-1]] = value
+
+    with pytest.raises(org_client.AgentConfigApiError, match=message):
+        org_client.OrgAnnouncementsClient._require_config(payload, TITLE_ID)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "Draft"},
+        {"status": "draft", "bulletin": {"type": "Standard"}},
+        {"status": "draft", "bulletin": {"priority": 2}},
+        {
+            "status": "draft",
+            "bulletin": {
+                "primaryAction": {
+                    "actionType": "ExternalLink",
+                    "label": "Open",
+                }
+            },
+        },
+    ],
+)
+def test_unknown_input_enum_values_are_rejected_before_post(payload) -> None:
+    with pytest.raises(ValueError, match="unsupported value"):
+        org_client._to_odata_save_input(payload)
 
 
 def _token(tenant_id: str = TENANT_ID) -> str:
@@ -597,6 +710,84 @@ def test_keyed_reload_failure_is_reported_as_committed_refresh(
         await client.aclose()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_committed_reload_retries_only_transient_keyed_get_404(
+    monkeypatch, operation
+) -> None:
+    counts = {"post": 0, "get": 0}
+    expected_status = "draft" if operation == "save" else "retired"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            counts["post"] += 1
+            return httpx.Response(200, json=_save_result())
+        counts["get"] += 1
+        if counts["get"] < 3:
+            return httpx.Response(
+                404, json={"Code": "NotFound", "Message": "not visible yet"}
+            )
+        return httpx.Response(200, json=_config(status=expected_status))
+
+    monkeypatch.setattr(org_client, "_COMMITTED_RELOAD_404_DELAYS", (0, 0))
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        if operation == "save":
+            result = await client.save_bulletin(
+                TITLE_ID,
+                {"id": BULLETIN_ID, "status": "draft"},
+            )
+        else:
+            result = await client.transition_bulletin(
+                TITLE_ID, BULLETIN_ID, "retired"
+            )
+        assert result["status"] == expected_status
+        await client.aclose()
+
+    asyncio.run(run())
+
+    assert counts == {"post": 1, "get": 3}
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_committed_reload_404_exhaustion_never_reposts(
+    monkeypatch, operation
+) -> None:
+    counts = {"post": 0, "get": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            counts["post"] += 1
+            return httpx.Response(200, json=_save_result())
+        counts["get"] += 1
+        return httpx.Response(
+            404, json={"Code": "NotFound", "Message": "not visible yet"}
+        )
+
+    monkeypatch.setattr(org_client, "_COMMITTED_RELOAD_404_DELAYS", (0, 0))
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        with pytest.raises(
+            org_client.CommittedCanonicalReloadError
+        ) as caught:
+            if operation == "save":
+                await client.save_bulletin(
+                    TITLE_ID,
+                    {"id": BULLETIN_ID, "status": "draft"},
+                )
+            else:
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        assert caught.value.cause.http_status == 404
+        await client.aclose()
+
+    asyncio.run(run())
+
+    assert counts == {"post": 1, "get": 3}
 
 
 @pytest.mark.parametrize("operation", ["save", "transition"])

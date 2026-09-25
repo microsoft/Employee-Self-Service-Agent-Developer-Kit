@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -48,6 +49,7 @@ from client import (
     CommittedCanonicalReloadError,
     IndeterminateWriteError,
     OrgAnnouncementsClient,
+    STATUS_DELETED,
     build_manager_state,
     is_deleted_item,
 )
@@ -123,7 +125,7 @@ TRANSITION_STATUS = {
     "archive": "retired",
     "unarchive": "draft",
     "moveToDraft": "draft",
-    "delete": "deleted",
+    "delete": STATUS_DELETED,
 }
 TransitionName = Literal["archive", "unarchive", "moveToDraft", "delete"]
 
@@ -170,13 +172,19 @@ _BACKEND_DIAGNOSTIC_CODES = frozenset(
     {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed"}
 )
 
-# Identity and audit fields the backend owns. A duplicate strips them from the
-# copied content so the copy is created as a fresh Draft rather than silently
-# updating its source or inheriting its history. The wrapper-level audit fields
-# (createdBy/createdOn/modifiedDate/status) are never copied at all, because the
-# duplicate payload is rebuilt from content and audience only.
-_COPY_STRIPPED_FIELDS = frozenset(
-    {"id", "createdBy", "createdOn", "modifiedDate", "status", "version", "etag"}
+# Closed authored-content projection accepted by WeveNova's EssBulletinContent
+# DTO. A duplicate never forwards provider-added fields back into Save.
+_AUTHORED_BULLETIN_FIELDS = frozenset(
+    {
+        "type",
+        "priority",
+        "title",
+        "description",
+        "primaryAction",
+        "secondaryAction",
+        "startDate",
+        "endDate",
+    }
 )
 
 
@@ -288,6 +296,7 @@ mcp = FastMCP(
 )
 
 _client: Optional[OrgAnnouncementsClient] = None
+_client_construction_task: Optional[asyncio.Task[None]] = None
 _client_users: dict[OrgAnnouncementsClient, int] = {}
 _retired_clients: set[OrgAnnouncementsClient] = set()
 _graph_client: Optional[GraphDirectoryClient] = None
@@ -296,6 +305,50 @@ _graph_client_users: dict[GraphDirectoryClient, int] = {}
 # Guards construction and invalidation of the process-global authoring client so
 # concurrent tool calls share one sign-in instead of racing two browser prompts.
 _client_lock = asyncio.Lock()
+
+
+def _observe_task_failure(task: asyncio.Task[None]) -> None:
+    """Retrieve an unobserved construction failure after all waiters cancel."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _construct_and_publish_client() -> None:
+    """Build one authoring client outside the lock and publish or dispose it."""
+    global _client, _client_construction_task
+    current_task = asyncio.current_task()
+    client = None
+    published = False
+    try:
+        try:
+            client = await asyncio.to_thread(OrgAnnouncementsClient)
+        except (LocalCredentialError, LockException, OSError) as error:
+            raise _FailureResult(
+                "AuthenticationRequired",
+                "Organization announcement sign-in could not be completed. Try again.",
+                source=SOURCE_MCP,
+            ) from error
+
+        with anyio.CancelScope(shield=True):
+            close_client = None
+            async with _client_lock:
+                if _client is None:
+                    _client = client
+                    published = True
+                else:
+                    close_client = client
+            if close_client is not None:
+                await close_client.aclose()
+    except asyncio.CancelledError:
+        if client is not None and not published:
+            with anyio.CancelScope(shield=True):
+                await client.aclose()
+        raise
+    finally:
+        with anyio.CancelScope(shield=True):
+            async with _client_lock:
+                if _client_construction_task is current_task:
+                    _client_construction_task = None
 
 
 async def get_client() -> OrgAnnouncementsClient:
@@ -307,43 +360,52 @@ async def get_client() -> OrgAnnouncementsClient:
     inline would run all of that *inside* the asyncio event loop, freezing every
     other in-flight request and the MCP stdio transport itself for the duration.
 
-    Construction and lease registration happen behind the same lock. Callers
-    must release the returned client, normally through ``get_client_lease``, so
-    a 401 reset can retire the client without closing it during another request.
+    One shared construction task is registered behind the lock, but the
+    potentially human-duration authentication itself runs outside it. Lease
+    registration remains lock-protected. Callers must release the returned
+    client, normally through ``get_client_lease``, so a 401 reset can retire the
+    client without closing it during another request.
     """
-    global _client
-    async with _client_lock:
-        if _client is None:
-            try:
-                _client = await asyncio.to_thread(OrgAnnouncementsClient)
-            except (LocalCredentialError, LockException, OSError) as error:
-                # Cache details stay on the exception cause, not in tool payloads.
-                raise _FailureResult(
-                    "AuthenticationRequired",
-                    "Organization announcement sign-in could not be completed. Try again.",
-                    source=SOURCE_MCP,
-                ) from error
-        client = _client
-        _client_users[client] = _client_users.get(client, 0) + 1
-        return client
+    global _client_construction_task
+    while True:
+        async with _client_lock:
+            if _client is not None:
+                client = _client
+                _client_users[client] = _client_users.get(client, 0) + 1
+                return client
+            construction = _client_construction_task
+            if construction is None:
+                construction = asyncio.create_task(_construct_and_publish_client())
+                construction.add_done_callback(_observe_task_failure)
+                _client_construction_task = construction
+        try:
+            await asyncio.shield(construction)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if construction.cancelled() and (
+                current is None or not current.cancelling()
+            ):
+                continue
+            raise
 
 
 async def release_client(client: OrgAnnouncementsClient) -> None:
     """Release one authoring-client lease and close a retired final user."""
-    close_client = None
-    async with _client_lock:
-        users = _client_users.get(client)
-        if users is None:
-            return
-        if users > 1:
-            _client_users[client] = users - 1
-            return
-        del _client_users[client]
-        if client in _retired_clients:
-            _retired_clients.remove(client)
-            close_client = client
-    if close_client is not None:
-        await close_client.aclose()
+    with anyio.CancelScope(shield=True):
+        close_client = None
+        async with _client_lock:
+            users = _client_users.get(client)
+            if users is None:
+                return
+            if users > 1:
+                _client_users[client] = users - 1
+                return
+            del _client_users[client]
+            if client in _retired_clients:
+                _retired_clients.remove(client)
+                close_client = client
+        if close_client is not None:
+            await close_client.aclose()
 
 
 @asynccontextmanager
@@ -418,16 +480,18 @@ async def get_graph_client(
             and previous is not client
             and not _graph_client_users.get(previous)
         ):
-            await previous.aclose()
+            with anyio.CancelScope(shield=True):
+                await previous.aclose()
         yield client
     finally:
-        remaining = _graph_client_users[client] - 1
-        if remaining:
-            _graph_client_users[client] = remaining
-        else:
-            del _graph_client_users[client]
-            if client is not _graph_client:
-                await client.aclose()
+        with anyio.CancelScope(shield=True):
+            remaining = _graph_client_users[client] - 1
+            if remaining:
+                _graph_client_users[client] = remaining
+            else:
+                del _graph_client_users[client]
+                if client is not _graph_client:
+                    await client.aclose()
 
 
 def _now() -> datetime:
@@ -771,6 +835,25 @@ def _editor_payload(
     }
 
 
+def _model_visible_failure(failure: _FailureResult) -> _FailureResult:
+    """Replace backend-controlled detail before exposing a failure to the model."""
+    if failure.source == SOURCE_BACKEND:
+        safe_message = _MODEL_VISIBLE_BACKEND_MESSAGES.get(failure.code)
+        if safe_message is None:
+            return _FailureResult(
+                "InvalidRequest",
+                "The Org Announcements service rejected the request.",
+                source=SOURCE_BACKEND,
+            )
+        return _FailureResult(
+            failure.code,
+            safe_message,
+            retryable=failure.retryable,
+            source=SOURCE_BACKEND,
+        )
+    return failure
+
+
 def _open_error_payload(
     request: dict[str, Any], failure: _FailureResult, scope: dict[str, str]
 ) -> CallToolResult:
@@ -779,22 +862,7 @@ def _open_error_payload(
     The request is response-only retry state, including the original suggestion.
     It is never logged or sent to telemetry.
     """
-    visible_failure = failure
-    if failure.source == SOURCE_BACKEND:
-        safe_message = _MODEL_VISIBLE_BACKEND_MESSAGES.get(failure.code)
-        if safe_message is None:
-            visible_failure = _FailureResult(
-                "InvalidRequest",
-                "The Org Announcements service rejected the request.",
-                source=SOURCE_BACKEND,
-            )
-        else:
-            visible_failure = _FailureResult(
-                failure.code,
-                safe_message,
-                retryable=failure.retryable,
-                source=SOURCE_BACKEND,
-            )
+    visible_failure = _model_visible_failure(failure)
 
     payload = {
         **scope,
@@ -840,6 +908,25 @@ def _open_failure(
     return _open_error_payload(request, failure, scope)
 
 
+async def _discovery_tool_error(
+    operation: str,
+    error: Exception,
+    started: float,
+    client: Optional[OrgAnnouncementsClient],
+) -> ToolError:
+    failure = _model_visible_failure(await _failure_from(error, client))
+    diagnostic_code = _diagnostic_code(failure)
+    _LOGGER.warning("%s failed: %s", operation, diagnostic_code)
+    record_operation(
+        operation,
+        outcome="failure",
+        latency_ms=_elapsed_ms(started),
+        error_code=diagnostic_code,
+        error_source=failure.source,
+    )
+    return ToolError(failure.message)
+
+
 @mcp.resource(
     ORG_ANNOUNCEMENTS_RESOURCE_URI,
     name="Org announcements",
@@ -857,15 +944,20 @@ def org_announcements_widget() -> str:
 )
 async def list_agent_configs() -> str:
     """List configured deployed ESS agents; never initialize configuration."""
+    started = time.monotonic()
+    client = None
     try:
         async with get_client_lease() as client:
-            try:
-                result = await client.list_agent_configs()
-            except AgentConfigApiError as error:
-                failure = await _failure_from(error, client)
-                raise ToolError(failure.message) from None
-    except _FailureResult as failure:
-        raise ToolError(failure.message) from None
+            result = await client.list_agent_configs()
+    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
+        raise await _discovery_tool_error(
+            "list_agent_configs", error, started, client
+        ) from None
+    record_operation(
+        "list_agent_configs",
+        outcome="success",
+        latency_ms=_elapsed_ms(started),
+    )
     return json.dumps(result, indent=2)
 
 
@@ -874,15 +966,20 @@ async def list_agent_configs() -> str:
 )
 async def search_agents(searchString: str) -> str:
     """Find deployed ESS agents by name to resolve their titleId."""
+    started = time.monotonic()
+    client = None
     try:
         async with get_client_lease() as client:
-            try:
-                result = await client.search_agents(searchString)
-            except AgentConfigApiError as error:
-                failure = await _failure_from(error, client)
-                raise ToolError(failure.message) from None
-    except _FailureResult as failure:
-        raise ToolError(failure.message) from None
+            result = await client.search_agents(searchString)
+    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
+        raise await _discovery_tool_error(
+            "search_agents", error, started, client
+        ) from None
+    record_operation(
+        "search_agents",
+        outcome="success",
+        latency_ms=_elapsed_ms(started),
+    )
     return json.dumps(result, indent=2)
 
 
@@ -1316,10 +1413,9 @@ async def transition_bulletin(
                 outcome="success",
                 latency_ms=_elapsed_ms(started),
             )
-            # The canonical changed row is included alongside the manager state. It is
-            # additive: the widget's existing manager-shaped contract is untouched, so a
-            # host that strips unknown fields simply ignores ``item`` and still gets a
-            # correct refresh.
+            # Non-delete transitions include the canonical changed row alongside
+            # the manager state. Delete returns only the refreshed manager because
+            # the tombstoned resource is no longer readable.
             payload = {**scope, "status": "success", "manager": manager}
             if changed is not None:
                 payload["item"] = {"config": changed}
@@ -1347,10 +1443,9 @@ async def duplicate_bulletin(
 ) -> CallToolResult:
     """Copy an existing announcement into a new Draft.
 
-    Loads the canonical source, strips its identity and audit fields, and
-    creates a new Draft. A missing source is a not-found failure, never a
-    create: duplicating something that no longer exists must not invent a
-    record.
+    Loads the canonical source, projects only WeveNova-authored content fields,
+    and creates a new Draft. A missing source is a not-found failure, never a
+    create: duplicating something that no longer exists must not invent a record.
     """
     started = time.monotonic()
     scope = {"titleId": titleId}
@@ -1362,15 +1457,13 @@ async def duplicate_bulletin(
             scope = {"tenantId": client.tenant_id, "titleId": titleId}
             source = await client.get_bulletin(titleId, id)
 
-            # Stored content is forwarded verbatim, so it never passes through
-            # BulletinInput. The blank-schedule sentinel is stripped explicitly here for
-            # the same reason it is coerced there: "" is not a DateTimeOffset, and
-            # sending it would fail model binding on a copy the maker never edited.
+            # Stored content does not pass through BulletinInput. Project the
+            # provider's closed DTO and strip blank schedule sentinels before Save.
             bulletin = without_blank_schedule(
                 {
                     key: value
                     for key, value in source["bulletin"].items()
-                    if key not in _COPY_STRIPPED_FIELDS
+                    if key in _AUTHORED_BULLETIN_FIELDS
                 }
             )
             audience = source.get("audience")
