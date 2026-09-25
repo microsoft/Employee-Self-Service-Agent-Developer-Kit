@@ -388,14 +388,9 @@ def _capacity_portal(runner) -> str:
     """Return the ring-matched Power Platform capacity portal link."""
     ring = getattr(runner, "ring", None)
     if ring not in _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING:
-        config = getattr(runner, "config", None) or {}
-        host = str(config.get("powerPlatformApiEndpoint") or "")
-        if ".environment.api.test.powerplatform.com" in host.casefold():
-            ring = "test"
-        elif ".environment.api.preprod.powerplatform.com" in host.casefold():
-            ring = "preprod"
-        else:
-            ring = "prod"
+        raise ValueError(
+            "Power Platform environment ring is unavailable or unsupported."
+        )
     origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING[ring]
     return (
         "[Power Platform Admin Center > Licensing > Copilot Studio > "

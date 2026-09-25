@@ -1196,6 +1196,9 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "Do not send a maker from a non-production setup ring to the "
         "production admin center."
     ) in normalized
+    assert "using `ring_from_environment_host()`" in normalized
+    assert "do not assume production" in normalized
+    assert '--ring "{CONFIRMED_RING}"' in text
     assert "--manual-attested" in text
     assert "never overrides a known zero allocation" in normalized
     assert "When it is false after materialization" in normalized

@@ -42,6 +42,7 @@ def _args(
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
+    ring: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -51,6 +52,7 @@ def _args(
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
+        ring=ring,
     )
 
 
@@ -163,6 +165,7 @@ class TestGates:
                     environment_id=(
                         "00000000-0000-4000-8000-000000001111"
                     ),
+                    ring="prod",
                 )
             )
 
@@ -182,6 +185,11 @@ class TestGates:
                     "releaseLine": "da",
                     "environmentId": (
                         "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "ring": "test",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000000000000000000000000.0."
+                        "environment.api.test.powerplatform.com"
                     ),
                 }
             ),
@@ -211,6 +219,62 @@ class TestGates:
             )
 
         assert exc.value.code == 0
+
+    def test_capacity_requires_ring_when_setup_state_is_inconclusive(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 1
+        assert "Confirm whether the environment uses" in capsys.readouterr().out
+
+    def test_capacity_rejects_configured_ring_endpoint_mismatch(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "releaseLine": "da",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "ring": "prod",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000000000000000000000000.0."
+                        "environment.api.test.powerplatform.com"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args("ENV-CAPACITY-001", tmp_path)
+            )
+
+        assert exc.value.code == 1
+        assert "do not identify the same" in capsys.readouterr().out
 
 
 class TestHermeticRun:

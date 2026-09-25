@@ -107,6 +107,8 @@ python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-ope
 python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
 ```
 
+FlightCheck resolves the ring from the explicit ring persisted by setup and validates it against the canonical Power Platform environment endpoint using `ring_from_environment_host()`. If the ring is missing, malformed, or contradictory, do not assume production. Ask the maker to confirm whether the environment uses **prod**, **preprod**, or **test**, then rerun the affected checkpoint with `--ring "{CONFIRMED_RING}"`.
+
 After each setup-readiness run, even when that FlightCheck exits nonzero, apply its result to canonical setup state. Apply agent access and content directly:
 
 ```text

@@ -707,6 +707,43 @@ def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
     return str(active.get("releaseLine") or "").casefold() == "da"
 
 
+def _resolve_environment_ring(
+    config: dict,
+    *,
+    explicit_ring: str | None = None,
+) -> str:
+    """Resolve one supported ring and reject contradictory environment state."""
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    requested_ring = str(explicit_ring or "").strip().casefold()
+    host = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    inferred_ring = None
+    if host:
+        inferred_ring = ring_from_environment_host(host)
+
+    candidates = {
+        ring
+        for ring in (requested_ring, configured_ring, inferred_ring)
+        if ring
+    }
+    if not candidates:
+        raise ValueError(
+            "The Power Platform environment ring is unavailable. Confirm "
+            "whether the environment uses prod, preprod, or test, then rerun "
+            "FlightCheck with --ring."
+        )
+    if not candidates <= {"prod", "preprod", "test"}:
+        raise ValueError(
+            "The Power Platform environment ring must be prod, preprod, or "
+            "test."
+        )
+    if len(candidates) != 1:
+        raise ValueError(
+            "The supplied ring, configured ring, and Power Platform endpoint "
+            "do not identify the same environment ring."
+        )
+    return candidates.pop()
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -906,6 +943,15 @@ def _run_single_checkpoint(args):
         target_matcher=lambda cid: registry.matches(target, cid),
     )
     runner.config = config
+    try:
+        runner.ring = _resolve_environment_ring(
+            config,
+            explicit_ring=getattr(args, "ring", None),
+        )
+    except ValueError as exc:
+        if target == "ENV-CAPACITY-001":
+            print(f"ERROR: {exc}")
+            sys.exit(1)
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -1060,6 +1106,14 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--ring",
+        choices=["prod", "preprod", "test"],
+        help=(
+            "Confirm the Power Platform service ring when it cannot be "
+            "resolved from local setup state."
+        ),
     )
     parser.add_argument(
         "--no-open", action="store_true",
@@ -1492,6 +1546,15 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
+    try:
+        runner.ring = _resolve_environment_ring(
+            config,
+            explicit_ring=args.ring,
+        )
+    except ValueError as exc:
+        if args.scope in {"full", "environment"}:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id

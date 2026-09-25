@@ -55,18 +55,15 @@ def _runner(
     powerplatform,
     payg=None,
     env_id="env-guid",
-    ring=None,
-    host=None,
+    ring="prod",
 ):
     runner = SimpleNamespace(
         powerplatform=powerplatform,
         env_id=env_id,
-        config={"powerPlatformApiEndpoint": host} if host else {},
+        ring=ring,
     )
     if payg is not None:
         runner._payg_configured = payg
-    if ring is not None:
-        runner.ring = ring
     return runner
 
 
@@ -141,17 +138,12 @@ def test_capacity_remediation_uses_ring_admin_center(
     assert expected_origin in r.remediation
 
 
-def test_capacity_remediation_derives_test_ring_from_environment_host():
-    r = _run(
-        _runner(
-            powerplatform=None,
-            host=(
-                "https://00000000000000000000000000000000.0."
-                "environment.api.test.powerplatform.com"
-            ),
-        )
-    )
-    assert "https://admin.test.powerplatform.microsoft.com" in r.remediation
+def test_capacity_remediation_rejects_an_unresolved_ring():
+    with pytest.raises(
+        ValueError,
+        match="ring is unavailable or unsupported",
+    ):
+        _run(_runner(powerplatform=None, ring=None))
 
 
 def test_fails_when_no_env_id():

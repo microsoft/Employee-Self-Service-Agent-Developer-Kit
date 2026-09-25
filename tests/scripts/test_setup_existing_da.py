@@ -613,6 +613,7 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
         (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
     )
     assert config["setup"] == "complete"
+    assert config["ring"] == "test"
     assert config["agent"]["botId"] == AGENT_ID
 
     canonical_state = _setup_state(tmp_path)

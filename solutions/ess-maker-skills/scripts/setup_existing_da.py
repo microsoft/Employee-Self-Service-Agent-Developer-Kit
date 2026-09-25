@@ -1889,6 +1889,7 @@ def _write_config(
     agent_entry: dict[str, Any],
     environment_id: str,
     host: str,
+    ring: str,
     api_version: str,
     component_counts: Counter[str],
 ) -> None:
@@ -1920,6 +1921,7 @@ def _write_config(
         "releaseLine": "da",
         "environmentId": environment_id,
         "powerPlatformApiEndpoint": host,
+        "ring": ring,
         "agentBuilderApiVersion": api_version,
         "agent": agent_entry,
         "activeAgent": agent_entry["slug"],
@@ -2393,6 +2395,7 @@ def attach_existing_dev(
             agent_entry=agent_entry,
             environment_id=normalized_environment_id,
             host=client.host,
+            ring=client.ring,
             api_version=client.api_version,
             component_counts=component_counts,
         )
