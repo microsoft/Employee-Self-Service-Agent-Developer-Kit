@@ -4,7 +4,7 @@
 The single, trackable checklist spanning the five Workday connect steps for the
 **ESS HR agent**. This file is the
 **canonical row source**: on first run the skill renders it to the working copy
-`.local/setup/workday-da/tasks.md` and then updates **only its own items**
+`.local/connect/workday-da/tasks.md` and then updates **only its own items**
 through the shared
 [`shared/checklist-updater.md`](shared/checklist-updater.md). The durable
 mirror of each item's status is `setupStatus` in

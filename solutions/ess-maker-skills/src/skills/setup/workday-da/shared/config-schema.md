@@ -72,7 +72,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 Each step records its own checkpoint outcomes under a `setupStatus` object,
 keyed by **Step ID** (`DA1.1` … `DA5.1`) from the DA master checklist. This is
 the durable record `shared/checklist-updater.md` reads and writes; the
-rendered `.local/setup/workday-da/tasks.md` is the human-readable view of the
+rendered `.local/connect/workday-da/tasks.md` is the human-readable view of the
 same data.
 
 ```json

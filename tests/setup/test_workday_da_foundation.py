@@ -65,7 +65,9 @@ def test_state_contract_requires_immediate_durable_updates() -> None:
 
     assert "A `MANUAL` or attestation-gated row is never" in updater
     assert "**Persist immediately — never batch.**" in updater
+    assert ".local/connect/workday-da/tasks.md" in updater
     assert ".local/setup/workday-da/tasks.md" in updater
+    assert "Never maintain both paths" in updater
     assert ".local/connect/workday-da/config.json" in updater
     assert "Read" in schema and "Merge" in schema and "Write" in schema
     assert "sidecarDataverseEndpoint" in schema

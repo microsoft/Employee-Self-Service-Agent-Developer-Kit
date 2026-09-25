@@ -6,7 +6,7 @@ same way, and the **MANUAL/attestation rule** below is enforced in exactly one
 place.
 
 Forked from the CEA `setup/shared/checklist-updater.md` with DA-scoped state
-paths (`.local/setup/workday-da/tasks.md`, `.local/connect/workday-da/config.json`).
+paths (`.local/connect/workday-da/tasks.md`, `.local/connect/workday-da/config.json`).
 The logic is identical — only the persisted files differ — so the two skills can
 evolve independently.
 
@@ -42,7 +42,7 @@ not narrate tool calls.
   `user-acknowledgement`, or `external-operation`.
 
 **Outputs:**
-- The matching checklist item in `.local/setup/workday-da/tasks.md` is updated
+- The matching checklist item in `.local/connect/workday-da/tasks.md` is updated
   in place (checkbox + hidden `status:` field).
 - The mirror record `setupStatus["{STEP_ID}"]` in
   `.local/connect/workday-da/config.json` is updated (see `config-schema.md`).
@@ -51,10 +51,12 @@ not narrate tool calls.
 
 ## Files
 
-- **Working copy (read/write):** `.local/setup/workday-da/tasks.md` — the
+- **Working copy (read/write):** `.local/connect/workday-da/tasks.md` — the
   rendered, human-readable checklist. Rendered on first run from the template
   `src/skills/setup/workday-da/tasks.md` (the canonical row source). If the
-  working copy doesn't exist yet, render it from the template before updating.
+  working copy doesn't exist yet, first migrate the exact legacy
+  `.local/setup/workday-da/tasks.md` file when present; otherwise render it from
+  the template before updating. Never maintain both paths.
 - **Durable mirror:** `setupStatus` in `.local/connect/workday-da/config.json`.
   The tasks file is the view; `setupStatus` is the source of truth a later
   step reads to know what's already done.
@@ -171,9 +173,9 @@ Rules:
 
 ## U.1 — Locate the item
 
-Read `.local/setup/workday-da/tasks.md` (render from the template first if
-absent). Find the checklist item whose hidden comment has `id:` equal to
-`STEP_ID`.
+Read `.local/connect/workday-da/tasks.md` (migrate the legacy path or render
+from the template first if absent). Find the checklist item whose hidden
+comment has `id:` equal to `STEP_ID`.
 
 - If no such item exists, **stop and report** — a skill must not invent items.
   The canonical item set lives in the checklist template
@@ -252,7 +254,7 @@ to its next row. A completed row must be durable the instant its checkpoint pass
 so that if a later row in the same skill errors, the progress already made is not
 lost — the orchestrator resumes from the first non-`done` row in `setupStatus`.
 
-1. Update the located item in `.local/setup/workday-da/tasks.md` to the state
+1. Update the located item in `.local/connect/workday-da/tasks.md` to the state
    from U.2:
    - Set the checkbox marker: `- [x]` when the resulting status is `done`,
      otherwise `- [ ]`.

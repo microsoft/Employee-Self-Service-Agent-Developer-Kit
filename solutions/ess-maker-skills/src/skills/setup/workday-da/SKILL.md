@@ -95,9 +95,18 @@ ID, App ID URI) are safe to capture in chat — see
 
    **End message.**
 
-2. **Working copy.** If `.local/setup/workday-da/tasks.md` does not exist, render
-   it by copying the template `src/skills/setup/workday-da/tasks.md`. Do not
-   hand-edit its status markers — the shared checklist-updater writes them.
+2. **Working copy.** The canonical checklist is
+   `.local/connect/workday-da/tasks.md`, next to the provider config it
+   represents. If it does not exist:
+   - When the legacy `.local/setup/workday-da/tasks.md` exists, create
+     `.local/connect/workday-da/` if needed and move that exact file to the
+     canonical path. Preserve its contents and timestamps; never replace it
+     with a fresh template or overwrite an existing canonical checklist.
+   - Otherwise render it by copying the template
+     `src/skills/setup/workday-da/tasks.md`.
+
+   Do not hand-edit its status markers — the shared checklist-updater writes
+   them. After a successful legacy move, the old path is no longer used.
 
 3. **Resume point.** Read `setupStatus` in `.local/connect/workday-da/config.json`
    (the durable source of truth; the tasks file is only the view). If the file or

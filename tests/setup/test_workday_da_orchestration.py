@@ -25,6 +25,9 @@ def test_orchestrator_resumes_durable_state_without_restarting_setup() -> None:
     assert "pick the first whose state is not `done`" in text
     assert "must not** batch those writes" in text
     assert 'provider `status` to be `"ready"`' in text
+    assert ".local/connect/workday-da/tasks.md" in text
+    assert ".local/setup/workday-da/tasks.md" in text
+    assert "move that exact file to the canonical path" in normalized
     assert "you do not need to run `/setup` again" in normalized
     assert "Here's the plan for connecting Workday to your ESS HR agent" in text
     assert "- {m} Verify employee SAML sign-in policy" in text
