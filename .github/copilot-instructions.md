@@ -21,6 +21,7 @@ For everything that isn't an attempt to use the kit (general questions, code exp
    - `/landing-page`
    - `/create`
    - `/connect`
+   - `/connect-workday`
    - `/delete`
    - `/evaluate`
    - `/run`

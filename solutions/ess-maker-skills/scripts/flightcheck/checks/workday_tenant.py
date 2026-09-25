@@ -15,8 +15,8 @@ via ``--checkpoint``:
     ``oauthClientId`` / ``tokenEndpoint``.
   * ``WD-TENANT-001`` — Tenant Setup - Security is configured (redirect URL
     set; OAuth 2.0 Clients + SAML enabled; SAML Service Provider ID matches
-    the Entra Identifier) AND the authentication policy is scoped to the
-    OAuth client and activated. Echoes the captured ``restBaseUrl`` /
+    the Entra Identifier) AND an active authentication rule allows SAML for
+    the intended employee population. Echoes the captured ``restBaseUrl`` /
     ``soapBaseUrl`` / ``tenant`` / ``appIdUri``.
 
 Design invariants (per ``scripts/flightcheck/AGENTS.md``):
@@ -48,8 +48,7 @@ _API_CLIENT_DESC = (
     "areas, Include Workday Owned Scope = Yes)"
 )
 _TENANT_DESC = (
-    "Workday Tenant Setup - Security + authentication policy configured for "
-    "the OAuth client"
+    "Workday Tenant Setup - Security + signed-in employee SAML policy verified"
 )
 
 # Marker used in the finding when a config field the operator is expected to
@@ -120,7 +119,9 @@ def _check_api_client(config) -> list[CheckResult]:
             "uses Client Grant Type = SAML ******, includes the functional "
             "areas Core Payroll, Organizations and Roles, Staffing, and Time "
             "Off and Leave, and has Include Workday Owned Scope = Yes "
-            "(required for the REST /workers/me call)."
+            "(required for the REST /workers/me call). This signed-in employee "
+            "setup does not use an ISU, RaaS report, or integration-system "
+            "security-group domain mapping."
         )
     else:
         result = (
@@ -141,10 +142,9 @@ def _check_api_client(config) -> list[CheckResult]:
             "Type = SAML ******, select the functional areas Core Payroll, "
             "Organizations and Roles, Staffing, and Time Off and Leave, and "
             "set Include Workday Owned Scope = Yes. Then open 'View API "
-            "Client' and capture the Client ID and Token Endpoint. Register "
-            "the API client BEFORE scoping the authentication policy — the "
-            "policy references the OAuth client identity, which only exists "
-            "once the client is registered."
+            "Client' and capture the Client ID and Token Endpoint. Do not add "
+            "legacy ISU, RaaS, or integration-system security-group steps to "
+            "this signed-in employee setup."
         ),
     )]
 
@@ -167,9 +167,9 @@ def _check_tenant_security(config) -> list[CheckResult]:
         f"(App ID URI) = {app_id_uri}. Confirm Tenant Setup - Security has the "
         "redirection URL set, OAuth 2.0 Clients and SAML enabled, and the "
         "SAML Service Provider ID matching the Entra Identifier above — and "
-        "that the authentication policy is scoped to the registered OAuth "
-        "client and 'Activate All Pending Authentication Policy Changes' has "
-        "been run."
+        "that an active authentication rule allows SAML for the intended "
+        "employee population. If the existing active policy already provides "
+        "that access, no policy change or activation is required."
     )
 
     return [CheckResult(roles=_ROLES,
@@ -181,11 +181,14 @@ def _check_tenant_security(config) -> list[CheckResult]:
             "In Workday: (1) edit 'Tenant Setup - Security' — set the "
             "redirection URL, enable OAuth 2.0 Clients and SAML, and verify "
             "the SAML Service Provider ID equals the Entra Identifier / Entity "
-            "ID; (2) run 'Manage Authentication Policies' — scope the policy "
-            "to the OAuth client registered in S4.1, allow SAML as an allowed "
-            "authentication type, then run 'Activate All Pending "
-            "Authentication Policy Changes'. The functional proof comes "
-            "downstream, when skill-5's Copilot Studio connection "
-            "authenticates successfully."
+            "ID; (2) open 'Manage Authentication Policies' and verify an active "
+            "rule allows SAML for the intended employees. Do not invent an "
+            "OAuth-client condition when the tenant UI does not expose one, "
+            "and do not use an ISU/integration-system security-group rule for "
+            "this signed-in employee setup. If a policy change is required, "
+            "preserve administrator access and existing network restrictions, "
+            "review all pending changes, and only then activate them. The "
+            "functional proof comes downstream, when the Copilot Studio "
+            "connection authenticates successfully."
         ),
     )]

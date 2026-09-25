@@ -308,7 +308,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
 
     gated_prompts = (
         "backup-template-configs.prompt.md",
-        "connect.prompt.md",
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
@@ -338,6 +337,12 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
             not in normalized
         ), path
 
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert "schema_version: 4" in connect_prompt
+    assert 'steps.SETUP-07.state: "done"' in connect_prompt
+    assert "Do not require\n`connect_ready: true`" in connect_prompt
+    assert "workspace evidence" in connect_prompt
+
     assert "`.local/config.json`'s" in instructions
 
 
@@ -364,11 +369,15 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
     assert "configPattern" not in text
 
 
-def test_workday_routing_remains_separate() -> None:
+def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/SKILL.md" in step1
+    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "gptagent_copilotforemployeeselfservicehr" in step1
+    assert "Workday integration with the ESS IT Agent isn't supported" in step1
+    assert "or run `WD-PKG-001`" in normalized_step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
     assert _WORKDAY.is_file()
     assert "Hybrid Workday extension setup is not available" in workday
@@ -1226,7 +1235,6 @@ def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "DA-GA agent is not yet available",
         "delete.prompt.md": "DA-GA agent is not yet available",
-        "connect.prompt.md": "requires the corresponding product extension",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),
@@ -1236,6 +1244,10 @@ def test_da_commands_degrade_by_operation() -> None:
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
         assert "transport" not in prompt.casefold(), name
+
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert "src/skills/connect/SKILL.md" in connect_prompt
+    assert "Extension setup is not yet available" not in connect_prompt
 
 
 def test_hybrid_workday_config_commands_remain_available() -> None:

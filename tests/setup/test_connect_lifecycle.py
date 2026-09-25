@@ -79,4 +79,4 @@ def test_declarative_agents_do_not_enter_cea_lifecycle() -> None:
     assert "gptagent_copilotforemployeeselfserviceit" in route
     assert "WD-DA-PKG-001" in route
     assert "Do not create CEA Workday lifecycle state" in route
-    assert "setup/workday-da/SKILL.md" not in route
+    assert "setup/workday-da/SKILL.md" in route
