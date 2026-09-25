@@ -610,6 +610,12 @@ def derive_run_outcome(run_result: Any) -> str:
 # Local / infra / auth / etc. are not connector-scoped.
 _WORKDAY_SCOPES = frozenset({
     "workday", "workdaytenant", "workdayextension",
+    # Also connector-scoped for Workday even though the naming doesn't lead
+    # with the "workday" token: the "Workday DA" scope (workdayda) and the
+    # topic-authoring scope (topics, which SCOPE_MAP labels "Workday Topics")
+    # both exercise Workday paths exclusively. Missing these here left real
+    # Workday runs emitting connector="" (ADO 7943641 review).
+    "workdayda", "topics",
 })
 _SERVICENOW_SCOPES = frozenset({"servicenow"})
 

@@ -204,7 +204,7 @@ essmakerkit_flightcheck_run
 adk_capability_use
 | where EventInfo_Time > ago(30d)
 | where adk_capability == "connect"
-| summarize Starts = count(), Tenants = dcount(tenantId) by connector
+| summarize Starts = count(), Tenants = dcount(tenant_id) by connector
 | order by Starts desc
 
 // 9b) FlightCheck runs by connector — dedicated Workday / ServiceNow scopes
@@ -230,14 +230,22 @@ essmakerkit_flightcheck_check
 | order by connector asc, SuccessPct asc
 
 // 9d) Legacy-vs-attributed rollout: watch "legacy" go to zero over time as
-//     old ADK installs upgrade past 1.4.0.
+//     old ADK installs upgrade past 1.4.0. Buckets are null-safe: pre-1.4.0
+//     events land in Kusto with no ``connector`` column at all (isnull) and
+//     1.4.0+ non-connector-scoped events emit ``connector=""`` (isempty);
+//     both collapse into "unattributed". ``unknown`` is called out
+//     separately so a caller passing an out-of-taxonomy value stays
+//     visible instead of being folded into "attributed".
 adk_capability_use
 | where EventInfo_Time > ago(30d)
 | where adk_capability == "connect"
 | summarize Events = count() by bin(EventInfo_Time, 1d),
-                                bucket = case(connector == "", "unattributed",
-                                              connector == "legacy", "legacy",
-                                              "attributed")
+                                bucket = case(
+                                    isnull(connector) or isempty(connector),
+                                        "unattributed",
+                                    connector == "legacy", "legacy",
+                                    connector == "unknown", "unknown",
+                                    "attributed")
 | order by EventInfo_Time asc
 
 
