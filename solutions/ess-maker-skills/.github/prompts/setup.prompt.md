@@ -33,8 +33,7 @@ continues to its next render point without another progress snapshot.
 
 Run setup commands from the current ESS Maker Skills workspace folder.
 
-Using the resolved launcher in place of `{PYTHON}`, run this command without
-showing it to the user:
+Using the resolved launcher in place of `{PYTHON}`, run:
 
 ```powershell
 {PYTHON} -m pip install -r scripts/requirements.txt
