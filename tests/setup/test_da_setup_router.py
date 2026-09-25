@@ -1177,6 +1177,13 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     ) in text
     assert "Your agent and local authoring workspace are already available." in text
     assert "#### Copilot Studio message capacity" in text
+    assert "In the left navigation, select **Licensing**." in text
+    assert "Under **Products**, select **Copilot Studio**." in text
+    assert "Select **Manage Copilot Credits**." in text
+    assert (
+        "Confirm that the environment has more than zero allocated Copilot "
+        "Credits."
+    ) in normalized
     assert (
         "After checking Power Platform Admin Center, is Copilot Studio "
         "message capacity allocated to this environment?"

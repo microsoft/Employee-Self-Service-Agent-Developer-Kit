@@ -125,8 +125,11 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 #### Copilot Studio message capacity
 
 1. Open [Power Platform Admin Center]({POWER_PLATFORM_ADMIN_ORIGIN}/billing/licenses/copilotStudio/overview).
-2. Find the selected environment.
-3. Confirm that Copilot Studio message capacity is allocated to it.
+2. In the left navigation, select **Licensing**.
+3. Under **Products**, select **Copilot Studio**.
+4. Select **Manage Copilot Credits**.
+5. Find **{friendly environment name or selected Power Platform environment}**.
+6. Confirm that the environment has more than zero allocated Copilot Credits. If it does not, allocate credits and save the change.
 
 **End message.**
 
