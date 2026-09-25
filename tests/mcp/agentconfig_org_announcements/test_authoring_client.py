@@ -36,6 +36,7 @@ from _mcp_modules import load_org_announcements_client_modules  # noqa: E402
 _ORG_MODULES = load_org_announcements_client_modules()
 
 org_client = _ORG_MODULES["client"]
+org_validation = _ORG_MODULES["validation"]
 
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
@@ -48,6 +49,16 @@ OTHER_BULLETIN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 CREATED_BULLETIN_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 VALID_BULLETIN_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+
+
+def test_request_validators_are_shared_public_boundary_helpers() -> None:
+    assert org_validation.validate_title_id(TITLE_ID) == TITLE_ID
+    assert org_validation.validate_bulletin_id(BULLETIN_ID) == BULLETIN_ID
+
+    with pytest.raises(ValueError, match="titleId"):
+        org_validation.validate_title_id(" padded")
+    with pytest.raises(ValueError, match="bulletinId"):
+        org_validation.validate_bulletin_id("bad/id")
 
 
 def _token(tenant_id: str = TENANT_ID) -> str:
@@ -195,9 +206,14 @@ def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> Non
     [
         "",
         f" {BULLETIN_ID}",
+        ".",
+        "..",
         "a/b",
         "a\\b",
         "a?b",
+        "a#b",
+        "a%2Fb",
+        "a\x01b",
         "not-a-guid",
         "00000000-0000-0000-0000-000000000000",
     ],
@@ -210,6 +226,23 @@ def test_rejects_ids_that_could_reshape_the_route(monkeypatch, bad_id) -> None:
     async def run() -> None:
         with pytest.raises(ValueError):
             await client.get_bulletin(TITLE_ID, bad_id)
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_keyed_get_rejects_a_response_for_a_different_bulletin(
+    monkeypatch,
+) -> None:
+    different_id = _test_id("different-keyed-response")
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(200, json=_config(different_id)),
+    )
+
+    async def run() -> None:
+        with pytest.raises(org_client.AgentConfigApiError, match="different"):
+            await client.get_bulletin(TITLE_ID, BULLETIN_ID)
         await client.aclose()
 
     asyncio.run(run())
@@ -561,6 +594,37 @@ def test_keyed_reload_failure_is_reported_as_committed_refresh(
                 await client.transition_bulletin(
                     TITLE_ID, BULLETIN_ID, "retired"
                 )
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_keyed_reload_identity_mismatch_is_reported_as_committed_refresh(
+    monkeypatch, operation
+) -> None:
+    different_id = _test_id(f"different-{operation}-reload")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, json=_config(different_id))
+
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        with pytest.raises(org_client.CommittedCanonicalReloadError) as caught:
+            if operation == "save":
+                await client.save_bulletin(
+                    TITLE_ID,
+                    {"id": BULLETIN_ID, "status": "draft"},
+                )
+            else:
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        assert isinstance(caught.value.cause, org_client.AgentConfigApiError)
+        assert "different" in str(caught.value.cause)
         await client.aclose()
 
     asyncio.run(run())

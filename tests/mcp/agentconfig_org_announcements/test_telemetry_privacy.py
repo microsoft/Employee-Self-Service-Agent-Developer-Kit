@@ -14,6 +14,7 @@ caught here too.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -122,7 +123,7 @@ def test_a_failure_event_adds_only_a_stable_code_and_broad_source(
         "save_bulletin",
         outcome="failure",
         latency_ms=7,
-        error_code="AudienceRequired",
+        error_code="BackendValidationError",
         error_source=org_telemetry.SOURCE_BACKEND,
     )
 
@@ -131,7 +132,7 @@ def test_a_failure_event_adds_only_a_stable_code_and_broad_source(
             "api_endpoint": "save_bulletin",
             "outcome": "failure",
             "latency_ms": 7,
-            "error_code": "AudienceRequired",
+            "error_code": "BackendValidationError",
             "error_category": "backend",
             # Never a message: backend text can echo the announcement back.
             "error_message": "",
@@ -188,11 +189,13 @@ def test_an_unknown_error_source_is_bucketed(emitted) -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("AudienceRequired", "AudienceRequired"),
-        ("Committed_Refresh_Failed", "Committed_Refresh_Failed"),
+        ("AuthenticationRequired", "AuthenticationRequired"),
+        ("CommittedRefreshFailed", "CommittedRefreshFailed"),
         ("", ""),
         # A message masquerading as a code is replaced, not truncated: a
         # truncated message is still content.
+        ("SecretProject", "UnknownError"),
+        ("秘密", "UnknownError"),
         ("Announcement 'Layoffs' is invalid", "UnknownError"),
         ("https://contoso.example/x", "UnknownError"),
         ("a" * 200, "UnknownError"),
@@ -200,6 +203,22 @@ def test_an_unknown_error_source_is_bucketed(emitted) -> None:
 )
 def test_only_identifier_shaped_error_codes_are_emitted(raw, expected) -> None:
     assert org_telemetry.normalize_error_code(raw) == expected
+
+
+def test_backend_diagnostic_codes_are_allowlisted() -> None:
+    committed = org_server._FailureResult(
+        "CommittedRefreshFailed",
+        "Saved, but refresh failed.",
+        source=org_telemetry.SOURCE_BACKEND,
+    )
+    caller_controlled = org_server._FailureResult(
+        "SecretProject",
+        "Rejected.",
+        source=org_telemetry.SOURCE_BACKEND,
+    )
+
+    assert org_server._diagnostic_code(committed) == "CommittedRefreshFailed"
+    assert org_server._diagnostic_code(caller_controlled) == "BackendValidationError"
 
 
 def test_a_negative_latency_is_clamped(emitted) -> None:
@@ -375,14 +394,17 @@ def test_a_successful_save_emits_no_content_or_group_identifier(
             assert secret not in flat, f"{secret!r} leaked into telemetry"
 
 
-def test_a_failed_save_emits_only_the_stable_code(monkeypatch, emitted) -> None:
+def test_a_failed_save_keeps_the_backend_code_out_of_diagnostics(
+    monkeypatch, emitted, caplog
+) -> None:
+    caller_controlled_code = "SecretProject"
     _install_fakes(
         monkeypatch,
         client=_FakeClient(
             save_error=org_client.BulletinValidationError(
                 [
                     {
-                        "code": "AudienceGroupInvalid",
+                        "code": caller_controlled_code,
                         "field": "audience",
                         # A backend message can echo content straight back.
                         "message": f"Group {SECRET_GROUP_ID} is invalid for "
@@ -393,12 +415,15 @@ def test_a_failed_save_emits_only_the_stable_code(monkeypatch, emitted) -> None:
         ),
     )
 
-    _call("save_bulletin", _save_arguments())
+    with caplog.at_level(logging.WARNING, logger="ess-org-announcements"):
+        payload = _call("save_bulletin", _save_arguments())
 
     assert emitted
     event = emitted[-1]
-    assert event["error_code"] == "AudienceGroupInvalid"
+    assert event["error_code"] == "BackendValidationError"
     assert event["error_message"] == ""
+    assert payload["errors"][0]["code"] == caller_controlled_code
+    assert caller_controlled_code not in caplog.text
     for secret in FORBIDDEN:
         assert secret not in _flatten(event)
 

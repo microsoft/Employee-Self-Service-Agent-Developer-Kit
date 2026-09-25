@@ -96,7 +96,7 @@ class _CredentialFailure(Enum):
     )
 
 
-class _LocalCredentialError(ValueError):
+class LocalCredentialError(ValueError):
     """Local validation failure with an allowlisted renewal diagnostic."""
 
     def __init__(self, message: str, reason: _CredentialFailure):
@@ -121,18 +121,18 @@ def _resolve_token() -> str:
 
 def _read_token_file(token_file: str) -> str:
     if not os.path.isfile(token_file):
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN_FILE does not exist", _CredentialFailure.FILE_MISSING
         )
     try:
         with open(token_file, "r", encoding="utf-8") as handle:
             token = handle.read().strip()
     except (OSError, UnicodeError) as error:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN_FILE could not be read", _CredentialFailure.FILE_UNREADABLE
         ) from error
     if not token:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN_FILE is empty", _CredentialFailure.FILE_EMPTY
         )
     return token
@@ -143,7 +143,7 @@ def _validate_token_tenant(token: str, expected_tenant_id: str | None) -> str:
         expected_tenant_id is not None
         and _decode_tenant_id_from_jwt(token) != expected_tenant_id
     ):
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "The AgentConfiguration token tenant does not match the configured "
             "Dataverse environment. Sign in to that tenant or provide a matching token.",
             _CredentialFailure.TENANT_MISMATCH,
@@ -292,7 +292,7 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     """
     parts = token.split(".")
     if len(parts) != 3:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN does not look like a JWT "
             "(expected three dot-separated segments)",
             _CredentialFailure.INVALID_TOKEN,
@@ -302,12 +302,12 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     try:
         payload = json.loads(base64.urlsafe_b64decode(padded))
     except ValueError as error:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "Could not decode AGENTCONFIG_ACCESS_TOKEN payload",
             _CredentialFailure.INVALID_TOKEN,
         ) from error
     if not isinstance(payload, dict):
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN payload must be an object", _CredentialFailure.INVALID_TOKEN
         )
     return payload
@@ -317,13 +317,13 @@ def _decode_tenant_id_from_jwt(token: str) -> str:
     """Decode and validate the tenant ID (``tid``) used to address the route."""
     tenant_id = _decode_jwt_payload(token).get("tid")
     if not isinstance(tenant_id, str) or not tenant_id:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN payload has no 'tid' claim", _CredentialFailure.INVALID_TOKEN
         )
     try:
         return str(uuid.UUID(tenant_id))
     except ValueError as error:
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN payload has an invalid 'tid' claim", _CredentialFailure.INVALID_TOKEN
         ) from error
 
@@ -352,7 +352,7 @@ def validate_token_identity(token: str, tenant_id: str, object_id: str | None) -
         raise ValueError("The authoring account cannot be identified without an oid claim")
     actual = _decode_object_id_from_jwt(token)
     if actual is None or actual.casefold() != object_id.casefold():
-        raise _LocalCredentialError(
+        raise LocalCredentialError(
             "The token does not identify the intended authoring account", _CredentialFailure.ACCOUNT_MISMATCH
         )
     return token
@@ -467,7 +467,7 @@ class AgentConfigBaseClient:
                     "Could not renew credentials for the original account. "
                     "Provide matching credentials and retry."
                 )
-                if isinstance(error, _LocalCredentialError):
+                if isinstance(error, LocalCredentialError):
                     message = error.reason.value
                 elif isinstance(error, LockException):
                     message = (

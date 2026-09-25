@@ -20,7 +20,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID
 
 import httpx
 
@@ -38,10 +37,10 @@ sys.path.insert(
 from _odata import (  # noqa: E402
     _require_odata_id,
     _validate_https_base_url,
-    _validate_title_id,
 )
 from agent_discovery import AgentDiscoveryClient  # noqa: E402
 from base_client import AgentConfigApiError  # noqa: E402
+from validation import validate_bulletin_id, validate_title_id  # noqa: E402
 
 
 DEFAULT_ORG_ANNOUNCEMENTS_BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
@@ -90,26 +89,6 @@ class CommittedCanonicalReloadError(Exception):
             "The announcement was saved, but its canonical state could not be reloaded."
         )
         self.cause = cause
-
-
-def validate_title_id(title_id: str) -> str:
-    """Validate the opaque Employee Agent route key."""
-    return _validate_title_id(title_id)
-
-
-def validate_bulletin_id(bulletin_id: str) -> str:
-    """Validate and canonicalize the backend-assigned OData Guid key."""
-    if not isinstance(bulletin_id, str) or not bulletin_id:
-        raise ValueError("bulletinId must be a non-empty GUID string")
-    if bulletin_id != bulletin_id.strip():
-        raise ValueError("bulletinId must not have surrounding whitespace")
-    try:
-        parsed = UUID(bulletin_id)
-    except (ValueError, AttributeError) as error:
-        raise ValueError("bulletinId must be a valid GUID") from error
-    if parsed.int == 0:
-        raise ValueError("bulletinId must not be the empty GUID")
-    return str(parsed)
 
 
 _BULLETIN_FIELD_MAP = {
@@ -286,7 +265,12 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         return f"tenants('{self.tenant_id}')/EmployeeAgents('{encoded}')/EssBulletins"
 
     @staticmethod
-    def _require_config(payload: Any, title_id: str) -> dict[str, Any]:
+    def _require_config(
+        payload: Any,
+        title_id: str,
+        *,
+        expected_bulletin_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         """Reject a success-shaped response that is not a canonical record.
 
         A malformed body must not become an empty default, because the widget
@@ -312,6 +296,11 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
             raise AgentConfigApiError(
                 "Org Announcements API returned a configuration without a valid id"
             ) from error
+        if expected_bulletin_id is not None and bulletin_id != expected_bulletin_id:
+            raise AgentConfigApiError(
+                "Org Announcements API returned a configuration for a different "
+                "bulletin id"
+            )
         audience = payload.get("Audience")
         if not isinstance(audience, list) or not all(
             isinstance(group_id, str) for group_id in audience
@@ -452,12 +441,12 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
 
     async def get_bulletin(self, title_id: str, bulletin_id: str) -> dict[str, Any]:
         """Load one canonical stored configuration."""
-        path = (
-            f"{self._collection_path(title_id)}"
-            f"({validate_bulletin_id(bulletin_id)})"
-        )
+        validated_id = validate_bulletin_id(bulletin_id)
+        path = f"{self._collection_path(title_id)}({validated_id})"
         return self._require_config(
-            await self._request("GET", path, transform_payload=False), title_id
+            await self._request("GET", path, transform_payload=False),
+            title_id,
+            expected_bulletin_id=validated_id,
         )
 
     async def save_bulletin(
