@@ -21,17 +21,20 @@ not rephrase or narrate tool calls.
   them).
 - `OAUTH_CLIENT_ID`, `TOKEN_ENDPOINT` — from the Workday "View API Client"
   screen (DA-3).
-- `APP_ID_URI` — the Entra Application ID URI (`api://{entraAppId}`) from
-  DA-2.
+- `ENTRA_APP_ID_URI` — the Entra Application ID URI
+  (`api://{entraAppId}`) from DA-2.
+- `WORKDAY_SAML_ENTITY_ID` — the Workday SAML Service Provider ID and
+  connection resource URL (`http://www.workday.com/{tenant}`) from DA-2.
 
 **Outputs (written back to `.local/connect/workday-da/config.json`, see
 `config-schema.md`):**
-- `appIdUri`, `oauthTokenUrl` / `tokenEndpoint`, `oauthClientId`,
+- `entraAppIdUri`, `workdaySamlEntityId`, `oauthTokenUrl` / `tokenEndpoint`,
+  `oauthClientId`,
   `soapBaseUrl`, `restBaseUrl` (trimmed).
 
 ---
 
-## C.1 — Application ID URI
+## C.1 — Keep the two audience identifiers distinct
 
 The Application ID URI identifies the Entra app registration itself
 (`api://{entraAppId}`). DA-3 exposes it for the SAML token audience and the
@@ -39,7 +42,7 @@ connector's API pre-authorization. It is **not** the connection's "Microsoft
 Entra resource URL" — see the note below.
 
 - Expected form: `api://{entraAppId}` (the GUID, not the object ID).
-- If `APP_ID_URI` is missing, derive it from `entraAppId`:
+- If `ENTRA_APP_ID_URI` is missing, derive it from `entraAppId`:
   `api://{entraAppId}`.
 - **Validate:** must start with `api://` and contain a GUID. If it instead looks
   like a full URL (`https://...`) or is empty, re-prompt:
@@ -53,13 +56,18 @@ Entra resource URL" — see the note below.
 ]
 ```
 
-Save as `appIdUri`.
+Save as `entraAppIdUri`.
 
 > **Not the connection resource URL.** The Workday connection asks for a
 > **Microsoft Entra resource URL** — the Workday SAML identifier
 > `http://www.workday.com/{tenant}` (matching the Entra app's Identifier /
 > Entity ID and Workday's SAML Service Provider ID), **not** this `api://…` App
 > ID URI.
+
+Derive `WORKDAY_SAML_ENTITY_ID` independently from the validated Workday
+tenant as `http://www.workday.com/{tenant}` and save it as
+`workdaySamlEntityId`. Reject the data if these two identifiers are equal or if
+the SAML entity ID does not exactly match the selected tenant.
 
 ---
 

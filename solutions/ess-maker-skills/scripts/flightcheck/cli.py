@@ -770,6 +770,7 @@ _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
     "tokenHost",
     "vertical",
     "verticals",
+    "workdaySamlEntityId",
 })
 
 
@@ -788,6 +789,20 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
         overlay = json.load(f)
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
+
+    if overlay.get("schemaVersion") == 2:
+        scope = overlay.get("scope") or {}
+        identifiers = overlay.get("identifiers") or {}
+        endpoints = overlay.get("endpoints") or {}
+        overlay = {
+            **overlay,
+            **identifiers,
+            **endpoints,
+            "tenant": scope.get("workdayTenant"),
+            "tenantId": scope.get("entraTenantId"),
+            "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
+            "appIdUri": identifiers.get("entraAppIdUri"),
+        }
 
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:
         if key in overlay:

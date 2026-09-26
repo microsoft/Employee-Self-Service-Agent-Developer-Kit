@@ -7,7 +7,8 @@ Tenant Setup – Security, the Workday API client, and the authentication policy
 It owns master-checklist rows **DA3.1 through DA3.4**.
 
 Depends on DA-2 (the Entra app must already exist — this step reads its
-`entraAppId` / `appIdUri` and the activated signing-cert thumbprint). It is
+`entraAppId`, `entraAppIdUri`, `workdaySamlEntityId`, and the activated
+signing-cert thumbprint). It is
 **Workday-only**: none of these tasks is reachable through a Microsoft admin API,
 and standing up a Workday connection to self-verify would be **circular** (it
 needs the same Entra-app + tenant configuration the ESS agent itself needs). So
@@ -157,8 +158,8 @@ Wait for the user's answer, then record it as the pre-gate evidence
 (`SAML_ISSUER`, `SAML_SP_ID`, `SAML_CERT`).
 
 - **If an IdP is already active AND it is not the Entra app DA-2 provisioned**
-  (the Issuer / Service Provider ID does not match this tenant's `appIdUri` /
-  `entraAppId` from `.local/connect/workday-da/config.json`):
+  (its Service Provider ID does not exactly match this tenant's
+  `workdaySamlEntityId` from `.local/connect/workday-da/config.json`):
 
   **Message:**
 
@@ -269,7 +270,9 @@ as part of the `WD-TENANT-001` attestation (verified at the end of DA3.3).
 In Workday, run **Edit Tenant Setup – Security**. Set the **Redirect URL** for
 the sign-on, and enable both **OAuth 2.0 Clients Enabled** and **SAML**. In the
 SAML Setup, confirm the **Service Provider ID** matches your Entra app's
-**Identifier (Entity ID)** — they must be identical. Type **done** when saved.
+Workday SAML Identifier (Entity ID),
+`http://www.workday.com/{tenant}` — not the `api://...` Application ID URI.
+Type **done** when saved.
 
 **End message.**
 
@@ -314,13 +317,15 @@ C.1–C.6), passing whatever is already known from
   `.local/connect/workday-da/config.json` if already captured, otherwise gathered
   here from the Workday tenant URL (the token endpoint on the View API Client
   screen has the form `https://{WD_TOKEN_HOST}/ccx/oauth2/{WD_TENANT}/token`).
-- `APP_ID_URI` — the Entra `appIdUri` from DA-2.
+- `ENTRA_APP_ID_URI` — the Entra `entraAppIdUri` from DA-2.
+- `WORKDAY_SAML_ENTITY_ID` — the `workdaySamlEntityId` from DA-2.
 
 `shared/connection-fields.md` derives the **SOAP base URL** from the Workday web
 host (with a user-prompt fallback), trims the **REST base URL** to `/api`, and
-persists `oauthClientId`, `tokenEndpoint`, `soapBaseUrl`, `restBaseUrl`, and
-`appIdUri` back to `.local/connect/workday-da/config.json` (round-trip merge —
-never drop fields owned by other steps).
+persists `oauthClientId`, `tokenEndpoint`, `soapBaseUrl`, `restBaseUrl`,
+`entraAppIdUri`, and `workdaySamlEntityId` back to
+`.local/connect/workday-da/config.json` (round-trip merge — never drop fields
+owned by other steps).
 
 **Message:**
 
@@ -429,8 +434,8 @@ are in place.
 python scripts/flightcheck/cli.py --checkpoint WD-TENANT-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
-This echoes the captured `tenant` / `restBaseUrl` / `soapBaseUrl` / `appIdUri`
-and restates the Tenant Setup – Security and signed-in employee
+This echoes the captured `tenant` / `restBaseUrl` / `soapBaseUrl` /
+`workdaySamlEntityId` and restates the Tenant Setup – Security and signed-in employee
 authentication-policy facts to confirm.
 `WD-TENANT-001` always returns `MANUAL`, so render its result in chat per
 [`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the

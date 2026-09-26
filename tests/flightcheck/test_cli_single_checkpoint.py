@@ -215,6 +215,49 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
+    def test_connect_config_flattens_v2_workday_state(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "scope": {
+                        "workdayTenant": "acme_impl",
+                        "entraTenantId": "tenant-id",
+                        "dataverseUrl": "https://acme.crm.dynamics.com",
+                    },
+                    "identifiers": {
+                        "entraAppId": "app-id",
+                        "entraAppIdUri": "api://app-id",
+                        "workdaySamlEntityId": (
+                            "http://www.workday.com/acme_impl"
+                        ),
+                    },
+                    "endpoints": {
+                        "restBaseUrl": (
+                            "https://wd2-impl-services1.workday.com/ccx/api"
+                        )
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["tenantId"] == "tenant-id"
+        assert merged["dataverseEndpoint"] == (
+            "https://acme.crm.dynamics.com"
+        )
+        assert merged["entraAppId"] == "app-id"
+        assert merged["appIdUri"] == "api://app-id"
+        assert merged["workdaySamlEntityId"] == (
+            "http://www.workday.com/acme_impl"
+        )
+
     @pytest.mark.parametrize(
         "agent_slug",
             (
