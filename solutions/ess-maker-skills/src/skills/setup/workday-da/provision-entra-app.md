@@ -371,13 +371,15 @@ activated. Pass the certificate thumbprint and activation confirmation as
 Configure the app (`WD_ENTRA_APP_OBJECT_ID` from DA2.1) so the Power Platform
 Workday connector can obtain an on-behalf-of token.
 
-1. **Expose the `user_impersonation` scope** — apply
+1. **Expose the `user_impersonation` scope without replacing the SAML
+   identifier.** The application must retain both distinct identifier URIs:
+   `http://www.workday.com/{tenant}` for Workday SAML and
+   `api://{WD_ENTRA_APP_ID}` for the exposed API scope. Do not call the generic
+   B.4a command because it replaces the entire `identifierUris` collection.
+   PATCH the application with both exact values, generate `SCOPE_GUID`, then
+   apply
    [`connect/azure/app-registration.md`](../../connect/azure/app-registration.md)
-   **§B.4** against this app, with `APP_OBJECT_ID` = `WD_ENTRA_APP_OBJECT_ID`,
-   `APP_CLIENT_ID` = `WD_ENTRA_APP_ID`, and `SCOPE_RESOURCE_LABEL` = `Workday`.
-   That sets the identifier URI `api://{WD_ENTRA_APP_ID}`, generates a
-   `SCOPE_GUID`, and exposes `user_impersonation` (with a built-in portal
-   fallback).
+   **§B.4b** to expose `user_impersonation`.
 
 2. **Pre-authorize the Workday connector** — apply the same file's **§B.5** with
    `CONNECTOR_APP_ID` = `4e4707ca-5f53-46a6-a819-f7765446e6ff` (the Power Platform
@@ -414,7 +416,9 @@ Workday connector can obtain an on-behalf-of token.
    Wait for the user, then continue.
 
 **Persist** to `.local/connect/workday-da/config.json` (merge): `scopeGuid` =
-`SCOPE_GUID`, `appIdUri` = `api://{WD_ENTRA_APP_ID}`, `entraSSO` = `true`.
+`SCOPE_GUID`, `entraAppIdUri` = `api://{WD_ENTRA_APP_ID}`,
+`workdaySamlEntityId` = `http://www.workday.com/{tenant}`, and `entraSSO` =
+`true`. These two URI fields are independent and must never be aliases.
 
 **Message:**
 

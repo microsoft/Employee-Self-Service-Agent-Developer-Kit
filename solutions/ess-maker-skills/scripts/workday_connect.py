@@ -17,6 +17,11 @@ from workday_connect_model import (
     plan_hash,
 )
 from workday_connect_auth import authentication_plan
+from workday_connect_contracts import (
+    WorkdayConnectContractError,
+    build_entra_plan,
+    build_workday_admin_packet,
+)
 from workday_connect_preflight import (
     WorkdayConnectPreflightError,
     run_preflight,
@@ -71,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("initialize")
     subparsers.add_parser("status")
     subparsers.add_parser("auth-plan")
+
+    entra_plan = subparsers.add_parser("entra-plan")
+    entra_plan.add_argument("--discovery-json", required=True)
+    subparsers.add_parser("workday-admin-packet")
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--dataverse-url")
@@ -127,6 +136,15 @@ def main() -> None:
                 "auth-plan",
                 {"authenticationPlan": authentication_plan()},
             )
+        elif args.command == "entra-plan":
+            plan = build_entra_plan(
+                store.load(),
+                _json_object(args.discovery_json, "Entra discovery"),
+            )
+            _emit("entra-plan", {"plan": plan})
+        elif args.command == "workday-admin-packet":
+            packet = build_workday_admin_packet(store.load())
+            _emit("workday-admin-packet", {"packet": packet})
         elif args.command == "preflight":
             _emit(
                 "preflight",
@@ -203,6 +221,7 @@ def main() -> None:
     except (
         OSError,
         WorkdayConnectModelError,
+        WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
         WorkdayConnectStoreError,

@@ -62,7 +62,8 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | `entraSSO` | boolean | DA-2 | True once the SSO gallery app + connector authorization exist. |
 | `entraAppId` | string | DA-2 | Entra app (client) ID. |
 | `entraAppObjectId` | string | DA-2 | Entra app object ID (for Graph calls). |
-| `entraAppIdUri` / `appIdUri` | string | DA-2 | Application ID URI (`api://{entraAppId}`). `appIdUri` is the documented alias. |
+| `entraAppIdUri` | string | DA-2 | Entra Application ID URI (`api://{entraAppId}`), used for the exposed API scope. |
+| `workdaySamlEntityId` | string | DA-2 | Workday SAML Service Provider ID / resource URL (`http://www.workday.com/{tenant}`). Never alias this to `entraAppIdUri`. |
 | `scopeGuid` | string | DA-2 | GUID of the exposed `user_impersonation` scope. |
 | `oauthClientId` | string | DA-3 | Workday API **client ID** (distinct from `entraAppId`). |
 | `tokenEndpoint` | string | DA-3 | OAuth token endpoint captured from the Workday API client view. Mirrors `oauthTokenUrl` when both are present. |
@@ -150,7 +151,8 @@ evidence from the checked-in authorization script.
   "entraSSO": true,
   "entraAppId": "11111111-1111-1111-1111-111111111111",
   "entraAppObjectId": "22222222-2222-2222-2222-222222222222",
-  "appIdUri": "api://11111111-1111-1111-1111-111111111111",
+  "entraAppIdUri": "api://11111111-1111-1111-1111-111111111111",
+  "workdaySamlEntityId": "http://www.workday.com/acme_dpt1",
   "scopeGuid": "33333333-3333-3333-3333-333333333333",
   "oauthClientId": "WORKDAY_CLIENT_ID",
   "status": "in-progress",
