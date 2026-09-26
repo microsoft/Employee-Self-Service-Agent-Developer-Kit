@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -136,6 +137,72 @@ def test_resolve_target_reuses_setup_environment_inventory(
     )
 
     assert target.dataverse_url == ENV_URL
+
+
+def test_resolve_target_reuses_exact_pac_environment(tmp_path: Path) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path)
+
+    def runner(command, **_kwargs):
+        assert command[-3:] == [
+            "--environment",
+            "agent-environment",
+            "--json",
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "EnvironmentId": "agent-environment",
+                    "OrgUrl": f"{ENV_URL}/",
+                }
+            ),
+            stderr="",
+        )
+
+    target = preflight.resolve_target(
+        tmp_path,
+        dataverse_url=None,
+        state=model.default_state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        pac_runner=runner,
+    )
+
+    assert target.dataverse_url == ENV_URL
+
+
+def test_resolve_target_rejects_mismatched_pac_environment(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path)
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="different environment",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url=None,
+            state=model.default_state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            pac_runner=lambda command, **_kwargs: subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {
+                        "EnvironmentId": "other-environment",
+                        "OrgUrl": ENV_URL,
+                    }
+                ),
+                stderr="",
+            ),
+        )
 
 
 def test_resolve_target_rejects_classic_da(tmp_path: Path) -> None:

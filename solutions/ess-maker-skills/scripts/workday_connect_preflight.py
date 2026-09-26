@@ -8,10 +8,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import subprocess
 from typing import Any, Callable
 
 from auth import authenticate, query_all
-from install_workday_da_extension import install_workday_package
+from install_workday_da_extension import (
+    PacCliError,
+    install_workday_package,
+    resolve_pac_executable,
+)
 from workday_connect_auth import (
     WorkdayConnectIdentityError,
     authentication_plan,
@@ -178,12 +183,67 @@ def _cached_dataverse_url(
     ).strip()
 
 
+def _pac_dataverse_url(
+    environment_id: str,
+    *,
+    pac_resolver: Callable[[], Path],
+    runner: Callable[..., subprocess.CompletedProcess],
+) -> str:
+    if not environment_id:
+        return ""
+    try:
+        pac = pac_resolver()
+    except PacCliError:
+        return ""
+    try:
+        result = runner(
+            [
+                str(pac),
+                "org",
+                "who",
+                "--environment",
+                environment_id,
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WorkdayConnectPreflightError(
+            "PAC did not resolve the setup environment within one minute."
+        ) from exc
+    if result.returncode != 0:
+        return ""
+    try:
+        identity = json.loads(result.stdout or "")
+    except json.JSONDecodeError as exc:
+        raise WorkdayConnectPreflightError(
+            "PAC returned invalid environment identity JSON."
+        ) from exc
+    if not isinstance(identity, dict):
+        raise WorkdayConnectPreflightError(
+            "PAC returned an invalid environment identity result."
+        )
+    observed_id = str(identity.get("EnvironmentId") or "").strip()
+    if observed_id.casefold() != environment_id.casefold():
+        raise WorkdayConnectPreflightError(
+            "PAC resolved a different environment than setup recorded."
+        )
+    return str(identity.get("OrgUrl") or "").strip()
+
+
 def resolve_target(
     workspace_root: Path,
     *,
     dataverse_url: str | None,
     state: dict[str, Any],
     catalog: dict[str, Any] | None = None,
+    pac_resolver: Callable[[], Path] = resolve_pac_executable,
+    pac_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> PreflightTarget:
     active_catalog = catalog or load_catalog()
     foundation = _read_json(workspace_root / ".local" / "config.json")
@@ -218,6 +278,11 @@ def resolve_target(
             workspace_root,
             environment_id=environment_id,
             ring=foundation_ring,
+        )
+        or _pac_dataverse_url(
+            environment_id,
+            pac_resolver=pac_resolver,
+            runner=pac_runner,
         )
     ).rstrip("/")
     if not exact_url:
