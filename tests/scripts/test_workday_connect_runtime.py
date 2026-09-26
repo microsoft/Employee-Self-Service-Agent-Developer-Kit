@@ -285,7 +285,9 @@ def test_runtime_requires_completed_connection_phase():
     ):
         runtime.run_runtime_operation(
             state,
-            apply=False,
+            apply=True,
+            approved_hash="approved",
+            verifier=lambda *_args: None,
             token_provider=lambda *_args, **_kwargs: "token",
             **_discovery_dependencies(_records()),
         )

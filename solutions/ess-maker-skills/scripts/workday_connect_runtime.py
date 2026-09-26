@@ -531,7 +531,7 @@ def run_runtime_operation(
 ) -> dict[str, Any]:
     """Run runtime preview or apply while reusing one Dataverse token."""
     phases = state.get("phases") or {}
-    if (phases.get("connections") or {}).get("status") != "complete":
+    if apply and (phases.get("connections") or {}).get("status") != "complete":
         raise WorkdayConnectRuntimeError(
             "Complete the Workday connection sign-ins before runtime wiring."
         )

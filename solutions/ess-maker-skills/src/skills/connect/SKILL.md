@@ -52,14 +52,13 @@ Workday routes by architecture before package detection:
   - **CEA full/legacy package or no package** — stop at the current unsupported
     installation boundary without changing state.
   - **DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
-    resumable package, Entra, tenant, Power Platform, and runtime checklist.
+    resumable six-phase controller lifecycle.
   - **DA IT or another DA agent** — unsupported for Workday in this release;
     stop before creating state or entering a Workday lifecycle.
 
   CEA per-agent lifecycle state is stored at
   `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state
-  is stored in `.local/connect/workday-da/config.json` and
-  `.local/setup/workday-da/tasks.md`.
+  is stored only in `.local/connect/workday-da/config.json`.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
