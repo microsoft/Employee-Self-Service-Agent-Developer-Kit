@@ -131,6 +131,53 @@ def _pac_ring(foundation_ring: str) -> str:
     )
 
 
+def _cached_dataverse_url(
+    workspace_root: Path,
+    *,
+    environment_id: str,
+    ring: str,
+) -> str:
+    if not environment_id:
+        return ""
+    inventory = _read_json(
+        workspace_root
+        / ".local"
+        / "setup"
+        / f"environment-list-{ring}.json"
+    )
+    environments = inventory.get("environments")
+    if not isinstance(environments, list):
+        return ""
+    matches = [
+        environment
+        for environment in environments
+        if isinstance(environment, dict)
+        and str(environment.get("id") or "").casefold()
+        == environment_id.casefold()
+    ]
+    if len(matches) > 1:
+        raise WorkdayConnectPreflightError(
+            "Setup environment inventory contains duplicate records for "
+            f"environment {environment_id}."
+        )
+    if not matches:
+        return ""
+    match = matches[0]
+    properties = match.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+    linked = properties.get("linkedEnvironmentMetadata")
+    if not isinstance(linked, dict):
+        linked = {}
+    return str(
+        match.get("url")
+        or match.get("instanceUrl")
+        or linked.get("instanceApiUrl")
+        or linked.get("instanceUrl")
+        or ""
+    ).strip()
+
+
 def resolve_target(
     workspace_root: Path,
     *,
@@ -157,26 +204,32 @@ def resolve_target(
         )
     _require_materialized_workspace(setup_state, agent)
 
-    exact_url = (
-        str(foundation.get("dataverseEndpoint") or "").strip()
-        or str(state.get("scope", {}).get("dataverseUrl") or "").strip()
-        or str(dataverse_url or "").strip()
-    ).rstrip("/")
-    if not exact_url:
-        raise WorkdayConnectPreflightError(
-            "Select the Dataverse environment that will host the Workday "
-            "runtime package."
-        )
-    if not exact_url.startswith("https://"):
-        raise WorkdayConnectPreflightError(
-            "The Workday Dataverse environment URL must use HTTPS."
-        )
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
     environment_id = str(
         foundation.get("environmentId")
         or (setup_state.get("environment") or {}).get("id")
         or ""
     ).strip()
+    exact_url = (
+        str(foundation.get("dataverseEndpoint") or "").strip()
+        or str(state.get("scope", {}).get("dataverseUrl") or "").strip()
+        or str(dataverse_url or "").strip()
+        or _cached_dataverse_url(
+            workspace_root,
+            environment_id=environment_id,
+            ring=foundation_ring,
+        )
+    ).rstrip("/")
+    if not exact_url:
+        raise WorkdayConnectPreflightError(
+            "The setup environment does not have a resolved Dataverse URL. "
+            "Refresh environment inventory for the recorded environment ID "
+            "or provide that environment's exact Dataverse URL."
+        )
+    if not exact_url.startswith("https://"):
+        raise WorkdayConnectPreflightError(
+            "The Workday Dataverse environment URL must use HTTPS."
+        )
     return PreflightTarget(
         agent={
             key: agent[key]
