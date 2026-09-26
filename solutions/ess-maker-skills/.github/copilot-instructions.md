@@ -3,18 +3,26 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json`.**
+reading tool to read `.local/setup/config.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read this file FIRST, then decide what
-to do based on the result.
+the user first. Do NOT list capabilities. Read this file FIRST, then decide
+what to do based on the result.
 
 ### If setup is missing or not ready
 
-DA setup is ready only when `.local/setup/config.json` has `schema_version`
-equal to `4` and its `agents` entry matching `.local/config.json`'s
-`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
-that per-agent marker only after all eight foundation steps for that agent have
-reached `done`.
+DA authoring setup is ready when `.local/setup/config.json` has
+`schema_version` equal to `4` and at least one entry in its `agents` object has
+`authoring_ready` equal to `true`. This is the only readiness marker used by
+this first gate. Ignore `connect_ready`, `active_step`, blocked capacity, and
+blocked connection steps here: they describe runtime readiness after the exact
+editable agent and local workspace are already usable, and `/connect` exists
+to resolve a missing connection.
+
+This first gate establishes only that the workspace has a usable DA foundation.
+After it passes, read `.local/config.json` and let the invoked command resolve
+and validate the exact active agent. If operational configuration is missing or
+does not match a canonical setup entry, report that configuration error instead
+of routing back to `/setup`.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
@@ -212,9 +220,9 @@ After canonical DA setup is complete:
   available;
 - Dataverse push and server-backed validation are permitted in this
   workspace; run the push pipeline when the maker asks to push local changes;
-- `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
-  unsupported products or agent verticals must stop at their explicit routing
-  boundary;
+- `/connect servicenow` is available for the DA-GA HR prototype through its
+  product-specific guidance; other integrations require their corresponding
+  DA-GA product extension guidance;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
 - `/flightcheck` may run only its local-files scope.

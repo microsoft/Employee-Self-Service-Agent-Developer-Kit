@@ -272,6 +272,39 @@ def test_client_uses_only_configured_environment_host() -> None:
     }
 
 
+def test_update_components_uses_native_change_set_contract() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "changeToken": "updated-token",
+                    "connectionReferenceChanges": [],
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+    change_set = {
+        "changeToken": "token",
+        "connectionReferenceChanges": [],
+    }
+
+    result = client.update_components(AGENT_ID, change_set)
+
+    assert result["changeToken"] == "updated-token"
+    assert session.calls[0]["method"] == "PUT"
+    assert session.calls[0]["json"] == change_set
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
+    }
+
+
 def test_realm_configuration_rejects_unknown_realm() -> None:
     client = agentbuilder.AgentBuilderClient(
         HOST,
