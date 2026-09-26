@@ -185,9 +185,9 @@ When an occupied workspace needs a new environment, offer **Create and open a ne
 
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
-- **Cancel setup**
+- **Go back**
 
-Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Then run:
+For **Go back**, make no changes and return to the Setup choice surface that offered **Create and open a new workspace**. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
 
 ```text
 python scripts/prepare_fresh_workspace.py \
@@ -205,9 +205,8 @@ Offer exactly:
 
 - **Reset workspace**
 - **Go back**
-- **Cancel setup**
 
-Do not preselect **Reset workspace**. Continue only when the maker selects it, then run:
+Do not preselect **Reset workspace**. For **Go back**, make no changes and return to the choice surface that offered **Reset and use this workspace**. Continue only when the maker selects **Reset workspace**, then run:
 
 ```text
 python scripts/reset_local_workspace.py --confirm-reset

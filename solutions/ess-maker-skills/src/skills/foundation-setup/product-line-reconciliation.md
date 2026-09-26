@@ -33,21 +33,35 @@ Parse `DA_SETUP_PRODUCT_RECONCILIATION_JSON:`.
 - For `action: continue-da-ga-setup`, continue at the next DA-GA setup operation. `classification: unknown` is deliberately fail-open; do not persist it or tell the maker that DA-GA was proven.
 - For `action: stop-and-use-cea-kit`, stop before inspection, validation, attachment, import, Object Model installation, or other DA-GA-only work. Render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the kit-switch choice is pending.
 
-  When `recoveryUnavailable` is `true`, say that the compatible pinned installer could not be resolved, render **Review the setup handoff** as blocked, make no changes, and stop without guessing a branch or release.
+  When `recoveryUnavailable` is `true`, say that the compatible pinned installer could not be resolved and render **Review the setup handoff** as blocked. Do not guess a branch or release. Use the host's interactive single-selection control, ask **How would you like to continue setup?**, and offer exactly:
+  - **Choose a different agent**
+  - **Choose a different environment**
+  - **Go back**
+
+  Do not offer **Install and open the compatible kit** when its pinned installer is unavailable. Follow the corresponding Setup routes below.
 
   Otherwise say:
 
   > **{agent display name or Selected agent}** belongs to the classic Employee Self-Service agent product line, so this Developer Kit cannot safely continue its setup.
-  >
-  > Want me to install the compatible CEA kit in a separate folder and open it now?
 
-  - When the maker accepts, run `recoveryCommand` in a terminal using `recoveryShell`. On success, render **Review the setup handoff** as complete and say:
+  Then use the host's interactive single-selection control and ask exactly:
+
+  > How would you like to continue setup?
+
+  Offer exactly:
+  - **Install and open the compatible kit**
+  - **Choose a different agent**
+  - **Choose a different environment**
+  - **Go back**
+
+  Do not preselect a choice.
+  - For **Install and open the compatible kit**, run `recoveryCommand` in a terminal using `recoveryShell`. On success, render **Review the setup handoff** as complete and say:
 
     > Continue setup in the workspace opened by the compatible installer. No Copilot Studio agent or setup state was changed by this product-line check.
 
-  - When the maker declines, render **Review the setup handoff** as complete, show `recoveryCommand` in a fenced block whose language is `recoveryShell`, and say:
-
-    > Run this pinned command later to install the compatible kit in a separate folder. No Copilot Studio agent or setup state was changed by this product-line check.
+  - For **Choose a different agent**, retain the current account, environment, and ring. Read `src/skills/foundation-setup/da-existing-dev.md` and continue from its environment-scoped `list-agents` candidate-selection path. Do not persist the rejected agent or change the active local agent before another exact candidate passes product-line reconciliation.
+  - For **Choose a different environment**, retain the current account and ring. Read `src/skills/foundation-setup/da-environment-target.md`, rerun `list-environments`, and continue from its environment picker. A target in another environment follows the parent skill's new-workspace contract.
+  - For **Go back**, do not persist the rejected agent. Return to **Choose the sign-in account** in the parent skill. After the maker selects an account, read `src/skills/foundation-setup/da-environment-target.md`, list that account's environments, and continue from the selected environment through the parent skill's create-or-connect choice. The direct different-agent and different-environment routes above retain the current account; **Go back** is the account-reset route.
 
   - When command execution fails, render **Review the setup handoff** as blocked and state the observed installer failure. Do not label the unchanged command as a retry or reinterpret installer failure as a successful handoff. When the output identifies an existing installation, verify that its checkout matches `releaseTag` and offer to open its `solutions/ess-maker-skills` workspace directly. Otherwise provide one recovery action grounded in the observed failure.
 

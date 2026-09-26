@@ -109,9 +109,11 @@ Offer exactly:
 
 - **Choose an existing agent in this environment**
 - **Replace an existing agent with this package**
-- **Cancel setup**
+- **Go back**
 
 Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. The native candidate result is authoritative DA-GA evidence; run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or replacement. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
+
+For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Clear package-import and replacement intent, but preserve the import receipt and collision evidence.
 
 Before replacement, validate the exact selected Dev agent:
 
@@ -130,12 +132,15 @@ Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 Offer exactly:
 
 - **Continue replacement**
-- **Choose the existing agent without replacement**
-- **Cancel setup**
+- **Go back**
 
 Never preselect or recommend **Continue replacement**. Continue only after the
-maker explicitly selects it. Pass the same validated internal ID in both
-confirmation arguments:
+maker explicitly selects it. For **Go back**, make no changes and return to
+**Handle a collision**. Reuse the latest successful visible-agent list instead
+of rerunning `list-agents` solely because the maker went back. Clear the
+replacement intent and selected replacement candidate; require an exact agent
+selection for whichever route the maker chooses next. Pass the same validated
+internal ID in both confirmation arguments:
 
 ```text
 python scripts/setup_alm_import.py \

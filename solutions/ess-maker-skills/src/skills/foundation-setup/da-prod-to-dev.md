@@ -94,7 +94,7 @@ python scripts/setup_alm_export.py export \
   --ring "{SOURCE_RING}"
 ```
 
-If the maker cancels after export, run `setup_alm_export.py cleanup`. A later
+If the maker goes back after export, run `setup_alm_export.py cleanup`. A later
 fresh inspect or export also removes a recorded package left by an interrupted
 run before continuing.
 
@@ -109,9 +109,9 @@ Immediately before import, ask:
 Offer exactly:
 
 - **Create editable Dev agent**
-- **Cancel setup**
+- **Go back**
 
-Do not preselect **Create editable Dev agent**. Continue only after the maker selects it.
+Do not preselect **Create editable Dev agent**. Continue only after the maker selects it. For **Go back**, run `setup_alm_export.py cleanup` before routing anywhere else. When the target environment is the source environment, retain the selected account and return to the choice surface that supplied the Prod agent: the active-agent choice surface for a recorded local target, or **Do you already have an ESS agent in Copilot Studio?** for a supplied URL. When the maker selected a different target environment, clear that target and return to **Choose the sign-in account** in the parent skill. After the maker selects an account, rerun source inspection under that account and resume target-environment selection before creating another export. Never reuse the cleaned-up package.
 
 When the maker explicitly selected another environment, use its friendly display name when an authoritative operation returned one in this invocation. Otherwise say "the selected Power Platform environment" without showing internal IDs or URLs. Run no other operation between the maker's confirmation and the create-only import:
 
@@ -146,7 +146,7 @@ inspection, show:
 > A related editable Dev agent now exists: **{agent display name}**. Use it for
 > this workspace?
 
-Offer exactly **Use related Dev agent** and **Cancel setup**, and offer to attach it through [Attach and complete](#attach-and-complete). Continue only when the maker selects **Use related Dev agent**. If no related Dev is returned or the family cannot be proven, stop with the safe conflict outcome from `src/reference/native-alm-import.md`. Do not recover a collision or offer replacement.
+Offer exactly **Use related Dev agent** and **Go back**, and offer to attach it through [Attach and complete](#attach-and-complete). Continue only when the maker selects **Use related Dev agent**. For **Go back**, retain the selected account and durable operation evidence and return to the choice surface that supplied the Prod agent: the active-agent choice surface for a recorded local target, or **Do you already have an ESS agent in Copilot Studio?** for a supplied URL. Do not rerun export or import. If no related Dev is returned or the family cannot be proven, stop with the safe conflict outcome from `src/reference/native-alm-import.md`. Do not recover a collision or offer replacement.
 
 For any other result besides `kind: success`, stop and use the outcome guidance
 in `src/reference/native-alm-import.md`; do not retry or replace an agent.

@@ -126,19 +126,46 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
         "**Review the setup handoff** as in progress",
     ):
         assert mismatch_state in normalized_reconciliation
+    assert "How would you like to continue setup?" in reconciliation
+    for recovery_choice in (
+        "Install and open the compatible kit",
+        "Choose a different agent",
+        "Choose a different environment",
+        "Go back",
+    ):
+        assert f"**{recovery_choice}**" in reconciliation
+    assert "**Not now**" not in reconciliation
+    assert "**Cancel setup**" not in reconciliation
+    assert "For **Install and open the compatible kit**, run `recoveryCommand`" in (
+        reconciliation
+    )
+    assert "continue from its environment-scoped `list-agents`" in reconciliation
+    assert "rerun `list-environments`" in reconciliation
+    assert "Return to **Choose the sign-in account**" in reconciliation
+    assert "**Go back** is the account-reset route" in reconciliation
+    unavailable_recovery = reconciliation[
+        reconciliation.index("When `recoveryUnavailable` is `true`") :
+        reconciliation.index("Otherwise say:")
+    ]
+    for recovery_choice in (
+        "Choose a different agent",
+        "Choose a different environment",
+        "Go back",
+    ):
+        assert f"**{recovery_choice}**" in unavailable_recovery
     assert (
-        "Want me to install the compatible CEA kit in a separate folder and open "
-        "it now?"
-    ) in normalized_reconciliation
-    assert "When the maker accepts, run `recoveryCommand`" in reconciliation
-    assert "When the maker declines" in reconciliation
+        "Do not offer **Install and open the compatible kit**"
+        in unavailable_recovery
+    )
+    assert "Follow the corresponding Setup routes below." in unavailable_recovery
+    assert "stop without guessing" not in reconciliation
     assert "When command execution fails" in reconciliation
     assert "Do not label the unchanged command as a retry" in reconciliation
     assert "verify that its checkout matches `releaseTag`" in reconciliation
     assert "offer to open its `solutions/ess-maker-skills` workspace directly" in (
         reconciliation
     )
-    assert reconciliation.count("**Review the setup handoff** as complete") == 2
+    assert reconciliation.count("**Review the setup handoff** as complete") == 1
     assert reconciliation.count("**Review the setup handoff** as blocked") == 2
     assert "No Copilot Studio agent or setup state was changed" in reconciliation
     assert "installation was not changed" not in reconciliation
@@ -668,6 +695,16 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Create editable Dev agent" in text
     assert "Do not preselect **Create editable Dev agent**" in text
     assert "Use related Dev agent" in text
+    assert "**Cancel setup**" not in text
+    assert "If the maker goes back after export" in normalized
+    assert (
+        "When the maker selected a different target environment, clear that "
+        "target and return to **Choose the sign-in account**"
+    ) in normalized
+    assert "Never reuse the cleaned-up package" in normalized
+    assert (
+        "Do not rerun export or import" in normalized
+    )
     assert "render the factual workspace and runtime-readiness report there" in normalized
     assert "Existing Prod agent; related Dev reused" in normalized
     assert "Existing Prod agent; new Dev created" in normalized
@@ -731,7 +768,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "Use another account",
         "Use an environment URL",
         "Create a Power Platform environment",
-        "Cancel setup",
+        "Go back",
     ):
         assert f"**{empty_environment_choice}**" in environment_target
     assert "does not require a Dataverse database" in environment_target
@@ -749,7 +786,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     for retry_choice in (
         "Try with a different user",
         "Try a different environment",
-        "Cancel setup",
+        "Go back",
     ):
         assert f"**{retry_choice}**" in environment_target
     assert "present these labels unchanged with the selection initially unset" in (
@@ -759,6 +796,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         normalized_environment_target
     )
     assert "retain the current account and ring" in normalized_environment_target
+    assert "**Use another account** remains the account-switch route" in (
+        normalized_environment_target
+    )
+    assert (
+        "return to the parent skill's **What would you like to set up in this "
+        "environment?** choice surface"
+    ) in normalized_environment_target
     assert "also offer **Use an agent URL**" in environment_target
     assert "setup_mos_starter.py list" in text
     assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
@@ -842,12 +886,26 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Create a new ESS agent" in normalized
     assert "**{selected product label}**" in text
     assert "Choose a different product" in text
+    assert (
+        "For **Choose a different product**, return to the valid rows from the "
+        "latest successful catalog result"
+    ) in normalized
     assert _PREPARE_FRESH_WORKSPACE.is_file()
     assert "Create and open a new workspace" in foundation
     assert "Create a new workspace without opening it" not in foundation
     assert "Use suggested location -- {suggested absolute sibling-folder path}" in foundation
     assert "Choose another location" in foundation
     assert "Do not ask the maker to type a path unless" in normalized_foundation
+    workspace_location = foundation[
+        foundation.index("When an occupied workspace needs a new environment") :
+        foundation.index("For **Reset and use this workspace**")
+    ]
+    assert "**Go back**" in workspace_location
+    assert "**Cancel setup**" not in workspace_location
+    assert (
+        "return to the Setup choice surface that offered **Create and open a new "
+        "workspace**"
+    ) in " ".join(workspace_location.split())
     assert "scripts/prepare_fresh_workspace.py" in foundation
     assert "--open-vscode" in foundation
     assert "DA_PREPARED_WORKSPACE_JSON:" in foundation
@@ -974,7 +1032,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "uses a new client request UUID" in normalized
     collision_choices = text[text.index("When the annotations report `outcome: collision`") :]
     collision_choices = collision_choices[: collision_choices.index("## Enable ALM")]
-    assert "**Go back**" not in collision_choices
+    assert "**Go back**" in collision_choices
+    assert "**Cancel setup**" not in collision_choices
+    assert "do not repeat that create request" in " ".join(collision_choices.split())
     assert "does not identify the corresponding agent" in reference
 
     assert "createFromStarterPackage" in reference
@@ -1006,6 +1066,15 @@ def test_foundation_offers_local_workspace_reset() -> None:
     assert "report its `ERROR:` and `NOTE:` output" in normalized
     assert "will not change or delete any agent in Copilot Studio" in normalized
     assert "archive its current local agent files" in normalized
+    assert (
+        "For **Go back**, make no changes and return to the choice surface that "
+        "offered **Reset and use this workspace**."
+    ) in normalized
+    reset_confirmation = text[
+        text.index("For **Reset and use this workspace**") :
+        text.index("For **Switch to another configured agent**")
+    ]
+    assert "**Cancel setup**" not in reset_confirmation
 
 
 def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
@@ -1191,15 +1260,33 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     for choice in (
         "Choose an existing agent in this environment",
         "Replace an existing agent with this package",
-        "Cancel setup",
         "Continue replacement",
+        "Go back",
         "Retry import",
         "Stop without retrying",
     ):
         assert choice in text
+    assert "**Cancel setup**" not in text
+    assert "Choose the existing agent without replacement" not in text
     assert "Do not preselect a choice or recommend replacement" in normalized
     assert "setup_existing_da.py list-agents" in text
     assert "Never preselect or recommend **Continue replacement**" in text
+    assert (
+        "For **Go back**, make no changes and return to **Handle a collision**."
+        in normalized
+    )
+    assert (
+        "Reuse the latest successful visible-agent list instead of rerunning "
+        "`list-agents` solely because the maker went back."
+    ) in normalized
+    assert (
+        "Clear the replacement intent and selected replacement candidate"
+        in normalized
+    )
+    assert (
+        "Clear package-import and replacement intent, but preserve the import "
+        "receipt and collision evidence."
+    ) in normalized
     assert "could not be proven" in normalized
     assert "avoid creating or replacing the agent twice" in normalized
     assert "only after the maker selects **Retry import**" in normalized
