@@ -39,6 +39,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
             {
                 "tenant": "contoso_prod",
                 "tenantId": "entra-tenant",
+                "entraAdminAccount": "admin@example.com",
                 "appIdUri": "api://application-id",
                 "setupStatus": {
                     "DA1.1": {"state": "done", "verifiedBy": "programmatic"},
@@ -59,6 +60,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
         == "http://www.workday.com/contoso_prod"
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
+    assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
     assert path.with_name("config.pre-v2.json").exists()
 
 
@@ -69,13 +71,17 @@ def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
     path.parent.mkdir(parents=True)
     path.write_text("{}", encoding="utf-8")
     tasks = tmp_path / ".local/setup/workday-da/tasks.md"
+    connect_tasks = tmp_path / ".local/connect/workday-da/tasks.md"
     tasks.parent.mkdir(parents=True)
-    tasks.write_text("legacy checklist", encoding="utf-8")
+    tasks.write_text("legacy setup checklist", encoding="utf-8")
+    connect_tasks.write_text("legacy connect checklist", encoding="utf-8")
 
     store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert tasks.read_text(encoding="utf-8") == "legacy checklist"
-    assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
+    assert tasks.read_text(encoding="utf-8") == "legacy setup checklist"
+    assert connect_tasks.read_text(encoding="utf-8") == (
+        "legacy connect checklist"
+    )
 
 
 def test_phase_completion_requires_prerequisite(tmp_path: Path) -> None:

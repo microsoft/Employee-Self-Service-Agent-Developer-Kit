@@ -78,6 +78,7 @@ def test_resolve_target_prefers_canonical_dataverse_url(tmp_path: Path) -> None:
     )
 
     assert target.dataverse_url == ENV_URL
+    assert target.environment_id == "agent-environment"
     assert target.package_flavor == "runtime"
 
 
@@ -157,6 +158,76 @@ def test_preflight_installs_and_reverifies_with_same_account(
     assert result["package"]["action"] == "installed"
     assert result["operator"]["username"] == "maker@example.com"
     assert result["operator"]["credentialStores"]["pac"] == "verified"
+
+
+def test_preflight_reuses_persisted_maker_identity(tmp_path: Path) -> None:
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "operators",
+        {
+            "powerPlatformMaker": {
+                "username": "maker@example.com",
+                "tenantId": "tenant-id",
+            }
+        },
+    )
+    observed = {}
+
+    def token_provider(_url, *, preferred_username):
+        observed["preferred"] = preferred_username
+        return "token"
+
+    preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username=None,
+        store=store,
+        token_provider=token_provider,
+        identity_provider=lambda _token, *, preferred_username: {
+            "username": preferred_username,
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [
+            {"uniquename": "msdyn_EssWorkdayRuntime"}
+        ],
+    )
+
+    assert observed["preferred"] == "maker@example.com"
+
+
+def test_preflight_identity_mismatch_is_structured(tmp_path: Path) -> None:
+    import workday_connect_auth as auth
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    def mismatch(_token, *, preferred_username):
+        raise auth.WorkdayConnectIdentityError(
+            "Dataverse authentication used a different account from the "
+            "selected Environment Maker."
+        )
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="different account",
+    ):
+        preflight.run_preflight(
+            tmp_path,
+            dataverse_url=ENV_URL,
+            maker_username="maker@example.com",
+            store=store,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=mismatch,
+            query=lambda *_args, **_kwargs: [],
+        )
 
 
 def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:

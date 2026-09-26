@@ -20,6 +20,10 @@ from install_workday_da_extension import (
     resolve_pac_executable,
 )
 from workday_connect_model import load_catalog, plan_hash
+from workday_connect_auth import (
+    WorkdayConnectIdentityError,
+    require_identity,
+)
 
 
 ACTIVE_FLOW_STATE = 1
@@ -83,18 +87,18 @@ def _select_connection(
         )
     ]
     if len(matches) != 1:
-        safe = [
+        safe = sorted(
             {
-                "id": value.get("name"),
-                "displayName": (value.get("properties") or {}).get(
-                    "displayName"
-                ),
+                str(
+                    (value.get("properties") or {}).get("displayName")
+                    or connector_name
+                )
+                for value in matches
             }
-            for value in matches
-        ]
+        )
         raise WorkdayConnectRuntimeError(
             f"Expected exactly one connected {connector_name} connection; "
-            f"found {len(matches)}. Candidates: "
+            f"found {len(matches)}. Connected display names: "
             f"{json.dumps(safe, sort_keys=True)}"
         )
     return matches[0]
@@ -106,22 +110,28 @@ def _list_connections(
     *,
     runner: Callable[..., subprocess.CompletedProcess],
 ) -> list[dict[str, Any]]:
-    result = runner(
-        [
-            str(pac_executable),
-            "connectivity",
-            "list-connections",
-            "--environment",
-            environment_url,
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=120,
-        check=False,
-    )
+    try:
+        result = runner(
+            [
+                str(pac_executable),
+                "connectivity",
+                "list-connections",
+                "--environment",
+                environment_url,
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise WorkdayConnectRuntimeError(
+            "PAC did not finish listing environment connections within "
+            "2 minutes."
+        ) from exc
     if result.returncode != 0:
         raise WorkdayConnectRuntimeError(
             "PAC could not list the target environment's connections."
@@ -197,6 +207,7 @@ def _runtime_flows(
     environment_url: str,
     token: str,
     flow_names: list[str],
+    allowed_workflow_ids: set[str],
     *,
     query: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, dict[str, Any]]:
@@ -211,6 +222,17 @@ def _runtime_flows(
         filters,
     )
     flows = _single_rows(rows, flow_names, "name", "Workday flow")
+    outside_package = [
+        name
+        for name, row in flows.items()
+        if str(row.get("workflowid") or "").casefold()
+        not in allowed_workflow_ids
+    ]
+    if outside_package:
+        raise WorkdayConnectRuntimeError(
+            "A reviewed Workday flow name resolved outside the selected "
+            "installed package: " + ", ".join(sorted(outside_package))
+        )
     non_cloud = [
         name
         for name, row in flows.items()
@@ -222,6 +244,50 @@ def _runtime_flows(
             + ", ".join(sorted(non_cloud))
         )
     return flows
+
+
+def _solution_component_ids(
+    environment_url: str,
+    token: str,
+    solution_schema: str,
+    *,
+    query: Callable[..., list[dict[str, Any]]],
+) -> set[str]:
+    solutions = query(
+        environment_url,
+        token,
+        "solutions",
+        "solutionid,uniquename",
+        f"uniquename eq '{_odata_literal(solution_schema)}'",
+    )
+    if len(solutions) != 1:
+        raise WorkdayConnectRuntimeError(
+            "Expected exactly one installed Workday package solution "
+            f"'{solution_schema}'; found {len(solutions)}."
+        )
+    solution_id = _required_text(
+        solutions[0],
+        "solutionid",
+        f"Solution ID for {solution_schema}",
+    )
+    components = query(
+        environment_url,
+        token,
+        "solutioncomponents",
+        "objectid,componenttype",
+        f"_solutionid_value eq {solution_id} and componenttype eq 29",
+    )
+    component_ids = {
+        str(value.get("objectid") or "").casefold()
+        for value in components
+        if str(value.get("objectid") or "").strip()
+    }
+    if not component_ids:
+        raise WorkdayConnectRuntimeError(
+            "The installed Workday package did not expose solution-component "
+            "membership for its reviewed flows."
+        )
+    return component_ids
 
 
 def _topic_document(data: str) -> dict[str, Any] | None:
@@ -432,10 +498,21 @@ def discover_runtime_plan(
         logical_names,
         query=query,
     )
+    solution_component_ids = _solution_component_ids(
+        environment_url,
+        active_token,
+        _required_text(
+            package,
+            "solutionSchemaName",
+            "Workday package solution schema",
+        ),
+        query=query,
+    )
     flows = _runtime_flows(
         environment_url,
         active_token,
         [str(name) for name in flow_names],
+        solution_component_ids,
         query=query,
     )
     topics = _runtime_topics(
@@ -445,8 +522,22 @@ def discover_runtime_plan(
         query=query,
     )
     target_connections = {
-        logical_names[0]: str(workday.get("name") or ""),
-        logical_names[1]: str(dataverse.get("name") or ""),
+        logical_names[0]: {
+            "connectionId": str(workday.get("name") or ""),
+            "displayName": str(
+                (workday.get("properties") or {}).get("displayName")
+                or "Workday"
+            ),
+            "connector": references_catalog["workday"]["connectorName"],
+        },
+        logical_names[1]: {
+            "connectionId": str(dataverse.get("name") or ""),
+            "displayName": str(
+                (dataverse.get("properties") or {}).get("displayName")
+                or "Microsoft Dataverse"
+            ),
+            "connector": references_catalog["dataverse"]["connectorName"],
+        },
     }
     flow_targets = [
         {
@@ -495,7 +586,13 @@ def discover_runtime_plan(
     }
     observed = {
         "connectionBindings": {
-            name: references[name].get("connectionid")
+            name: {
+                "selectedDisplayName": target_connections[name]["displayName"],
+                "alreadyBoundToSelection": str(
+                    references[name].get("connectionid") or ""
+                ).casefold()
+                == target_connections[name]["connectionId"].casefold(),
+            }
             for name in logical_names
         },
         "flowStates": {
@@ -509,6 +606,15 @@ def discover_runtime_plan(
     }
     return {
         "plan": {**plan, "planHash": plan_hash(plan)},
+        "approvalSummary": {
+            "environmentUrl": environment_url,
+            "agentName": str(agent.get("name") or "ESS HR agent"),
+            "connections": [
+                value["displayName"] for value in target_connections.values()
+            ],
+            "flows": [target["name"] for target in flow_targets],
+            "userContextTarget": TARGET_TOPIC_NAME,
+        },
         "observed": observed,
     }
 
@@ -522,6 +628,7 @@ def run_runtime_operation(
     workday_connection_id: str | None = None,
     dataverse_connection_id: str | None = None,
     token_provider: Callable[..., str] = authenticate,
+    identity_provider: Callable[..., dict[str, str]] = require_identity,
     query: Callable[..., list[dict[str, Any]]] = query_all,
     updater: Callable[..., bool] = update_record,
     authorization_runner: Callable[
@@ -549,6 +656,13 @@ def run_runtime_operation(
         environment_url,
         preferred_username=maker,
     )
+    try:
+        identity = identity_provider(
+            token,
+            preferred_username=maker,
+        )
+    except WorkdayConnectIdentityError as exc:
+        raise WorkdayConnectRuntimeError(str(exc)) from exc
     discovery = discover_runtime_plan(
         state,
         workday_connection_id=workday_connection_id,
@@ -559,7 +673,7 @@ def run_runtime_operation(
         **discovery_dependencies,
     )
     if not apply:
-        return discovery
+        return {**discovery, "authenticatedAccount": identity["username"]}
     if not approved_hash or verifier is None:
         raise WorkdayConnectRuntimeError(
             "Runtime apply requires an approved plan hash."
@@ -576,6 +690,7 @@ def run_runtime_operation(
         "plan": discovery["plan"],
         "observedBeforeApply": discovery["observed"],
         "applied": applied,
+        "authenticatedAccount": identity["username"],
     }
 
 
@@ -591,26 +706,32 @@ def _run_authorization(
         )
     authorization = plan["delegatedAuthorization"]
     for workflow_id in authorization["workflowIds"]:
-        result = runner(
-            [
-                shell,
-                "-NoProfile",
-                "-File",
-                str(Path(__file__).parent / authorization["script"]),
-                "-OrgUrl",
-                plan["scope"]["dataverseUrl"],
-                "-BotId",
-                authorization["botId"],
-                "-WorkflowId",
-                workflow_id,
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=600,
-            check=False,
-        )
+        try:
+            result = runner(
+                [
+                    shell,
+                    "-NoProfile",
+                    "-File",
+                    str(Path(__file__).parent / authorization["script"]),
+                    "-OrgUrl",
+                    plan["scope"]["dataverseUrl"],
+                    "-BotId",
+                    authorization["botId"],
+                    "-WorkflowId",
+                    workflow_id,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise WorkdayConnectRuntimeError(
+                "Delegated flow authorization did not finish within "
+                f"10 minutes for workflow {workflow_id}."
+            ) from exc
         output = (result.stdout or "") + "\n" + (result.stderr or "")
         if (
             result.returncode != 0
@@ -644,6 +765,23 @@ def _run_authorization(
             )
 
 
+def _require_approved_flow_targets(
+    flows: Mapping[str, Mapping[str, Any]],
+    targets: list[Mapping[str, Any]],
+) -> None:
+    changed = [
+        str(target["name"])
+        for target in targets
+        if str(flows[str(target["name"])].get("workflowid") or "").casefold()
+        != str(target["workflowId"]).casefold()
+    ]
+    if changed:
+        raise WorkdayConnectRuntimeError(
+            "Reviewed Workday flow identity changed after approval: "
+            + ", ".join(sorted(changed))
+        )
+
+
 def apply_runtime_plan(
     plan: Mapping[str, Any],
     *,
@@ -656,7 +794,11 @@ def apply_runtime_plan(
 ) -> dict[str, Any]:
     """Apply one approved runtime plan with one shared Dataverse token."""
     environment_url = plan["scope"]["dataverseUrl"]
-    bindings = plan["connectionBindings"]
+    binding_targets = plan["connectionBindings"]
+    bindings = {
+        logical_name: target["connectionId"]
+        for logical_name, target in binding_targets.items()
+    }
     references = _runtime_references(
         environment_url,
         token,
@@ -686,8 +828,10 @@ def apply_runtime_plan(
         environment_url,
         token,
         flow_names,
+        {value["workflowId"].casefold() for value in plan["flows"]},
         query=query,
     )
+    _require_approved_flow_targets(flows, plan["flows"])
     for target in plan["flows"]:
         flow = flows[target["name"]]
         if (
@@ -757,8 +901,10 @@ def apply_runtime_plan(
         environment_url,
         token,
         flow_names,
+        {value["workflowId"].casefold() for value in plan["flows"]},
         query=query,
     )
+    _require_approved_flow_targets(verified_flows, plan["flows"])
     inactive = [
         name
         for name, row in verified_flows.items()
@@ -788,7 +934,10 @@ def apply_runtime_plan(
         )
     return {
         "verified": True,
-        "connectionBindings": bindings,
+        "connectionBindings": {
+            logical_name: target["displayName"]
+            for logical_name, target in binding_targets.items()
+        },
         "flows": flow_names,
         "userContext": plan["userContext"]["targetTopicSchema"],
         "delegatedAuthorization": "verified-by-script",

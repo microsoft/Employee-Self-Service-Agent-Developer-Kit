@@ -13,6 +13,12 @@ connections in the selected environment:
 Explain that Workday connector OAuth is another credential store and may open
 its own sign-in. Do not ask the maker to paste connection IDs.
 
+In Copilot Studio, connect the reviewed Workday flows to the selected ESS HR
+agent. For every agent connection used by those flows, enable **Allow
+permission to share parameters**. This is what prevents each employee from
+receiving an unexpected first-use connection prompt. It is distinct from
+binding the package's solution connection references.
+
 Run runtime discovery:
 
 ```powershell
@@ -30,13 +36,17 @@ flows, selected agent, and User Context V2 topics.
   `--dataverse-connection-id`.
 - If none exists or a connection is not connected, leave the phase waiting and
   show the exact missing connector.
+- Run the existing FlightCheck and require `WD-CONN-013` to pass. If it does
+  not, show only its safe display-name remediation, have the maker enable
+  parameter sharing in Copilot Studio, and rerun that check.
 
-After successful discovery, record evidence and set `connections` to
-`complete`.
+After successful discovery and a passing `WD-CONN-013`, record both as evidence
+and set `connections` to `complete`.
 
 ## Runtime approval and apply
 
-Show one combined runtime plan:
+Show only the returned `approvalSummary`, not raw connection, application,
+workflow, or bot identifiers. The combined runtime plan will:
 
 - bind the two reviewed connection references;
 - activate only the checked-in Workday flow catalog;
