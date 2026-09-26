@@ -303,6 +303,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             for change in service_now_topics
             if isinstance(change.get("component"), dict)
             and change["component"].get("state") == "Active"
+            and change["component"].get("status") == "Active"
         ),
         "serviceNowTopics": topic_summaries,
         "connectionReferenceCount": len(
@@ -691,9 +692,15 @@ def _inspection_progress(
 
     total_topics = components["serviceNowTopicCount"]
     active_topics = components["activeServiceNowTopicCount"]
+    topic_enablement = state.get("topicEnablement")
+    kept_current_topics = (
+        isinstance(topic_enablement, dict)
+        and topic_enablement.get("customerChoice") == "keep-current"
+        and steps.get("topics") == "done"
+    )
     topics_done = (
         total_topics > 0 and active_topics == total_topics
-    ) or steps.get("topics") == "done"
+    ) or kept_current_topics
 
     attestation = state.get("agentConnection")
     if not isinstance(attestation, dict):
@@ -938,6 +945,11 @@ def record_agent_connection_attestation(
     if physical.get("status") != "Connected":
         raise ServiceNowConnectError(
             "The physical ServiceNow connection is not Connected."
+        )
+    if physical.get("authMode") != "entraIDUserLogin":
+        raise ServiceNowConnectError(
+            "The physical ServiceNow connection must use Microsoft Entra ID "
+            "User Login."
         )
 
     normalized_connection_id = uuid.UUID(connection_id).hex

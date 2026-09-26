@@ -104,6 +104,18 @@ def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
     assert result["reference"]["resourceUri"] == "resource-id"
 
 
+def test_summarize_components_requires_active_state_and_status() -> None:
+    components = _components(CONNECTION_ID)
+    topic = components["botComponentChanges"][0]["component"]
+    topic["state"] = "Active"
+    topic["status"] = "Inactive"
+
+    result = snow.summarize_components(components)
+
+    assert result["serviceNowTopicCount"] == 1
+    assert result["activeServiceNowTopicCount"] == 0
+
+
 def test_topic_state_update_replays_full_dialog_component() -> None:
     components = _components()
     topic = components["botComponentChanges"][0]["component"]
@@ -527,6 +539,39 @@ def test_record_agent_connection_validates_health_and_persists_attestation(
     assert state["steps"]["agentConnection"] == "done"
 
 
+def test_record_agent_connection_rejects_unsupported_auth_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeConnectivity:
+        def get_connection(self, _connection_id: str) -> dict:
+            return {
+                "name": CONNECTION_ID.replace("-", ""),
+                "properties": {
+                    "displayName": "ServiceNow",
+                    "statuses": [{"target": "token", "status": "Connected"}],
+                    "connectionParametersSet": {"name": "oauth2"},
+                },
+            }
+
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Microsoft Entra ID User Login",
+    ):
+        snow.record_agent_connection_attestation(
+            {
+                "agent": {"id": AGENT_ID},
+                "environment": {"id": ENVIRONMENT_ID},
+            },
+            CONNECTION_ID,
+        )
+
+
 def test_inspect_preserves_progress_and_reports_completed_steps(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -636,6 +681,138 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
     assert state["agentConnection"]["makerAttested"] is True
     assert state["parameterSharing"]["status"] == "not-exposed"
     assert state["test"]["result"] == "pass"
+
+
+def test_inspect_reopens_topics_after_later_deactivation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / "servicenow"
+        / "agents"
+        / AGENT_ID
+        / "state.json"
+    )
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "topicEnablement": {"customerChoice": "enable-all"},
+                "steps": {"topics": "done"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    components = _components(CONNECTION_ID)
+    components["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    components["botComponentChanges"][0]["component"]["status"] = "Inactive"
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+    class FakeConnectivity:
+        def get_connector(self) -> dict:
+            return {"properties": {}}
+
+        def list_connections(self) -> list[dict]:
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    result = snow.inspect(
+        {
+            "agent": {
+                "id": AGENT_ID,
+                "schema_name": snow.HR_SCHEMA_NAME,
+            },
+            "environment": {"id": ENVIRONMENT_ID, "ring": "test"},
+        }
+    )
+
+    assert result["progress"]["topics"]["status"] == "pending"
+
+
+def test_inspect_preserves_explicit_keep_current_topic_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / "servicenow"
+        / "agents"
+        / AGENT_ID
+        / "state.json"
+    )
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "topicEnablement": {"customerChoice": "keep-current"},
+                "steps": {"topics": "done"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    components = _components(CONNECTION_ID)
+    components["botComponentChanges"][0]["component"]["state"] = "Inactive"
+    components["botComponentChanges"][0]["component"]["status"] = "Inactive"
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+    class FakeConnectivity:
+        def get_connector(self) -> dict:
+            return {"properties": {}}
+
+        def list_connections(self) -> list[dict]:
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    result = snow.inspect(
+        {
+            "agent": {
+                "id": AGENT_ID,
+                "schema_name": snow.HR_SCHEMA_NAME,
+            },
+            "environment": {"id": ENVIRONMENT_ID, "ring": "test"},
+        }
+    )
+
+    assert result["progress"]["topics"]["status"] == "done"
 
 
 def test_record_parameter_sharing_persists_maker_observation(

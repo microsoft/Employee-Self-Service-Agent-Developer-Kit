@@ -43,6 +43,7 @@ Rules:
    auto-response as an answer, and never require the maker to invoke
    `/connect` again merely to continue that question.
 
-After reading SKILL.md, your first action is to check for
-`.local/connect/steps.md`. If starting fresh, your first message to the user
-is the checklist table from the Fresh Start section.
+Do not inspect `.local/connect/steps.md` before the router selects a path. If
+the router selects the retained Preview path, use that path's persisted
+`steps.md` and Fresh Start contract. If it selects the DA ServiceNow path,
+start with that skill's live `inspect` contract instead.

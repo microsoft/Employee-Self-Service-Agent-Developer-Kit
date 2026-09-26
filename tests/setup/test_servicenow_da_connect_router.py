@@ -26,6 +26,8 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
     assert "Skip completed steps" in prompt
     assert "Waiting for maker input" in prompt
     assert "never require the maker to invoke" in prompt
+    assert "Do not inspect `.local/connect/steps.md` before" in prompt
+    assert "start with that skill's live `inspect` contract" in prompt
     assert "src/skills/connect/servicenow-da/SKILL.md" in router
     assert "releaseLine" in router
 
