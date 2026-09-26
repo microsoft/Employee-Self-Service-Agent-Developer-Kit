@@ -253,6 +253,57 @@ def test_preflight_skips_install_when_package_exists(tmp_path: Path) -> None:
     assert installer_calls == []
     assert result["package"]["action"] == "unchanged"
     assert result["status"]["nextPhaseId"] == "entra"
+    assert result["scope"]["entraTenantId"] == "tenant-id"
+
+
+def test_preflight_carries_verified_tenant_into_entra_handoff(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_contracts as contracts
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [
+            {"uniquename": "msdyn_EssWorkdayRuntime"}
+        ],
+    )
+    state = store.merge_section(
+        "scope",
+        {"workdayTenant": "contoso_impl"},
+    )
+
+    handoff = contracts.build_entra_handoff(
+        state,
+        {
+            "applications": [
+                {
+                    "displayName": "Workday exact",
+                    "appId": "44444444-4444-4444-4444-444444444444",
+                    "objectId": "55555555-5555-5555-5555-555555555555",
+                    "servicePrincipalId": (
+                        "66666666-6666-6666-6666-666666666666"
+                    ),
+                    "identifierUris": [
+                        "http://www.workday.com/contoso_impl"
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert handoff["scope"]["entraTenantId"] == "tenant-id"
 
 
 def test_preflight_installs_and_reverifies_with_same_account(
