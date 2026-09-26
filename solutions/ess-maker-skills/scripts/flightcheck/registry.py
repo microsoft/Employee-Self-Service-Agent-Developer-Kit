@@ -159,6 +159,15 @@ class ResolvedPlan:
     ordered_fns: list = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ProfileSpec:
+    """A named callable profile: ordered checkpoint IDs Connect can request."""
+
+    name: str
+    checkpoint_ids: tuple[str, ...]
+    description: str
+
+
 # ---------------------------------------------------------------------------
 # The registry. Order here is for readability only; lookups go through
 # resolve(). Keep this list aligned with the master-checklist registry/mint
@@ -630,6 +639,125 @@ _SPECS: list[CheckpointSpec] = [
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
+_PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
+    ProfileSpec(
+        name="workday-da:setup-readiness",
+        description="Foundation readiness before Workday Connect setup.",
+        checkpoint_ids=(
+            "ENV-001",
+            "ENV-002",
+            "ENV-CAPACITY-001",
+            "DA-AGENT-001",
+            "DA-CONTENT-001",
+            "ESS-SOLN-001",
+            "WD-PKG-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:dataverse-ready",
+        description="Dataverse and bridge-package readiness for Workday DA.",
+        checkpoint_ids=(
+            "ENV-001",
+            "ENV-002",
+            "ENV-009",
+            "ESS-SOLN-001",
+            "WD-PKG-001",
+            "WD-FLOW",
+            "DV-CONN-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:external-prerequisites",
+        description="External prerequisites owned by Entra and Workday admins.",
+        checkpoint_ids=(
+            "WD-ENTRA-SCOPE-001",
+            "WD-ENTRA-CONSENT-001",
+            "WD-ASSIGN-001",
+            "WD-ENTRA-NAMEID-001",
+            "WD-ENTRA-SIGNOPT-001",
+            "WD-API-CLIENT-001",
+            "WD-TENANT-001",
+            "WD-NET-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:post-runtime",
+        description="Post-runtime Workday read-path validation.",
+        checkpoint_ids=("WD-RUN-001",),
+    ),
+    ProfileSpec(
+        name="workday-da:post-connection",
+        description="Connection-reference and Workday endpoint validation.",
+        checkpoint_ids=(
+            "WD-PKG-001",
+            "WD-CONN-012",
+            "WD-CONN-AUTH-001",
+            "WD-CONN-013",
+            "DV-CONN-001",
+            "WD-REST-001",
+            "WD-REST-002",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:post-agent-wiring",
+        description="Topic and agent wiring validation after connection setup.",
+        checkpoint_ids=(
+            "DA-CONN",
+            "TOPIC-TRIGGER",
+            "TOPIC-INTEGRATION",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:final",
+        description="Full DA Workday Connect final readiness profile.",
+        checkpoint_ids=(
+            "ENV-001",
+            "ENV-002",
+            "ENV-CAPACITY-001",
+            "DA-AGENT-001",
+            "DA-CONTENT-001",
+            "DA-CONN",
+            "ESS-SOLN-001",
+            "WD-PKG-001",
+            "WD-ENTRA-SCOPE-001",
+            "WD-ENTRA-CONSENT-001",
+            "WD-ASSIGN-001",
+            "WD-ENTRA-NAMEID-001",
+            "WD-ENTRA-SIGNOPT-001",
+            "WD-API-CLIENT-001",
+            "WD-TENANT-001",
+            "WD-CONN-012",
+            "WD-CONN-AUTH-001",
+            "WD-CONN-013",
+            "DV-CONN-001",
+            "WD-REST-001",
+            "WD-REST-002",
+            "WD-NET-001",
+            "WD-RUN-001",
+            "TOPIC-TRIGGER",
+            "TOPIC-INTEGRATION",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-legacy:diagnostic",
+        description="Legacy/full Workday diagnostic profile retained separately.",
+        checkpoint_ids=(
+            "WD-PKG-001",
+            "WD-001",
+            "WD-CONN",
+            "WD-FLOW",
+            "WD-WF",
+            "WD-ENV",
+        ),
+    ),
+)
+
+PROFILES: dict[str, ProfileSpec] = {
+    profile.name: profile for profile in _PROFILE_DEFINITIONS
+}
+_SHIPPED_REGISTRY_KEYS = frozenset(REGISTRY)
+
+
 # ---------------------------------------------------------------------------
 # Owned-prefix allow-list for the drift test (tests/flightcheck/
 # test_registry_drift.py). This is the set of checkpoint-ID prefixes the
@@ -800,6 +928,71 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     )
 
 
+def resolve_profile(profile_name: str) -> Optional[ProfileSpec]:
+    """Return a callable validation profile by name."""
+    return PROFILES.get(profile_name)
+
+
+def list_profiles() -> list[ProfileSpec]:
+    """Return callable profiles sorted by stable profile name."""
+    return sorted(PROFILES.values(), key=lambda profile: profile.name)
+
+
+def profile_requirements(profile_name: str) -> ResolvedPlan:
+    """Resolve a profile to the union of its checkpoint execution needs."""
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        raise RegistryError(f"Unknown profile {profile_name!r}.")
+    if not profile.checkpoint_ids:
+        raise RegistryError(
+            f"Profile {profile_name!r} declares no checkpoints."
+        )
+
+    clients: frozenset = frozenset()
+    requires_config = False
+    requires_dataverse_endpoint = False
+    seen_fns: set = set()
+    unique: list[tuple] = []
+
+    for checkpoint_id in profile.checkpoint_ids:
+        plan = transitive_requirements(checkpoint_id)
+        clients = clients | plan.clients
+        requires_config = requires_config or plan.requires_config
+        requires_dataverse_endpoint = (
+            requires_dataverse_endpoint or plan.requires_dataverse_endpoint
+        )
+        for label, fn in plan.ordered_fns:
+            if fn in seen_fns:
+                continue
+            seen_fns.add(fn)
+            unique.append((label, fn))
+
+    def _order_index(label: str) -> int:
+        try:
+            return CATEGORY_ORDER.index(label)
+        except ValueError:
+            return len(CATEGORY_ORDER)
+
+    unique.sort(key=lambda pair: _order_index(pair[0]))
+
+    return ResolvedPlan(
+        target=profile.name,
+        spec=_resolve_or_raise(profile.checkpoint_ids[0]),
+        clients=clients,
+        requires_config=requires_config,
+        requires_dataverse_endpoint=requires_dataverse_endpoint,
+        ordered_fns=unique,
+    )
+
+
+def profile_matches(profile_name: str, emitted_id: str) -> bool:
+    """True when an emitted checkpoint ID belongs to a profile member."""
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        return False
+    return any(matches(checkpoint_id, emitted_id) for checkpoint_id in profile.checkpoint_ids)
+
+
 def matches(target: str, emitted_id: str) -> bool:
     """True if a runner-emitted checkpoint ID belongs to the requested target.
 
@@ -855,6 +1048,16 @@ def validate_registry() -> None:
                     f"{prereq!r}, which does not resolve to any registered "
                     f"checkpoint or family."
                 )
+
+    if frozenset(REGISTRY) == _SHIPPED_REGISTRY_KEYS:
+        for profile in PROFILES.values():
+            for checkpoint_id in profile.checkpoint_ids:
+                if resolve(checkpoint_id) is None:
+                    raise RegistryError(
+                        f"Profile {profile.name!r} declares checkpoint "
+                        f"{checkpoint_id!r}, which does not resolve to any "
+                        f"registered checkpoint or family."
+                    )
 
     # (2) The prereq graph (keyed by resolved spec key) must be acyclic.
     WHITE, GREY, BLACK = 0, 1, 2

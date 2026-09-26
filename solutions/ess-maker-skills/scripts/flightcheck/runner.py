@@ -13,12 +13,18 @@ import time
 import traceback
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Callable
+from typing import Any, Callable
+
+
+FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v1"
 
 
 class Status(str, Enum):
     PASSED = "Passed"
     FAILED = "Failed"
+    # BLOCKED is distinct from SKIPPED because an unavailable essential
+    # platform capability is a release gate, not a benign non-applicable row.
+    BLOCKED = "Blocked"
     WARNING = "Warning"
     NOT_CONFIGURED = "NotConfigured"
     SKIPPED = "Skipped"
@@ -72,11 +78,27 @@ class CheckResult:
     remediation: str = ""  # How to fix
     doc_link: str = ""     # Microsoft Learn URL
     doc_label: str = ""    # Link text for doc_link; falls back to "Docs"
+    severity: str = ""     # Stable contract severity consumed by Connect
+    automation_type: str = ""  # automated / manual / active_probe / passive
+    remediation_id: str = ""   # Stable remediation contract identifier
+    evidence: dict[str, Any] = field(default_factory=dict)  # Non-secret evidence
     # roles — the persona(s) who own the next step (fix or manual
     # validation). Every production check sets this; defaults to empty
     # so the runner's ERROR fallback and unit-test constructions still
     # build. Values are Role enum strings.
     roles: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.severity:
+            self.severity = _default_severity(self.status, self.priority)
+        if not self.automation_type:
+            self.automation_type = (
+                "manual" if self.status == Status.MANUAL.value else "automated"
+            )
+        if not self.remediation_id:
+            self.remediation_id = self.checkpoint_id
+        if not self.evidence and self.result:
+            self.evidence = {"summary": self.result}
 
 
 @dataclass
@@ -85,6 +107,7 @@ class CategorySummary:
     total: int = 0
     passed: int = 0
     failed: int = 0
+    blocked: int = 0
     warnings: int = 0
     not_configured: int = 0
     skipped: int = 0
@@ -102,12 +125,59 @@ class RunResult:
     total: int = 0
     passed: int = 0
     failed: int = 0
+    blocked: int = 0
     warnings: int = 0
     not_configured: int = 0
     manual: int = 0
     skipped: int = 0
     errors: int = 0
     overall: str = ""  # READY / READY_WITH_WARNINGS / NOT_READY
+    profile: str = ""
+    profile_checkpoints: list[str] = field(default_factory=list)
+    validation_context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ValidationContext:
+    """Non-secret context Connect passes to profile runs.
+
+    Realm is required so Connect cannot accidentally treat a Dev validation
+    result as Test/Prod readiness. The remaining fields are identifiers only;
+    do not put tokens, credentials, employee IDs, or user data here.
+    """
+
+    realm: str
+    environment_id: str = ""
+    environment_url: str = ""
+    agent_schema_name: str = ""
+    agent_id: str = ""
+    tenant_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.realm, str) or not self.realm.strip():
+            raise ValueError("ValidationContext.realm is required.")
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "realm": self.realm.strip(),
+            "environmentId": self.environment_id.strip(),
+            "environmentUrl": self.environment_url.strip(),
+            "agentSchemaName": self.agent_schema_name.strip(),
+            "agentId": self.agent_id.strip(),
+            "tenantId": self.tenant_id.strip(),
+        }
+
+
+def _default_severity(status: str, priority: str) -> str:
+    if status == Status.BLOCKED.value:
+        return "blocking"
+    if status in (Status.FAILED.value, Status.ERROR.value):
+        return str(priority or Priority.HIGH.value).lower()
+    if status == Status.WARNING.value:
+        return "warning"
+    if status in (Status.MANUAL.value, Status.NOT_CONFIGURED.value):
+        return "manual"
+    return "info"
 
 
 class FlightCheckRunner:
@@ -185,6 +255,8 @@ class FlightCheckRunner:
                 s.passed += 1
             elif r.status == Status.FAILED.value:
                 s.failed += 1
+            elif r.status == Status.BLOCKED.value:
+                s.blocked += 1
             elif r.status == Status.WARNING.value:
                 s.warnings += 1
             elif r.status == Status.NOT_CONFIGURED.value:
@@ -197,6 +269,7 @@ class FlightCheckRunner:
                 s.manual += 1
 
         total_failed = sum(c.failed for c in cat_map.values())
+        total_blocked = sum(c.blocked for c in cat_map.values())
         total_warnings = sum(c.warnings for c in cat_map.values())
         total_passed = sum(c.passed for c in cat_map.values())
         # Tallied here so the verdict logic can consult errors. Errors
@@ -209,9 +282,14 @@ class FlightCheckRunner:
         # contradiction the prioritized report is meant to eliminate.
         total_errors = sum(c.errors for c in cat_map.values())
 
-        if total_failed == 0 and total_errors == 0 and total_warnings == 0:
+        if (
+            total_failed == 0
+            and total_blocked == 0
+            and total_errors == 0
+            and total_warnings == 0
+        ):
             overall = "READY"
-        elif total_failed == 0 and total_errors == 0:
+        elif total_failed == 0 and total_blocked == 0 and total_errors == 0:
             overall = "READY_WITH_WARNINGS"
         else:
             overall = "NOT_READY"
@@ -225,6 +303,7 @@ class FlightCheckRunner:
             total=len(self.results),
             passed=total_passed,
             failed=total_failed,
+            blocked=total_blocked,
             warnings=total_warnings,
             not_configured=sum(c.not_configured for c in cat_map.values()),
             manual=sum(c.manual for c in cat_map.values()),
@@ -242,13 +321,18 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
     # Write results.json
     results_path = os.path.join(output_dir, "results.json")
     data = {
+        "schema_version": FLIGHTCHECK_RESULT_SCHEMA_VERSION,
         "scope": run_result.scope,
+        "profile": run_result.profile,
+        "profile_checkpoints": run_result.profile_checkpoints,
+        "validation_context": run_result.validation_context,
         "started": run_result.started,
         "duration_secs": run_result.duration_secs,
         "overall": run_result.overall,
         "total": run_result.total,
         "passed": run_result.passed,
         "failed": run_result.failed,
+        "blocked": run_result.blocked,
         "warnings": run_result.warnings,
         "not_configured": run_result.not_configured,
         "manual": run_result.manual,
@@ -256,6 +340,7 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "errors": run_result.errors,
         "categories": [asdict(c) for c in run_result.categories],
         "results": [asdict(r) for r in run_result.results],
+        "contract": versioned_run_result_to_dict(run_result),
     }
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -286,9 +371,11 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
 # ------------------------------------------------------------------
 # Results sort into one of three rendered sections, top to bottom:
 #
-#   1. ACTION_REQUIRED — Failed, Error. These are checks that did
-#      not pass and the kit is confident the operator must act.
-#      The blocking signal — fix-this-now items only.
+#   1. ACTION_REQUIRED — Failed, Blocked, Error. These are checks
+#      that did not pass and the kit is confident the operator must
+#      act. Blocked means an essential platform capability was
+#      unavailable; keeping it separate from Skipped prevents a
+#      release gate from being rendered as a success-shaped no-op.
 #
 #   2. MANUAL_VERIFICATION — Warning, Manual, NotConfigured. The
 #      kit cannot make a yes/no judgement, or surfaced a soft
@@ -298,11 +385,9 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
 #      verification path is the operator's, not the kit's. NotConfigured
 #      means the kit had no creds/visibility to evaluate.
 #
-#   3. PASSED — Passed, Skipped. Skipped is grouped with Passed
-#      because the kit chose not to run the check (e.g. it didn't
-#      apply to this scope, or a precondition wasn't met); from the
-#      operator's triage perspective the row needs no action and
-#      should sit alongside the proof-of-work passes.
+#   3. PASSED — Passed, Skipped. Skipped is grouped with Passed only
+#      for benign non-applicable rows. Essential unavailable capability
+#      rows MUST use Blocked instead, so they land in Action required.
 #
 # Within each bucket, results are sorted by:
 #   - priority (Critical > High > Medium > Low > unknown last)
@@ -321,6 +406,7 @@ BUCKET_PASSED = "passed"
 # values (which is what CheckResult.status carries).
 _STATUS_TO_BUCKET = {
     Status.FAILED.value: BUCKET_ACTION,
+    Status.BLOCKED.value: BUCKET_ACTION,
     Status.ERROR.value: BUCKET_ACTION,
     Status.WARNING.value: BUCKET_MANUAL,
     Status.MANUAL.value: BUCKET_MANUAL,
@@ -332,9 +418,10 @@ _STATUS_TO_BUCKET = {
 # Within-bucket status sort order — lower index = surfaced first.
 # Worst news in each bucket goes to the top.
 _BUCKET_STATUS_ORDER = {
-    # ACTION_REQUIRED — Failed first, then Error.
+    # ACTION_REQUIRED — Failed first, then Blocked, then Error.
     Status.FAILED.value: 0,
-    Status.ERROR.value: 1,
+    Status.BLOCKED.value: 1,
+    Status.ERROR.value: 2,
     # MANUAL_VERIFICATION — Warning first because it carries an
     # observed finding (vs Manual/NotConfigured, which are "we
     # didn't / couldn't evaluate").
@@ -385,6 +472,56 @@ def bucket_results(
     for key in buckets:
         buckets[key].sort(key=_sort_key)
     return buckets
+
+
+def check_result_contract_dict(result: CheckResult) -> dict[str, Any]:
+    """Versioned Connect-facing row shape with stable camelCase keys."""
+    return {
+        "checkpointId": result.checkpoint_id,
+        "category": result.category,
+        "status": result.status,
+        "severity": result.severity,
+        "automationType": result.automation_type,
+        "remediationId": result.remediation_id,
+        "description": result.description,
+        "result": result.result,
+        "remediation": result.remediation,
+        "docLink": result.doc_link,
+        "docLabel": result.doc_label,
+        "roles": list(result.roles),
+        "evidence": dict(result.evidence),
+    }
+
+
+def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
+    """Return the versioned JSON contract consumed by Connect.
+
+    The legacy snake_case keys remain in ``results.json`` for existing report
+    consumers; this nested contract gives Connect stable camelCase fields and
+    a version string to negotiate future additive changes.
+    """
+    return {
+        "schemaVersion": FLIGHTCHECK_RESULT_SCHEMA_VERSION,
+        "profile": run_result.profile,
+        "profileCheckpoints": list(run_result.profile_checkpoints),
+        "validationContext": dict(run_result.validation_context),
+        "overall": run_result.overall,
+        "counts": {
+            "total": run_result.total,
+            "passed": run_result.passed,
+            "failed": run_result.failed,
+            "blocked": run_result.blocked,
+            "warnings": run_result.warnings,
+            "notConfigured": run_result.not_configured,
+            "manual": run_result.manual,
+            "skipped": run_result.skipped,
+            "errors": run_result.errors,
+        },
+        "results": [
+            check_result_contract_dict(result)
+            for result in run_result.results
+        ],
+    }
 
 
 def _generate_html_report(r: RunResult) -> str:
@@ -444,7 +581,7 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     operators at the right section is the whole reason the verdict
     has a subline.
     """
-    failing = r.failed + r.errors
+    failing = r.failed + r.blocked + r.errors
     manual_count = r.warnings + r.manual + r.not_configured
 
     if r.overall == "READY":
@@ -475,20 +612,23 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
         )
 
     # NOT_READY (or any unrecognized overall) — treat as a blocker.
-    # Headline counts failures/errors as the truly blocking items;
+    # Headline counts failures/blocked/errors as the truly blocking items;
     # warnings (now in the manual section) are mentioned in the
     # subline so the operator knows their scale without thinking
     # they're additional blockers.
     issue_word = "issue" if failing == 1 else "issues"
+    blocked_text = (
+        "failing/blocked/errored" if r.blocked else "failing/errored"
+    )
     if r.warnings:
         sub = (
-            f"{failing} failing/errored check(s) need action; "
+            f"{failing} {blocked_text} check(s) need action; "
             f"{r.warnings} warning(s) need manual verification. "
             "Start with \u201cAction required\u201d below."
         )
     else:
         sub = (
-            f"{failing} failing/errored check(s) need action. "
+            f"{failing} {blocked_text} check(s) need action. "
             "See \u201cAction required\u201d below."
         )
     return (
@@ -1301,6 +1441,7 @@ def _render_synopsis(
     stats = [
         ("pass", "green", r.passed, "Passed"),
         ("fail", "red", r.failed, "Failed"),
+        ("fail", "red", r.blocked, "Blocked"),
         ("warn", "amber", r.warnings, "Warning"),
         ("manual", "gray", r.manual, "Manual"),
         ("na", "gray", r.not_configured, "Not configured"),
