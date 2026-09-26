@@ -166,6 +166,19 @@ Wait for the user's answer. Do not ask a second question that repeats these
 fields. Then record the answer as the pre-gate evidence
 (`SAML_ISSUER`, `SAML_SP_ID`, `SAML_CERT`).
 
+The controlled replacement path below replaces the current row with the
+Microsoft Entra application configured by this lifecycle. The skill must not
+configure direct Workday federation through Okta, Ping, or another provider;
+do not offer steps for configuring those providers.
+
+- **If the user asks to skip the read-only review or cannot provide the row
+  values**, do not treat the safety check as passed. Explain that the skill
+  cannot make the replacement itself, then offer the same **Keep current
+  federation** / **Replace with Microsoft Entra** decision below. An authorized
+  replacement may proceed without copying the existing values into chat only
+  when the Workday administrator has documented the current configuration for
+  rollback and both required administrators explicitly approve the replacement.
+
 - **If an IdP is already active AND it is not the Entra app DA-2 provisioned**
   (the Issuer / Service Provider ID does not match this tenant's `appIdUri` /
   `entraAppId` from `.local/connect/workday-da/config.json`):
@@ -174,15 +187,44 @@ fields. Then record the answer as the pre-gate evidence
 
   This Workday tenant already has a **different** SAML identity provider active.
   Workday only allows one at a time, and replacing it would break the existing
-  sign-on for its users. This V1 setup supports Microsoft Entra ID Integrated
-  authentication only; direct Workday federation through Okta, Ping, or another
-  provider is not supported. I'm stopping here so nothing is overwritten.
-  Confirm the intended federation with the Workday and identity administrators
-  before continuing.
+  sign-on until the replacement is configured correctly. The skill will not
+  overwrite it automatically.
+
+  Choose how to proceed:
+
+  1. **Keep the current federation** — pause Workday setup without changing it.
+  2. **Replace it with Microsoft Entra** — continue only after both the Workday
+     administrator and identity administrator approve the replacement and the
+     Workday administrator records the current settings for rollback.
 
   **End message.**
 
-  **Halt.** Do not proceed.
+  Do not preselect or recommend either choice.
+
+  - **Keep the current federation**, no answer, or an unclear answer → keep
+    Workday setup paused and make no further tenant changes.
+  - **Replace it with Microsoft Entra** → ask for this explicit confirmation:
+
+    **Message:**
+
+    Please confirm all three statements:
+
+    - The Workday administrator approved replacing the active SAML federation.
+    - The identity administrator approved using the Microsoft Entra application
+      configured in this setup.
+    - The Workday administrator recorded the existing SAML settings and accepts
+      the possible employee sign-in interruption during replacement.
+
+    Reply **I approve replacement** to continue, or **cancel** to leave the
+    current federation unchanged.
+
+    **End message.**
+
+    Only the exact, unambiguous approval **I approve replacement** continues.
+    Record `SAML_REPLACEMENT_APPROVED=true`, the reviewed issuer and Service
+    Provider ID when supplied, and whether the prior settings were documented
+    for rollback in `GATE_EVIDENCE`. Any other response pauses setup without
+    changing Workday.
 
 - **Otherwise** (no active IdP, or the active one is this tenant's own Entra app)
   → continue.

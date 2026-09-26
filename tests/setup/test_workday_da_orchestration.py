@@ -99,6 +99,20 @@ def test_workday_security_changes_are_explicitly_manual_admin_actions() -> None:
     assert "Have your Workday administrator open" in text
 
 
+def test_saml_safety_gate_allows_only_an_explicit_admin_approved_replacement() -> None:
+    text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "do not treat the safety check as passed" in normalized
+    assert "**Keep the current federation**" in text
+    assert "**Replace it with Microsoft Entra**" in text
+    assert "Do not preselect or recommend either choice" in text
+    assert "I approve replacement" in text
+    assert "SAML_REPLACEMENT_APPROVED=true" in text
+    assert "documented for rollback" in normalized
+    assert "The skill will not overwrite it automatically" in normalized
+
+
 def test_connections_are_created_before_binding_and_flow_activation() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"
