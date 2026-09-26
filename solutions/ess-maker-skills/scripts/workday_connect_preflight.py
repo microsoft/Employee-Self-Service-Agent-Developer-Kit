@@ -149,7 +149,8 @@ def resolve_target(
     if supported is None:
         if schema in set(active_catalog["unsupportedAgents"]):
             raise WorkdayConnectPreflightError(
-                "Workday connection supports the ESS HR agent only."
+                "This Workday lifecycle supports the native ESS HR agent "
+                "only. Classic DA and ESS IT agents are not supported."
             )
         raise WorkdayConnectPreflightError(
             "The selected agent is not a supported ESS HR architecture."
@@ -336,7 +337,7 @@ def run_preflight(
         evidence={
             "outcome": "passed",
             "packageSchema": required_schema,
-            "action": package_action,
+            "packageAction": package_action,
             "pacAccount": pac_identity,
         },
     )

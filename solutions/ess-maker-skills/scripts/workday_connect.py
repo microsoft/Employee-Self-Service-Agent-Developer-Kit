@@ -9,18 +9,21 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from workday_connect_model import (
     CONTROLLER_CONTRACT_VERSION,
     WorkdayConnectModelError,
-    plan_hash,
+    workday_saml_entity_id,
 )
-from workday_connect_auth import authentication_plan
 from workday_connect_contracts import (
     WorkdayConnectContractError,
-    build_entra_plan,
+    build_entra_handoff,
     build_workday_admin_packet,
+    validate_connections_evidence,
+    validate_employee_evidence,
+    validate_entra_verification,
+    validate_workday_admin_response,
 )
 from workday_connect_preflight import (
     WorkdayConnectPreflightError,
@@ -77,13 +80,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace root containing .local state.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("initialize")
     subparsers.add_parser("status")
-    subparsers.add_parser("auth-plan")
 
-    entra_plan = subparsers.add_parser("entra-plan")
-    entra_plan.add_argument("--discovery-json", required=True)
+    tenant = subparsers.add_parser("set-workday-tenant")
+    tenant.add_argument("--tenant", required=True)
+
+    entra_handoff = subparsers.add_parser("entra-handoff")
+    entra_handoff.add_argument("--discovery-json", required=True)
+    record_entra = subparsers.add_parser("record-entra")
+    record_entra.add_argument("--verification-json", required=True)
     subparsers.add_parser("workday-admin-packet")
+    record_admin = subparsers.add_parser("record-workday-admin")
+    record_admin.add_argument("--response-json", required=True)
 
     runtime_plan = subparsers.add_parser("runtime-plan")
     runtime_plan.add_argument("--workday-connection-id")
@@ -93,45 +101,245 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_apply.add_argument("--plan-hash", required=True)
     runtime_apply.add_argument("--workday-connection-id")
     runtime_apply.add_argument("--dataverse-connection-id")
+    runtime_approve = subparsers.add_parser("runtime-approve")
+    runtime_approve.add_argument("--plan-json", required=True)
+
+    record_connections = subparsers.add_parser("record-connections")
+    record_connections.add_argument("--evidence-json", required=True)
+    record_validation = subparsers.add_parser("record-validation")
+    record_validation.add_argument("--evidence-json", required=True)
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--dataverse-url")
     preflight.add_argument("--maker-username")
 
-    merge = subparsers.add_parser("merge-section")
-    merge.add_argument(
-        "--section",
-        required=True,
-        choices=["scope", "identifiers", "endpoints", "operators"],
-    )
-    merge.add_argument("--json", required=True)
-
-    phase_status = subparsers.add_parser("set-phase-status")
-    phase_status.add_argument("--phase", required=True)
-    phase_status.add_argument("--status", required=True)
-    phase_status.add_argument("--blocker-json")
-
-    complete = subparsers.add_parser("complete-action")
-    complete.add_argument("--phase", required=True)
-    complete.add_argument("--action", required=True)
-    complete.add_argument("--evidence-json")
-
-    handoff = subparsers.add_parser("record-handoff")
-    handoff.add_argument("--phase", required=True)
-    handoff.add_argument("--json", required=True)
-
-    approve = subparsers.add_parser("approve-plan")
-    approve.add_argument("--phase", required=True)
-    approve.add_argument("--plan-json", required=True)
-
-    verify = subparsers.add_parser("verify-plan")
-    verify.add_argument("--phase", required=True)
-    verify.add_argument("--plan-json", required=True)
-    verify.add_argument("--plan-hash", required=True)
-
-    calculate = subparsers.add_parser("plan-hash")
-    calculate.add_argument("--plan-json", required=True)
     return parser
+
+
+def _status(
+    _args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return store.status()
+
+
+def _set_workday_tenant(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    tenant = args.tenant.strip()
+    workday_saml_entity_id(tenant)
+    state = store.merge_section("scope", {"workdayTenant": tenant})
+    return {
+        "workdayTenant": state["scope"]["workdayTenant"],
+        "status": store.status(),
+    }
+
+
+def _entra_handoff(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return {
+        "packet": build_entra_handoff(
+            store.load(),
+            _json_object(args.discovery_json, "Entra discovery"),
+        )
+    }
+
+
+def _record_entra(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    result = validate_entra_verification(
+        store.load(),
+        _json_object(args.verification_json, "Entra verification"),
+    )
+    store.merge_section("identifiers", result["identifiers"])
+    store.complete_action(
+        "entra",
+        "exact-application-discovered",
+        evidence={
+            "outcome": "verified",
+            "applicationDisplayName": result["evidence"][
+                "applicationDisplayName"
+            ],
+        },
+    )
+    store.complete_action(
+        "entra",
+        "administrator-configuration-verified",
+        evidence={
+            "outcome": "verified",
+            "checks": result["evidence"]["checks"],
+        },
+    )
+    store.set_phase_status("entra", "complete")
+    return {"verified": True, "status": store.status()}
+
+
+def _workday_admin_packet(
+    _args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return {"packet": build_workday_admin_packet(store.load())}
+
+
+def _record_workday_admin(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    result = validate_workday_admin_response(
+        store.load(),
+        _json_object(
+            args.response_json,
+            "Workday administrator response",
+        ),
+    )
+    store.merge_section("identifiers", result["identifiers"])
+    store.merge_section("endpoints", result["endpoints"])
+    store.complete_action(
+        "workday-admin",
+        "administrator-response-validated",
+        evidence={"outcome": "verified", **result["evidence"]},
+    )
+    store.set_phase_status("workday-admin", "complete")
+    return {"verified": True, "status": store.status()}
+
+
+def _runtime_plan(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return run_runtime_operation(
+        store.load(),
+        apply=False,
+        workday_connection_id=args.workday_connection_id,
+        dataverse_connection_id=args.dataverse_connection_id,
+    )
+
+
+def _runtime_apply(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    result = run_runtime_operation(
+        store.load(),
+        apply=True,
+        approved_hash=args.plan_hash,
+        verifier=lambda plan, approved_hash: store.verify_plan(
+            "runtime",
+            plan,
+            approved_hash,
+        ),
+        workday_connection_id=args.workday_connection_id,
+        dataverse_connection_id=args.dataverse_connection_id,
+        stage_recorder=lambda action, evidence: store.complete_action(
+            "runtime",
+            action,
+            evidence=evidence,
+        ),
+    )
+    store.set_phase_status("runtime", "complete")
+    return {**result, "status": store.status()}
+
+
+def _runtime_approve(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    _, approved_hash = store.approve_plan(
+        "runtime",
+        _json_object(args.plan_json, "runtime plan"),
+    )
+    return {"planHash": approved_hash, "status": store.status()}
+
+
+def _record_connections(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = validate_connections_evidence(
+        _json_object(args.evidence_json, "connection evidence")
+    )
+    actions = (
+        (
+            "physical-connections-verified",
+            {
+                "workdayConnected": evidence["workdayConnectionConnected"],
+                "dataverseConnected": evidence[
+                    "dataverseConnectionConnected"
+                ],
+            },
+        ),
+        (
+            "agent-parameter-sharing-verified",
+            {"checkpoint": "WD-CONN-013", "outcome": "passed"},
+        ),
+        (
+            "flow-attachment-confirmed",
+            {"makerConfirmed": evidence["flowAttachmentConfirmed"]},
+        ),
+    )
+    for action, details in actions:
+        store.complete_action(
+            "connections",
+            action,
+            evidence={"outcome": "verified", **details},
+        )
+    store.set_phase_status("connections", "complete")
+    return {"verified": True, "status": store.status()}
+
+
+def _record_validation(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = validate_employee_evidence(
+        _json_object(
+            args.evidence_json,
+            "employee validation evidence",
+        )
+    )
+    store.complete_action(
+        "employee-validation",
+        "signed-in-scenario",
+        evidence=evidence,
+    )
+    store.set_phase_status("employee-validation", "complete")
+    return {"verified": True, "status": store.status()}
+
+
+def _preflight(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return run_preflight(
+        Path(args.root),
+        dataverse_url=args.dataverse_url,
+        maker_username=args.maker_username,
+        store=store,
+    )
+
+
+_COMMAND_HANDLERS: dict[
+    str,
+    Callable[[argparse.Namespace, WorkdayConnectStore], dict[str, Any]],
+] = {
+    "status": _status,
+    "set-workday-tenant": _set_workday_tenant,
+    "entra-handoff": _entra_handoff,
+    "record-entra": _record_entra,
+    "workday-admin-packet": _workday_admin_packet,
+    "record-workday-admin": _record_workday_admin,
+    "runtime-plan": _runtime_plan,
+    "runtime-apply": _runtime_apply,
+    "runtime-approve": _runtime_approve,
+    "record-connections": _record_connections,
+    "record-validation": _record_validation,
+    "preflight": _preflight,
+}
 
 
 def main() -> None:
@@ -139,137 +347,10 @@ def main() -> None:
     args = parser.parse_args()
     store = WorkdayConnectStore(Path(args.root))
     try:
-        if args.command == "initialize":
-            state = store.initialize()
-            _emit("initialize", {"state": state, "status": store.status()})
-        elif args.command == "status":
-            _emit("status", store.status())
-        elif args.command == "auth-plan":
-            _emit(
-                "auth-plan",
-                {"authenticationPlan": authentication_plan()},
-            )
-        elif args.command == "entra-plan":
-            plan = build_entra_plan(
-                store.load(),
-                _json_object(args.discovery_json, "Entra discovery"),
-            )
-            _emit("entra-plan", {"plan": plan})
-        elif args.command == "workday-admin-packet":
-            packet = build_workday_admin_packet(store.load())
-            _emit("workday-admin-packet", {"packet": packet})
-        elif args.command == "runtime-plan":
-            _emit(
-                "runtime-plan",
-                run_runtime_operation(
-                    store.load(),
-                    apply=False,
-                    workday_connection_id=args.workday_connection_id,
-                    dataverse_connection_id=args.dataverse_connection_id,
-                ),
-            )
-        elif args.command == "runtime-apply":
-            result = run_runtime_operation(
-                store.load(),
-                apply=True,
-                approved_hash=args.plan_hash,
-                verifier=lambda plan, approved_hash: store.verify_plan(
-                    "runtime",
-                    plan,
-                    approved_hash,
-                ),
-                workday_connection_id=args.workday_connection_id,
-                dataverse_connection_id=args.dataverse_connection_id,
-            )
-            for action, evidence in (
-                ("connection-references-bound", "Dataverse reread"),
-                ("runtime-flows-active", "Dataverse reread"),
-                ("delegated-authorization-configured", "authorization script"),
-                ("user-context-v2-configured", "Dataverse reread"),
-            ):
-                store.complete_action(
-                    "runtime",
-                    action,
-                    evidence={
-                        "outcome": "verified",
-                        "provenance": evidence,
-                    },
-                )
-            state = store.set_phase_status("runtime", "complete")
-            _emit("runtime-apply", {**result, "state": state})
-        elif args.command == "preflight":
-            _emit(
-                "preflight",
-                run_preflight(
-                    Path(args.root),
-                    dataverse_url=args.dataverse_url,
-                    maker_username=args.maker_username,
-                    store=store,
-                ),
-            )
-        elif args.command == "merge-section":
-            state = store.merge_section(
-                args.section,
-                _json_object(args.json, "section data"),
-            )
-            _emit("merge-section", {"state": state})
-        elif args.command == "set-phase-status":
-            blocker = (
-                _json_object(args.blocker_json, "blocker")
-                if args.blocker_json
-                else None
-            )
-            state = store.set_phase_status(
-                args.phase,
-                args.status,
-                blocker=blocker,
-            )
-            _emit("set-phase-status", {"state": state})
-        elif args.command == "complete-action":
-            evidence = (
-                _json_object(args.evidence_json, "evidence")
-                if args.evidence_json
-                else None
-            )
-            state = store.complete_action(
-                args.phase,
-                args.action,
-                evidence=evidence,
-            )
-            _emit("complete-action", {"state": state})
-        elif args.command == "record-handoff":
-            state = store.record_handoff(
-                args.phase,
-                _json_object(args.json, "handoff"),
-            )
-            _emit("record-handoff", {"state": state})
-        elif args.command == "approve-plan":
-            state, approved_hash = store.approve_plan(
-                args.phase,
-                _json_object(args.plan_json, "plan"),
-            )
-            _emit(
-                "approve-plan",
-                {"state": state, "planHash": approved_hash},
-            )
-        elif args.command == "verify-plan":
-            verified_hash = store.verify_plan(
-                args.phase,
-                _json_object(args.plan_json, "plan"),
-                args.plan_hash,
-            )
-            _emit("verify-plan", {"planHash": verified_hash, "verified": True})
-        elif args.command == "plan-hash":
-            _emit(
-                "plan-hash",
-                {
-                    "planHash": plan_hash(
-                        _json_object(args.plan_json, "plan")
-                    )
-                },
-            )
-        else:
+        handler = _COMMAND_HANDLERS.get(args.command)
+        if handler is None:
             parser.error(f"Unsupported command: {args.command}")
+        _emit(args.command, handler(args, store))
     except (
         OSError,
         WorkdayConnectModelError,

@@ -15,7 +15,12 @@ BOT_ID = "00000000-0000-4000-8000-000000000001"
 ENV_URL = "https://target.crm.dynamics.com"
 
 
-def _write_foundation(root: Path, *, dataverse_url: str | None = None) -> None:
+def _write_foundation(
+    root: Path,
+    *,
+    dataverse_url: str | None = None,
+    schema_name: str = "gptagent_copilotforemployeeselfservicehr",
+) -> None:
     local = root / ".local"
     local.mkdir(parents=True, exist_ok=True)
     config = {
@@ -29,14 +34,14 @@ def _write_foundation(root: Path, *, dataverse_url: str | None = None) -> None:
         "agent": {
             "slug": "ess-hr",
             "botId": BOT_ID,
-            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+            "schemaName": schema_name,
             "name": "Employee Self-Service HR",
         },
         "agents": [
             {
                 "slug": "ess-hr",
                 "botId": BOT_ID,
-                "schemaName": "gptagent_copilotforemployeeselfservicehr",
+                "schemaName": schema_name,
                 "name": "Employee Self-Service HR",
             }
         ],
@@ -97,6 +102,26 @@ def test_resolve_target_accepts_exact_url_without_inventory_lookup(
     )
 
     assert target.dataverse_url == ENV_URL
+
+
+def test_resolve_target_rejects_classic_da(tmp_path: Path) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(
+        tmp_path,
+        schema_name="msdyn_copilotforemployeeselfservicedahr",
+    )
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="native ESS HR agent only",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url=ENV_URL,
+            state=model.default_state(),
+        )
 
 
 def test_preflight_skips_install_when_package_exists(tmp_path: Path) -> None:

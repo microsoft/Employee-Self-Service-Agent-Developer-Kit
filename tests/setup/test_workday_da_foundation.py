@@ -27,7 +27,7 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 2' in schema
+    assert '"schemaVersion": 3' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
     assert not (_WORKDAY_DA / "shared" / "checklist-updater.md").exists()
@@ -69,7 +69,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         assert "api://" in text
     assert "Never select by display name alone" in entra
     assert "Never alias" in schema or "must never be aliases" in schema
-    assert "entra-plan" in entra
+    assert "entra-handoff" in entra
     assert "workday-admin-packet" in tenant
 
 

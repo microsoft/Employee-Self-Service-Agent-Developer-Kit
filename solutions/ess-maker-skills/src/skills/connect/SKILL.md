@@ -51,10 +51,10 @@ Workday routes by architecture before package detection:
     `src/skills/connect/workday/contract.json`.
   - **CEA full/legacy package or no package** — stop at the current unsupported
     installation boundary without changing state.
-  - **DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
+  - **Native DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
     resumable six-phase controller lifecycle.
-  - **DA IT or another DA agent** — unsupported for Workday in this release;
-    stop before creating state or entering a Workday lifecycle.
+  - **Classic DA HR, DA IT, or another DA agent** — unsupported for this
+    Workday lifecycle; stop before creating state.
 
   CEA per-agent lifecycle state is stored at
   `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state

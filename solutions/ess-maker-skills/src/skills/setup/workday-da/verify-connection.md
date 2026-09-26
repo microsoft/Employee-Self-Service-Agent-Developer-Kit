@@ -22,11 +22,12 @@ On success, record only the scenario name, test-user category, timestamp, and
 outcome:
 
 ```powershell
-python scripts/workday_connect.py complete-action --phase employee-validation --action signed-in-scenario --evidence-json '{...}'
-python scripts/workday_connect.py set-phase-status --phase employee-validation --status complete
+python scripts/workday_connect.py record-validation --evidence-json '{...}'
 ```
 
-Never record employee data or credentials.
+Provide only `scenarioName`, `testUserCategory`, `timestamp`, and a passed or
+verified `outcome`. The controller rejects additional fields. Never record
+employee data or credentials.
 
 On failure, keep the phase active and persist one current blocker. Use the
 failing surface to choose the next check:

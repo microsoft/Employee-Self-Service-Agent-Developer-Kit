@@ -21,7 +21,7 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 2
+    assert state["schemaVersion"] == 3
     assert _config_path(tmp_path).exists()
     assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
     assert not (tmp_path / ".local/setup/workday-da/tasks.md").exists()
@@ -61,7 +61,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v2.json").exists()
+    assert path.with_name("config.pre-v3.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -116,7 +116,7 @@ def test_complete_action_is_idempotent(tmp_path: Path) -> None:
     assert state["phases"]["preflight"]["completedActions"] == [
         "verify-target"
     ]
-    assert len(state["phases"]["preflight"]["evidence"]) == 2
+    assert len(state["phases"]["preflight"]["evidence"]) == 1
 
 
 def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
@@ -125,19 +125,19 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     store.initialize()
     plan = {
-        "phase": "entra",
+        "phase": "runtime",
         "scope": {"tenantId": "tenant-a", "applicationId": "app-a"},
         "actions": ["configure-saml"],
     }
-    _state, approved_hash = store.approve_plan("entra", plan)
+    _state, approved_hash = store.approve_plan("runtime", plan)
 
-    assert store.verify_plan("entra", plan, approved_hash) == approved_hash
+    assert store.verify_plan("runtime", plan, approved_hash) == approved_hash
     changed = {
         **plan,
         "scope": {"tenantId": "tenant-a", "applicationId": "app-b"},
     }
     with pytest.raises(store_module.WorkdayConnectPlanChangedError):
-        store.verify_plan("entra", changed, approved_hash)
+        store.verify_plan("runtime", changed, approved_hash)
 
 
 def test_status_returns_one_progress_line_and_next_phase(tmp_path: Path) -> None:
@@ -145,6 +145,12 @@ def test_status_returns_one_progress_line_and_next_phase(tmp_path: Path) -> None
 
     store = store_module.WorkdayConnectStore(tmp_path)
     store.initialize()
+    for action in ("verify-target", "verify-package"):
+        store.complete_action(
+            "preflight",
+            action,
+            evidence={"outcome": "verified"},
+        )
     store.set_phase_status("preflight", "complete")
 
     status = store.status()
@@ -152,3 +158,59 @@ def test_status_returns_one_progress_line_and_next_phase(tmp_path: Path) -> None
     assert status["nextPhaseId"] == "entra"
     assert status["progressText"].startswith("Progress: Preflight ✓ · Entra")
     assert len(status["phases"]) == 6
+
+
+def test_phase_cannot_complete_without_required_evidence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    with pytest.raises(
+        store_module.WorkdayConnectStoreError,
+        match="missing required verified actions",
+    ):
+        store.set_phase_status("preflight", "complete")
+
+
+def test_scope_change_invalidates_affected_phases(tmp_path: Path) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section("scope", {"agent": {"slug": "agent-a"}})
+    for action in ("verify-target", "verify-package"):
+        store.complete_action(
+            "preflight",
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status("preflight", "complete")
+
+    state = store.merge_section("scope", {"agent": {"slug": "agent-b"}})
+
+    assert state["phases"]["preflight"]["status"] == "pending"
+    assert state["phases"]["preflight"]["completedActions"] == []
+    assert state["phases"]["entra"]["status"] == "pending"
+
+
+def test_v2_state_is_downgraded_when_completion_has_no_evidence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = store_module.default_state()
+    state["schemaVersion"] = 2
+    state["phases"]["preflight"]["status"] = "complete"
+    state["status"] = "in-progress"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 3
+    assert upgraded["phases"]["preflight"]["status"] == "active"
+    assert upgraded["migration"]["source"] == "workday-connect-state-v2"

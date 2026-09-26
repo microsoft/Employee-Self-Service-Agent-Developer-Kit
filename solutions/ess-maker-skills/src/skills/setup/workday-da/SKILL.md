@@ -8,9 +8,10 @@ copy, update, or infer status from a Markdown checklist.
 
 ## Safety contract
 
-- Support only the active ESS HR agent recorded by `/setup`. The controller
-  verifies the exact agent, workspace materialization, architecture, and
-  Dataverse environment during preflight.
+- Support only the active native ESS HR agent recorded by `/setup`. Classic DA
+  and ESS IT agents are outside this lifecycle. The controller verifies the
+  exact agent, workspace materialization, architecture, and Dataverse
+  environment during preflight.
 - Never ask for a Workday password, client secret, access token, refresh token,
   cookie, certificate private key, or certificate body in chat.
 - Explain an authentication prompt before launching it. Azure CLI/Graph, PAC,
@@ -32,7 +33,7 @@ Describe each action according to who actually performs it:
 | Phase | What the skill can do | What remains a user or administrator action |
 | --- | --- | --- |
 | Preflight | Verify the selected agent, environment, account, and package; install the reviewed package through PAC when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
-| Microsoft Entra | Discover exact applications, validate roles, build and hash the plan, reread Graph, and record verified evidence | Create or change the Entra application in the portal; the controller has no `entra-apply` command |
+| Microsoft Entra | Discover exact applications, validate roles, generate one administrator handoff, reread Graph, and record verified evidence | Create or change the Entra application in the portal |
 | Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
 | Connections | Discover connected physical connections, verify agent parameter sharing, and record the maker's flow-attachment confirmation | Create connector connections, complete connector OAuth, connect flows to the agent, and enable parameter sharing in Copilot Studio |
 | Runtime | After approval, bind reviewed solution connection references, activate reviewed package flows, configure delegated authorization, redirect an empty User Context scaffold, and reread every write | Resolve custom topic content or a package without a reviewed runtime catalog |
@@ -48,7 +49,6 @@ command succeeded and the target was reread.
 Run:
 
 ```powershell
-python scripts/workday_connect.py initialize
 python scripts/workday_connect.py status
 ```
 

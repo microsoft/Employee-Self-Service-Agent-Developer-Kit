@@ -415,37 +415,16 @@ def _default_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess
     return subprocess.run(command, **kwargs)
 
 
-def discover_runtime_plan(
+def _runtime_discovery_context(
     state: Mapping[str, Any],
-    *,
-    workday_connection_id: str | None = None,
-    dataverse_connection_id: str | None = None,
-    catalog: Mapping[str, Any] | None = None,
-    token: str | None = None,
-    token_provider: Callable[..., str] = authenticate,
-    query: Callable[..., list[dict[str, Any]]] = query_all,
-    pac_resolver: Callable[[], Path] = resolve_pac_executable,
-    pac_auth: Callable[..., Any] = ensure_pac_auth,
-    runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
+    catalog: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Discover exact runtime targets and return a stable approval plan."""
     scope = state.get("scope") or {}
     operators = state.get("operators") or {}
     agent = scope.get("agent") or {}
-    environment_url = _required_text(
-        scope, "dataverseUrl", "Dataverse environment URL"
-    ).rstrip("/")
     package_flavor = _required_text(
         scope, "packageFlavor", "Workday package flavor"
     )
-    bot_id = _required_text(agent, "botId", "Workday agent bot ID")
-    maker = _required_text(
-        operators.get("powerPlatformMaker") or {},
-        "username",
-        "Power Platform maker account",
-    )
-    ring = str(scope.get("ring") or "prod").casefold()
-    pac_ring = "preprod" if ring in {"test", "preprod"} else "prod"
     active_catalog = catalog or load_catalog()
     package = (active_catalog.get("packages") or {}).get(package_flavor)
     if not isinstance(package, Mapping):
@@ -458,69 +437,40 @@ def discover_runtime_plan(
             "This Workday architecture requires a manual runtime handoff; "
             "no reviewed flow catalog is available."
         )
+    ring = str(scope.get("ring") or "prod").casefold()
+    return {
+        "agent": agent,
+        "environmentUrl": _required_text(
+            scope, "dataverseUrl", "Dataverse environment URL"
+        ).rstrip("/"),
+        "packageFlavor": package_flavor,
+        "botId": _required_text(agent, "botId", "Workday agent bot ID"),
+        "maker": _required_text(
+            operators.get("powerPlatformMaker") or {},
+            "username",
+            "Power Platform maker account",
+        ),
+        "pacRing": "preprod" if ring in {"test", "preprod"} else "prod",
+        "package": package,
+        "flowNames": [str(name) for name in flow_names],
+        "referencesCatalog": active_catalog["connectionReferences"],
+    }
 
-    pac = pac_resolver()
-    pac_auth(
-        pac,
-        ring=pac_ring,
-        environment_url=environment_url,
-        preferred_username=maker,
-        runner=runner,
-    )
-    connections = _list_connections(
-        pac,
-        environment_url,
-        runner=runner,
-    )
-    references_catalog = active_catalog["connectionReferences"]
-    workday = _select_connection(
-        connections,
-        references_catalog["workday"]["connectorName"],
-        explicit_id=workday_connection_id,
-    )
-    dataverse = _select_connection(
-        connections,
-        references_catalog["dataverse"]["connectorName"],
-        explicit_id=dataverse_connection_id,
-    )
 
-    active_token = token or token_provider(
-        environment_url,
-        preferred_username=maker,
-    )
+def _build_runtime_discovery(
+    context: Mapping[str, Any],
+    *,
+    workday: Mapping[str, Any],
+    dataverse: Mapping[str, Any],
+    references: Mapping[str, Mapping[str, Any]],
+    flows: Mapping[str, Mapping[str, Any]],
+    topics: Mapping[str, Any],
+) -> dict[str, Any]:
+    references_catalog = context["referencesCatalog"]
     logical_names = [
         references_catalog["workday"]["logicalName"],
         references_catalog["dataverse"]["logicalName"],
     ]
-    references = _runtime_references(
-        environment_url,
-        active_token,
-        logical_names,
-        query=query,
-    )
-    solution_component_ids = _solution_component_ids(
-        environment_url,
-        active_token,
-        _required_text(
-            package,
-            "solutionSchemaName",
-            "Workday package solution schema",
-        ),
-        query=query,
-    )
-    flows = _runtime_flows(
-        environment_url,
-        active_token,
-        [str(name) for name in flow_names],
-        solution_component_ids,
-        query=query,
-    )
-    topics = _runtime_topics(
-        environment_url,
-        active_token,
-        bot_id,
-        query=query,
-    )
     target_connections = {
         logical_names[0]: {
             "connectionId": str(workday.get("name") or ""),
@@ -546,15 +496,15 @@ def discover_runtime_plan(
                 flows[name], "workflowid", f"Workflow ID for {name}"
             ),
         }
-        for name in flow_names
+        for name in context["flowNames"]
     ]
     plan = {
         "phase": "runtime",
         "scope": {
-            "dataverseUrl": environment_url,
-            "botId": bot_id,
-            "packageFlavor": package_flavor,
-            "makerUsername": maker,
+            "dataverseUrl": context["environmentUrl"],
+            "botId": context["botId"],
+            "packageFlavor": context["packageFlavor"],
+            "makerUsername": context["maker"],
         },
         "connectionBindings": target_connections,
         "flows": flow_targets,
@@ -571,7 +521,7 @@ def discover_runtime_plan(
             ),
         },
         "delegatedAuthorization": {
-            "botId": bot_id,
+            "botId": context["botId"],
             "workflowIds": [target["workflowId"] for target in flow_targets],
             "script": AUTHORIZATION_SCRIPT,
         },
@@ -600,15 +550,17 @@ def discover_runtime_plan(
                 "statecode": flows[name].get("statecode"),
                 "statuscode": flows[name].get("statuscode"),
             }
-            for name in flow_names
+            for name in context["flowNames"]
         },
         "userContext": topics["redirectState"],
     }
     return {
         "plan": {**plan, "planHash": plan_hash(plan)},
         "approvalSummary": {
-            "environmentUrl": environment_url,
-            "agentName": str(agent.get("name") or "ESS HR agent"),
+            "environmentUrl": context["environmentUrl"],
+            "agentName": str(
+                context["agent"].get("name") or "ESS HR agent"
+            ),
             "connections": [
                 value["displayName"] for value in target_connections.values()
             ],
@@ -617,6 +569,93 @@ def discover_runtime_plan(
         },
         "observed": observed,
     }
+
+
+def discover_runtime_plan(
+    state: Mapping[str, Any],
+    *,
+    workday_connection_id: str | None = None,
+    dataverse_connection_id: str | None = None,
+    catalog: Mapping[str, Any] | None = None,
+    token: str | None = None,
+    token_provider: Callable[..., str] = authenticate,
+    query: Callable[..., list[dict[str, Any]]] = query_all,
+    pac_resolver: Callable[[], Path] = resolve_pac_executable,
+    pac_auth: Callable[..., Any] = ensure_pac_auth,
+    runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
+) -> dict[str, Any]:
+    """Discover exact runtime targets and return a stable approval plan."""
+    context = _runtime_discovery_context(state, catalog)
+    pac = pac_resolver()
+    pac_auth(
+        pac,
+        ring=context["pacRing"],
+        environment_url=context["environmentUrl"],
+        preferred_username=context["maker"],
+        runner=runner,
+    )
+    connections = _list_connections(
+        pac,
+        context["environmentUrl"],
+        runner=runner,
+    )
+    references_catalog = context["referencesCatalog"]
+    workday = _select_connection(
+        connections,
+        references_catalog["workday"]["connectorName"],
+        explicit_id=workday_connection_id,
+    )
+    dataverse = _select_connection(
+        connections,
+        references_catalog["dataverse"]["connectorName"],
+        explicit_id=dataverse_connection_id,
+    )
+
+    active_token = token or token_provider(
+        context["environmentUrl"],
+        preferred_username=context["maker"],
+    )
+    logical_names = [
+        references_catalog["workday"]["logicalName"],
+        references_catalog["dataverse"]["logicalName"],
+    ]
+    references = _runtime_references(
+        context["environmentUrl"],
+        active_token,
+        logical_names,
+        query=query,
+    )
+    solution_component_ids = _solution_component_ids(
+        context["environmentUrl"],
+        active_token,
+        _required_text(
+            context["package"],
+            "solutionSchemaName",
+            "Workday package solution schema",
+        ),
+        query=query,
+    )
+    flows = _runtime_flows(
+        context["environmentUrl"],
+        active_token,
+        context["flowNames"],
+        solution_component_ids,
+        query=query,
+    )
+    topics = _runtime_topics(
+        context["environmentUrl"],
+        active_token,
+        context["botId"],
+        query=query,
+    )
+    return _build_runtime_discovery(
+        context,
+        workday=workday,
+        dataverse=dataverse,
+        references=references,
+        flows=flows,
+        topics=topics,
+    )
 
 
 def run_runtime_operation(
@@ -634,6 +673,7 @@ def run_runtime_operation(
     authorization_runner: Callable[
         ..., subprocess.CompletedProcess
     ] = _default_runner,
+    stage_recorder: Callable[[str, Mapping[str, Any]], Any] | None = None,
     **discovery_dependencies: Any,
 ) -> dict[str, Any]:
     """Run runtime preview or apply while reusing one Dataverse token."""
@@ -685,9 +725,9 @@ def run_runtime_operation(
         query=query,
         updater=updater,
         authorization_runner=authorization_runner,
+        stage_recorder=stage_recorder,
     )
     return {
-        "plan": discovery["plan"],
         "observedBeforeApply": discovery["observed"],
         "applied": applied,
         "authenticatedAccount": identity["username"],
@@ -782,22 +822,29 @@ def _require_approved_flow_targets(
         )
 
 
-def apply_runtime_plan(
+def _record_runtime_stage(
+    stages: list[str],
+    action: str,
+    evidence: Mapping[str, Any],
+    recorder: Callable[[str, Mapping[str, Any]], Any] | None,
+) -> None:
+    if recorder is not None:
+        recorder(action, evidence)
+    stages.append(action)
+
+
+def _apply_connection_binding_stage(
     plan: Mapping[str, Any],
     *,
     token: str,
-    query: Callable[..., list[dict[str, Any]]] = query_all,
-    updater: Callable[..., bool] = update_record,
-    authorization_runner: Callable[
-        ..., subprocess.CompletedProcess
-    ] = _default_runner,
-) -> dict[str, Any]:
-    """Apply one approved runtime plan with one shared Dataverse token."""
+    query: Callable[..., list[dict[str, Any]]],
+    updater: Callable[..., bool],
+) -> dict[str, str]:
     environment_url = plan["scope"]["dataverseUrl"]
-    binding_targets = plan["connectionBindings"]
+    targets = plan["connectionBindings"]
     bindings = {
         logical_name: target["connectionId"]
-        for logical_name, target in binding_targets.items()
+        for logical_name, target in targets.items()
     }
     references = _runtime_references(
         environment_url,
@@ -822,17 +869,49 @@ def apply_runtime_plan(
             ),
             {"connectionid": target_id},
         )
+    verified = _runtime_references(
+        environment_url,
+        token,
+        list(bindings),
+        query=query,
+    )
+    wrong = [
+        name
+        for name, target_id in bindings.items()
+        if str(verified[name].get("connectionid") or "").casefold()
+        != str(target_id).casefold()
+    ]
+    if wrong:
+        raise WorkdayConnectRuntimeError(
+            "Connection-reference verification failed: "
+            + ", ".join(sorted(wrong))
+        )
+    return {
+        logical_name: target["displayName"]
+        for logical_name, target in targets.items()
+    }
 
-    flow_names = [value["name"] for value in plan["flows"]]
+
+def _apply_flow_activation_stage(
+    plan: Mapping[str, Any],
+    *,
+    token: str,
+    query: Callable[..., list[dict[str, Any]]],
+    updater: Callable[..., bool],
+) -> list[str]:
+    environment_url = plan["scope"]["dataverseUrl"]
+    targets = plan["flows"]
+    flow_names = [value["name"] for value in targets]
+    approved_ids = {value["workflowId"].casefold() for value in targets}
     flows = _runtime_flows(
         environment_url,
         token,
         flow_names,
-        {value["workflowId"].casefold() for value in plan["flows"]},
+        approved_ids,
         query=query,
     )
-    _require_approved_flow_targets(flows, plan["flows"])
-    for target in plan["flows"]:
+    _require_approved_flow_targets(flows, targets)
+    for target in targets:
         flow = flows[target["name"]]
         if (
             flow.get("statecode") == ACTIVE_FLOW_STATE
@@ -849,10 +928,38 @@ def apply_runtime_plan(
                 "statuscode": ACTIVE_FLOW_STATUS,
             },
         )
+    verified = _runtime_flows(
+        environment_url,
+        token,
+        flow_names,
+        approved_ids,
+        query=query,
+    )
+    _require_approved_flow_targets(verified, targets)
+    inactive = [
+        name
+        for name, row in verified.items()
+        if row.get("statecode") != ACTIVE_FLOW_STATE
+        or row.get("statuscode") != ACTIVE_FLOW_STATUS
+    ]
+    if inactive:
+        raise WorkdayConnectRuntimeError(
+            "Runtime flow verification failed: "
+            + ", ".join(sorted(inactive))
+        )
+    return flow_names
 
-    _run_authorization(plan, runner=authorization_runner)
 
+def _apply_user_context_stage(
+    plan: Mapping[str, Any],
+    *,
+    token: str,
+    query: Callable[..., list[dict[str, Any]]],
+    updater: Callable[..., bool],
+) -> str:
+    environment_url = plan["scope"]["dataverseUrl"]
     setup_topic_id = plan["userContext"]["setupTopicId"]
+    target_schema = plan["userContext"]["targetTopicSchema"]
     topic_rows = query(
         environment_url,
         token,
@@ -866,7 +973,7 @@ def apply_runtime_plan(
         )
     redirect_state = _redirect_state(
         str(topic_rows[0].get("data") or ""),
-        plan["userContext"]["targetTopicSchema"],
+        target_schema,
     )
     if redirect_state == "custom":
         raise WorkdayConnectRuntimeError(
@@ -878,67 +985,93 @@ def apply_runtime_plan(
             token,
             "botcomponents",
             setup_topic_id,
-            {
-                "data": _redirect_yaml(
-                    plan["userContext"]["targetTopicSchema"]
-                )
-            },
+            {"data": _redirect_yaml(target_schema)},
         )
-
-    verified_references = _runtime_references(
-        environment_url,
-        token,
-        list(bindings),
-        query=query,
-    )
-    wrong_bindings = [
-        name
-        for name, target_id in bindings.items()
-        if str(verified_references[name].get("connectionid") or "").casefold()
-        != str(target_id).casefold()
-    ]
-    verified_flows = _runtime_flows(
-        environment_url,
-        token,
-        flow_names,
-        {value["workflowId"].casefold() for value in plan["flows"]},
-        query=query,
-    )
-    _require_approved_flow_targets(verified_flows, plan["flows"])
-    inactive = [
-        name
-        for name, row in verified_flows.items()
-        if row.get("statecode") != ACTIVE_FLOW_STATE
-        or row.get("statuscode") != ACTIVE_FLOW_STATUS
-    ]
-    verified_topic = query(
+    verified = query(
         environment_url,
         token,
         "botcomponents",
         "botcomponentid,data",
         f"botcomponentid eq '{_odata_literal(setup_topic_id)}'",
     )
-    topic_ok = (
-        len(verified_topic) == 1
-        and _redirect_state(
-            str(verified_topic[0].get("data") or ""),
-            plan["userContext"]["targetTopicSchema"],
+    if (
+        len(verified) != 1
+        or _redirect_state(
+            str(verified[0].get("data") or ""),
+            target_schema,
         )
-        == "configured"
-    )
-    if wrong_bindings or inactive or not topic_ok:
+        != "configured"
+    ):
         raise WorkdayConnectRuntimeError(
-            "Runtime post-write verification failed: "
-            f"bindings={wrong_bindings}, flows={inactive}, "
-            f"userContext={topic_ok}."
+            "User Context V2 redirect verification failed."
         )
+    return target_schema
+
+
+def apply_runtime_plan(
+    plan: Mapping[str, Any],
+    *,
+    token: str,
+    query: Callable[..., list[dict[str, Any]]] = query_all,
+    updater: Callable[..., bool] = update_record,
+    authorization_runner: Callable[
+        ..., subprocess.CompletedProcess
+    ] = _default_runner,
+    stage_recorder: Callable[[str, Mapping[str, Any]], Any] | None = None,
+) -> dict[str, Any]:
+    """Apply and verify ordered idempotent stages with one Dataverse token."""
+    verified_stages: list[str] = []
+    connection_bindings = _apply_connection_binding_stage(
+        plan,
+        token=token,
+        query=query,
+        updater=updater,
+    )
+    _record_runtime_stage(
+        verified_stages,
+        "connection-references-bound",
+        {"outcome": "verified", "provenance": "Dataverse reread"},
+        stage_recorder,
+    )
+
+    flow_names = _apply_flow_activation_stage(
+        plan,
+        token=token,
+        query=query,
+        updater=updater,
+    )
+    _record_runtime_stage(
+        verified_stages,
+        "runtime-flows-active",
+        {"outcome": "verified", "provenance": "Dataverse reread"},
+        stage_recorder,
+    )
+
+    _run_authorization(plan, runner=authorization_runner)
+    _record_runtime_stage(
+        verified_stages,
+        "delegated-authorization-configured",
+        {"outcome": "verified", "provenance": "authorization script"},
+        stage_recorder,
+    )
+
+    user_context = _apply_user_context_stage(
+        plan,
+        token=token,
+        query=query,
+        updater=updater,
+    )
+    _record_runtime_stage(
+        verified_stages,
+        "user-context-v2-configured",
+        {"outcome": "verified", "provenance": "Dataverse reread"},
+        stage_recorder,
+    )
     return {
         "verified": True,
-        "connectionBindings": {
-            logical_name: target["displayName"]
-            for logical_name, target in binding_targets.items()
-        },
+        "verifiedStages": verified_stages,
+        "connectionBindings": connection_bindings,
         "flows": flow_names,
-        "userContext": plan["userContext"]["targetTopicSchema"],
+        "userContext": user_context,
         "delegatedAuthorization": "verified-by-script",
     }
