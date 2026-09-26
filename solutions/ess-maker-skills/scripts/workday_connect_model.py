@@ -97,19 +97,15 @@ PHASE_REQUIRED_ACTIONS = {
     Phase.WORKDAY_ADMIN.value: frozenset(
         {"administrator-response-validated"}
     ),
-    Phase.CONNECTIONS.value: frozenset(
-        {
-            "physical-connections-verified",
-            "agent-parameter-sharing-verified",
-            "flow-attachment-confirmed",
-        }
-    ),
+    Phase.CONNECTIONS.value: frozenset({"physical-connections-verified"}),
     Phase.RUNTIME.value: frozenset(
         {
             "connection-references-bound",
             "runtime-flows-active",
             "delegated-authorization-configured",
             "user-context-v2-configured",
+            "agent-parameter-sharing-verified",
+            "flow-attachment-confirmed",
         }
     ),
     Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),

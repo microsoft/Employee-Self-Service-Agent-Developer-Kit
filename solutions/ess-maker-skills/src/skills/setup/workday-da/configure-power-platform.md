@@ -3,13 +3,9 @@
 
 ## Connections
 
-The skill does not create physical connector connections, complete connector
-OAuth, connect flows to the agent, or enable parameter sharing. The maker
-performs those actions; the skill discovers and verifies the result.
-
-The current helpers do not independently read the Copilot Studio
-flow-to-agent attachment. Record the maker's confirmation of that attachment
-as manual handoff evidence; do not describe it as automatically verified.
+The skill does not create physical connector connections or complete connector
+OAuth. The maker performs those actions; the skill discovers and verifies the
+result.
 
 Ask the maker to create or confirm exactly two connected Power Platform
 connections in the selected environment:
@@ -20,12 +16,6 @@ connections in the selected environment:
 
 Explain that Workday connector OAuth is another credential store and may open
 its own sign-in. Do not ask the maker to paste connection IDs.
-
-In Copilot Studio, connect the reviewed Workday flows to the selected ESS HR
-agent. For every agent connection used by those flows, enable **Allow
-permission to share parameters**. This is what prevents each employee from
-receiving an unexpected first-use connection prompt. It is distinct from
-binding the package's solution connection references.
 
 Run runtime discovery:
 
@@ -45,21 +35,15 @@ flows, selected agent, and User Context V2 topics.
   maker to paste or repeat an ID.
 - If none exists or a connection is not connected, leave the phase waiting and
   show the exact missing connector.
-- Run the existing FlightCheck and require `WD-CONN-013` to pass. If it does
-  not, show only its safe display-name remediation, have the maker enable
-  parameter sharing in Copilot Studio, and rerun that check.
-
-After successful discovery, a passing `WD-CONN-013`, and the maker's
-confirmation that the reviewed flows are connected to the selected agent, run:
+After successful discovery of both physical connections, run:
 
 ```powershell
 python scripts/workday_connect.py record-connections --evidence-json '{...}'
 ```
 
-Set all four required booleans only from observed or confirmed evidence:
-Workday connected, Dataverse connected, parameter sharing passed, and flow
-attachment confirmed. The controller records the distinct automated and
-manual evidence and completes the phase atomically.
+Set the Workday and Dataverse connected booleans only from observed evidence.
+This completes the physical-connections phase so the controller can activate
+the reviewed flows before Copilot Studio attaches them.
 
 ## Runtime approval and apply
 
@@ -73,8 +57,6 @@ workflow, or bot identifiers. The combined runtime plan will:
 - bind the two reviewed connection references;
 - activate only the checked-in Workday flow catalog;
 - authorize the exact agent to invoke those exact workflow IDs;
-- redirect only an empty admin user-context scaffold to Workday User Context
-  V2; and
 - reread every changed record.
 
 If the setup topic contains custom content, stop and preserve it. Do not
@@ -98,9 +80,69 @@ one Dataverse token for Python mutations, invokes the checked-in delegated
 authorization script, and verifies bindings, flow state, authorization, and
 User Context V2 after each ordered stage. It records each verified stage
 immediately, so a later failure resumes from durable evidence rather than
-hiding earlier successful changes. Report permission issues only from an
-explicit forbidden response, `[FAIL]` marker, ambiguity result, or nonzero
+hiding earlier successful changes. The runtime phase remains active until the
+maker completes the agent binding below. Report permission issues only from
+an explicit forbidden response, `[FAIL]` marker, ambiguity result, or nonzero
 script exit.
+
+## Agent binding after flow activation
+
+Only after runtime apply has activated the reviewed flows, wire the native
+agent's local `[Admin] - User Context - Setup` topic to
+`Workday [System] - 1: Set User Context V2` using the existing guarded
+checkpoint, scoped dry-run, approval, and push pattern in
+`src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the
+recorded Power Platform maker as `--preferred-username` so the native push
+cannot silently reuse another cached account. This scoped push changes only
+the setup redirect; Workday topics remain inactive until connection sharing is
+complete. Run `WD-REST-002` after the scoped push and require it to pass.
+
+If a Workday system topic shows `CloudFlow ... not found`, repair the missing
+agent-level flow registration in Copilot Studio. Open the broken **Call an
+action** node, select the exact existing flow, preserve its current
+input/output mappings, and save the topic:
+
+- **Workday System Get User Context V2** -> **ESS Workday Runtime**
+- **Workday System Get REST Execution** ->
+  **ESS Workday Runtime REST Execution**
+- **Workday System Get CommonExecution** ->
+  **ESS Workday Runtime References** and **ESS Workday Runtime**
+
+Do not recreate or clone the flows. Their IDs in the reviewed topics already
+match the installed Dataverse flows; reselecting them registers the missing
+native flow contract.
+
+Then open the agent connection settings. Connect **ESS Workday Runtime REST
+Execution** and **ESS Workday Runtime**. **ESS Workday Runtime References** is
+`EmbeddedOnly`, so it is not expected in the user-facing connection list. For
+every agent connection used by the two visible flows, enable **Allow permission
+to share parameters**. This prevents each employee from receiving an
+unexpected first-use connection prompt.
+
+Run the existing FlightCheck and require `WD-CONN-013` to pass. Then run
+`src/skills/connect/workday/actions/activate-workday-topics.md`. That action
+derives the complete Workday dialog list from the selected agent's
+`.component-map.json`, previews the exact scope, and uses the native components
+endpoint to set both `state` and `status` to `Active` for every Workday topic.
+Do not activate only the two User Context setup topics.
+
+The current
+helpers do not independently read the Copilot Studio flow-to-agent attachment,
+so retain the maker's explicit confirmation after the broken action nodes are
+resolved and do not describe it as automatically verified.
+
+Then run:
+
+```powershell
+python scripts/workday_connect.py record-agent-binding --evidence-json '{...}'
+```
+
+Set `userContextRedirectPassed` only from `WD-REST-002`,
+`parameterSharingPassed` only from the FlightCheck result, and
+`flowAttachmentConfirmed` only after the maker has saved the repaired action
+nodes without a missing-flow diagnostic. Set `workdayTopicsActivated` only
+when `activate-workday-topics.md` reports that every selected Workday topic was
+reread as Active. This completes the runtime phase.
 
 If runtime discovery reports that the selected package has no reviewed flow
 catalog, record a manual handoff. Do not claim that connection references,

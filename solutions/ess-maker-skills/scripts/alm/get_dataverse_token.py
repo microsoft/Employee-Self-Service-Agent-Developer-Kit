@@ -18,9 +18,13 @@ import auth  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", required=True)
+    parser.add_argument("--preferred-username")
     args = parser.parse_args()
 
-    token = auth.authenticate(args.environment.rstrip("/"))
+    token = auth.authenticate(
+        args.environment.rstrip("/"),
+        preferred_username=args.preferred_username,
+    )
     print(f"ESS_DATAVERSE_TOKEN={token}")
     return 0
 

@@ -19,6 +19,7 @@ from workday_connect_contracts import (  # noqa: E402
     WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
+    validate_agent_binding_evidence,
     validate_connections_evidence,
     validate_employee_evidence,
     validate_entra_verification,
@@ -206,8 +207,14 @@ def test_connections_and_employee_evidence_are_strict():
         {
             "workdayConnectionConnected": True,
             "dataverseConnectionConnected": True,
+        }
+    )["workdayConnectionConnected"] is True
+    assert validate_agent_binding_evidence(
+        {
+            "userContextRedirectPassed": True,
             "parameterSharingPassed": True,
             "flowAttachmentConfirmed": True,
+            "workdayTopicsActivated": True,
         }
     )["parameterSharingPassed"] is True
 

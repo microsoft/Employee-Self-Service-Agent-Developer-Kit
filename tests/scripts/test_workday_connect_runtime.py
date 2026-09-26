@@ -139,27 +139,6 @@ def _records():
             "uniquename": "msdyn_EssWorkdayRuntime",
         },
         "flows": flows,
-        "setup": {
-            "botcomponentid": "setup-topic",
-            "name": runtime.SETUP_TOPIC_NAME,
-            "schemaname": "contoso.topic.setusercontext",
-            "data": (
-                "kind: AdaptiveDialog\n"
-                "beginDialog:\n"
-                "  kind: OnRedirect\n"
-                "  actions: []\n"
-            ),
-            "statecode": 0,
-            "statuscode": 1,
-        },
-        "target": {
-            "botcomponentid": "target-topic",
-            "name": runtime.TARGET_TOPIC_NAME,
-            "schemaname": "contoso.topic.workdaysystemgetusercontextv2",
-            "data": "",
-            "statecode": 0,
-            "statuscode": 1,
-        },
     }
 
 
@@ -176,10 +155,6 @@ def _query_for(records):
             ]
         if entity_set == "workflows":
             return list(records["flows"].values())
-        if entity_set == "botcomponents":
-            if filter_expr and "componenttype eq 9" in filter_expr:
-                return [records["setup"], records["target"]]
-            return [records["setup"]]
         raise AssertionError(entity_set)
 
     return query
@@ -226,9 +201,6 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
         "Workday",
         "Dataverse",
     ]
-    assert result["approvalSummary"]["userContextTarget"] == (
-        runtime.TARGET_TOPIC_NAME
-    )
     serialized_summary = __import__("json").dumps(
         result["approvalSummary"],
         sort_keys=True,
@@ -236,34 +208,8 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
     assert WORKDAY_CONNECTION not in serialized_summary
     assert DATAVERSE_CONNECTION not in serialized_summary
     assert len(result["plan"]["flows"]) == 3
-    assert result["plan"]["userContext"]["targetTopicSchema"].endswith(
-        "workdaysystemgetusercontextv2"
-    )
+    assert "userContext" not in result["plan"]
     assert "token" not in json.dumps(result).casefold()
-
-
-def test_runtime_plan_stops_on_custom_user_context():
-    records = _records()
-    records["setup"]["data"] = (
-        "kind: AdaptiveDialog\n"
-        "beginDialog:\n"
-        "  kind: OnRedirect\n"
-        "  actions:\n"
-        "    - kind: SendActivity\n"
-        "      activity: custom\n"
-    )
-
-    with pytest.raises(
-        runtime.WorkdayConnectRuntimeError,
-        match="custom content",
-    ):
-        runtime.run_runtime_operation(
-            _state(),
-            apply=False,
-            token_provider=lambda *_args, **_kwargs: "token",
-            identity_provider=_identity,
-            **_discovery_dependencies(records),
-        )
 
 
 def test_runtime_apply_verifies_all_mutations(monkeypatch):
@@ -282,14 +228,14 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
                 if value["workflowid"] == record_id:
                     value.update(data)
                     return True
-        if entity_set == "botcomponents" and record_id == "setup-topic":
-            records["setup"].update(data)
-            return True
         raise AssertionError((entity_set, record_id, data))
 
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
 
     def authorization_runner(command, **_kwargs):
+        assert command[command.index("-PreferredUsername") + 1] == (
+            "maker@contoso.com"
+        )
         assert command[-2] == "-WorkflowId"
         return SimpleNamespace(
             returncode=0,
@@ -323,7 +269,6 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         ("connection-references-bound", "verified"),
         ("runtime-flows-active", "verified"),
         ("delegated-authorization-configured", "verified"),
-        ("user-context-v2-configured", "verified"),
     ]
     assert all(
         value["connectionid"]
@@ -333,10 +278,6 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
-    assert runtime._redirect_state(
-        records["setup"]["data"],
-        records["target"]["schemaname"],
-    ) == "configured"
 
 
 def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
@@ -396,10 +337,6 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
-    assert runtime._redirect_state(
-        records["setup"]["data"],
-        records["target"]["schemaname"],
-    ) == "empty"
 
 
 def test_runtime_requires_completed_connection_phase():
@@ -572,7 +509,10 @@ def test_runtime_rejects_a_different_dataverse_identity():
 
 def test_runtime_authorization_timeout_is_structured(monkeypatch):
     plan = {
-        "scope": {"dataverseUrl": "https://contoso.crm.dynamics.com"},
+        "scope": {
+            "dataverseUrl": "https://contoso.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+        },
         "delegatedAuthorization": {
             "script": "alm/Enable-CosmosDAFlowAuthorization.ps1",
             "botId": BOT_ID,

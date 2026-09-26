@@ -27,10 +27,9 @@ via ``--checkpoint``:
     documented-tier Dataverse ``connectionreferences`` read.
   * ``WD-REST-001`` (S5.5) — the captured ``restBaseUrl`` is present and
     **trimmed to** ``/api``. Pure-config check, no client.
-  * ``WD-REST-002`` (S5.7) — the agent's ``user-context-setup.mcs.yml`` topic
-    contains a ``BeginDialog`` redirect to the Workday user-context system topic
-    (``WorkdaySystemGetUserContextV2`` on the simplified pack). Pure local-file
-    check; SKIPPED on the legacy install path.
+  * ``WD-REST-002`` (S5.7) — the agent's mapped admin user-context topic
+    contains a ``BeginDialog`` redirect to the mapped Workday user-context
+    system topic. Pure local-file check; SKIPPED on the legacy install path.
   * ``WD-NET-001`` (S5.8) — the Workday REST + SOAP endpoints are allowlisted at
     the corporate firewall. **Always MANUAL attestation:** the kit has no
     reliable probe (a local reachability test proves only the dev machine's
@@ -52,6 +51,7 @@ Design invariants (per ``scripts/flightcheck/AGENTS.md``):
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -102,9 +102,9 @@ _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 
 # ---- Local user-context topic (WD-REST-002) ----
 _AGENTS_ROOT = "workspace/agents"
-_INSTALLED_AGENTS_ROOT = ".local/agents"
-_USER_CONTEXT_FILE = "user-context-setup.mcs.yml"
-_SCHEMA_NAME_RE = re.compile(r"(?m)^\s*schemaName:\s*['\"]?([^'\"\s]+)")
+_COMPONENT_MAP_FILE = ".component-map.json"
+_SETUP_TOPIC_DISPLAY = "[Admin] - User Context - Setup"
+_TARGET_TOPIC_DISPLAY = "Workday [System] - 1: Set User Context V2"
 
 _CONN_AUTH_DESC = (
     "Workday connection authentication type is Microsoft Entra ID Integrated"
@@ -121,8 +121,8 @@ _NET_DESC = "Workday REST + SOAP endpoints allowlisted at the firewall"
 _REDIRECT_REMEDIATION = (
     "Wire the user-context redirect: save a rollback checkpoint "
     "(scripts/checkpoint.py), then set the agent's "
-    "topics/user-context-setup.mcs.yml OnRedirect to a BeginDialog that calls "
-    "the installed Workday user-context system topic, and push "
+    "mapped [Admin] - User Context - Setup topic OnRedirect to a BeginDialog "
+    "that calls the mapped Workday user-context system topic, and push "
     "(scripts/push.py). See the connect skill step 3 (§3.5d)."
 )
 
@@ -142,31 +142,58 @@ def _selected_agent_slug(runner) -> str:
     return validate_agent_slug(str(slug)) if slug else ""
 
 
-def _installed_user_context_dialogs(agent_slug: str) -> list[str]:
-    agent_dir = resolve_agent_directory(
-        Path(_INSTALLED_AGENTS_ROOT),
-        agent_slug,
-    )
-    topics_dir = agent_dir / "topics"
-    if not topics_dir.is_dir():
-        return []
-
-    dialogs: set[str] = set()
-    for topic_file in sorted(topics_dir.glob("*.mcs.yml")):
-        try:
-            text = topic_file.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        match = _SCHEMA_NAME_RE.search(text)
-        dialog = (
-            match.group(1)
-            if match
-            else topic_file.name.removesuffix(".mcs.yml")
+def _mapped_user_context_topics(
+    agent_dir: Path,
+) -> tuple[Path | None, str | None, str | None]:
+    component_map_path = agent_dir / _COMPONENT_MAP_FILE
+    try:
+        component_map = json.loads(
+            component_map_path.read_text(encoding="utf-8")
         )
-        normalized = re.sub(r"[^a-z0-9]", "", dialog.casefold())
-        if "workday" in normalized and "usercontext" in normalized:
-            dialogs.add(dialog)
-    return sorted(dialogs)
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, None, (
+            f"The selected agent '{agent_dir.name}' {_COMPONENT_MAP_FILE} "
+            f"could not be read: {exc}"
+        )
+    if not isinstance(component_map, dict):
+        return None, None, (
+            f"The selected agent's {_COMPONENT_MAP_FILE} is not a JSON object."
+        )
+
+    setup_matches = [
+        (relative_path, entry)
+        for relative_path, entry in component_map.items()
+        if isinstance(entry, dict)
+        and entry.get("componentKind") == "DialogComponent"
+        and str(entry.get("displayName") or "").casefold()
+        == _SETUP_TOPIC_DISPLAY.casefold()
+    ]
+    target_matches = [
+        entry
+        for entry in component_map.values()
+        if isinstance(entry, dict)
+        and entry.get("componentKind") == "DialogComponent"
+        and str(entry.get("displayName") or "").casefold()
+        == _TARGET_TOPIC_DISPLAY.casefold()
+    ]
+    if len(setup_matches) != 1 or len(target_matches) != 1:
+        return None, None, (
+            f"Expected exactly one mapped admin user-context topic and one "
+            f"mapped Workday User Context V2 topic for selected agent "
+            f"'{agent_dir.name}'."
+        )
+
+    relative_path = Path(str(setup_matches[0][0]))
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return None, None, (
+            "The mapped admin user-context topic path is unsafe."
+        )
+    target_schema = str(target_matches[0].get("schemaName") or "").strip()
+    if not target_schema:
+        return None, None, (
+            "The mapped Workday User Context V2 topic has no schemaName."
+        )
+    return agent_dir / relative_path, target_schema, None
 
 
 def _fmt(config, key: str) -> str:
@@ -638,30 +665,28 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
         )]
 
     agent_dir = resolve_agent_directory(agents_root, agent_slug)
-    topic_file = agent_dir / "topics" / _USER_CONTEXT_FILE
+    topic_file, target_dialog, mapping_error = _mapped_user_context_topics(
+        agent_dir
+    )
+    if mapping_error:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_REDIRECT_DESC,
+            result=mapping_error,
+            remediation=_REDIRECT_REMEDIATION,
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+    assert topic_file is not None
+    assert target_dialog is not None
     if not topic_file.is_file():
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REDIRECT_DESC,
             result=(
-                f"No {_USER_CONTEXT_FILE} found for selected agent "
-                f"'{agent_slug}' under {_AGENTS_ROOT}/{agent_slug}/topics/."
-            ),
-            remediation=_REDIRECT_REMEDIATION,
-            doc_link=_DOC_SIMPLIFIED,
-        )]
-
-    installed_dialogs = _installed_user_context_dialogs(agent_slug)
-    if not installed_dialogs:
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-002", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.FAILED.value,
-            description=_REDIRECT_DESC,
-            result=(
-                "No installed Workday user-context system topic was found for "
-                f"selected agent '{agent_slug}' under "
-                f"{_INSTALLED_AGENTS_ROOT}/{agent_slug}/topics/."
+                f"No mapped admin user-context topic found for selected "
+                f"agent '{agent_slug}' at {topic_file}."
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,
@@ -675,30 +700,23 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REDIRECT_DESC,
             result=(
-                f"The selected agent's {_USER_CONTEXT_FILE} could not be read: "
+                "The selected agent's mapped user-context topic could not be "
+                "read: "
                 f"{e}"
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    matched_dialog = next(
-        (
-            dialog
-            for dialog in installed_dialogs
-            if "BeginDialog" in text and dialog in text
-        ),
-        None,
-    )
-    if not matched_dialog:
+    if "BeginDialog" not in text or target_dialog not in text:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REDIRECT_DESC,
             result=(
                 f"The selected agent '{agent_slug}' user-context topic does "
-                "not redirect to any installed Workday user-context system "
-                f"topic. Installed candidate(s): {', '.join(installed_dialogs)}."
+                "not redirect to its mapped Workday user-context system "
+                f"topic '{target_dialog}'."
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,
@@ -710,7 +728,7 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
         description=_REDIRECT_DESC,
         result=(
             "The user-context topic redirects to the Workday "
-            f"'{matched_dialog}' system topic for selected agent "
+            f"'{target_dialog}' system topic for selected agent "
             f"'{agent_slug}'."
         ),
         doc_link=_DOC_SIMPLIFIED,

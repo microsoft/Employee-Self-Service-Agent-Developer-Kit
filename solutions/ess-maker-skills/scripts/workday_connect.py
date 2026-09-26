@@ -20,6 +20,7 @@ from workday_connect_contracts import (
     WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
+    validate_agent_binding_evidence,
     validate_connections_evidence,
     validate_employee_evidence,
     validate_entra_verification,
@@ -103,9 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_apply.add_argument("--dataverse-connection-id")
     runtime_approve = subparsers.add_parser("runtime-approve")
     runtime_approve.add_argument("--plan-json", required=True)
-
     record_connections = subparsers.add_parser("record-connections")
     record_connections.add_argument("--evidence-json", required=True)
+    record_binding = subparsers.add_parser("record-agent-binding")
+    record_binding.add_argument("--evidence-json", required=True)
     record_validation = subparsers.add_parser("record-validation")
     record_validation.add_argument("--evidence-json", required=True)
 
@@ -241,7 +243,6 @@ def _runtime_apply(
             evidence=evidence,
         ),
     )
-    store.set_phase_status("runtime", "complete")
     return {**result, "status": store.status()}
 
 
@@ -263,32 +264,54 @@ def _record_connections(
     evidence = validate_connections_evidence(
         _json_object(args.evidence_json, "connection evidence")
     )
-    actions = (
-        (
-            "physical-connections-verified",
-            {
-                "workdayConnected": evidence["workdayConnectionConnected"],
-                "dataverseConnected": evidence[
-                    "dataverseConnectionConnected"
-                ],
-            },
-        ),
-        (
-            "agent-parameter-sharing-verified",
-            {"checkpoint": "WD-CONN-013", "outcome": "passed"},
-        ),
-        (
-            "flow-attachment-confirmed",
-            {"makerConfirmed": evidence["flowAttachmentConfirmed"]},
-        ),
+    store.complete_action(
+        "connections",
+        "physical-connections-verified",
+        evidence={
+            "outcome": "verified",
+            "workdayConnected": evidence["workdayConnectionConnected"],
+            "dataverseConnected": evidence[
+                "dataverseConnectionConnected"
+            ],
+        },
     )
-    for action, details in actions:
-        store.complete_action(
-            "connections",
-            action,
-            evidence={"outcome": "verified", **details},
-        )
     store.set_phase_status("connections", "complete")
+    return {"verified": True, "status": store.status()}
+
+
+def _record_agent_binding(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = validate_agent_binding_evidence(
+        _json_object(args.evidence_json, "agent binding evidence")
+    )
+    store.complete_action(
+        "runtime",
+        "user-context-v2-configured",
+        evidence={
+            "outcome": "verified",
+            "checkpoint": "WD-REST-002",
+        },
+    )
+    store.complete_action(
+        "runtime",
+        "agent-parameter-sharing-verified",
+        evidence={
+            "outcome": "verified",
+            "checkpoint": "WD-CONN-013",
+        },
+    )
+    store.complete_action(
+        "runtime",
+        "flow-attachment-confirmed",
+        evidence={
+            "outcome": "verified",
+            "makerConfirmed": evidence["flowAttachmentConfirmed"],
+            "workdayTopicsActivated": evidence["workdayTopicsActivated"],
+        },
+    )
+    store.set_phase_status("runtime", "complete")
     return {"verified": True, "status": store.status()}
 
 
@@ -337,6 +360,7 @@ _COMMAND_HANDLERS: dict[
     "runtime-apply": _runtime_apply,
     "runtime-approve": _runtime_approve,
     "record-connections": _record_connections,
+    "record-agent-binding": _record_agent_binding,
     "record-validation": _record_validation,
     "preflight": _preflight,
 }

@@ -410,15 +410,48 @@ def validate_connections_evidence(
     required_true = (
         "workdayConnectionConnected",
         "dataverseConnectionConnected",
-        "parameterSharingPassed",
-        "flowAttachmentConfirmed",
     )
+    unexpected = sorted(set(evidence) - set(required_true))
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Connection evidence contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
     missing = sorted(
         key for key in required_true if evidence.get(key) is not True
     )
     if missing:
         raise WorkdayConnectContractError(
             "Connection evidence is incomplete: " + ", ".join(missing)
+        )
+    return {key: True for key in required_true}
+
+
+def validate_agent_binding_evidence(
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(evidence, Mapping):
+        raise WorkdayConnectContractError(
+            "Agent binding evidence must contain a JSON object."
+        )
+    required_true = (
+        "userContextRedirectPassed",
+        "parameterSharingPassed",
+        "flowAttachmentConfirmed",
+        "workdayTopicsActivated",
+    )
+    unexpected = sorted(set(evidence) - set(required_true))
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Agent binding evidence contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+    missing = sorted(
+        key for key in required_true if evidence.get(key) is not True
+    )
+    if missing:
+        raise WorkdayConnectContractError(
+            "Agent binding evidence is incomplete: " + ", ".join(missing)
         )
     return {key: True for key in required_true}
 

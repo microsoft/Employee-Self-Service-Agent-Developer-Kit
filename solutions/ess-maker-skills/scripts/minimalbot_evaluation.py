@@ -25,6 +25,7 @@ rather than a hardcoded TEST ring.
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import datetime, timezone
 import fnmatch
 import json
@@ -219,6 +220,18 @@ def _wire_kinds(value: Any) -> Any:
     return value
 
 
+def _without_diagnostics(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_diagnostics(child)
+            for key, child in value.items()
+            if key != "diagnostics"
+        }
+    if isinstance(value, list):
+        return [_without_diagnostics(child) for child in value]
+    return value
+
+
 def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bool:
     """True if any ``*.mcs.yml`` in ``folder`` matches one of ``only_globs``.
 
@@ -273,7 +286,9 @@ def _connection_id(connection: dict[str, Any]) -> str:
 
 
 def acquire_test_pp_token(
-    tenant_id: str, scope: str | None = None
+    tenant_id: str,
+    scope: str | None = None,
+    preferred_username: str | None = None,
 ) -> tuple[str, str]:
     """Acquire a Power Platform token, reusing the shared MSAL cache.
 
@@ -295,15 +310,28 @@ def acquire_test_pp_token(
         CLIENT_ID, authority=authority, token_cache=cache
     )
     accounts = app.get_accounts()
-    selected_account = accounts[0] if accounts else None
+    preferred = str(preferred_username or "").casefold()
+    selected_account = next(
+        (
+            account
+            for account in accounts
+            if str(account.get("username") or "").casefold() == preferred
+        ),
+        None,
+    )
+    if selected_account is None and not preferred:
+        selected_account = accounts[0] if accounts else None
     result = None
     if selected_account:
         result = app.acquire_token_silent([scope], account=selected_account)
     if not result or "access_token" not in result:
         print("Opening browser for Power Platform sign-in...")
-        result = app.acquire_token_interactive(
-            [scope], prompt="select_account"
+        interactive_options = (
+            {"login_hint": preferred_username}
+            if preferred_username
+            else {"prompt": "select_account"}
         )
+        result = app.acquire_token_interactive([scope], **interactive_options)
     if "access_token" not in result:
         # Don't echo error_description (CWE-209); mirror auth.py.
         error = result.get("error", "unknown_error")
@@ -389,11 +417,21 @@ class MinimalBotEvaluationClient:
         )
 
     # -- auth ---------------------------------------------------------------
-    def authenticate(self) -> str:
+    def authenticate(self, preferred_username: str | None = None) -> str:
         """Acquire a Power Platform token for this ring, reusing the MSAL cache."""
         self._token, self.signed_in_username = acquire_test_pp_token(
-            self.tenant_id, scope=self.scope
+            self.tenant_id,
+            scope=self.scope,
+            preferred_username=preferred_username,
         )
+        if preferred_username and (
+            str(self.signed_in_username or "").casefold()
+            != preferred_username.casefold()
+        ):
+            raise MinimalBotEvaluationError(
+                "Power Platform authentication used a different account from "
+                "the selected Environment Maker."
+            )
         return self._token
 
     def _require_token(self) -> str:
@@ -456,6 +494,178 @@ class MinimalBotEvaluationClient:
                 "MinimalBot component read returned an unexpected payload."
             )
         return body
+
+    def update_dialog_components(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Update existing dialog components with drift and identity checks."""
+        if not updates:
+            raise MinimalBotEvaluationError(
+                "No MinimalBot dialog updates were requested."
+            )
+
+        before = self.read_components()
+        change_token = str(before.get("changeToken") or "")
+        if not change_token:
+            raise MinimalBotEvaluationError(
+                "MinimalBot component read did not return a changeToken."
+            )
+        remote_changes = before.get("botComponentChanges")
+        if not isinstance(remote_changes, list):
+            raise MinimalBotEvaluationError(
+                "MinimalBot component read returned no component changes."
+            )
+
+        changes: list[dict[str, Any]] = []
+        for update in updates:
+            component_id = str(update.get("componentId") or "")
+            schema_name = str(update.get("schemaName") or "")
+            matches = [
+                change.get("component")
+                for change in remote_changes
+                if isinstance(change, dict)
+                and isinstance(change.get("component"), dict)
+                and str(change["component"].get("id") or "").casefold()
+                == component_id.casefold()
+            ]
+            if len(matches) != 1:
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog component is no longer "
+                    "unique."
+                )
+            component = matches[0]
+            if (
+                component.get("$kind") != "DialogComponent"
+                or str(component.get("schemaName") or "").casefold()
+                != schema_name.casefold()
+            ):
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog identity changed after "
+                    "local extraction."
+                )
+            has_dialog_update = "dialog" in update
+            desired_dialog = update.get("dialog")
+            expected_dialog = update.get("expectedDialog")
+            if has_dialog_update and (
+                not isinstance(expected_dialog, dict)
+                or not isinstance(desired_dialog, dict)
+            ):
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog content updates require expected and "
+                    "desired Object Model payloads."
+                )
+            desired_state = update.get("state")
+            desired_status = update.get("status")
+            if (
+                not has_dialog_update
+                and desired_state is None
+                and desired_status is None
+            ):
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog update did not request content or state "
+                    "changes."
+                )
+            remote_dialog = _without_diagnostics(component.get("dialog"))
+            dialog_is_desired = (
+                not has_dialog_update
+                or remote_dialog == _without_diagnostics(desired_dialog)
+            )
+            state_is_desired = (
+                desired_state is None
+                or component.get("state") == desired_state
+            )
+            status_is_desired = (
+                desired_status is None
+                or component.get("status") == desired_status
+            )
+            if dialog_is_desired and state_is_desired and status_is_desired:
+                continue
+            if (
+                has_dialog_update
+                and not dialog_is_desired
+                and remote_dialog != _without_diagnostics(expected_dialog)
+            ):
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog changed remotely after "
+                    "the workspace baseline was captured."
+                )
+            updated_component = copy.deepcopy(component)
+            if has_dialog_update:
+                updated_component["dialog"] = desired_dialog
+            if desired_state is not None:
+                updated_component["state"] = desired_state
+            if desired_status is not None:
+                updated_component["status"] = desired_status
+            changes.append(
+                {
+                    "$kind": "BotComponentUpdate",
+                    "component": updated_component,
+                }
+            )
+
+        if changes:
+            payload = {
+                "changeToken": change_token,
+                "botComponentChanges": changes,
+                "cloudFlowDefinitionChanges": [],
+                "connectionReferenceChanges": [],
+                "connectorDefinitionChanges": [],
+                "environmentVariableChanges": [],
+                "aIPluginOperationChanges": [],
+                "componentCollectionChanges": [],
+                "dataverseTableSearchChanges": [],
+                "connectedAgentDefinitionChanges": [],
+            }
+            response, _ = self._request(
+                "PUT",
+                self._components_url,
+                body=payload,
+                operation="dialog update",
+            )
+            if response.status_code != 200:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog update failed "
+                    f"(HTTP {response.status_code})."
+                )
+
+        verified = self.read_components()
+        verified_changes = verified.get("botComponentChanges")
+        if not isinstance(verified_changes, list):
+            raise MinimalBotEvaluationError(
+                "MinimalBot dialog verification returned no component changes."
+            )
+        verified_by_id = {
+            str(component.get("id") or "").casefold(): component
+            for change in verified_changes
+            if isinstance(change, dict)
+            and isinstance((component := change.get("component")), dict)
+        }
+        for update in updates:
+            component_id = str(update["componentId"])
+            component = verified_by_id.get(component_id.casefold())
+            verified_update = component is not None
+            if verified_update and "dialog" in update:
+                verified_update = _without_diagnostics(
+                    component.get("dialog")
+                ) == _without_diagnostics(update["dialog"])
+            if verified_update and update.get("state") is not None:
+                verified_update = (
+                    component.get("state") == update["state"]
+                )
+            if verified_update and update.get("status") is not None:
+                verified_update = (
+                    component.get("status") == update["status"]
+                )
+            if not verified_update:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog verification failed for component "
+                    f"{component_id}."
+                )
+        return {
+            "updatedComponents": len(changes),
+            "verifiedComponents": len(updates),
+        }
 
     # -- push ---------------------------------------------------------------
     def push_agent_evaluations(

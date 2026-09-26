@@ -10,9 +10,6 @@ from pathlib import Path
 import shutil
 import subprocess
 from typing import Any, Callable, Mapping
-import uuid
-
-import yaml
 
 from auth import authenticate, query_all, update_record
 from install_workday_da_extension import (
@@ -29,10 +26,6 @@ from workday_connect_auth import (
 ACTIVE_FLOW_STATE = 1
 ACTIVE_FLOW_STATUS = 2
 CLOUD_FLOW_CATEGORY = 5
-SETUP_TOPIC_NAME = "[Admin] - User Context - Setup"
-SETUP_SCHEMA_SUFFIX = ".topic.setusercontext"
-TARGET_TOPIC_NAME = "Workday [System] - 1: Set User Context V2"
-TARGET_SCHEMA_SUFFIX = ".topic.workdaysystemgetusercontextv2"
 AUTHORIZATION_SCRIPT = "alm/Enable-CosmosDAFlowAuthorization.ps1"
 
 
@@ -290,128 +283,10 @@ def _solution_component_ids(
     return component_ids
 
 
-def _topic_document(data: str) -> dict[str, Any] | None:
-    if not data.strip():
-        return {}
-    try:
-        document = yaml.safe_load(data)
-    except yaml.YAMLError:
-        return None
-    return document if isinstance(document, dict) else None
-
-
-def _begin_dialog(document: Mapping[str, Any]) -> Mapping[str, Any]:
-    direct = document.get("beginDialog")
-    if isinstance(direct, Mapping):
-        return direct
-    dialog = document.get("dialog")
-    if isinstance(dialog, Mapping):
-        nested = dialog.get("beginDialog")
-        if isinstance(nested, Mapping):
-            return nested
-    return {}
-
-
-def _redirect_state(data: str, target_schema: str) -> str:
-    document = _topic_document(data)
-    if document is None:
-        return "custom"
-    begin = _begin_dialog(document)
-    actions = begin.get("actions")
-    if isinstance(actions, list) and len(actions) == 1:
-        action = actions[0]
-        if (
-            isinstance(action, Mapping)
-            and str(action.get("kind") or "").casefold() == "begindialog"
-            and str(action.get("dialog") or "").casefold()
-            == target_schema.casefold()
-        ):
-            return "configured"
-    if not document or (
-        str(begin.get("kind") or "").casefold() == "onredirect"
-        and actions in (None, [])
-    ):
-        return "empty"
-    return "custom"
-
-
-def _redirect_yaml(target_schema: str) -> str:
-    return (
-        "kind: AdaptiveDialog\n"
-        "beginDialog:\n"
-        "  kind: OnRedirect\n"
-        "  id: main\n"
-        "  priority: 0\n"
-        "  actions:\n"
-        "    - kind: BeginDialog\n"
-        "      id: QVk2yi\n"
-        f"      dialog: {target_schema}\n"
-    )
-
-
-def _runtime_topics(
-    environment_url: str,
-    token: str,
-    bot_id: str,
-    *,
-    query: Callable[..., list[dict[str, Any]]],
-) -> dict[str, dict[str, Any]]:
-    try:
-        normalized_bot_id = str(uuid.UUID(bot_id))
-    except ValueError as exc:
-        raise WorkdayConnectRuntimeError(
-            "The selected Workday agent has an invalid bot ID."
-        ) from exc
-    rows = query(
-        environment_url,
-        token,
-        "botcomponents",
-        "botcomponentid,name,schemaname,data,statecode,statuscode",
-        f"_parentbotid_value eq '{normalized_bot_id}' and componenttype eq 9",
-    )
-    setup_matches = [
-        row
-        for row in rows
-        if str(row.get("name") or "").casefold()
-        == SETUP_TOPIC_NAME.casefold()
-        or str(row.get("schemaname") or "").casefold().endswith(
-            SETUP_SCHEMA_SUFFIX
-        )
-    ]
-    target_matches = [
-        row
-        for row in rows
-        if str(row.get("name") or "").casefold()
-        == TARGET_TOPIC_NAME.casefold()
-        or str(row.get("schemaname") or "").casefold().endswith(
-            TARGET_SCHEMA_SUFFIX
-        )
-    ]
-    if len(setup_matches) != 1 or len(target_matches) != 1:
-        raise WorkdayConnectRuntimeError(
-            "Expected exactly one Workday setup topic and one User Context V2 "
-            "topic in the selected agent."
-        )
-    target_schema = _required_text(
-        target_matches[0], "schemaname", "User Context V2 topic schema"
-    )
-    state = _redirect_state(
-        str(setup_matches[0].get("data") or ""),
-        target_schema,
-    )
-    if state == "custom":
-        raise WorkdayConnectRuntimeError(
-            f"'{SETUP_TOPIC_NAME}' contains custom content. Refusing to "
-            "overwrite it automatically."
-        )
-    return {
-        "setup": setup_matches[0],
-        "target": target_matches[0],
-        "redirectState": state,
-    }
-
-
 def _default_runner(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    kwargs.setdefault("text", True)
+    kwargs.setdefault("encoding", "utf-8")
+    kwargs.setdefault("errors", "replace")
     return subprocess.run(command, **kwargs)
 
 
@@ -464,7 +339,6 @@ def _build_runtime_discovery(
     dataverse: Mapping[str, Any],
     references: Mapping[str, Mapping[str, Any]],
     flows: Mapping[str, Mapping[str, Any]],
-    topics: Mapping[str, Any],
 ) -> dict[str, Any]:
     references_catalog = context["referencesCatalog"]
     logical_names = [
@@ -508,18 +382,6 @@ def _build_runtime_discovery(
         },
         "connectionBindings": target_connections,
         "flows": flow_targets,
-        "userContext": {
-            "setupTopicId": _required_text(
-                topics["setup"],
-                "botcomponentid",
-                "User-context setup topic ID",
-            ),
-            "targetTopicSchema": _required_text(
-                topics["target"],
-                "schemaname",
-                "User Context V2 schema",
-            ),
-        },
         "delegatedAuthorization": {
             "botId": context["botId"],
             "workflowIds": [target["workflowId"] for target in flow_targets],
@@ -529,8 +391,6 @@ def _build_runtime_discovery(
             "Bind the reviewed Workday and Dataverse connection references",
             "Activate the reviewed Workday runtime cloud flows",
             "Authorize the selected agent to invoke each reviewed flow",
-            "Redirect the empty admin user-context scaffold to Workday User "
-            "Context V2",
             "Reread and verify every changed Dataverse record",
         ],
     }
@@ -552,7 +412,6 @@ def _build_runtime_discovery(
             }
             for name in context["flowNames"]
         },
-        "userContext": topics["redirectState"],
     }
     return {
         "plan": {**plan, "planHash": plan_hash(plan)},
@@ -565,7 +424,6 @@ def _build_runtime_discovery(
                 value["displayName"] for value in target_connections.values()
             ],
             "flows": [target["name"] for target in flow_targets],
-            "userContextTarget": TARGET_TOPIC_NAME,
         },
         "observed": observed,
     }
@@ -642,19 +500,12 @@ def discover_runtime_plan(
         solution_component_ids,
         query=query,
     )
-    topics = _runtime_topics(
-        context["environmentUrl"],
-        active_token,
-        context["botId"],
-        query=query,
-    )
     return _build_runtime_discovery(
         context,
         workday=workday,
         dataverse=dataverse,
         references=references,
         flows=flows,
-        topics=topics,
     )
 
 
@@ -757,6 +608,8 @@ def _run_authorization(
                     plan["scope"]["dataverseUrl"],
                     "-BotId",
                     authorization["botId"],
+                    "-PreferredUsername",
+                    plan["scope"]["makerUsername"],
                     "-WorkflowId",
                     workflow_id,
                 ],
@@ -950,64 +803,6 @@ def _apply_flow_activation_stage(
     return flow_names
 
 
-def _apply_user_context_stage(
-    plan: Mapping[str, Any],
-    *,
-    token: str,
-    query: Callable[..., list[dict[str, Any]]],
-    updater: Callable[..., bool],
-) -> str:
-    environment_url = plan["scope"]["dataverseUrl"]
-    setup_topic_id = plan["userContext"]["setupTopicId"]
-    target_schema = plan["userContext"]["targetTopicSchema"]
-    topic_rows = query(
-        environment_url,
-        token,
-        "botcomponents",
-        "botcomponentid,data",
-        f"botcomponentid eq '{_odata_literal(setup_topic_id)}'",
-    )
-    if len(topic_rows) != 1:
-        raise WorkdayConnectRuntimeError(
-            "The approved user-context setup topic is no longer unique."
-        )
-    redirect_state = _redirect_state(
-        str(topic_rows[0].get("data") or ""),
-        target_schema,
-    )
-    if redirect_state == "custom":
-        raise WorkdayConnectRuntimeError(
-            "The user-context setup topic changed after approval."
-        )
-    if redirect_state == "empty":
-        updater(
-            environment_url,
-            token,
-            "botcomponents",
-            setup_topic_id,
-            {"data": _redirect_yaml(target_schema)},
-        )
-    verified = query(
-        environment_url,
-        token,
-        "botcomponents",
-        "botcomponentid,data",
-        f"botcomponentid eq '{_odata_literal(setup_topic_id)}'",
-    )
-    if (
-        len(verified) != 1
-        or _redirect_state(
-            str(verified[0].get("data") or ""),
-            target_schema,
-        )
-        != "configured"
-    ):
-        raise WorkdayConnectRuntimeError(
-            "User Context V2 redirect verification failed."
-        )
-    return target_schema
-
-
 def apply_runtime_plan(
     plan: Mapping[str, Any],
     *,
@@ -1055,23 +850,10 @@ def apply_runtime_plan(
         stage_recorder,
     )
 
-    user_context = _apply_user_context_stage(
-        plan,
-        token=token,
-        query=query,
-        updater=updater,
-    )
-    _record_runtime_stage(
-        verified_stages,
-        "user-context-v2-configured",
-        {"outcome": "verified", "provenance": "Dataverse reread"},
-        stage_recorder,
-    )
     return {
         "verified": True,
         "verifiedStages": verified_stages,
         "connectionBindings": connection_bindings,
         "flows": flow_names,
-        "userContext": user_context,
         "delegatedAuthorization": "verified-by-script",
     }

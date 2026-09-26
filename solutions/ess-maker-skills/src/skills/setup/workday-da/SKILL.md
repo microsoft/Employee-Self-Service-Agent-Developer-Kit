@@ -36,7 +36,7 @@ Describe each action according to who actually performs it:
 | Microsoft Entra | Discover exact applications, validate roles, generate one administrator handoff, reread Graph, and record verified evidence | Create or change the Entra application in the portal |
 | Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
 | Connections | Discover connected physical connections, verify agent parameter sharing, and record the maker's flow-attachment confirmation | Create connector connections, complete connector OAuth, connect flows to the agent, and enable parameter sharing in Copilot Studio |
-| Runtime | After approval, bind reviewed solution connection references, activate reviewed package flows, configure delegated authorization, redirect an empty User Context scaffold, and reread every write | Resolve custom topic content or a package without a reviewed runtime catalog |
+| Runtime | After approval, bind reviewed solution connection references, activate reviewed package flows, configure delegated authorization, redirect an empty User Context scaffold, and activate the complete mapped Workday topic set after connection sharing | Resolve custom topic content or a package without a reviewed runtime catalog |
 | Employee validation | Record safe validation evidence and retain the current blocker | Publish the agent, sign in as an employee, and run the real employee scenario |
 
 Never say "I changed," "I configured," "I enabled," or "I updated" for a

@@ -4,6 +4,7 @@
 """Contracts for the simplified Workday DA orchestration."""
 
 import argparse
+import json
 from pathlib import Path
 
 import pytest
@@ -56,9 +57,72 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "runtime-plan" in text
     assert "record-connections" in text
     assert "runtime-apply" in text
+    assert "record-agent-binding" in text
+    assert text.index("runtime-apply") < text.index("record-agent-binding")
     assert "one shared Dataverse session" in normalized
     assert "delegated" in text
     assert "User Context V2" in text
+    assert "activate-workday-topics.md" in text
+    assert text.index("Allow permission") < text.index(
+        "activate-workday-topics.md"
+    )
+
+
+def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
+    action = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "activate-workday-topics.md"
+    ).read_text(encoding="utf-8")
+    redirect = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "wire-user-context-redirect.md"
+    ).read_text(encoding="utf-8")
+
+    assert ".component-map.json" in action
+    assert "{AGENT_SCHEMA}.topic.Workday" in action
+    assert "all 21 Workday dialog topics" in action
+    assert "--activate --dry-run" in action
+    assert "--activate --yes" in action
+    assert "state` and `status` to `Active`" in action
+    assert "--activate" not in redirect
+
+    agent_dir = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "workspace"
+        / "agents"
+        / "employee-self-service-hr"
+    )
+    component_map = json.loads(
+        (agent_dir / ".component-map.json").read_text(encoding="utf-8")
+    )
+    workday_topics = [
+        path
+        for path, entry in component_map.items()
+        if isinstance(entry, dict)
+        and entry.get("componentKind") == "DialogComponent"
+        and str(entry.get("schemaName") or "").split(".")[-1].startswith(
+            "Workday"
+        )
+        and str(entry.get("displayName") or "").startswith("Workday")
+    ]
+    assert len(workday_topics) == 21
+    assert all((agent_dir / path).is_file() for path in workday_topics)
 
 
 def test_readiness_requires_real_employee_runtime_evidence() -> None:
