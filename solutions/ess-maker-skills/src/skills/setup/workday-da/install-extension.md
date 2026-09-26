@@ -49,6 +49,11 @@ The command performs the complete phase:
 - detects or installs the package through PAC; and
 - rereads Dataverse to prove the package is installed.
 
+This is a controller-owned automated change. It is accurate to say the package
+was installed only when PAC succeeded and the Dataverse reread found the
+expected solution. The maker still performs any browser or device-code sign-in
+and chooses the environment when discovery cannot resolve one exact target.
+
 On failure, show the controller's concise error and preserve its blocker. Do
 not replace a precise PAC, authentication, or package error with a generic
 manual-install instruction. On success, return to `SKILL.md`.

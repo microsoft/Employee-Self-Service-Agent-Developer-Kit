@@ -1,6 +1,11 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Phase 3 - Workday administrator
 
+This phase never modifies Workday. The skill generates one handoff, validates
+the administrator's non-secret response, derives deterministic endpoints, and
+records evidence. All Workday tenant changes are performed by the Workday
+administrator.
+
 Generate one administrator handoff:
 
 ```powershell
