@@ -50,6 +50,8 @@ NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 TENANT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 TITLE_ID = "secret-agent-title"
+BULLETIN_ID = "10000000-0000-0000-0000-000000000001"
+CREATED_BULLETIN_ID = "10000000-0000-0000-0000-000000000002"
 
 # Values that must never appear in any emitted field.
 SECRET_TITLE = "Layoffs announcement do not leak"
@@ -71,6 +73,8 @@ FORBIDDEN = (
     SECRET_TOKEN,
     SECRET_PROMPT,
     SECRET_URL,
+    BULLETIN_ID,
+    CREATED_BULLETIN_ID,
 )
 
 
@@ -286,11 +290,11 @@ def test_a_telemetry_failure_does_not_fail_the_tool_call(
 # --------------------------------------------------------------------------
 
 
-def _config(bulletin_id: str = "bulletin-1", *, status: str = "draft") -> dict:
+def _config(bulletin_id: str = BULLETIN_ID, *, status: str = "draft") -> dict:
     return {
+        "id": bulletin_id,
         "titleId": TITLE_ID,
         "bulletin": {
-            "id": bulletin_id,
             "type": "standard",
             "priority": 1,
             "title": SECRET_TITLE,
@@ -329,7 +333,10 @@ class _FakeClient:
     async def save_bulletin(self, title_id: str, payload: dict) -> dict:
         if self.save_error is not None:
             raise self.save_error
-        return _config(payload.get("id") or "created-1", status=payload["status"])
+        return _config(
+            payload.get("id") or CREATED_BULLETIN_ID,
+            status=payload["status"],
+        )
 
     async def transition_bulletin(self, title_id: str, bulletin_id: str, status: str) -> dict:
         return _config(bulletin_id, status=status)
@@ -507,11 +514,20 @@ def test_discovery_telemetry_records_success_without_input(
 def test_a_transition_emits_no_identifier(monkeypatch, emitted) -> None:
     _install_fakes(monkeypatch)
 
-    _call("transition_bulletin", {"id": "bulletin-1", "transition": "archive"})
+    payload = _call(
+        "transition_bulletin",
+        {"id": BULLETIN_ID, "transition": "archive"},
+    )
 
+    assert payload["status"] == "success"
+    assert payload["item"]["config"]["id"] == BULLETIN_ID
+    assert "id" not in payload["item"]["config"]["bulletin"]
+    manager_item = payload["manager"]["items"][0]
+    assert manager_item["config"]["id"] == BULLETIN_ID
+    assert manager_item["audienceMetadata"][0]["id"] == SECRET_GROUP_ID
     assert emitted
     for event in emitted:
-        assert "bulletin-1" not in _flatten(event)
+        assert BULLETIN_ID not in _flatten(event)
 
 
 def test_no_event_field_is_outside_the_agreed_set(monkeypatch, emitted) -> None:
@@ -520,10 +536,17 @@ def test_no_event_field_is_outside_the_agreed_set(monkeypatch, emitted) -> None:
 
     _call("open_org_announcements", {"view": "manager"})
     _call("save_bulletin", _save_arguments())
-    _call("transition_bulletin", {"id": "bulletin-1", "transition": "archive"})
-    _call("duplicate_bulletin", {"id": "bulletin-1"})
+    transition = _call(
+        "transition_bulletin",
+        {"id": BULLETIN_ID, "transition": "archive"},
+    )
+    duplicate = _call("duplicate_bulletin", {"id": BULLETIN_ID})
     _call("search_audience_groups", {"query": "finance"})
 
+    assert transition["status"] == "success"
+    assert duplicate["status"] == "success"
+    assert duplicate["item"]["config"]["id"] == CREATED_BULLETIN_ID
+    assert "id" not in duplicate["item"]["config"]["bulletin"]
     allowed = {
         "api_endpoint",
         "outcome",

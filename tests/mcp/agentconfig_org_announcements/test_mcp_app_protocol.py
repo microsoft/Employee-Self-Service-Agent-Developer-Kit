@@ -46,6 +46,8 @@ RESOURCE_URI = "ui://widget/org-announcements/OrgAnnouncements.html"
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 TITLE_ID = "title-1"
+BULLETIN_ID = "22222222-2222-2222-2222-222222222222"
+CREATED_BULLETIN_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 
 MODEL_VISIBLE_TOOLS = {
@@ -56,16 +58,16 @@ APP_ONLY_TOOLS = {"save_bulletin", "transition_bulletin", "duplicate_bulletin"}
 
 
 def _config(
-    bulletin_id: str = "bulletin-1",
+    bulletin_id: str = BULLETIN_ID,
     *,
     status: str = "draft",
     audience: list[str] | None = None,
     end_date: str | None = None,
 ) -> dict[str, Any]:
     return {
+        "id": bulletin_id,
         "titleId": TITLE_ID,
         "bulletin": {
-            "id": bulletin_id,
             "type": "standard",
             "priority": 1,
             "title": "Quarterly update",
@@ -78,6 +80,44 @@ def _config(
         "createdBy": "admin@contoso.com",
         "createdOn": "2026-08-01T12:00:00.000Z",
         "modifiedDate": "2026-09-02T12:00:00.000Z",
+    }
+
+
+def _odata_config(
+    bulletin_id: str = BULLETIN_ID,
+    *,
+    status: str = "draft",
+    audience: list[str] | None = None,
+    end_date: str | None = None,
+    title_id: str = TITLE_ID,
+) -> dict[str, Any]:
+    config = _config(
+        bulletin_id,
+        status=status,
+        audience=audience,
+        end_date=end_date,
+    )
+    bulletin = config["bulletin"]
+    return {
+        "Id": config["id"],
+        "TitleId": title_id,
+        "Bulletin": {
+            "Type": bulletin.get("type"),
+            "Priority": bulletin.get("priority"),
+            "Title": bulletin.get("title"),
+            "Description": bulletin.get("description"),
+            "StartDate": bulletin.get("startDate"),
+            **(
+                {"EndDate": bulletin["endDate"]}
+                if "endDate" in bulletin
+                else {}
+            ),
+        },
+        "Audience": config["audience"],
+        "Status": config["status"],
+        "CreatedBy": config["createdBy"],
+        "CreatedOn": config["createdOn"],
+        "ModifiedDate": config["modifiedDate"],
     }
 
 
@@ -133,7 +173,10 @@ class _FakeClient:
         self.saves.append(payload)
         if self.save_error is not None:
             raise self.save_error
-        return _config(payload.get("id") or "created-1", status=payload["status"])
+        return _config(
+            payload.get("id") or CREATED_BULLETIN_ID,
+            status=payload["status"],
+        )
 
     async def transition_bulletin(
         self, title_id: str, bulletin_id: str, status: str
@@ -142,6 +185,8 @@ class _FakeClient:
         self.transitions.append((bulletin_id, status))
         if self.transition_error is not None:
             raise self.transition_error
+        if status == "deleted":
+            return None
         return _config(bulletin_id, status=status)
 
 
@@ -488,8 +533,8 @@ def test_manager_open_returns_canonical_manager_state(fake_clients) -> None:
     client, _ = fake_clients(
         _FakeClient(
             items=[
-                _config("a", status="draft"),
-                _config("b", status="retired"),
+                _config(BULLETIN_ID, status="draft"),
+                _config(CREATED_BULLETIN_ID, status="retired"),
             ]
         )
     )
@@ -499,9 +544,9 @@ def test_manager_open_returns_canonical_manager_state(fake_clients) -> None:
     assert payload["view"] == "manager"
     assert payload["workingSetCount"] == 1
     assert payload["archivedTruncated"] is False
-    assert [item["config"]["bulletin"]["id"] for item in payload["items"]] == [
-        "a",
-        "b",
+    assert [item["config"]["id"] for item in payload["items"]] == [
+        BULLETIN_ID,
+        CREATED_BULLETIN_ID,
     ]
     assert client.saves == []
 
@@ -789,20 +834,21 @@ def test_the_opener_schema_forbids_canonical_draft_fields() -> None:
 
 def test_edit_open_loads_the_canonical_record(fake_clients) -> None:
     client, _ = fake_clients(
-        _FakeClient(get_result=_config("bulletin-1", status="published"))
+        _FakeClient(get_result=_config(BULLETIN_ID, status="published"))
     )
 
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "bulletin-1"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
-    assert client.gets == ["bulletin-1"]
+    assert client.gets == [BULLETIN_ID]
     assert payload["mode"] == "edit"
-    assert payload["config"]["bulletin"]["id"] == "bulletin-1"
-    assert payload["draft"]["id"] == "bulletin-1"
+    assert payload["config"]["id"] == BULLETIN_ID
+    assert "id" not in payload["config"]["bulletin"]
+    assert payload["draft"]["id"] == BULLETIN_ID
     assert payload["draft"]["startDate"] == "2026-09-01T00:00:00.000Z"
 
 
@@ -812,7 +858,9 @@ def test_editing_an_expired_announcement_preserves_its_schedule(
     fake_clients(
         _FakeClient(
             get_result=_config(
-                "bulletin-1", status="published", end_date="2026-08-01T00:00:00.000Z"
+                BULLETIN_ID,
+                status="published",
+                end_date="2026-08-01T00:00:00.000Z",
             )
         )
     )
@@ -820,7 +868,7 @@ def test_editing_an_expired_announcement_preserves_its_schedule(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "bulletin-1"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -872,14 +920,17 @@ def test_open_errors_preserve_the_scoped_request_for_retry(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "secret-id"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
     assert payload["view"] == "error"
     assert payload["code"] == "NotFound"
     assert payload["request"] == {
-        "titleId": TITLE_ID, "view": "editor", "mode": "edit", "bulletinId": "secret-id"
+        "titleId": TITLE_ID,
+        "view": "editor",
+        "mode": "edit",
+        "bulletinId": BULLETIN_ID,
     }
     assert payload["tenantId"] == TENANT_ID
     assert payload["titleId"] == TITLE_ID
@@ -917,7 +968,7 @@ def test_saved_audiences_that_cannot_be_resolved_stay_present_but_invalid(
 ) -> None:
     fake_clients(
         _FakeClient(
-            get_result=_config("bulletin-1", audience=["g1", "missing", "g1"])
+            get_result=_config(BULLETIN_ID, audience=["g1", "missing", "g1"])
         ),
         _FakeGraphClient(
             resolved={
@@ -934,7 +985,7 @@ def test_saved_audiences_that_cannot_be_resolved_stay_present_but_invalid(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "bulletin-1"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -969,7 +1020,7 @@ def test_backend_failures_map_to_discriminated_open_errors(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "b"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -990,7 +1041,7 @@ def test_open_errors_do_not_expose_backend_details(fake_clients, http_status) ->
 
     result = _call(
         "open_org_announcements",
-        {"view": "editor", "mode": "edit", "bulletinId": "b"},
+        {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
     )
     payload = _structured(result)
 
@@ -1017,7 +1068,7 @@ def test_open_errors_rebuild_messages_for_recognized_backend_codes(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "b"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -1044,7 +1095,7 @@ def test_a_feature_gated_tenant_reports_feature_unavailable(
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "b"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -1064,7 +1115,7 @@ def test_open_transport_failure_is_a_retryable_network_error(fake_clients) -> No
     payload = _structured(
         _call(
             "open_org_announcements",
-            {"view": "editor", "mode": "edit", "bulletinId": "b"},
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
         )
     )
 
@@ -1109,9 +1160,12 @@ def test_create_sends_complete_content_without_an_identifier(fake_clients) -> No
 def test_update_sends_the_identifier_and_complete_state(fake_clients) -> None:
     client, _ = fake_clients()
 
-    _call("save_bulletin", _save_arguments(id="bulletin-1", status="published"))
+    _call(
+        "save_bulletin",
+        _save_arguments(id=BULLETIN_ID, status="published"),
+    )
 
-    assert client.saves[0]["id"] == "bulletin-1"
+    assert client.saves[0]["id"] == BULLETIN_ID
     assert client.saves[0]["status"] == "published"
     assert client.saves[0]["audience"] == ["g1"]
 
@@ -1125,7 +1179,7 @@ def test_publish_now_is_expressed_as_a_save_with_the_current_instant(
     _call(
         "save_bulletin",
         _save_arguments(
-            id="bulletin-1",
+            id=BULLETIN_ID,
             status="published",
             bulletin={
                 "type": "standard",
@@ -1233,12 +1287,12 @@ def test_a_duplicate_of_a_dateless_source_sends_no_empty_string(
     fake_clients,
 ) -> None:
     """The duplicate path rebuilds the payload from stored content."""
-    source = _config("bulletin-1")
+    source = _config(BULLETIN_ID)
     source["bulletin"]["startDate"] = ""
     source["bulletin"]["endDate"] = ""
     client, _ = fake_clients(_FakeClient(get_result=source))
 
-    _call("duplicate_bulletin", {"id": "bulletin-1"})
+    _call("duplicate_bulletin", {"id": BULLETIN_ID})
 
     sent = client.saves[0]
     # Duplicate forwards stored content verbatim and so never passes through
@@ -1258,7 +1312,7 @@ def test_save_returns_the_canonical_item_and_refreshed_manager_state(
 
     payload = _structured(_call("save_bulletin", _save_arguments()))
 
-    assert payload["item"]["config"]["bulletin"]["id"] == "created-1"
+    assert payload["item"]["config"]["id"] == CREATED_BULLETIN_ID
     assert payload["item"]["audienceMetadata"][0]["id"] == "g1"
     assert "workingSetCount" in payload["manager"]
     assert "archivedTruncated" in payload["manager"]
@@ -1527,7 +1581,7 @@ def test_a_graph_failure_after_a_committed_save_is_not_retryable(
 
 
 @pytest.mark.parametrize("saved_audience", [[], ["g1"]], ids=["manager-hydration", "saved-item-hydration"])
-@pytest.mark.parametrize("identifier", [None, "existing-1"], ids=["create", "update"])
+@pytest.mark.parametrize("identifier", [None, BULLETIN_ID], ids=["create", "update"])
 def test_committed_save_graph_failure_preserves_full_envelope_and_never_replays(
     fake_clients, saved_audience, identifier
 ) -> None:
@@ -1591,7 +1645,7 @@ def test_a_refresh_failure_after_a_committed_duplicate_is_not_retryable(
         )
     )
 
-    payload = _structured(_call("duplicate_bulletin", {"id": "bulletin-1"}))
+    payload = _structured(_call("duplicate_bulletin", {"id": BULLETIN_ID}))
 
     assert payload["errors"][0]["code"] == "CommittedRefreshFailed"
     assert payload["errors"][0]["retryable"] is False
@@ -1610,12 +1664,15 @@ def test_a_refresh_failure_after_a_committed_transition_is_not_retryable(
     )
 
     payload = _structured(
-        _call("transition_bulletin", {"id": "bulletin-1", "transition": "archive"})
+        _call(
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": "archive"},
+        )
     )
 
     assert payload["errors"][0]["code"] == "CommittedRefreshFailed"
     assert payload["errors"][0]["retryable"] is False
-    assert client.transitions == [("bulletin-1", "retired")]
+    assert client.transitions == [(BULLETIN_ID, "retired")]
 
 
 def test_a_failed_write_stays_a_normal_retryable_failure(fake_clients) -> None:
@@ -1676,25 +1733,32 @@ def test_transitions_map_to_minimal_status_payloads(
     client, _ = fake_clients()
 
     payload = _structured(
-        _call("transition_bulletin", {"id": "bulletin-1", "transition": transition})
+        _call(
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": transition},
+        )
     )
 
-    assert client.transitions == [("bulletin-1", status)]
+    assert client.transitions == [(BULLETIN_ID, status)]
     assert client.saves == []
     assert payload["status"] == "success"
     assert "manager" in payload
-    # The canonical changed row is included alongside the manager state. It is
-    # additive, so a host that strips unknown fields still gets the refresh.
-    assert payload["item"]["config"]["bulletin"]["id"] == "bulletin-1"
-    assert payload["item"]["config"]["status"] == status
+    if status == "deleted":
+        assert "item" not in payload
+    else:
+        assert payload["item"]["config"]["id"] == BULLETIN_ID
+        assert payload["item"]["config"]["status"] == status
 
 
 def test_transition_success_keeps_the_manager_shape_intact(fake_clients) -> None:
     """The added item must not disturb the manager contract Vorpal reads."""
-    fake_clients(_FakeClient(items=[_config("bulletin-1", audience=["g1"])]))
+    fake_clients(_FakeClient(items=[_config(BULLETIN_ID, audience=["g1"])]))
 
     payload = _structured(
-        _call("transition_bulletin", {"id": "bulletin-1", "transition": "archive"})
+        _call(
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": "archive"},
+        )
     )
 
     manager = payload["manager"]
@@ -1711,7 +1775,7 @@ def test_publish_now_is_not_a_transition_operation(fake_clients) -> None:
     with pytest.raises(ToolError):
         _call(
             "transition_bulletin",
-            {"id": "bulletin-1", "transition": "publishNow"},
+            {"id": BULLETIN_ID, "transition": "publishNow"},
         )
 
     assert client.transitions == []
@@ -1740,7 +1804,7 @@ def test_a_legacy_publish_now_is_rejected_by_host_validation(fake_clients) -> No
     with pytest.raises(ToolError) as caught:
         _call(
             "transition_bulletin",
-            {"id": "bulletin-1", "transition": "publishNow"},
+            {"id": BULLETIN_ID, "transition": "publishNow"},
         )
 
     # The rejection names the field and the permitted values, so the failure is
@@ -1807,23 +1871,29 @@ def test_archive_then_unarchive_preserves_content_and_audience(
     target ring — see the backend alignment gate in the dev spec.
     """
     original = _config(
-        "bulletin-1", status="published", audience=["g1", "g2", "g1"]
+        BULLETIN_ID, status="published", audience=["g1", "g2", "g1"]
     )
     original["bulletin"]["title"] = "Benefits enrollment"
     original["bulletin"]["description"] = "Enroll before Friday."
-    store = {"bulletin-1": copy.deepcopy(original)}
+    store = {BULLETIN_ID: copy.deepcopy(original)}
     client, _ = fake_clients(_StatefulFakeClient(store))
 
     archived = _structured(
-        _call("transition_bulletin", {"id": "bulletin-1", "transition": "archive"})
+        _call(
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": "archive"},
+        )
     )
     unarchived = _structured(
-        _call("transition_bulletin", {"id": "bulletin-1", "transition": "unarchive"})
+        _call(
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": "unarchive"},
+        )
     )
 
     assert client.transitions == [
-        ("bulletin-1", "retired"),
-        ("bulletin-1", "draft"),
+        (BULLETIN_ID, "retired"),
+        (BULLETIN_ID, "draft"),
     ]
     # No client-side read/merge/write: the payload carried only {id, status}.
     assert client.saves == []
@@ -1833,7 +1903,7 @@ def test_archive_then_unarchive_preserves_content_and_audience(
     assert unarchived["item"]["config"]["status"] == "draft"
 
     # Everything except status is byte-identical to the original record.
-    restored = store["bulletin-1"]
+    restored = store[BULLETIN_ID]
     assert restored["bulletin"] == original["bulletin"]
     # Order and multiplicity are preserved exactly, duplicates included.
     assert restored["audience"] == ["g1", "g2", "g1"]
@@ -1842,38 +1912,39 @@ def test_archive_then_unarchive_preserves_content_and_audience(
 def test_published_to_draft_preserves_content_through_a_stateful_backend(
     fake_clients,
 ) -> None:
-    original = _config("bulletin-1", status="published", audience=["g1"])
+    original = _config(BULLETIN_ID, status="published", audience=["g1"])
     original["bulletin"]["title"] = "Quarterly all-hands"
-    store = {"bulletin-1": copy.deepcopy(original)}
+    store = {BULLETIN_ID: copy.deepcopy(original)}
     client, _ = fake_clients(_StatefulFakeClient(store))
 
     payload = _structured(
         _call(
-            "transition_bulletin", {"id": "bulletin-1", "transition": "moveToDraft"}
+            "transition_bulletin",
+            {"id": BULLETIN_ID, "transition": "moveToDraft"},
         )
     )
 
-    assert client.transitions == [("bulletin-1", "draft")]
+    assert client.transitions == [(BULLETIN_ID, "draft")]
     assert client.saves == []
     assert payload["item"]["config"]["status"] == "draft"
-    assert store["bulletin-1"]["bulletin"] == original["bulletin"]
-    assert store["bulletin-1"]["audience"] == ["g1"]
+    assert store[BULLETIN_ID]["bulletin"] == original["bulletin"]
+    assert store[BULLETIN_ID]["audience"] == ["g1"]
 
 
 def test_deleted_rows_are_excluded_from_the_manager(fake_clients) -> None:
     fake_clients(
         _FakeClient(
             items=[
-                _config("keep-1", status="draft"),
-                _config("gone-1", status="deleted"),
+                _config(BULLETIN_ID, status="draft"),
+                _config(CREATED_BULLETIN_ID, status="deleted"),
             ]
         )
     )
 
     payload = _structured(_call("open_org_announcements", {"view": "manager"}))
 
-    assert [item["config"]["bulletin"]["id"] for item in payload["items"]] == [
-        "keep-1"
+    assert [item["config"]["id"] for item in payload["items"]] == [
+        BULLETIN_ID
     ]
     assert payload["workingSetCount"] == 1
 
@@ -1886,13 +1957,13 @@ def test_deleted_rows_are_excluded_from_the_manager(fake_clients) -> None:
 def test_duplicate_strips_identity_and_audit_fields_and_creates_a_draft(
     fake_clients,
 ) -> None:
-    source = _config("bulletin-1", status="published", audience=["g1", "g2"])
+    source = _config(BULLETIN_ID, status="published", audience=["g1", "g2"])
     source["bulletin"]["modifiedDate"] = "2026-09-02T12:00:00.000Z"
     client, _ = fake_clients(_FakeClient(get_result=source))
 
-    payload = _structured(_call("duplicate_bulletin", {"id": "bulletin-1"}))
+    payload = _structured(_call("duplicate_bulletin", {"id": BULLETIN_ID}))
 
-    assert client.gets == ["bulletin-1"]
+    assert client.gets == [BULLETIN_ID]
     saved = client.saves[0]
     assert "id" not in saved
     assert "id" not in saved["bulletin"]
@@ -1910,7 +1981,7 @@ def test_duplicate_of_a_missing_source_is_not_a_create(fake_clients) -> None:
         )
     )
 
-    payload = _structured(_call("duplicate_bulletin", {"id": "bulletin-1"}))
+    payload = _structured(_call("duplicate_bulletin", {"id": BULLETIN_ID}))
 
     assert payload["status"] == "failure"
     assert payload["errors"][0]["code"] == "NotFound"
@@ -1926,7 +1997,7 @@ def test_duplicate_reports_an_indeterminate_write(fake_clients) -> None:
         )
     )
 
-    payload = _structured(_call("duplicate_bulletin", {"id": "bulletin-1"}))
+    payload = _structured(_call("duplicate_bulletin", {"id": BULLETIN_ID}))
 
     assert payload["errors"][0]["code"] == "IndeterminateWrite"
     assert len(client.saves) == 1
@@ -2037,8 +2108,8 @@ def test_missing_title_is_a_host_error_before_any_client_call(monkeypatch, tool,
     [
         ("open_org_announcements", {"view": "editor", "mode": "create"}),
         ("save_bulletin", _save_arguments()),
-        ("transition_bulletin", {"id": "a", "transition": "archive"}),
-        ("duplicate_bulletin", {"id": "a"}),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}),
     ],
 )
 def test_invalid_title_never_acquires_a_client(monkeypatch, title_id, tool, arguments) -> None:
@@ -2087,10 +2158,13 @@ def test_invalid_mutation_id_never_acquires_a_client(
     [
         ("open_org_announcements", {"view": "manager"}),
         ("open_org_announcements", {"view": "editor", "mode": "create"}),
-        ("open_org_announcements", {"view": "editor", "mode": "edit", "bulletinId": "bulletin-1"}),
+        (
+            "open_org_announcements",
+            {"view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID},
+        ),
         ("save_bulletin", _save_arguments()),
-        ("transition_bulletin", {"id": "bulletin-1", "transition": "archive"}),
-        ("duplicate_bulletin", {"id": "bulletin-1"}),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}),
     ],
 )
 def test_success_envelopes_and_reusable_managers_carry_scope(fake_clients, tool, arguments) -> None:
@@ -2112,8 +2186,8 @@ def test_success_envelopes_and_reusable_managers_carry_scope(fake_clients, tool,
     [
         ("open_org_announcements", {"view": "editor", "mode": "create"}),
         ("save_bulletin", _save_arguments()),
-        ("transition_bulletin", {"id": "a", "transition": "archive"}),
-        ("duplicate_bulletin", {"id": "a"}),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}),
     ],
 )
 def test_auth_failure_before_tenant_resolution_omits_tenant(monkeypatch, tool, arguments) -> None:
@@ -2214,19 +2288,19 @@ def test_wrong_scope_is_rejected_before_audience_hydration(
     token_payload = base64.urlsafe_b64encode(json.dumps({"tid": TENANT_ID}).encode()).rstrip(b"=")
     monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"header.{token_payload.decode()}.signature")
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
-    config = _config()
+    config = _odata_config()
     if response_title is None:
-        config.pop("titleId")
+        config.pop("TitleId")
     else:
-        config["titleId"] = response_title
+        config["TitleId"] = response_title
     requests = []
 
     def handler(request):
         requests.append(request)
         if operation == "manager":
-            body = [config]
-        elif operation in ("save", "transition"):
-            body = {"id": "bulletin-1", "config": config, "errors": []}
+            body = {"value": [config]}
+        elif operation in ("save", "transition") and request.method == "POST":
+            body = {"Id": BULLETIN_ID, "Errors": []}
         else:
             body = config
         return httpx.Response(200, json=body)
@@ -2234,22 +2308,30 @@ def test_wrong_scope_is_rejected_before_audience_hydration(
     client = org_client.OrgAnnouncementsClient(transport=httpx.MockTransport(handler))
     _, graph = fake_clients(client)
     tool, arguments = {
-        "duplicate": ("duplicate_bulletin", {"id": "bulletin-1"}),
+        "duplicate": ("duplicate_bulletin", {"id": BULLETIN_ID}),
         "manager": ("open_org_announcements", {"view": "manager"}),
         "edit": ("open_org_announcements", {
-            "view": "editor", "mode": "edit", "bulletinId": "bulletin-1"
+            "view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID
         }),
-        "save": ("save_bulletin", {**_save_arguments(), "id": "bulletin-1"}),
+        "save": ("save_bulletin", {**_save_arguments(), "id": BULLETIN_ID}),
         "transition": ("transition_bulletin", {
-            "id": "bulletin-1", "transition": "archive"
+            "id": BULLETIN_ID, "transition": "archive"
         }),
     }[operation]
     payload = _structured(_call(tool, arguments))
-    assert payload.get("code") == "ServiceError" or payload["errors"][0]["code"] == "ServiceError"
+    expected_code = (
+        "CommittedRefreshFailed"
+        if operation in ("save", "transition")
+        else "ServiceError"
+    )
+    assert (
+        payload.get("code") == expected_code
+        or payload["errors"][0]["code"] == expected_code
+    )
     assert payload["titleId"] == TITLE_ID
     assert "config" not in payload and "item" not in payload and "manager" not in payload
     assert graph.resolve_calls == []
-    assert len(requests) == 1
+    assert len(requests) == (2 if operation in ("save", "transition") else 1)
     asyncio.run(client.aclose())
 
 
@@ -2258,7 +2340,7 @@ def test_overlapping_opens_do_not_share_an_active_title(fake_clients) -> None:
         async def list_bulletins(self, title_id):
             self.title_ids.append(title_id)
             await asyncio.sleep(0)
-            return [{**_config("shared-id", audience=[]), "titleId": title_id}]
+            return [{**_config(BULLETIN_ID, audience=[]), "titleId": title_id}]
 
     client = ScopedClient()
     fake_clients(client)
@@ -2289,11 +2371,11 @@ def test_overlapping_opens_do_not_share_an_active_title(fake_clients) -> None:
             "view": "editor", "mode": "create", "suggestedDraft": {"audience": ["g1"]}
         }),
         ("open_org_announcements", {
-            "view": "editor", "mode": "edit", "bulletinId": "bulletin-1"
+            "view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID
         }),
         ("save_bulletin", _save_arguments()),
-        ("transition_bulletin", {"id": "bulletin-1", "transition": "archive"}),
-        ("duplicate_bulletin", {"id": "bulletin-1"}),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}),
         ("search_audience_groups", {"query": "finance"}),
     ],
 )
@@ -2462,8 +2544,8 @@ def test_graph_cache_failure_after_commit_preserves_no_repeat_semantics(
     client, _ = fake_clients()
     arguments = {
         "save_bulletin": _save_arguments(),
-        "duplicate_bulletin": {"id": "bulletin-1"},
-        "transition_bulletin": {"id": "bulletin-1", "transition": "archive"},
+        "duplicate_bulletin": {"id": BULLETIN_ID},
+        "transition_bulletin": {"id": BULLETIN_ID, "transition": "archive"},
     }[tool]
 
     def already_committed():
@@ -2497,7 +2579,7 @@ def test_graph_cache_failure_after_commit_preserves_no_repeat_semantics(
             "view": "editor", "mode": "create", "suggestedDraft": {"audience": ["g1"]}
         }, "AudienceMetadataUnavailable"),
         ("open_org_announcements", {
-            "view": "editor", "mode": "edit", "bulletinId": "bulletin-1"
+            "view": "editor", "mode": "edit", "bulletinId": BULLETIN_ID
         }, "AudienceMetadataUnavailable"),
     ],
 )
@@ -2534,8 +2616,8 @@ def test_graph_cache_failure_preserves_open_and_search_envelopes(
     [
         ("open_org_announcements", {"view": "editor", "mode": "create"}),
         ("save_bulletin", _save_arguments()),
-        ("duplicate_bulletin", {"id": "bulletin-1"}),
-        ("transition_bulletin", {"id": "bulletin-1", "transition": "archive"}),
+        ("duplicate_bulletin", {"id": BULLETIN_ID}),
+        ("transition_bulletin", {"id": BULLETIN_ID, "transition": "archive"}),
         ("search_audience_groups", {"query": "finance"}),
     ],
 )

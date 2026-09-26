@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+from uuid import UUID
 
 # The AgentConfiguration MCP family lives at the ``src/mcp`` root as sibling
 # folders sharing the neutral ``agentconfig_core`` client core. There is no
@@ -29,9 +30,9 @@ def validate_title_id(title_id: str) -> str:
 
 
 def validate_bulletin_id(bulletin_id: str) -> str:
-    """Validate a path-bound backend-assigned bulletin identifier."""
+    """Validate and canonicalize the backend-assigned OData Guid key."""
     if not isinstance(bulletin_id, str) or not bulletin_id:
-        raise ValueError("bulletinId must be a non-empty string")
+        raise ValueError("bulletinId must be a non-empty GUID string")
     if bulletin_id != bulletin_id.strip():
         raise ValueError("bulletinId must not have surrounding whitespace")
     if bulletin_id in {".", ".."}:
@@ -48,4 +49,10 @@ def validate_bulletin_id(bulletin_id: str) -> str:
         raise ValueError(
             "bulletinId must not contain path, query, fragment, or escape separators"
         )
-    return bulletin_id
+    try:
+        parsed = UUID(bulletin_id)
+    except (ValueError, AttributeError) as error:
+        raise ValueError("bulletinId must be a valid GUID") from error
+    if parsed.int == 0:
+        raise ValueError("bulletinId must not be the empty GUID")
+    return str(parsed)

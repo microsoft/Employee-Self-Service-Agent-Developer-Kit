@@ -46,8 +46,10 @@ from pydantic import ValidationError
 from client import (
     AgentConfigApiError,
     BulletinValidationError,
+    CommittedCanonicalReloadError,
     IndeterminateWriteError,
     OrgAnnouncementsClient,
+    STATUS_DELETED,
     build_manager_state,
     is_deleted_item,
 )
@@ -123,7 +125,7 @@ TRANSITION_STATUS = {
     "archive": "retired",
     "unarchive": "draft",
     "moveToDraft": "draft",
-    "delete": "deleted",
+    "delete": STATUS_DELETED,
 }
 TransitionName = Literal["archive", "unarchive", "moveToDraft", "delete"]
 
@@ -170,13 +172,19 @@ _BACKEND_DIAGNOSTIC_CODES = frozenset(
     {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed"}
 )
 
-# Identity and audit fields the backend owns. A duplicate strips them from the
-# copied content so the copy is created as a fresh Draft rather than silently
-# updating its source or inheriting its history. The wrapper-level audit fields
-# (createdBy/createdOn/modifiedDate/status) are never copied at all, because the
-# duplicate payload is rebuilt from content and audience only.
-_COPY_STRIPPED_FIELDS = frozenset(
-    {"id", "createdBy", "createdOn", "modifiedDate", "status", "version", "etag"}
+# Closed authored-content projection accepted by WeveNova's EssBulletinContent
+# DTO. A duplicate never forwards provider-added fields back into Save.
+_AUTHORED_BULLETIN_FIELDS = frozenset(
+    {
+        "type",
+        "priority",
+        "title",
+        "description",
+        "primaryAction",
+        "secondaryAction",
+        "startDate",
+        "endDate",
+    }
 )
 
 
@@ -785,8 +793,7 @@ async def _resolve_manager_metadata(
 
     metadata: dict[str, list[dict[str, Any]]] = {}
     for config in visible:
-        bulletin = config.get("bulletin")
-        bulletin_id = bulletin.get("id") if isinstance(bulletin, dict) else None
+        bulletin_id = config.get("id")
         audience = config.get("audience")
         metadata[bulletin_id or ""] = build_audience_metadata(
             [group_id for group_id in audience if isinstance(group_id, str)]
@@ -1267,7 +1274,20 @@ async def save_bulletin(
     try:
         async with get_client_lease() as client:
             scope = {"tenantId": client.tenant_id, "titleId": titleId}
-            saved = await client.save_bulletin(titleId, payload)
+            try:
+                saved = await client.save_bulletin(titleId, payload)
+            except CommittedCanonicalReloadError as error:
+                failure = await _failure_from(error.cause, client)
+                _LOGGER.warning(
+                    "save_bulletin canonical reload failed after commit: %s",
+                    _diagnostic_code(failure),
+                )
+                return _fail(
+                    "save_bulletin",
+                    _committed_refresh_failure(failure),
+                    started,
+                    scope,
+                )
 
             try:
                 result = await _saved_item_result(
@@ -1347,9 +1367,23 @@ async def transition_bulletin(
         validate_bulletin_id(id)
         async with get_client_lease() as client:
             scope = {"tenantId": client.tenant_id, "titleId": titleId}
-            changed = await client.transition_bulletin(
-                titleId, id, TRANSITION_STATUS[transition]
-            )
+            try:
+                changed = await client.transition_bulletin(
+                    titleId, id, TRANSITION_STATUS[transition]
+                )
+            except CommittedCanonicalReloadError as error:
+                cause = await _failure_from(error.cause, client)
+                _LOGGER.warning(
+                    "transition_bulletin canonical reload failed after commit: %s (%s)",
+                    _diagnostic_code(cause),
+                    transition,
+                )
+                return _fail(
+                    "transition_bulletin",
+                    _committed_refresh_failure(cause),
+                    started,
+                    scope,
+                )
 
             # The transition is committed from here on. A refresh failure must never be
             # reported as a retryable normal failure, because the lifecycle change has
@@ -1379,17 +1413,14 @@ async def transition_bulletin(
                 outcome="success",
                 latency_ms=_elapsed_ms(started),
             )
-            # The canonical changed row is included alongside the manager state. It is
-            # additive: the widget's existing manager-shaped contract is untouched, so a
-            # host that strips unknown fields simply ignores ``item`` and still gets a
-            # correct refresh.
+            # Non-delete transitions include the canonical changed row alongside
+            # the manager state. Delete returns only the refreshed manager because
+            # the tombstoned resource is no longer readable.
+            payload = {**scope, "status": "success", "manager": manager}
+            if changed is not None:
+                payload["item"] = {"config": changed}
             return _text_result(
-                {
-                    **scope,
-                    "status": "success",
-                    "item": {"config": changed},
-                    "manager": manager,
-                },
+                payload,
                 "Updated the organization announcement.",
             )
     except _MUTATION_ERRORS as error:
@@ -1412,10 +1443,9 @@ async def duplicate_bulletin(
 ) -> CallToolResult:
     """Copy an existing announcement into a new Draft.
 
-    Loads the canonical source, strips its identity and audit fields, and
-    creates a new Draft. A missing source is a not-found failure, never a
-    create: duplicating something that no longer exists must not invent a
-    record.
+    Loads the canonical source, projects only WeveNova-authored content fields,
+    and creates a new Draft. A missing source is a not-found failure, never a
+    create: duplicating something that no longer exists must not invent a record.
     """
     started = time.monotonic()
     scope = {"titleId": titleId}
@@ -1427,15 +1457,13 @@ async def duplicate_bulletin(
             scope = {"tenantId": client.tenant_id, "titleId": titleId}
             source = await client.get_bulletin(titleId, id)
 
-            # Stored content is forwarded verbatim, so it never passes through
-            # BulletinInput. The blank-schedule sentinel is stripped explicitly here for
-            # the same reason it is coerced there: "" is not a DateTimeOffset, and
-            # sending it would fail model binding on a copy the maker never edited.
+            # Stored content does not pass through BulletinInput. Project the
+            # provider's closed DTO and strip blank schedule sentinels before Save.
             bulletin = without_blank_schedule(
                 {
                     key: value
                     for key, value in source["bulletin"].items()
-                    if key not in _COPY_STRIPPED_FIELDS
+                    if key in _AUTHORED_BULLETIN_FIELDS
                 }
             )
             audience = source.get("audience")
@@ -1453,6 +1481,18 @@ async def duplicate_bulletin(
 
             try:
                 created = await client.save_bulletin(titleId, payload)
+            except CommittedCanonicalReloadError as error:
+                failure = await _failure_from(error.cause, client)
+                _LOGGER.warning(
+                    "duplicate_bulletin canonical reload failed after commit: %s",
+                    _diagnostic_code(failure),
+                )
+                return _fail(
+                    "duplicate_bulletin",
+                    _committed_refresh_failure(failure),
+                    started,
+                    scope,
+                )
             except _MUTATION_ERRORS as error:
                 failure = await _failure_from(error, client)
                 _LOGGER.warning(

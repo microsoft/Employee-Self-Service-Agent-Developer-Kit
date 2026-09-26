@@ -11,6 +11,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 import pytest
@@ -41,19 +42,136 @@ org_validation = _ORG_MODULES["validation"]
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 TITLE_ID = "title-1"
 BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
-COLLECTION_PATH = f"/weveb2/api/v1.1/tenants('{TENANT_ID}')/EmployeeAgents('{TITLE_ID}')/essbulletins"
+COLLECTION_PATH = f"/weveb2/api/v1.1/tenants('{TENANT_ID}')/EmployeeAgents('{TITLE_ID}')/EssBulletins"
+MANAGEMENT_PATH = f"{COLLECTION_PATH}/ManagementView()"
+BULLETIN_ID = "22222222-2222-2222-2222-222222222222"
+OTHER_BULLETIN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+CREATED_BULLETIN_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+VALID_BULLETIN_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
-_UNSET = object()
+CONTRACT_FIXTURE = (
+    Path(__file__).with_name("fixtures")
+    / "wevenova_ess_bulletin_contract.json"
+)
+PROVIDER_CONTRACT = json.loads(CONTRACT_FIXTURE.read_text(encoding="utf-8"))
 
 
 def test_request_validators_are_shared_public_boundary_helpers() -> None:
     assert org_validation.validate_title_id(TITLE_ID) == TITLE_ID
-    assert org_validation.validate_bulletin_id("bulletin-1") == "bulletin-1"
+    assert org_validation.validate_bulletin_id(BULLETIN_ID) == BULLETIN_ID
 
     with pytest.raises(ValueError, match="titleId"):
         org_validation.validate_title_id(" padded")
     with pytest.raises(ValueError, match="bulletinId"):
         org_validation.validate_bulletin_id("bad/id")
+
+
+def test_provider_contract_fixture_records_authoritative_provenance() -> None:
+    source = PROVIDER_CONTRACT["source"]
+    identity = PROVIDER_CONTRACT["identity"]
+
+    assert source == {
+        "repository": "WeveNova",
+        "branch": "users/sophiesong/essbulletin-api-tools",
+        "commit": "fa4679cf74",
+        "dto": "EssBulletinResource / EssBulletinContent / EssBulletinAction",
+    }
+    assert identity == {
+        "resourceIdType": "Guid",
+        "resourceIdLocation": "root",
+        "contentHasId": False,
+    }
+    assert PROVIDER_CONTRACT["audience"]["nullable"] is False
+
+
+def test_provider_contract_values_are_accepted_at_the_odata_boundary() -> None:
+    for status in PROVIDER_CONTRACT["statusValues"]:
+        assert _canonical_config(status=status)["status"] == status
+
+    for bulletin_type in PROVIDER_CONTRACT["bulletinTypeValues"]:
+        payload = _config()
+        payload["Bulletin"]["Type"] = bulletin_type
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["type"]
+            == bulletin_type
+        )
+
+    for priority in PROVIDER_CONTRACT["priorityValues"]:
+        payload = _config()
+        payload["Bulletin"]["Priority"] = priority
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["priority"]
+            == priority
+        )
+
+    for action_type in PROVIDER_CONTRACT["actionTypeValues"]:
+        payload = _config()
+        payload["Bulletin"]["PrimaryAction"] = {
+            "ActionType": action_type,
+            "Label": "Open",
+        }
+        assert (
+            org_client.OrgAnnouncementsClient._require_config(
+                payload, TITLE_ID
+            )["bulletin"]["primaryAction"]["actionType"]
+            == action_type
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("Status",), "Draft", "invalid status"),
+        (("Bulletin", "Type"), "Standard", "invalid bulletin type"),
+        (("Bulletin", "Priority"), 2, "invalid bulletin priority"),
+        (
+            ("Bulletin", "PrimaryAction", "ActionType"),
+            "ExternalLink",
+            "invalid action type",
+        ),
+    ],
+)
+def test_unknown_provider_enum_values_are_rejected(
+    path, value, message
+) -> None:
+    payload = _config()
+    payload["Bulletin"]["PrimaryAction"] = {
+        "ActionType": "externalLink",
+        "Label": "Open",
+    }
+    target = payload
+    for segment in path[:-1]:
+        target = target[segment]
+    target[path[-1]] = value
+
+    with pytest.raises(org_client.AgentConfigApiError, match=message):
+        org_client.OrgAnnouncementsClient._require_config(payload, TITLE_ID)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "Draft"},
+        {"status": "draft", "bulletin": {"type": "Standard"}},
+        {"status": "draft", "bulletin": {"priority": 2}},
+        {
+            "status": "draft",
+            "bulletin": {
+                "primaryAction": {
+                    "actionType": "ExternalLink",
+                    "label": "Open",
+                }
+            },
+        },
+    ],
+)
+def test_unknown_input_enum_values_are_rejected_before_post(payload) -> None:
+    with pytest.raises(ValueError, match="unsupported value"):
+        org_client._to_odata_save_input(payload)
 
 
 def _token(tenant_id: str = TENANT_ID) -> str:
@@ -73,7 +191,7 @@ def _make_client(monkeypatch, handler, *, tenant_id=TENANT_ID) -> org_client.Org
 
 
 def _config(
-    bulletin_id: str,
+    bulletin_id: str = BULLETIN_ID,
     *,
     status: str = "draft",
     end_date: str | None = None,
@@ -81,44 +199,58 @@ def _config(
     title_id: str = TITLE_ID,
 ) -> dict:
     return {
-        "titleId": title_id,
-        "bulletin": {
-            "id": bulletin_id,
-            "type": "standard",
-            "priority": 1,
-            "title": "Announcement",
-            "description": "Body",
-            "startDate": "2026-09-01T00:00:00.000Z",
-            **({"endDate": end_date} if end_date else {}),
+        "Id": bulletin_id,
+        "TitleId": title_id,
+        "Bulletin": {
+            "Type": "standard",
+            "Priority": 1,
+            "Title": "Announcement",
+            "Description": "Body",
+            "StartDate": "2026-09-01T00:00:00.000Z",
+            **({"EndDate": end_date} if end_date else {}),
         },
-        "audience": audience if audience is not None else ["group-a"],
-        "status": status,
-        "createdBy": "admin@contoso.com",
-        "createdOn": "2026-08-01T12:00:00.000Z",
-        "modifiedDate": "2026-09-02T12:00:00.000Z",
+        "Audience": audience if audience is not None else ["group-a"],
+        "Status": status,
+        "CreatedBy": "admin@contoso.com",
+        "CreatedOn": "2026-08-01T12:00:00.000Z",
+        "ModifiedDate": "2026-09-02T12:00:00.000Z",
     }
 
 
 def _save_result(
-    bulletin_id: str,
+    bulletin_id: str = BULLETIN_ID,
+    *,
+    errors: list[dict] | None = None,
+    result_id: str | None = None,
+) -> dict:
+    return {
+        "Id": bulletin_id if result_id is None else result_id,
+        "Errors": errors if errors is not None else [],
+    }
+
+
+def _canonical_config(
+    bulletin_id: str = BULLETIN_ID,
     *,
     status: str = "draft",
-    errors: list[dict] | None = None,
-    config: dict | None = None,
-    result_id: str | None = _UNSET,
+    end_date: str | None = None,
+    audience: list[str] | None = None,
+    title_id: str = TITLE_ID,
 ) -> dict:
-    """Build an ``EssBulletinSaveResult`` exactly as WeveNova returns it.
+    return org_client.OrgAnnouncementsClient._require_config(
+        _config(
+            bulletin_id,
+            status=status,
+            end_date=end_date,
+            audience=audience,
+            title_id=title_id,
+        ),
+        title_id,
+    )
 
-    Save answers HTTP 200 with ``{id, config, errors}`` — a different shape from
-    the bare configs list/load return — so every save-path test speaks that
-    envelope rather than the load shape.
-    """
-    envelope: dict = {
-        "id": bulletin_id if result_id is _UNSET else result_id,
-        "config": config if config is not None else _config(bulletin_id, status=status),
-        "errors": errors if errors is not None else [],
-    }
-    return envelope
+
+def _test_id(label: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"org-announcements-test:{label}"))
 
 
 def test_uses_agent_qualified_v11_routes_with_tenant_from_token(monkeypatch) -> None:
@@ -126,28 +258,41 @@ def test_uses_agent_qualified_v11_routes_with_tenant_from_token(monkeypatch) -> 
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.path.endswith("/save"):
-            return httpx.Response(200, json=_save_result("new-1"))
-        if request.url.path.endswith("/essbulletins"):
-            return httpx.Response(200, json=[_config("a")])
-        return httpx.Response(200, json=_config("a"))
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result(CREATED_BULLETIN_ID))
+        if request.url.path == MANAGEMENT_PATH:
+            return httpx.Response(200, json={"value": [_config()]})
+        if request.url.path.endswith(f"({CREATED_BULLETIN_ID})"):
+            return httpx.Response(200, json=_config(CREATED_BULLETIN_ID))
+        return httpx.Response(200, json=_config())
 
     client = _make_client(monkeypatch, handler)
 
     async def run() -> None:
         await client.list_bulletins(TITLE_ID)
-        await client.get_bulletin(TITLE_ID, "a")
-        await client.save_bulletin(TITLE_ID, {"bulletin": {}, "audience": [], "status": "draft"})
+        await client.get_bulletin(TITLE_ID, BULLETIN_ID)
+        await client.save_bulletin(
+            TITLE_ID,
+            {"bulletin": {}, "audience": [], "status": "draft"},
+        )
         await client.aclose()
 
     asyncio.run(run())
 
     assert client.tenant_id == TENANT_ID
     assert [(request.method, request.url.path) for request in requests] == [
-        ("GET", COLLECTION_PATH),
-        ("GET", f"{COLLECTION_PATH}/a"),
-        ("POST", f"{COLLECTION_PATH}/save"),
+        ("GET", MANAGEMENT_PATH),
+        ("GET", f"{COLLECTION_PATH}({BULLETIN_ID})"),
+        ("POST", f"{COLLECTION_PATH}/Save"),
+        ("GET", f"{COLLECTION_PATH}({CREATED_BULLETIN_ID})"),
     ]
+    assert json.loads(requests[2].content) == {
+        "input": {
+            "Bulletin": {},
+            "Audience": [],
+            "Status": "draft",
+        }
+    }
 
 
 def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> None:
@@ -155,7 +300,7 @@ def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> Non
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(200, json=[_config("a")])
+        return httpx.Response(200, json={"value": [_config()]})
 
     client = _make_client(monkeypatch, handler)
 
@@ -165,22 +310,52 @@ def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> Non
 
     asyncio.run(run())
 
-    assert captured[0].url.path == COLLECTION_PATH
+    assert captured[0].url.path == MANAGEMENT_PATH
     assert captured[0].url.query == b""
 
 
 @pytest.mark.parametrize(
     "bad_id",
-    ["", " a", ".", "..", "a/b", "a\\b", "a?b", "a#b", "a%2Fb", "a\x01b"],
+    [
+        "",
+        f" {BULLETIN_ID}",
+        ".",
+        "..",
+        "a/b",
+        "a\\b",
+        "a?b",
+        "a#b",
+        "a%2Fb",
+        "a\x01b",
+        "not-a-guid",
+        "00000000-0000-0000-0000-000000000000",
+    ],
 )
 def test_rejects_ids_that_could_reshape_the_route(monkeypatch, bad_id) -> None:
     client = _make_client(
-        monkeypatch, lambda request: httpx.Response(200, json=_config("a"))
+        monkeypatch, lambda request: httpx.Response(200, json=_config())
     )
 
     async def run() -> None:
         with pytest.raises(ValueError):
             await client.get_bulletin(TITLE_ID, bad_id)
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_keyed_get_rejects_a_response_for_a_different_bulletin(
+    monkeypatch,
+) -> None:
+    different_id = _test_id("different-keyed-response")
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(200, json=_config(different_id)),
+    )
+
+    async def run() -> None:
+        with pytest.raises(org_client.AgentConfigApiError, match="different"):
+            await client.get_bulletin(TITLE_ID, BULLETIN_ID)
         await client.aclose()
 
     asyncio.run(run())
@@ -232,26 +407,39 @@ def test_unkeyed_create_network_failure_reports_indeterminate(monkeypatch) -> No
 
 def test_keyed_update_retries_a_transient_gateway_failure(monkeypatch) -> None:
     attempts: list[httpx.Request] = []
+    post_attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal post_attempts
         attempts.append(request)
-        if len(attempts) == 1:
-            return httpx.Response(503, json={"Code": "Busy", "Message": "later"})
-        return httpx.Response(200, json=_save_result("a"))
+        if request.method == "POST":
+            post_attempts += 1
+            if post_attempts == 1:
+                return httpx.Response(
+                    503, json={"Code": "Busy", "Message": "later"}
+                )
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, json=_config())
 
     client = _make_client(monkeypatch, handler)
     client.max_retries = 2
 
     async def run() -> None:
         result = await client.save_bulletin(TITLE_ID,
-            {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
+            {
+                "id": BULLETIN_ID,
+                "bulletin": {},
+                "audience": [],
+                "status": "draft",
+            }
         )
-        assert result["bulletin"]["id"] == "a"
+        assert result["id"] == BULLETIN_ID
         await client.aclose()
 
     asyncio.run(run())
 
-    assert len(attempts) == 2
+    assert post_attempts == 2
+    assert len(attempts) == 3
 
 
 def test_definite_rejection_is_not_reported_as_indeterminate(monkeypatch) -> None:
@@ -278,24 +466,26 @@ def test_transition_sends_only_identity_and_status(monkeypatch) -> None:
     captured: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(json.loads(request.content.decode("utf-8")))
-        return httpx.Response(200, json=_save_result("a", status="retired"))
+        if request.method == "POST":
+            captured.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, json=_config(status="retired"))
 
     client = _make_client(monkeypatch, handler)
 
     async def run() -> None:
-        changed = await client.transition_bulletin(TITLE_ID, "a", "retired")
-        # The envelope is unwrapped to the canonical config, not passed through.
-        assert changed["bulletin"]["id"] == "a"
+        changed = await client.transition_bulletin(
+            TITLE_ID, BULLETIN_ID, "retired"
+        )
+        assert changed["id"] == BULLETIN_ID
         assert changed["status"] == "retired"
-        assert "config" not in changed
         await client.aclose()
 
     asyncio.run(run())
 
-    assert captured == [{"id": "a", "status": "retired"}]
-    assert "bulletin" not in captured[0]
-    assert "audience" not in captured[0]
+    assert captured == [
+        {"input": {"Id": BULLETIN_ID, "Status": "retired"}}
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -303,51 +493,86 @@ def test_transition_sends_only_identity_and_status(monkeypatch) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_save_unwraps_the_canonical_config_from_the_result_envelope(
-    monkeypatch,
-) -> None:
-    """A successful save returns ``config``, never the wrapper itself."""
+def test_save_reloads_the_canonical_resource_from_the_receipt(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_save_result("created-1"))
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result(CREATED_BULLETIN_ID))
+        return httpx.Response(200, json=_config(CREATED_BULLETIN_ID))
 
     client = _make_client(monkeypatch, handler)
 
     async def run() -> None:
-        saved = await client.save_bulletin(TITLE_ID,
-            {"bulletin": {}, "audience": [], "status": "draft"}
+        saved = await client.save_bulletin(
+            TITLE_ID,
+            {
+                "bulletin": {
+                    "type": "standard",
+                    "priority": 0,
+                    "title": "Title",
+                    "description": "Body",
+                    "primaryAction": {
+                        "actionType": "externalLink",
+                        "label": "Open",
+                        "url": "https://contoso.com",
+                    },
+                },
+                "audience": ["group-a"],
+                "status": "draft",
+            },
         )
-        assert saved == _config("created-1")
-        # The wrapper's own keys must not leak into canonical state.
-        assert "config" not in saved
-        assert "errors" not in saved
+        assert saved == _canonical_config(CREATED_BULLETIN_ID)
         await client.aclose()
 
     asyncio.run(run())
+
+    assert [request.method for request in requests] == ["POST", "GET"]
+    assert json.loads(requests[0].content) == {
+        "input": {
+            "Bulletin": {
+                "Type": "standard",
+                "Priority": 0,
+                "Title": "Title",
+                "Description": "Body",
+                "PrimaryAction": {
+                    "ActionType": "externalLink",
+                    "Label": "Open",
+                    "Url": "https://contoso.com",
+                },
+            },
+            "Audience": ["group-a"],
+            "Status": "draft",
+        }
+    }
 
 
 def test_http_200_with_errors_is_a_structured_validation_failure(
     monkeypatch,
 ) -> None:
-    """Validation failure arrives inside a 200; every entry must survive."""
     reported = [
-        {"code": "AudienceRequired", "field": "audience", "message": "Pick a group."},
-        {"code": "TitleRequired", "field": "title", "message": "Add a title."},
+        {"Code": "AudienceRequired", "Field": "audience", "Message": "Pick a group."},
+        {"Code": "TitleRequired", "Field": "title", "Message": "Add a title."},
     ]
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json={"id": None, "config": None, "errors": reported}
-        )
-
-    client = _make_client(monkeypatch, handler)
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, json={"Id": None, "Errors": reported}
+        ),
+    )
 
     async def run() -> None:
         with pytest.raises(org_client.BulletinValidationError) as caught:
-            await client.save_bulletin(TITLE_ID,
-                {"bulletin": {}, "audience": [], "status": "published"}
+            await client.save_bulletin(
+                TITLE_ID,
+                {"bulletin": {}, "audience": [], "status": "published"},
             )
-        assert caught.value.errors == reported
+        assert caught.value.errors == [
+            {"code": "AudienceRequired", "field": "audience", "message": "Pick a group."},
+            {"code": "TitleRequired", "field": "title", "message": "Add a title."},
+        ]
         assert caught.value.http_status == 200
         await client.aclose()
 
@@ -357,24 +582,21 @@ def test_http_200_with_errors_is_a_structured_validation_failure(
 def test_a_partial_error_entry_keeps_its_field_and_gets_a_stable_code(
     monkeypatch,
 ) -> None:
-    """A sparse entry is still reported; it is never dropped or merged."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(
             200,
             json={
-                "id": None,
-                "config": None,
-                "errors": [{"field": "title"}, "unstructured"],
+                "Id": None,
+                "Errors": [{"Field": "title"}, "unstructured"],
             },
-        )
-
-    client = _make_client(monkeypatch, handler)
+        ),
+    )
 
     async def run() -> None:
         with pytest.raises(org_client.BulletinValidationError) as caught:
-            await client.save_bulletin(TITLE_ID,
-                {"bulletin": {}, "audience": [], "status": "draft"}
+            await client.save_bulletin(
+                TITLE_ID, {"bulletin": {}, "audience": [], "status": "draft"}
             )
         assert len(caught.value.errors) == 2
         assert caught.value.errors[0]["field"] == "title"
@@ -385,40 +607,26 @@ def test_a_partial_error_entry_keeps_its_field_and_gets_a_stable_code(
     asyncio.run(run())
 
 
-def test_a_success_envelope_without_a_config_is_rejected(monkeypatch) -> None:
-    """No errors and no config is malformed, never an empty announcement."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"id": "a", "config": None, "errors": []})
-
-    client = _make_client(monkeypatch, handler)
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"Id": BULLETIN_ID},
+        {"Id": BULLETIN_ID, "Errors": "bad"},
+        {"Id": None, "Errors": []},
+        _config(),
+    ],
+)
+def test_invalid_save_receipts_are_rejected(monkeypatch, body) -> None:
+    client = _make_client(
+        monkeypatch, lambda request: httpx.Response(200, json=body)
+    )
 
     async def run() -> None:
         with pytest.raises(org_client.AgentConfigApiError):
-            await client.save_bulletin(TITLE_ID,
-                {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
+            await client.save_bulletin(
+                TITLE_ID,
+                {"id": BULLETIN_ID, "status": "draft"},
             )
-        await client.aclose()
-
-    asyncio.run(run())
-
-
-def test_a_save_result_id_disagreeing_with_its_config_is_rejected(
-    monkeypatch,
-) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, json=_save_result("a", config=_config("b"), result_id="a")
-        )
-
-    client = _make_client(monkeypatch, handler)
-
-    async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError) as caught:
-            await client.save_bulletin(TITLE_ID,
-                {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
-            )
-        assert "does not match" in str(caught.value)
         await client.aclose()
 
     asyncio.run(run())
@@ -427,33 +635,19 @@ def test_a_save_result_id_disagreeing_with_its_config_is_rejected(
 def test_an_update_answered_with_a_different_record_is_rejected(
     monkeypatch,
 ) -> None:
-    """Replacing canonical state with someone else's announcement is a bug."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_save_result("other-1"))
-
-    client = _make_client(monkeypatch, handler)
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, json=_save_result(OTHER_BULLETIN_ID)
+        ),
+    )
 
     async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError) as caught:
-            await client.save_bulletin(TITLE_ID,
-                {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
+        with pytest.raises(org_client.AgentConfigApiError, match="different"):
+            await client.save_bulletin(
+                TITLE_ID,
+                {"id": BULLETIN_ID, "status": "draft"},
             )
-        assert "different announcement" in str(caught.value)
-        await client.aclose()
-
-    asyncio.run(run())
-
-
-def test_a_transition_answered_for_another_record_is_rejected(monkeypatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_save_result("other-1", status="retired"))
-
-    client = _make_client(monkeypatch, handler)
-
-    async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError):
-            await client.transition_bulletin(TITLE_ID, "a", "retired")
         await client.aclose()
 
     asyncio.run(run())
@@ -462,119 +656,199 @@ def test_a_transition_answered_for_another_record_is_rejected(monkeypatch) -> No
 def test_a_transition_rejected_by_validation_preserves_its_codes(
     monkeypatch,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
+    client = _make_client(
+        monkeypatch,
+        lambda request: httpx.Response(
             200,
             json={
-                "id": "a",
-                "config": None,
-                "errors": [
+                "Id": None,
+                "Errors": [
                     {
-                        "code": "InvalidLifecycleTransition",
-                        "field": "status",
-                        "message": "Cannot unarchive a deleted announcement.",
+                        "Code": "InvalidLifecycleTransition",
+                        "Field": "status",
+                        "Message": "Cannot unarchive a deleted announcement.",
                     }
                 ],
             },
-        )
-
-    client = _make_client(monkeypatch, handler)
+        ),
+    )
 
     async def run() -> None:
         with pytest.raises(org_client.BulletinValidationError) as caught:
-            await client.transition_bulletin(TITLE_ID, "a", "draft")
+            await client.transition_bulletin(TITLE_ID, BULLETIN_ID, "draft")
         assert caught.value.errors[0]["code"] == "InvalidLifecycleTransition"
         await client.aclose()
 
     asyncio.run(run())
 
 
-def test_a_non_list_error_field_is_rejected(monkeypatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"id": "a", "config": None, "errors": "bad"})
-
-    client = _make_client(monkeypatch, handler)
-
-    async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError):
-            await client.save_bulletin(TITLE_ID,
-                {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
-            )
-        await client.aclose()
-
-    asyncio.run(run())
-
-
-def test_a_bare_config_save_response_is_rejected(monkeypatch) -> None:
-    """The load shape is not the save shape; accepting it would mask drift."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_config("a"))
-
-    client = _make_client(monkeypatch, handler)
-
-    async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError):
-            await client.save_bulletin(TITLE_ID,
-                {"id": "a", "bulletin": {}, "audience": [], "status": "draft"}
-            )
-        await client.aclose()
-
-    asyncio.run(run())
-
-
-def test_a_saved_record_without_an_id_is_rejected(monkeypatch) -> None:
-    """An identity-less record could never be edited or transitioned again."""
-    config = _config("placeholder")
-    del config["bulletin"]["id"]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"config": config, "errors": []})
-
-    client = _make_client(monkeypatch, handler)
-
-    async def run() -> None:
-        with pytest.raises(org_client.AgentConfigApiError) as caught:
-            await client.save_bulletin(TITLE_ID,
-                {"bulletin": {}, "audience": [], "status": "draft"}
-            )
-        assert "without an id" in str(caught.value)
-        await client.aclose()
-
-    asyncio.run(run())
-
-
-def test_a_create_may_take_its_id_from_either_envelope_position(
-    monkeypatch,
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_keyed_reload_failure_is_reported_as_committed_refresh(
+    monkeypatch, operation
 ) -> None:
-    """The wrapper id and the config id are both authoritative when they agree.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(
+            503, json={"Code": "Busy", "Message": "try later"}
+        )
 
-    A create has no requested id to compare against, so either position alone is
-    enough as long as one is present.
-    """
-    config = _config("created-1")
+    client = _make_client(monkeypatch, handler)
+    client.max_retries = 1
+
+    async def run() -> None:
+        with pytest.raises(org_client.CommittedCanonicalReloadError):
+            if operation == "save":
+                await client.save_bulletin(
+                    TITLE_ID,
+                    {"id": BULLETIN_ID, "status": "draft"},
+                )
+            else:
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_committed_reload_retries_only_transient_keyed_get_404(
+    monkeypatch, operation
+) -> None:
+    counts = {"post": 0, "get": 0}
+    expected_status = "draft" if operation == "save" else "retired"
 
     def handler(request: httpx.Request) -> httpx.Response:
-        # Wrapper id omitted; the config still carries the canonical id.
-        return httpx.Response(200, json={"config": config, "errors": []})
+        if request.method == "POST":
+            counts["post"] += 1
+            return httpx.Response(200, json=_save_result())
+        counts["get"] += 1
+        if counts["get"] < 3:
+            return httpx.Response(
+                404, json={"Code": "NotFound", "Message": "not visible yet"}
+            )
+        return httpx.Response(200, json=_config(status=expected_status))
+
+    monkeypatch.setattr(org_client, "_COMMITTED_RELOAD_404_DELAYS", (0, 0))
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        if operation == "save":
+            result = await client.save_bulletin(
+                TITLE_ID,
+                {"id": BULLETIN_ID, "status": "draft"},
+            )
+        else:
+            result = await client.transition_bulletin(
+                TITLE_ID, BULLETIN_ID, "retired"
+            )
+        assert result["status"] == expected_status
+        await client.aclose()
+
+    asyncio.run(run())
+
+    assert counts == {"post": 1, "get": 3}
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_committed_reload_404_exhaustion_never_reposts(
+    monkeypatch, operation
+) -> None:
+    counts = {"post": 0, "get": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            counts["post"] += 1
+            return httpx.Response(200, json=_save_result())
+        counts["get"] += 1
+        return httpx.Response(
+            404, json={"Code": "NotFound", "Message": "not visible yet"}
+        )
+
+    monkeypatch.setattr(org_client, "_COMMITTED_RELOAD_404_DELAYS", (0, 0))
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        with pytest.raises(
+            org_client.CommittedCanonicalReloadError
+        ) as caught:
+            if operation == "save":
+                await client.save_bulletin(
+                    TITLE_ID,
+                    {"id": BULLETIN_ID, "status": "draft"},
+                )
+            else:
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        assert caught.value.cause.http_status == 404
+        await client.aclose()
+
+    asyncio.run(run())
+
+    assert counts == {"post": 1, "get": 3}
+
+
+@pytest.mark.parametrize("operation", ["save", "transition"])
+def test_keyed_reload_identity_mismatch_is_reported_as_committed_refresh(
+    monkeypatch, operation
+) -> None:
+    different_id = _test_id(f"different-{operation}-reload")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json=_save_result())
+        return httpx.Response(200, json=_config(different_id))
 
     client = _make_client(monkeypatch, handler)
 
     async def run() -> None:
-        saved = await client.save_bulletin(TITLE_ID,
-            {"bulletin": {}, "audience": [], "status": "draft"}
-        )
-        assert saved["bulletin"]["id"] == "created-1"
+        with pytest.raises(org_client.CommittedCanonicalReloadError) as caught:
+            if operation == "save":
+                await client.save_bulletin(
+                    TITLE_ID,
+                    {"id": BULLETIN_ID, "status": "draft"},
+                )
+            else:
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        assert isinstance(caught.value.cause, org_client.AgentConfigApiError)
+        assert "different" in str(caught.value.cause)
         await client.aclose()
 
     asyncio.run(run())
+
+
+def test_delete_does_not_reload_a_tombstoned_resource(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_save_result())
+
+    client = _make_client(monkeypatch, handler)
+
+    async def run() -> None:
+        assert (
+            await client.transition_bulletin(
+                TITLE_ID, BULLETIN_ID, "deleted"
+            )
+            is None
+        )
+        await client.aclose()
+
+    asyncio.run(run())
+
+    assert [request.method for request in requests] == ["POST"]
 
 
 def test_invalid_success_shaped_bodies_are_rejected(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/essbulletins"):
+        if request.url.path == MANAGEMENT_PATH:
             return httpx.Response(200, json={"unexpected": True})
-        return httpx.Response(200, json={"status": "draft"})
+        return httpx.Response(200, json={"Status": "draft"})
 
     client = _make_client(monkeypatch, handler)
 
@@ -582,7 +856,7 @@ def test_invalid_success_shaped_bodies_are_rejected(monkeypatch) -> None:
         with pytest.raises(org_client.AgentConfigApiError):
             await client.list_bulletins(TITLE_ID)
         with pytest.raises(org_client.AgentConfigApiError):
-            await client.get_bulletin(TITLE_ID, "a")
+            await client.get_bulletin(TITLE_ID, BULLETIN_ID)
         await client.aclose()
 
     asyncio.run(run())
@@ -590,7 +864,7 @@ def test_invalid_success_shaped_bodies_are_rejected(monkeypatch) -> None:
 
 def test_collection_items_missing_content_are_rejected(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"value": [{"status": "draft"}]})
+        return httpx.Response(200, json={"value": [{"Status": "draft"}]})
 
     client = _make_client(monkeypatch, handler)
 
@@ -617,37 +891,42 @@ def test_collection_items_missing_content_are_rejected(monkeypatch) -> None:
 def test_archive_classification_uses_status_and_schedule(
     status, end_date, expected_archived
 ) -> None:
-    config = _config("a", status=status, end_date=end_date)
+    config = _canonical_config(status=status, end_date=end_date)
     assert org_client.is_archived_item(config, NOW) is expected_archived
 
 
 def test_unparseable_end_date_keeps_a_published_item_current() -> None:
-    config = _config("a", status="published", end_date="not-a-date")
+    config = _canonical_config(status="published", end_date="not-a-date")
     assert org_client.is_archived_item(config, NOW) is False
 
 
 def test_manager_state_counts_current_items_and_preserves_order() -> None:
+    current_1 = _test_id("current-1")
+    archived_1 = _test_id("archived-1")
+    current_2 = _test_id("current-2")
     items = [
-        _config("current-1", status="published", end_date="2030-01-01T00:00:00.000Z"),
-        _config("archived-1", status="retired"),
-        _config("current-2", status="draft"),
+        _canonical_config(
+            current_1,
+            status="published",
+            end_date="2030-01-01T00:00:00.000Z",
+        ),
+        _canonical_config(archived_1, status="retired"),
+        _canonical_config(current_2, status="draft"),
     ]
 
     state = org_client.build_manager_state(items, {}, NOW, tenant_id=TENANT_ID, title_id=TITLE_ID)
 
     assert state["workingSetCount"] == 2
     assert state["archivedTruncated"] is False
-    assert [item["config"]["bulletin"]["id"] for item in state["items"]] == [
-        "current-1",
-        "archived-1",
-        "current-2",
+    assert [item["config"]["id"] for item in state["items"]] == [
+        current_1, archived_1, current_2
     ]
 
 
 def test_manager_state_flags_a_full_archived_window() -> None:
-    items = [_config("current", status="draft")]
+    items = [_canonical_config(_test_id("current"), status="draft")]
     items.extend(
-        _config(f"archived-{index}", status="retired")
+        _canonical_config(_test_id(f"archived-{index}"), status="retired")
         for index in range(org_client.ARCHIVED_WINDOW_SIZE)
     )
 
@@ -666,17 +945,19 @@ def test_manager_state_excludes_deleted_rows_from_items_and_counts() -> None:
     A deleted announcement is neither a working item nor a restorable archived
     one, so it must not appear and must not be counted in either bucket.
     """
+    current_id = _test_id("current-1")
+    deleted_id = _test_id("deleted-1")
+    archived_id = _test_id("archived-1")
     items = [
-        _config("current-1", status="draft"),
-        _config("deleted-1", status="deleted"),
-        _config("archived-1", status="retired"),
+        _canonical_config(current_id, status="draft"),
+        _canonical_config(deleted_id, status="deleted"),
+        _canonical_config(archived_id, status="retired"),
     ]
 
     state = org_client.build_manager_state(items, {}, NOW, tenant_id=TENANT_ID, title_id=TITLE_ID)
 
-    assert [item["config"]["bulletin"]["id"] for item in state["items"]] == [
-        "current-1",
-        "archived-1",
+    assert [item["config"]["id"] for item in state["items"]] == [
+        current_id, archived_id
     ]
     assert state["workingSetCount"] == 1
     assert state["archivedTruncated"] is False
@@ -685,10 +966,10 @@ def test_manager_state_excludes_deleted_rows_from_items_and_counts() -> None:
 def test_deleted_rows_do_not_fill_the_archived_window() -> None:
     """Deleted rows must not push archivedTruncated true on their own."""
     items = [
-        _config(f"deleted-{index}", status="deleted")
+        _canonical_config(_test_id(f"deleted-{index}"), status="deleted")
         for index in range(org_client.ARCHIVED_WINDOW_SIZE)
     ]
-    items.append(_config("current", status="draft"))
+    items.append(_canonical_config(_test_id("current"), status="draft"))
 
     state = org_client.build_manager_state(items, {}, NOW, tenant_id=TENANT_ID, title_id=TITLE_ID)
 
@@ -698,15 +979,21 @@ def test_deleted_rows_do_not_fill_the_archived_window() -> None:
 
 
 def test_deleted_classification_is_independent_of_schedule() -> None:
-    assert org_client.is_deleted_item(_config("a", status="deleted")) is True
-    assert org_client.is_deleted_item(_config("a", status="retired")) is False
-    assert org_client.is_deleted_item(_config("a", status="draft")) is False
+    assert org_client.is_deleted_item(
+        _canonical_config(status="deleted")
+    ) is True
+    assert org_client.is_deleted_item(
+        _canonical_config(status="retired")
+    ) is False
+    assert org_client.is_deleted_item(
+        _canonical_config(status="draft")
+    ) is False
 
 
 def test_manager_state_attaches_per_item_audience_metadata() -> None:
-    items = [_config("a", audience=["g1", "g2"])]
+    items = [_canonical_config(audience=["g1", "g2"])]
     metadata = {
-        "a": [
+        BULLETIN_ID: [
             {"id": "g1", "displayName": "Group One", "mail": None, "isValid": True},
             {"id": "g2", "displayName": "Group Two", "mail": None, "isValid": True},
         ]
@@ -760,11 +1047,13 @@ def test_invalid_title_is_rejected_before_any_http_request(monkeypatch, operatio
             if operation == "list":
                 await client.list_bulletins(title_id)
             elif operation == "get":
-                await client.get_bulletin(title_id, "a")
+                await client.get_bulletin(title_id, BULLETIN_ID)
             elif operation == "save":
                 await client.save_bulletin(title_id, {"status": "draft"})
             else:
-                await client.transition_bulletin(title_id, "a", "retired")
+                await client.transition_bulletin(
+                    title_id, BULLETIN_ID, "retired"
+                )
         await client.aclose()
 
     asyncio.run(run())
@@ -776,7 +1065,9 @@ def test_title_key_uses_the_landing_page_odata_encoding(monkeypatch) -> None:
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, json=[_config("a", title_id=title_id)])
+        return httpx.Response(
+            200, json={"value": [_config(title_id=title_id)]}
+        )
 
     client = _make_client(monkeypatch, handler)
 
@@ -785,18 +1076,23 @@ def test_title_key_uses_the_landing_page_odata_encoding(monkeypatch) -> None:
         await client.aclose()
 
     asyncio.run(run())
-    assert b"/EmployeeAgents('a%27%27b%2Fc')/essbulletins" in requests[0].url.raw_path
+    assert (
+        b"/EmployeeAgents('a%27%27b%2Fc')/EssBulletins/ManagementView()"
+        in requests[0].url.raw_path
+    )
     assert requests[0].url.query == b""
 
 
-def test_canonical_scope_cannot_be_embedded_in_bulletin_content(monkeypatch) -> None:
-    config = _config("a")
-    config["bulletin"]["titleId"] = TITLE_ID
+def test_canonical_identity_cannot_be_duplicated_in_bulletin_content(
+    monkeypatch,
+) -> None:
+    config = _config()
+    config["Bulletin"]["Id"] = BULLETIN_ID
     client = _make_client(monkeypatch, lambda r: httpx.Response(200, json=config))
 
     async def run():
-        with pytest.raises(org_client.AgentConfigApiError, match="inside bulletin"):
-            await client.get_bulletin(TITLE_ID, "a")
+        with pytest.raises(org_client.AgentConfigApiError, match="duplicate id"):
+            await client.get_bulletin(TITLE_ID, BULLETIN_ID)
         await client.aclose()
 
     asyncio.run(run())
@@ -805,39 +1101,56 @@ def test_canonical_scope_cannot_be_embedded_in_bulletin_content(monkeypatch) -> 
 @pytest.mark.parametrize("operation", ["list", "get", "save", "transition"])
 @pytest.mark.parametrize("response_title", [None, "", "another-title", "TITLE-1"])
 def test_every_returned_config_must_echo_the_exact_title(monkeypatch, operation, response_title) -> None:
-    config = _config("a")
+    config = _config()
     if response_title is None:
-        config.pop("titleId")
+        config.pop("TitleId")
     else:
-        config["titleId"] = response_title
+        config["TitleId"] = response_title
     requests = []
 
     def handler(request):
         requests.append(request)
         if operation == "list":
-            body = [_config("valid"), config]
-        elif operation == "get":
+            body = {"value": [_config(VALID_BULLETIN_ID), config]}
+        elif operation == "get" or request.method == "GET":
             body = config
         else:
-            body = _save_result("a", config=config)
+            body = _save_result()
         return httpx.Response(200, json=body)
 
     client = _make_client(monkeypatch, handler)
 
     async def run():
-        with pytest.raises(org_client.AgentConfigApiError, match="titleId"):
+        expected_error = (
+            org_client.CommittedCanonicalReloadError
+            if operation in ("save", "transition")
+            else org_client.AgentConfigApiError
+        )
+        with pytest.raises(expected_error) as caught:
             if operation == "list":
                 await client.list_bulletins(TITLE_ID)
             elif operation == "get":
-                await client.get_bulletin(TITLE_ID, "a")
+                await client.get_bulletin(TITLE_ID, BULLETIN_ID)
             elif operation == "save":
-                await client.save_bulletin(TITLE_ID, {"id": "a", "status": "draft"})
+                await client.save_bulletin(
+                    TITLE_ID, {"id": BULLETIN_ID, "status": "draft"}
+                )
             else:
-                await client.transition_bulletin(TITLE_ID, "a", "retired")
+                await client.transition_bulletin(
+                    TITLE_ID, BULLETIN_ID, "retired"
+                )
+        failure = (
+            caught.value.cause
+            if isinstance(
+                caught.value, org_client.CommittedCanonicalReloadError
+            )
+            else caught.value
+        )
+        assert "titleId" in str(failure)
         await client.aclose()
 
     asyncio.run(run())
-    assert len(requests) == 1
+    assert len(requests) == (1 if operation in ("list", "get") else 2)
 
 
 def test_unavailable_agent_route_never_falls_back_to_tenant_collection(monkeypatch) -> None:
@@ -855,7 +1168,7 @@ def test_unavailable_agent_route_never_falls_back_to_tenant_collection(monkeypat
         await client.aclose()
 
     asyncio.run(run())
-    assert paths == [COLLECTION_PATH]
+    assert paths == [MANAGEMENT_PATH]
 
 
 def test_collections_and_manager_limits_are_independent_per_tenant_and_agent(monkeypatch) -> None:
@@ -864,11 +1177,20 @@ def test_collections_and_manager_limits_are_independent_per_tenant_and_agent(mon
              (other_tenant, TITLE_ID, 0, 0)]
     responses = {}
     for tenant, title, current, archived in pairs:
-        path = f"/weveb2/api/v1.1/tenants('{tenant}')/EmployeeAgents('{title}')/essbulletins"
-        responses[path] = [
-            _config(f"same-id-{i}", title_id=title, status="draft" if i < current else "retired")
-            for i in range(current + archived)
-        ]
+        path = (
+            f"/weveb2/api/v1.1/tenants('{tenant}')/"
+            f"EmployeeAgents('{title}')/EssBulletins/ManagementView()"
+        )
+        responses[path] = {
+            "value": [
+                _config(
+                    _test_id(f"{tenant}:{title}:{index}"),
+                    title_id=title,
+                    status="draft" if index < current else "retired",
+                )
+                for index in range(current + archived)
+            ]
+        }
     clients = {
         tenant: _make_client(monkeypatch, lambda r: httpx.Response(200, json=responses[r.url.path]),
                              tenant_id=tenant)
