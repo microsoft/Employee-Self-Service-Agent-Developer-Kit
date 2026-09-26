@@ -207,6 +207,17 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_workday_da_agent_checks_use_only_their_required_clients(self):
+        sharing = registry.transitive_requirements("WD-DA-CONN-001")
+        assert sharing.clients == frozenset({registry.AGENTBUILDER})
+        assert sharing.requires_dataverse_endpoint is False
+        assert [label for label, _ in sharing.ordered_fns] == ["Workday DA"]
+
+        context = registry.transitive_requirements("WD-DA-CTX-001")
+        assert context.clients == frozenset({registry.DATAVERSE})
+        assert context.requires_dataverse_endpoint is True
+        assert [label for label, _ in context.ordered_fns] == ["Workday DA"]
+
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
         assert spec is not None and spec.key == "ENV-009"

@@ -479,14 +479,18 @@ class WorkdayDAStateStore:
                 "scenario record."
             )
         required_truth = (
-            scenario.get("signedInUserConfirmed") is True
+            scenario.get("nonMakerTestUserConfirmed") is True
+            and scenario.get("agentSharedWithTestUser") is True
+            and scenario.get("signedInUserConfirmed") is True
             and scenario.get("realWorkdayDataConfirmed") is True
+            and scenario.get("connectionPromptObserved") is False
             and scenario.get("unexpectedSignIn") is False
         )
         if not required_truth:
             raise WorkdayDAStateError(
-                "Final Workday readiness requires a signed-in employee, real "
-                "Workday data, and no unexpected additional sign-in."
+                "Final Workday readiness requires a shared non-maker test "
+                "employee, real Workday data, and no connection or additional "
+                "sign-in prompt."
             )
 
     def _dependent_ids(self, step_id: str) -> set[str]:

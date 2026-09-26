@@ -100,13 +100,25 @@ def test_topic_and_authorization_guidance_matches_the_supported_runtime() -> Non
     assert "Workday [System] - 1: Set User Context V2" in text
     assert "Workday System Get CommonExecution" in text
     assert "package/version drift" in text
+    assert "configure_workday_da_user_context.py" in text
+    assert "WORKDAY_DA_USER_CONTEXT_PLAN_JSON" in text
+    assert "WORKDAY_DA_USER_CONTEXT_APPLIED_JSON" in text
+    assert "[Admin] - User Context - Setup" in text
+    assert "select the existing topic reference" in text
+    assert "WD-DA-CTX-001" in text
+    assert "WD-DA-CONN-001" in text
+    assert "who is not the maker" in text
+    assert "Do not use a write or approval scenario" in normalized
 
 
 def test_readiness_requires_a_signed_in_runtime_scenario() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "Run one enabled Workday scenario" in text
+    assert "Run one enabled, read-only Workday scenario" in normalized
     assert "returns real Workday data" in normalized
     assert 'status: "ready"' in text
     assert "does not prove the live" in text
+    assert "who is not the maker" in text
+    assert "agentSharedWithTestUser" in text
+    assert '"connectionPromptObserved": false' in text

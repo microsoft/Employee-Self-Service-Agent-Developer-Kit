@@ -53,7 +53,11 @@ from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
-from flightcheck.checks.workday_da import run_workday_da_checks
+from flightcheck.checks.workday_da import (
+    run_workday_da_connection_checks,
+    run_workday_da_package_checks,
+    run_workday_da_user_context_checks,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -276,13 +280,33 @@ _SPECS: list[CheckpointSpec] = [
     # only recognize the CEA solution family.
     CheckpointSpec(
         key="WD-DA-PKG-001",
-        category_fn=run_workday_da_checks,
+        category_fn=run_workday_da_package_checks,
         category_label="Workday DA",
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
         prereqs=("ENV-002",),
         priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-CONN-001",
+        category_fn=run_workday_da_connection_checks,
+        category_label="Workday DA",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-CTX-001",
+        category_fn=run_workday_da_user_context_checks,
+        category_label="Workday DA",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
     # ---- External Systems: WD-001 (prereq-only, hidden from listing) ----

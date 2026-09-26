@@ -484,6 +484,31 @@ def test_final_readiness_requires_structured_current_scenario_evidence(
             evidence=_evidence("Generic acknowledgement is insufficient."),
         )
 
+    with pytest.raises(
+        WorkdayDAStateError,
+        match="shared non-maker test employee",
+    ):
+        store.update_row(
+            "DA5.1",
+            checkpoint_result="Manual",
+            result_source="user-acknowledgement",
+            ack=True,
+            evidence={
+                **_evidence("A maker-only test is insufficient."),
+                "scenario": {
+                    "scenarioName": "vacation balance",
+                    "testUserCategory": "maker",
+                    "nonMakerTestUserConfirmed": False,
+                    "agentSharedWithTestUser": True,
+                    "signedInUserConfirmed": True,
+                    "realWorkdayDataConfirmed": True,
+                    "connectionPromptObserved": False,
+                    "unexpectedSignIn": False,
+                    "completedAt": "2026-09-25T12:00:00Z",
+                },
+            },
+        )
+
     ready = store.update_row(
         "DA5.1",
         checkpoint_result="Manual",
@@ -495,9 +520,12 @@ def test_final_readiness_requires_structured_current_scenario_evidence(
             ),
             "scenario": {
                 "scenarioName": "vacation balance",
-                "testUserCategory": "assigned test employee",
+                "testUserCategory": "non-maker assigned test employee",
+                "nonMakerTestUserConfirmed": True,
+                "agentSharedWithTestUser": True,
                 "signedInUserConfirmed": True,
                 "realWorkdayDataConfirmed": True,
+                "connectionPromptObserved": False,
                 "unexpectedSignIn": False,
                 "completedAt": "2026-09-25T12:00:00Z",
             },

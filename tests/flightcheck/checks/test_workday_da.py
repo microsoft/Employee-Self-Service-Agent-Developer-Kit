@@ -21,15 +21,19 @@ import pytest
 import responses
 
 from tests.conftest import FAKE_DATAVERSE_URL, require_validated_mock
+from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 
 require_validated_mock(dv)
+require_validated_mock(ab)
 
 
 # Production module — flightcheck is importable because pyproject.toml puts
 # solutions/ess-maker-skills/scripts on pythonpath.
 from flightcheck.checks.workday_da import (  # noqa: E402
     _check_workday_da_package_installed,
+    _check_workday_da_parameter_sharing,
+    _check_workday_da_user_context,
 )
 
 
@@ -46,6 +50,13 @@ SOLN_FILTER = (
 )
 
 SOLUTION_ID = "22222222-2222-2222-2222-222222222222"
+BOT_ID = "11111111-2222-3333-4444-555555555555"
+TOPIC_SELECT = (
+    "botcomponentid,name,schemaname,data,statecode,statuscode"
+)
+TOPIC_FILTER = (
+    f"_parentbotid_value eq '{BOT_ID}' and componenttype eq 9"
+)
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -59,6 +70,7 @@ class _MinimalRunner:
     dv_token: str | None
     config: dict[str, Any] = field(default_factory=dict)
     agent_slug: str | None = None
+    agentbuilder: Any = None
 
 
 @pytest.fixture
@@ -71,6 +83,7 @@ def _select_classic_hr(runner: _MinimalRunner) -> None:
         "activeAgent": "ess-hr",
         "agents": [{
             "slug": "ess-hr",
+            "botId": BOT_ID,
             "schemaName": "msdyn_copilotforemployeeselfservicedahr",
         }],
     }
@@ -105,6 +118,42 @@ def _register_solutions(solutions: list[dict[str, Any]]) -> None:
         select=SOLN_SELECT,
         filter_expr=SOLN_FILTER,
     ))
+
+
+def _topic_record(
+    record_id: str,
+    name: str,
+    schema_name: str,
+    data: str,
+    *,
+    statecode: int = 0,
+) -> dict[str, Any]:
+    return {
+        "botcomponentid": record_id,
+        "name": name,
+        "schemaname": schema_name,
+        "data": data,
+        "statecode": statecode,
+        "statuscode": 1,
+    }
+
+
+def _register_topics(topics: list[dict[str, Any]]) -> None:
+    responses.add(**dv.query(
+        base_url=BASE_URL,
+        entity_set="botcomponents",
+        records=topics,
+        select=TOPIC_SELECT,
+        filter_expr=TOPIC_FILTER,
+    ))
+
+
+class _FakeAgentBuilder:
+    def __init__(self, payload_by_bot: dict[str, dict[str, Any]]):
+        self.payload_by_bot = payload_by_bot
+
+    def fetch_components(self, bot_id: str) -> dict[str, Any]:
+        return self.payload_by_bot.get(bot_id, {})
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -435,3 +484,202 @@ def test_warning_when_dataverse_returns_401(runner: _MinimalRunner) -> None:
     assert r.status == "Warning"
     assert "401" in r.result
     assert "Re-run FlightCheck" in r.remediation
+
+
+def test_parameter_sharing_passes_for_the_active_agent_only(
+    runner: _MinimalRunner,
+) -> None:
+    shared = ab.shared_connection_parameters_json_string()
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [
+            {"slug": "ess-hr", "botId": "HR-BOT"},
+            {"slug": "other-agent", "botId": "OTHER-BOT"},
+        ],
+    }
+    runner.agentbuilder = _FakeAgentBuilder({
+        "HR-BOT": ab.components_with_references(references=[
+            ab.workday_connection_reference(
+                connection_id="wd-connected",
+                shared_connection_parameters=shared,
+            )
+        ]),
+        "OTHER-BOT": ab.components_with_references(references=[
+            ab.workday_connection_reference(
+                connection_id="wd-other",
+                shared_connection_parameters=None,
+            )
+        ]),
+    })
+
+    result = _check_workday_da_parameter_sharing(runner)[0]
+
+    assert result.checkpoint_id == "WD-DA-CONN-001"
+    assert result.status == "Passed"
+    assert "All 1 connected Workday reference" in result.result
+    assert result.remediation == ""
+
+
+def test_parameter_sharing_fails_when_active_agent_has_no_shared_values(
+    runner: _MinimalRunner,
+) -> None:
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [{"slug": "ess-hr", "botId": "HR-BOT"}],
+    }
+    runner.agentbuilder = _FakeAgentBuilder({
+        "HR-BOT": ab.components_with_references(references=[
+            ab.workday_connection_reference(
+                connection_id="wd-connected",
+                shared_connection_parameters=None,
+            )
+        ])
+    })
+
+    result = _check_workday_da_parameter_sharing(runner)[0]
+
+    assert result.status == "Failed"
+    assert "do not contain shared connection parameters" in result.result
+    assert "Allow permission to share parameters" in result.remediation
+
+
+def test_parameter_sharing_is_not_configured_when_reference_is_unbound(
+    runner: _MinimalRunner,
+) -> None:
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [{"slug": "ess-hr", "botId": "HR-BOT"}],
+    }
+    runner.agentbuilder = _FakeAgentBuilder({
+        "HR-BOT": ab.components_with_references(references=[
+            ab.workday_connection_reference(
+                connection_id=None,
+                shared_connection_parameters=None,
+            )
+        ])
+    })
+
+    result = _check_workday_da_parameter_sharing(runner)[0]
+
+    assert result.status == "NotConfigured"
+    assert "are not connected" in result.result
+    assert "connect every Workday flow entry" in result.remediation
+
+
+@responses.activate
+def test_user_context_passes_when_redirect_and_target_are_active(
+    runner: _MinimalRunner,
+) -> None:
+    import configure_workday_da_user_context as user_context
+
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [{
+            "slug": "ess-hr",
+            "botId": BOT_ID,
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        }],
+    }
+    _register_topics([
+        _topic_record(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            user_context.SETUP_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic.Setusercontext",
+            user_context._redirect_yaml(
+                "gptagent_copilotforemployeeselfservicehr.topic."
+                "WorkdaySystemGetUserContextV2"
+            ),
+        ),
+        _topic_record(
+            "99999999-8888-7777-6666-555555555555",
+            user_context.TARGET_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic."
+            "WorkdaySystemGetUserContextV2",
+            "kind: AdaptiveDialog\n",
+        ),
+    ])
+
+    result = _check_workday_da_user_context(runner)[0]
+
+    assert result.checkpoint_id == "WD-DA-CTX-001"
+    assert result.status == "Passed"
+    assert "redirects to the enabled" in result.result
+    assert result.remediation == ""
+
+
+@responses.activate
+def test_user_context_fails_with_click_path_when_redirect_is_missing(
+    runner: _MinimalRunner,
+) -> None:
+    import configure_workday_da_user_context as user_context
+
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [{
+            "slug": "ess-hr",
+            "botId": BOT_ID,
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        }],
+    }
+    _register_topics([
+        _topic_record(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            user_context.SETUP_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic.Setusercontext",
+            "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n",
+        ),
+        _topic_record(
+            "99999999-8888-7777-6666-555555555555",
+            user_context.TARGET_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic."
+            "WorkdaySystemGetUserContextV2",
+            "kind: AdaptiveDialog\n",
+        ),
+    ])
+
+    result = _check_workday_da_user_context(runner)[0]
+
+    assert result.status == "Failed"
+    assert "does not redirect exclusively" in result.result
+    assert "Select a topic" in result.remediation
+
+
+@responses.activate
+def test_user_context_fails_when_v2_target_is_disabled(
+    runner: _MinimalRunner,
+) -> None:
+    import configure_workday_da_user_context as user_context
+
+    runner.config = {
+        "activeAgent": "ess-hr",
+        "agents": [{
+            "slug": "ess-hr",
+            "botId": BOT_ID,
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        }],
+    }
+    _register_topics([
+        _topic_record(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            user_context.SETUP_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic.Setusercontext",
+            user_context._redirect_yaml(
+                "gptagent_copilotforemployeeselfservicehr.topic."
+                "WorkdaySystemGetUserContextV2"
+            ),
+        ),
+        _topic_record(
+            "99999999-8888-7777-6666-555555555555",
+            user_context.TARGET_TOPIC_NAME,
+            "gptagent_copilotforemployeeselfservicehr.topic."
+            "WorkdaySystemGetUserContextV2",
+            "kind: AdaptiveDialog\n",
+            statecode=1,
+        ),
+    ])
+
+    result = _check_workday_da_user_context(runner)[0]
+
+    assert result.status == "Failed"
+    assert "exists and is selected, but it is disabled" in result.result
+    assert "Enable the Workday V2 user-context topic" in result.remediation

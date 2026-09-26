@@ -504,10 +504,13 @@
       "owner": "da-4",
       "automation": "no",
       "automationLabel": "No",
-      "checkpoints": [],
-      "checkpointLabel": "n/a",
-      "gate": "manual",
-      "gateLabel": "manual",
+      "checkpoints": [
+        "WD-DA-CONN-001"
+      ],
+      "checkpointLabel": "WD-DA-CONN-001",
+      "gate": "prog",
+      "gateLabel": "prog, else manual",
+      "fallbackGate": "manual",
       "dependsOn": [
         "DA4.4"
       ],
@@ -546,10 +549,12 @@
       "owner": "da-4",
       "automation": "attempt",
       "automationLabel": "Attempt",
-      "checkpoints": [],
-      "checkpointLabel": "n/a",
+      "checkpoints": [
+        "WD-DA-CTX-001"
+      ],
+      "checkpointLabel": "WD-DA-CTX-001",
       "gate": "manual",
-      "gateLabel": "manual",
+      "gateLabel": "prog user-context + manual topics",
       "dependsOn": [
         "DA4.5"
       ],

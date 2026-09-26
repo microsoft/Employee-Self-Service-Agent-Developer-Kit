@@ -55,6 +55,24 @@ def agent_bot_ids(config: dict[str, Any]) -> list[str]:
     return ordered
 
 
+def active_agent_bot_id(config: dict[str, Any]) -> str | None:
+    """Return the exact active agent bot ID from supported config shapes."""
+    active_slug = config.get("activeAgent")
+    if isinstance(active_slug, str) and active_slug.strip():
+        for agent in config.get("agents", []) or []:
+            if not isinstance(agent, dict) or agent.get("slug") != active_slug:
+                continue
+            bot_id = agent.get("botId")
+            if isinstance(bot_id, str) and bot_id.strip():
+                return bot_id.strip()
+
+    single = config.get("agent") or {}
+    single_bot_id = single.get("botId") if isinstance(single, dict) else None
+    if isinstance(single_bot_id, str) and single_bot_id.strip():
+        return single_bot_id.strip()
+    return None
+
+
 def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
     """Fetch + normalize one agent's connection references from the minimalBots
     components API.
@@ -97,9 +115,11 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
 
 
 def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:
-    """The single active agent's DA connection references (config
-    ``agent.botId``), or ``None`` when the AgentBuilder client or the
-    active-agent botId is unavailable.
+    """The active agent's DA connection references.
+
+    Resolves either the single-agent ``agent.botId`` shape or
+    ``activeAgent`` against the multi-agent ``agents`` collection. Returns
+    ``None`` when the AgentBuilder client or active-agent bot ID is unavailable.
 
     Used by ``DV-CONN-001`` (checks/workday_extension.py), which validates the
     Workday SOAP connection reference on the agent under check. Scoping this to
@@ -109,7 +129,7 @@ def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | No
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
+    agent_id = active_agent_bot_id(config)
     if client is None or not agent_id:
         return None
     return _bot_connection_references(client, agent_id)

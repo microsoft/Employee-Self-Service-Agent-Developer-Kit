@@ -60,12 +60,17 @@ The configuration checklist is complete. Now validate the actual employee
 path:
 
 1. Publish the ESS HR agent.
-2. Use a test employee who is assigned to the Workday Entra application and
-   has valid Workday access.
-3. Start a new conversation so stale user-flow state is not reused.
-4. Run one enabled Workday scenario, such as checking a vacation balance.
-5. Confirm the agent identifies the signed-in employee and returns real
-   Workday data without asking for another unexpected sign-in.
+2. Share the published agent with a test employee who is not the maker who
+   created the Workday connection.
+3. Confirm that employee is assigned to the Workday Entra application and has
+   valid Workday access.
+4. Sign in as that employee and start a new conversation so maker credentials
+   and stale user-flow state are not reused.
+5. Run one enabled, read-only Workday scenario, such as checking a vacation
+   balance.
+6. Confirm the agent identifies the signed-in employee and returns real
+   Workday data without showing a **Connect**, consent, or additional sign-in
+   prompt.
 
 Did the scenario complete successfully?
 
@@ -82,10 +87,14 @@ On success, update **DA5.1** with `GATE="manual"`, `ACK=true` and structured
   "capturedAt": "<current UTC timestamp>",
   "scenario": {
     "scenarioName": "<safe category, for example vacation balance>",
-    "testUserCategory": "<safe category, for example assigned test employee>",
+    "testUserCategory": "non-maker assigned test employee",
+    "nonMakerTestUserConfirmed": true,
+    "agentSharedWithTestUser": true,
     "signedInUserConfirmed": true,
     "realWorkdayDataConfirmed": true,
+    "connectionPromptObserved": false,
     "unexpectedSignIn": false,
+    "testSurface": "<safe category, for example Microsoft 365 Copilot>",
     "completedAt": "<current UTC timestamp>"
   }
 }

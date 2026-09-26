@@ -149,14 +149,27 @@
           "type": "string",
           "minLength": 1
         },
+        "nonMakerTestUserConfirmed": {
+          "const": true
+        },
+        "agentSharedWithTestUser": {
+          "const": true
+        },
         "signedInUserConfirmed": {
           "const": true
         },
         "realWorkdayDataConfirmed": {
           "const": true
         },
+        "connectionPromptObserved": {
+          "const": false
+        },
         "unexpectedSignIn": {
           "const": false
+        },
+        "testSurface": {
+          "type": "string",
+          "minLength": 1
         },
         "completedAt": {
           "type": "string",

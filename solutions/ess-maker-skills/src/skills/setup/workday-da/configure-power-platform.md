@@ -215,10 +215,57 @@ values remain populated.
 
 This is agent/runtime wiring; solution-level binding does not replace it. Do
 not infer it from the physical connection inventory's `allowSharing` property.
-Require explicit confirmation that every Workday flow entry is connected,
-parameter sharing is enabled, the fields remain populated, and the connection
-is connected. If a connection is **Stale** or **Needs attention**, reconnect it
-before continuing. Record DA4.5 as manual.
+After the maker saves the setting, verify the active agent rather than accepting
+only a completion statement:
+
+```powershell
+python scripts/flightcheck/cli.py `
+  --checkpoint WD-DA-CONN-001 `
+  --connect-config ".local/connect/workday-da/config.json" `
+  --agent-slug "{ACTIVE_AGENT}"
+```
+
+Show the result per
+[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0.
+
+- `PASSED` proves that every connected Workday reference exposed by the active
+  agent contains shared connection parameters. Update DA4.5 with
+  `GATE="prog"`, `CHECKPOINT_RESULT="PASSED"`, and
+  `RESULT_SOURCE="flightcheck"`.
+- `FAILED` means at least one connected Workday reference does not contain
+  shared parameters. Show the named remediation, leave DA4.5 blocked, and
+  rerun the checkpoint after the maker saves the setting again.
+- `NOT_CONFIGURED` means the active agent has no connected Workday reference.
+  Return to the start of DA4.5 and connect every Workday flow entry.
+- `WARNING` or `SKIPPED` means the setting could not be read. Refresh the
+  active-agent authentication and retry. If the read remains unavailable, use
+  the definition's manual fallback only after explicit confirmation that every
+  Workday flow entry is connected, parameter sharing is enabled, the fields
+  remain populated, and the connection shows **Connected**. A **Stale** or
+  **Needs attention** connection must be reconnected first.
+
+After DA4.5 passes or its documented fallback is completed, show:
+
+**Message:**
+
+The Workday connection parameters are shared with the agent. After the
+remaining setup is complete and the agent is published, validate that sharing
+works for another employee:
+
+1. Share the agent with a test employee who is not the maker who created the
+   Workday connection.
+2. Sign in as that employee and start a new conversation.
+3. Run a read-only Workday question, such as checking a vacation balance.
+4. Confirm the agent returns that employee's Workday data without showing a
+   **Connect**, consent, or additional sign-in prompt.
+5. If a connection prompt appears, return to **Settings → Connection
+   settings**, save **Allow permission to share parameters** again, rerun this
+   verification, republish, and retry with a new conversation.
+
+The final Workday validation will ask you to confirm this non-maker test. Do
+not use a write or approval scenario until the read-only check succeeds.
+
+**End message.**
 
 ## DA4.6 — Authorize the DA to use the Workday flows
 
@@ -301,6 +348,55 @@ Inspect the installed DA package before changing the agent. Do not assume the
 CEA topic name or file shape. Identify the package's V2 signed-in-user context
 component that uses the Workday `/workers/me` path.
 
+Use the checked-in UserContext helper:
+
+`scripts/configure_workday_da_user_context.py`
+
+Resolve the active agent's `botId`, the effective Dataverse URL, and the maker
+account from canonical state. Do not ask the maker to paste an agent ID. First
+preview:
+
+```powershell
+python scripts/configure_workday_da_user_context.py `
+  --url "{WORKDAY_DATAVERSE_URL}" `
+  --bot-id "{BOT_ID}" `
+  --preferred-username "{MAKER_ACCOUNT}"
+```
+
+The helper scopes every read to the exact active agent. It requires exactly one
+**[Admin] - User Context - Setup** topic and exactly one
+**Workday [System] - 1: Set User Context V2** target. It changes only an empty
+or bare setup scaffold, reports an already-correct redirect as unchanged, and
+refuses to overwrite custom or ambiguous content.
+
+Show the `WORKDAY_DA_USER_CONTEXT_PLAN_JSON` action. If the action is
+`configure`, obtain approval and rerun the identical command with `--apply`.
+The apply run must emit `WORKDAY_DA_USER_CONTEXT_APPLIED_JSON`, report
+`"verified": true`, and confirm that the setup topic now redirects to the
+installed target topic's exact schema name. The helper changes draft topic
+content only; do not publish from this step.
+
+If the helper reports custom content, cannot authenticate, cannot identify the
+two topics unambiguously, or fails post-write verification, do not force an
+overwrite. Show:
+
+**Message:**
+
+**Switch the user-context topic to V2**
+
+1. In Microsoft Copilot Studio, open the active **ESS HR** agent.
+2. Go to **Topics** and open **[Admin] - User Context - Setup**.
+3. In the **Topic** node, select the existing topic reference and choose
+   **Select a topic**.
+4. Search for `v2`.
+5. Select **Workday [System] - 1: Set User Context V2**.
+6. Save the topic.
+
+Tell me after the topic is saved. I will verify the redirect before completing
+this setup step.
+
+**End message.**
+
 Present these choices:
 
 1. **Enable all Workday topics** — recommended for makers who want the complete
@@ -342,7 +438,26 @@ The current AgentBuilder client can fetch components, update the bot entity,
 import, and publish, but it has no proven per-component status mutation API.
 Until a supported API is added, do not guess a MinimalBot payload. Provide the
 equivalent Copilot Studio enablement steps, including the **Enable all**
-selection, and record DA4.7 as manual after confirmation.
+selection.
+
+After the maker confirms the selected topics and required system dependencies
+are enabled, run:
+
+```powershell
+python scripts/flightcheck/cli.py `
+  --checkpoint WD-DA-CTX-001 `
+  --connect-config ".local/connect/workday-da/config.json" `
+  --agent-slug "{ACTIVE_AGENT}"
+```
+
+Show the result per
+[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0. Do not
+complete DA4.7 unless the checkpoint is `PASSED`; a pass proves the setup topic
+redirects to the exact Workday V2 target and that target is enabled. DA4.7
+remains a manual gate because the selected business-topic set still requires
+maker confirmation. Record the checkpoint result, explicit acknowledgement,
+and safe evidence describing the selected topic mode without storing topic
+contents.
 
 After the selected Workday topics and required dependencies are confirmed,
 show:

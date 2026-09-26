@@ -64,6 +64,18 @@ def test_agent_bot_ids_ignores_blank_and_non_string():
     assert reader.agent_bot_ids(config) == ["X"]
 
 
+def test_active_agent_bot_id_resolves_the_selected_multi_agent_entry():
+    config = {
+        "activeAgent": "ess-hr",
+        "agent": {"slug": "stale-agent", "botId": "STALE-BOT"},
+        "agents": [
+            {"slug": "ess-it", "botId": "IT-BOT"},
+            {"slug": "ess-hr", "botId": "HR-BOT"},
+        ],
+    }
+    assert reader.active_agent_bot_id(config) == "HR-BOT"
+
+
 # --------------------------------------------------------------------------
 # read_active_agent_connection_references (DV-CONN-001 surface)
 # --------------------------------------------------------------------------
@@ -77,6 +89,27 @@ def test_read_active_none_when_no_active_bot_id():
     # Only multi-agent config; no config["agent"].botId -> active read SKIPs.
     runner = _FakeRunner(_FakeClient({}), {"agents": [{"botId": "BOT"}]})
     assert reader.read_active_agent_connection_references(runner) is None
+
+
+def test_read_active_uses_active_agent_in_multi_agent_config():
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id="wd-conn-1")]
+    )
+    runner = _FakeRunner(
+        _FakeClient({"HR-BOT": payload}),
+        {
+            "activeAgent": "ess-hr",
+            "agents": [
+                {"slug": "ess-it", "botId": "IT-BOT"},
+                {"slug": "ess-hr", "botId": "HR-BOT"},
+            ],
+        },
+    )
+
+    rows = reader.read_active_agent_connection_references(runner)
+
+    assert len(rows) == 1
+    assert rows[0]["botid"] == "HR-BOT"
 
 
 def test_read_active_normalizes_workday_row():
