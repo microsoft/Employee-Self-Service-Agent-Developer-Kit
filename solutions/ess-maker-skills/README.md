@@ -245,6 +245,9 @@ Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog i
 
 Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
 
+For Declarative Agents, this release supports the **ESS HR Agent**. Workday
+integration with the ESS IT Agent is not supported in this release.
+
 **Two supported install paths** — the kit detects which one applies and routes automatically:
 
 - **Simplified** (Microsoft's default for new installs) — just one Workday connection (OAuthUser via Entra ID) plus Dataverse. No ISU service accounts, security groups, or custom reports. User context comes from the Workday REST `/workers/me` endpoint.
@@ -267,6 +270,27 @@ Connect your agent to Workday for employee data, compensation, time off, and org
 | Basic auth | Legacy path's ISU connections (`d6081`, `0786a`) |
 
 **Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. On the legacy path, if ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
+
+**Test and production deployment:** `/connect workday` is the development
+environment experience. After the ESS DA HR agent and Workday package are
+deployed to Test or Production, an administrator runs the post-deployment
+Dataverse authorization script for that target environment. See
+[`scripts/alm/README.md`](scripts/alm/README.md) for the required parameters,
+safe preview, execution, and verification procedure.
+
+For ESS DA HR in development, `/connect workday` also guides the maker through
+the OAuthUser and Dataverse references, shared connection parameters,
+stale-connection recovery, flow enablement, bot-to-flow authorization, V2
+employee context, topic selection, firewall readiness, and a signed-in
+end-to-end Workday scenario. Settings without a reliable DA-scoped API require
+explicit maker or administrator confirmation rather than being reported as
+automatically verified.
+
+At the beginning of the experience, the skill presents the complete setup plan
+and identifies when an Entra administrator, Workday administrator, Power
+Platform/Dataverse administrator, InfoSec administrator, or Workday test user
+is required. This lets the maker arrange the required participants before the
+setup reaches a permission-dependent step.
 
 **What you can build after connecting:**
 - Look up employee information, compensation, service anniversary, cost center
@@ -433,6 +457,13 @@ capabilities are used and where they fail, so we can improve the product. It is
   lower sensitivity than the tenant ID it is derived from.
 - Non-identifying context: ADK version, surface, session ID, event name, and
   per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
+- A short **toolkit git SHA** (7-char) and a **toolkit branch classification** —
+  System Metadata that lets us distinguish "install is on latest bits" from
+  "install is on an older tree at the same extension version". The SHA is
+  validated as hex before emission (non-SHA overrides become `unknown`). The
+  branch is collapsed to a **bounded set** — one of `main`, `main-ca`, `detached`,
+  `other`, or `unknown` — so raw branch names (which could otherwise carry
+  personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an

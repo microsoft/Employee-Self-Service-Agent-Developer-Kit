@@ -26,11 +26,19 @@
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
-    [string] $SourceBaseUrl = 'https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup'
+    [ValidateSet('maker','developer','prompt','lite','standard','')]
+    [string] $InstallMode = '',
+    [string] $SourceBaseUrl
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Derive SourceBaseUrl from -Branch when not explicitly set, so `-Branch <feature>`
+# actually pulls the installer bits from that feature branch (not from main).
+if (-not $SourceBaseUrl) {
+    $SourceBaseUrl = "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$Branch/setup"
+}
 
 $tempDir = Join-Path $env:TEMP "ess-adk-bootstrap-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -75,7 +83,11 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; SkipMakerProfile = $true }
+$installerArgs = @{ Branch = $Branch }
+# Forward -InstallMode when the caller pinned one; otherwise leave the
+# installer to fall back to its own default (prompt), which asks the
+# maker to pick Maker or Developer in the terminal before VS Code launches.
+if ($InstallMode) { $installerArgs.InstallMode = $InstallMode }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

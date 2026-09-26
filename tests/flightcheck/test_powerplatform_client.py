@@ -10,6 +10,7 @@ import json
 import responses
 
 from flightcheck.powerplatform_client import PowerPlatformClient
+from flightcheck import powerplatform_client
 from tests.conftest import require_validated_mock
 from tests.mocks import powerplatform as pp
 
@@ -21,6 +22,53 @@ def _client() -> PowerPlatformClient:
     client = PowerPlatformClient("tenant")
     client._token = "REDACTED_TOKEN"  # noqa: S105 - test fixture
     return client
+
+
+def test_authenticate_uses_preferred_cached_account(monkeypatch) -> None:
+    selected_accounts = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return [
+                {"username": "other@example.com"},
+                {"username": "Maker@Example.com"},
+            ]
+
+        def acquire_token_silent(self, scopes, account):
+            selected_accounts.append(account)
+            return {
+                "access_token": "preferred-token",
+                "id_token_claims": {
+                    "preferred_username": "Maker@Example.com",
+                },
+            }
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("cached preferred account should be reused")
+
+    monkeypatch.setattr(
+        powerplatform_client.msal,
+        "SerializableTokenCache",
+        FakeCache,
+    )
+    monkeypatch.setattr(
+        powerplatform_client.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    client = PowerPlatformClient("organizations")
+    token = client.authenticate(preferred_username="maker@example.com")
+
+    assert token == "preferred-token"
+    assert client.signed_in_username == "Maker@Example.com"
+    assert selected_accounts == [{"username": "Maker@Example.com"}]
 
 
 @responses.activate

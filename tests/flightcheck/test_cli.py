@@ -28,6 +28,14 @@ import pytest
 from flightcheck import cli
 
 
+def test_workday_da_check_is_explicit_scope_only() -> None:
+    """An optional DA HR package must not fail unrelated full runs."""
+    assert cli.SCOPE_MAP["workdayda"] == [
+        ("Workday DA", cli.run_workday_da_checks)
+    ]
+    assert ("Workday DA", cli.run_workday_da_checks) not in cli.FULL_SCOPE
+
+
 class TestOpenReportInBrowser:
     """Tests for cli.open_report_in_browser."""
 
@@ -310,6 +318,7 @@ class TestAgentBuilderNativeScopes:
         config = {
             "releaseLine": "da",
             "environmentId": "00000000-0000-4000-8000-000000001111",
+            "ring": "test",
             "agent": {
                 "slug": "mock-agent",
                 "botId": "00000000-0000-4000-8000-000000002222",

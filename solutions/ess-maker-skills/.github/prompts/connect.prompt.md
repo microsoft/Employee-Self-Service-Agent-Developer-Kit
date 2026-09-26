@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Check DA-GA product extension setup availability"
+description: "Connect Workday or another supported integration"
 ---
 
 # Connect
@@ -8,12 +8,13 @@ description: "Check DA-GA product extension setup availability"
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
 Resolve `.local/config.json`'s `activeAgent` slug to the matching object in its
 `agents` array, then use that object's `botId` to select the entry in
-`.local/setup/config.json`'s `agents` object. If setup does not have
-`schema_version: 4`, or that canonical agent entry does not have
-`authoring_ready: true`, show the message below and STOP. Ignore
-`connect_ready`, `active_step`, blocked capacity, and blocked connection steps
-for this admission check; capacity and the product connection itself may still
-need attention.
+`.local/setup/config.json`'s `agents` object. Continue when canonical state has
+`schema_version: 4`, that agent has `authoring_ready: true`, complete workspace evidence,
+and `steps.SETUP-07.state: "done"`. Do not require
+`connect_ready: true`; Ignore `connect_ready`, `active_step`, blocked capacity,
+and blocked connection steps for this admission check because this command
+configures the product-extension connections that may currently block runtime
+readiness. If local workspace materialization is incomplete, show:
 
 > Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
 

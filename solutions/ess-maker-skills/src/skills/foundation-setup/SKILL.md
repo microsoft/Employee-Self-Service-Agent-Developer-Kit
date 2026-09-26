@@ -40,7 +40,7 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Send the complete **Message** block as its own chat message. Finish that message before opening the next question or interactive control; the next control begins with its own prompt, explanation, and choices. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
 **Message:**
 
@@ -78,13 +78,24 @@ python scripts/setup_existing_da.py cached-accounts
 
 Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
 
-- For one cached sign-in name, ask **Use {account} for setup?** and offer exactly **Continue with this account** and **Use another account**. Do not preselect either choice.
-- For multiple cached sign-in names, ask **Which account should setup use?** and offer each returned sign-in name plus **Use another account**. Do not preselect an account.
-- For no cached sign-in names, or after **Use another account**, ask **Do you have a test tenant user?** Allow the maker to enter that account's sign-in name or skip. When multiple cached accounts exist, require a sign-in name after **Use another account** so subsequent setup commands do not reopen account selection.
+- Ask exactly one account question: **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in.
+- Build the choices in this order: **Skip — Use the Microsoft account picker** first, followed by every cached sign-in name. Do not preselect or recommend an option. Allow a different account sign-in name as free-form input. Do not add a separate **Use another account** choice or a follow-up account question.
 
-Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, and `setup_alm_import.py` command in this invocation. Never infer a corp account. When the maker skips with no cached accounts, omit `--account` and let Microsoft sign-in present its account picker.
+Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
+
+When the maker selects **Skip — Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
+
+If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and ask which sign-in name the maker selected before continuing.
+
+Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
 Present account confirmation once per setup invocation. Do not repeat it before later commands.
+
+## Reconcile every selected agent
+
+Whenever one exact environment and agent has been selected, read `src/skills/foundation-setup/product-line-reconciliation.md` and complete that handoff before the next DA-GA-only operation. This applies regardless of whether the identity came from a supplied URL, active local setup state, a configured-agent switch, environment candidate selection, MOS creation, or ALM import. Run it once per selected identity in this invocation and again only when the selection changes.
+
+For a supplied Copilot Studio URL, retain its exact `agentBackend` query value as an ordering hint for that handoff. Do not infer existence, product family, support, or ALM enrollment from the hint.
 
 ## Shared authorization message
 
@@ -106,6 +117,30 @@ Do not describe an authorization wait as service processing, start a second comm
 
 Establish a working Python invocation before running setup commands.
 
+Before checking the available Python invocation, render this exact Message
+block as a completed response. This is an informational disclosure, not another
+setup confirmation. The current `/setup` request or the explicit choice that
+entered this skill already confirms the maker's intent. After rendering the
+message, proceed directly with runtime discovery:
+
+**Message:**
+
+**Setup command approvals**
+
+VS Code will ask you to approve commands that:
+
+- check Python and prepare the required local tools;
+- sign you in and inspect the selected environment and agent;
+- perform the setup actions you confirm and prepare the local workspace;
+- download required Microsoft components when needed.
+
+To avoid repeated prompts, open the permissions menu below the chat input and
+select **Allow all** for this chat session. This applies to every tool used in
+the session, not only setup. Provide a screenshot of your chat input if you
+need guidance finding the setting.
+
+**End message.**
+
 - Run setup commands from the current ESS Maker Skills workspace folder.
 - From the kit root, check each candidate with
   `{PYTHON} -c "import sys; print(sys.executable)"`, one terminal command at a
@@ -123,6 +158,27 @@ Establish a working Python invocation before running setup commands.
 
   When child guidance shows `python`, substitute the resolved invocation.
 
+### When command approval is declined
+
+A declined VS Code command approval pauses the current setup operation before
+the command runs. Render this exact response, substituting the declined command
+and the shell language appropriate for the current platform:
+
+> **Run this command manually**
+>
+> Setup paused before running this command:
+
+```{SHELL}
+{COMMAND}
+```
+
+> Run it from the current workspace. When it finishes, return here with the
+> result and I'll continue setup from this step.
+
+Resume from the paused operation when the maker returns. Continue from a
+successful result; apply the command-failure recovery guidance to a failed
+result.
+
 ## Shared workspace choices
 
 One workspace targets one Power Platform environment, can contain multiple ESS Dev agents from that environment, and has one active agent at a time. `.local/config.json` owns the active agent through `activeAgent` and the matching `agent` entry. Canonical setup state records readiness independently for every configured agent.
@@ -131,9 +187,9 @@ When an occupied workspace needs a new environment, offer **Create and open a ne
 
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
-- **Cancel setup**
+- **Go back**
 
-Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Then run:
+For **Go back**, make no changes and return to the Setup choice surface that offered **Create and open a new workspace**. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
 
 ```text
 python scripts/prepare_fresh_workspace.py \
@@ -151,9 +207,8 @@ Offer exactly:
 
 - **Reset workspace**
 - **Go back**
-- **Cancel setup**
 
-Do not preselect **Reset workspace**. Continue only when the maker selects it, then run:
+Do not preselect **Reset workspace**. For **Go back**, make no changes and return to the choice surface that offered **Reset and use this workspace**. Continue only when the maker selects **Reset workspace**, then run:
 
 ```text
 python scripts/reset_local_workspace.py --confirm-reset
@@ -161,7 +216,7 @@ python scripts/reset_local_workspace.py --confirm-reset
 
 Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
 
-For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, run:
+For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, complete the selected-agent product-line reconciliation before changing the active local selection, then run:
 
 ```text
 python scripts/setup_existing_da.py select-agent \
@@ -172,14 +227,31 @@ Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectRe
 
 The final handoff is the sole completion summary. After it, offer exactly these context-appropriate choices:
 
-- **Continue customizing this agent**
+- **Finish setup**
 - **Switch to another configured agent** -- only when another configured agent exists.
 - **Install another product in this environment**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
-- **Finish for now**
 
-Do not preselect a choice. **Install another product in this environment** begins `da-mos-starter.md` at its first product-installation decision surface with the recorded environment and ring. **Finish for now** ends immediately. Every other selected follow-up begins at that follow-up's first decision surface rather than rendering another completion summary.
+Do not preselect a choice. **Finish setup** closes the setup flow. Do not render
+another setup completion summary. After the maker selects it, show:
+
+**Message:**
+
+The {agent display name} agent is now active.
+
+- Run `/landing-page` to configure branding and the content employees see.
+- Run `/connect` to choose an integration.
+- Type `/menu` to see all available capabilities.
+
+**End message.**
+
+Then end the request.
+
+**Install another product in this environment** begins `da-mos-starter.md` at
+its first product-installation decision surface with the recorded environment
+and ring. Every other selected follow-up begins at that follow-up's first
+decision surface rather than rendering another completion summary.
 
 ## Start
 
@@ -212,7 +284,7 @@ Offer exactly these context-appropriate choices:
 
 Do not preselect a choice. Follow the corresponding shared workspace choice above.
 
-For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection above, then run:
+For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection and selected-agent product-line reconciliation above, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -237,10 +309,11 @@ already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
 not explicitly selected package import, infer its environment ID, agent ID,
-and service ring. The URL should have a segment denoting the ring, such as
-`test` or `preprod`; when neither segment is present, confirm the `prod` ring
-with the user. Ask only when the environment ID or agent ID is unclear. Then
-run:
+service ring, and optional `agentBackend` ordering hint. When the URL does not
+identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when
+the environment ID or agent ID is unclear. Complete the selected-agent
+product-line reconciliation before running:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -252,6 +325,12 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
+- When `almEnrollment` is `not-enrolled`, the earlier native identity probe
+  still proves that the agent exists. Say that the agent is not enrolled in
+  the ALM family required for local authoring, then offer **Choose a different
+  agent**, **Choose a different environment**, and **Go back** using the exact
+  recovery routes in `product-line-reconciliation.md`. Do not call the agent
+  missing and do not continue to validation or attachment.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent
@@ -275,7 +354,24 @@ python scripts/emit_capability.py setup
 
 When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
 
-When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
+When the request identifies an environment and explicitly asks to connect to an existing agent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
+
+When the request identifies an environment but not an agent or create-versus-connect intent, retain the resolved environment ID and service ring. Send the current progress snapshot using the shared **Message** contract, then ask exactly:
+
+> What would you like to set up in `{environment name or the selected Power Platform environment}`?
+
+Offer exactly:
+
+- **Create a fresh agent in this environment**
+- **Connect to an existing agent in this environment**
+- **Cancel setup**
+
+Require an explicit selection; all choices begin unselected.
+Resolve the environment label from known context. This question confirms the selected target; the access-verification stage remains current until a service operation succeeds.
+
+- For **Create a fresh agent in this environment**, continue directly through `src/skills/foundation-setup/da-mos-starter.md` with the retained environment and ring.
+- For **Connect to an existing agent in this environment**, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path with the retained environment and ring.
+- For **Cancel setup**, make no changes and stop.
 
 When the request does not identify an agent or environment and no usable local target exists, ask:
 
@@ -286,4 +382,7 @@ Offer exactly:
 - **Yes, I have an agent** — ask for its Copilot Studio URL.
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
 
-Do not run Dataverse foundation or onboarding playbooks. Never route from `/setup` into an integration or topic playbook.
+Do not run Dataverse foundation or onboarding playbooks. Never route from
+`/setup` into an integration or topic playbook. **Finish setup** advertises
+separate commands and ends the current request; a command selected afterward
+begins its own prompt flow.

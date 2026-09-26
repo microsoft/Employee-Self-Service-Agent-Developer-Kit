@@ -39,6 +39,7 @@ from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
+from ..agent_scope import resolve_agent_directory
 from .infrastructure import (
     _infra_003_directive,
     _infra_003_probe_layer_note,
@@ -398,6 +399,19 @@ def _ref_key_label(key: str) -> str:
     return _WD_REF_KEY_LABELS.get(key, key)
 
 
+def _runner_agent_slug(runner) -> str:
+    """Resolve the agent selected for this FlightCheck invocation."""
+    config = getattr(runner, "config", {}) or {}
+    agents = config.get("agents") or []
+    return str(
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or (agents[0].get("slug") if agents else "")
+        or ""
+    )
+
+
 def _extract_requested_reference_keys(topic_data: str) -> set[str]:
     """Reference keys a topic actually REQUESTS from GetReferenceData — the
     literal ``referenceDataKey: KEY`` input it passes on each call."""
@@ -419,14 +433,7 @@ def _wd_studio_link(runner) -> str:
     """
     try:
         from .local_files import _studio_link_md
-        config = getattr(runner, "config", {}) or {}
-        agents = config.get("agents") or []
-        slug = (
-            config.get("activeAgent")
-            or (config.get("agent") or {}).get("slug")
-            or (agents[0].get("slug") if agents else "")
-            or ""
-        )
+        slug = _runner_agent_slug(runner)
         return _studio_link_md(runner, slug, "the agent in Copilot Studio")
     except Exception:  # noqa: BLE001 — never let link-building break the check
         return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
@@ -1179,7 +1186,14 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    workday_refs = [r for r in refs if _is_workday_soap_connector(r.get("connectorid"))]
+    workday_refs = [
+        r
+        for r in refs
+        if _is_workday_soap_connector(r.get("connectorid"))
+        and not _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
     runner._workday_connection_refs = workday_refs
 
     # Classify each Workday row's suffix (some may not match the
@@ -2753,9 +2767,27 @@ def _select_active_workday_cert(
     return (active, others)
 
 
-def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+def _format_preferred_thumbprint(preferred_thumbprint: str | None) -> str | None:
+    """Format Graph's colon-free SHA-1 preferred signing thumbprint."""
+    normalized = (preferred_thumbprint or "").strip().replace(":", "")
+    if not re.fullmatch(r"[0-9A-Fa-f]{40}", normalized):
+        return None
+    return ":".join(
+        normalized[index:index + 2].upper()
+        for index in range(0, len(normalized), 2)
+    )
+
+
+def _format_cert_detail_line(
+    cert: dict,
+    now: datetime,
+    *,
+    thumbprint_override: str | None = None,
+) -> str:
     """Render one cert group as a one-line summary for result text."""
-    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    display = thumbprint_override
+    if display is None:
+        display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
     end = cert["end"]
     if end is None:
         expiry_str = "NotAfter=(unknown)"
@@ -3009,7 +3041,19 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             (c["end"] is not None and c["end"] < now) for c in cert_groups
         )
 
-        cert_line = _format_cert_detail_line(active, now)
+        preferred_display = _format_preferred_thumbprint(
+            sp.get("preferredTokenSigningKeyThumbprint")
+        )
+        # Graph tenants can surface a non-SHA-1 customKeyIdentifier even though
+        # preferredTokenSigningKeyThumbprint is the authoritative SHA-1 value.
+        # With one logical certificate there is no ambiguity, so show the
+        # preferred thumbprint rather than incorrectly calling the key malformed.
+        active_thumbprint = preferred_display if len(cert_groups) == 1 else None
+        cert_line = _format_cert_detail_line(
+            active,
+            now,
+            thumbprint_override=active_thumbprint,
+        )
         rollover_lines = [
             f"      rollover: {_format_cert_detail_line(c, now)}"
             for c in others
@@ -5089,16 +5133,23 @@ def _scan_topic_for_workday_refs(
 
 def _discover_customer_workday_scenarios(
     workspace_root: Path = Path("workspace/agents"),
+    agent_slug: str = "",
 ) -> list[dict]:
-    """Walk every agent under workspace_root and return all Workday
-    scenario references (Pattern A + Pattern B). Returns [] when the
-    workspace doesn't exist (callers should treat that as SKIPPED, not
-    PASSED — see _check_custom_workflow_inventory).
+    """Return Workday scenario references for the selected agent.
+
+    Without an agent slug, retain the broad inventory behavior and walk every
+    agent. Returns [] when the workspace or selected agent doesn't exist
+    (callers should treat that as SKIPPED, not PASSED — see
+    _check_custom_workflow_inventory).
     """
     if not workspace_root.exists():
         return []
+    if agent_slug:
+        agent_dirs = [resolve_agent_directory(workspace_root, agent_slug)]
+    else:
+        agent_dirs = sorted(workspace_root.iterdir())
     discovered: list[dict] = []
-    for agent_dir in sorted(workspace_root.iterdir()):
+    for agent_dir in agent_dirs:
         if not agent_dir.is_dir() or agent_dir.name.startswith("."):
             continue
         topics_dir = agent_dir / "topics"
@@ -5135,7 +5186,10 @@ def _get_unknown_workday_scenarios(runner) -> list[dict]:
     if cached is not None:
         return cached
     workspace_root_str = "workspace/agents"
-    discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
+    discovered = _discover_customer_workday_scenarios(
+        Path(workspace_root_str),
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
     if not discovered:
         runner._workday_unknown_scenarios = []
@@ -5289,7 +5343,10 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     # Discover Workday refs from topics first — no catalog needed for
     # this step. If there are none, we can SKIP cleanly without even
     # touching Dataverse.
-    discovered = _discover_customer_workday_scenarios(workspace_root)
+    discovered = _discover_customer_workday_scenarios(
+        workspace_root,
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
 
     if not discovered:

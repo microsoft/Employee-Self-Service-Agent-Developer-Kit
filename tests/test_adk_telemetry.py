@@ -460,13 +460,38 @@ def test_common_dimensions_shape():
     for key in (
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
-        "session_id", "surface", "adk_version", "timestamp",
+        "session_id", "surface", "adk_version",
+        "toolkit_git_sha", "toolkit_git_branch",
+        "timestamp",
     ):
         assert key in dims
     assert dims["schema_version"] == adk.SCHEMA_VERSION
     assert dims["surface"] == "cli"
     assert dims["session_id"] == "sid-1"
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", dims["timestamp"])
+
+
+def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
+    """toolkit_git_sha and toolkit_git_branch are precise upgrade-posture
+    signals — ADO #7943642. They must be present on every ADK event so
+    dashboards can distinguish "install is on latest bits" from "install
+    is on an older tree at the same extension version".
+    """
+    # The env overrides are the deterministic entry point used by CI and
+    # tests; the real git-walk code path is exercised in the FlightCheck
+    # test module against a fabricated .git dir.
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "abcdef0")
+    # Branch overrides now go through the bounded classifier — a
+    # personal-name override collapses to "other" so free-form values
+    # never appear in the emitted dimension.
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "amilandin/adk-telemetry-x")
+    _fc = __import__("flightcheck.telemetry", fromlist=["telemetry"])
+    _fc.get_toolkit_git_sha.cache_clear()
+    _fc.get_toolkit_git_branch.cache_clear()
+
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["toolkit_git_sha"] == "abcdef0"
+    assert dims["toolkit_git_branch"] == "other"
 
 
 def test_build_event_is_common_schema_4_0():
@@ -1727,7 +1752,12 @@ def test_every_canonical_capability_is_actually_emitted():
         for pat in (py_shim_pat, use_pat, kw_pat):
             for m in pat.finditer(text):
                 emitted.add(m.group(1))
-    for path in skills_dir.rglob("SKILL.md"):
+    # Scan every prompt-file the skills dispatch chain reads, not just
+    # SKILL.md. Some SKILLs (connect, in particular) defer their emit into a
+    # step*.md file so the ``--connector`` value can be attached AFTER the
+    # user picks Workday vs ServiceNow. Restricting the scan to SKILL.md
+    # would misclassify those deferred capabilities as dead.
+    for path in skills_dir.rglob("*.md"):
         text = path.read_text(encoding="utf-8")
         for m in md_pat.finditer(text):
             emitted.add(m.group(1))
@@ -1774,7 +1804,9 @@ def test_no_caller_passes_a_noncanonical_capability_to_the_shim():
             cap = m.group(1)
             if cap not in adk.ADK_CAPABILITIES:
                 offenders.append((str(path.relative_to(repo_root)), cap))
-    for path in skills_dir.rglob("SKILL.md"):
+    # Scan every prompt file, not just SKILL.md — deferred emits live in
+    # step*.md (see the reverse scanner above for the same rationale).
+    for path in skills_dir.rglob("*.md"):
         text = path.read_text(encoding="utf-8")
         for m in md_pat.finditer(text):
             cap = m.group(1)
@@ -2002,3 +2034,153 @@ def test_sanitize_tenant_id_rejects_non_guid(bad):
 def test_sanitize_tenant_id_preserves_empty():
     assert adk._sanitize_tenant_id("") == ""
     assert adk._sanitize_tenant_id("   ") == ""
+
+
+# --- connector attribution (ADO 7943641) ----------------------------------
+def test_normalize_connector_known_values_pass_through():
+    for c in adk.CONNECTORS:
+        assert adk.normalize_connector(c) == c
+
+
+def test_normalize_connector_empty_stays_empty():
+    # Most events legitimately have no connector context (topic authoring,
+    # workflow deletion, etc.). Empty must NOT coerce to "unknown".
+    assert adk.normalize_connector("") == ""
+    assert adk.normalize_connector(None) == ""
+
+
+def test_normalize_connector_case_and_whitespace_insensitive():
+    assert adk.normalize_connector("  Workday  ") == "workday"
+    assert adk.normalize_connector("SERVICENOW") == "servicenow"
+
+
+def test_normalize_connector_legacy_sentinel_preserved():
+    # The "legacy" sentinel labels events that predate connector attribution
+    # (generic "connect" capability without a --connector arg). It must
+    # round-trip verbatim so the pre-attribution corpus stays queryable as
+    # its own bucket instead of collapsing into "unknown".
+    assert adk.normalize_connector("legacy") == adk.CONNECTOR_LEGACY
+    assert adk.normalize_connector(" Legacy ") == adk.CONNECTOR_LEGACY
+
+
+def test_normalize_connector_unknown_bucketed():
+    # Out-of-taxonomy values still emit but land in the controlled bucket so
+    # the "connector" dimension never mints stray slices.
+    assert adk.normalize_connector("adp") == adk.CONNECTOR_UNKNOWN
+    assert adk.normalize_connector("workday-soap") == adk.CONNECTOR_UNKNOWN
+    assert adk.normalize_connector("wd") == adk.CONNECTOR_UNKNOWN
+
+
+def test_emit_capability_use_stamps_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("connect", connector="workday", block=True)
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == "workday"
+
+
+def test_emit_capability_use_omitted_connector_is_empty(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("topic_create", block=True)
+    data = captured_post[0][1][0]["data"]
+    # Topic authoring is not connector-scoped; the field is always present
+    # (Kusto column shape stays stable) but empty.
+    assert data["connector"] == ""
+
+
+def test_emit_capability_use_unknown_connector_bucketed(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("connect", connector="Sap", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == adk.CONNECTOR_UNKNOWN
+
+
+def test_emit_flightcheck_run_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_run(agent_id="a1", connector="servicenow", block=True)
+    data = captured_post[0][1][0]["data"]
+    assert data["connector"] == "servicenow"
+
+
+def test_emit_flightcheck_result_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_result(agent_id="a1", connector="workday", result="pass", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_error(agent_id="a1", connector="workday", error_code="X", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_schema_version_bump_records_connector_dim():
+    # The connector dimension was added in 1.5.0. Older cubes / dashboards
+    # can version-gate on this to know whether "connector" will be present.
+    assert adk.SCHEMA_VERSION == "1.5.0"
+
+
+# --- emit_capability.py shim --connector plumbing -------------------------
+def test_shim_parses_connector_flag_before_capability(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "--connector", "servicenow", "connect",
+    ])
+    assert rc == 0
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == "servicenow"
+
+
+def test_shim_parses_connector_flag_after_capability(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "connect", "--connector", "workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_shim_parses_connector_equals_form(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "connect", "--connector=workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_shim_omitted_connector_yields_empty(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "topic_create"])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == ""
+
+
+def test_shim_dangling_connector_flag_still_emits(captured_post, monkeypatch):
+    # Malformed CLI (`--connector` with no value at the end) must not fail
+    # the skill step; the emit still fires with an empty connector so the
+    # capability signal is not lost.
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "connect", "--connector"])
+    assert rc == 0
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == ""
+
+
+def test_shim_worker_mode_preserves_connector(captured_post, monkeypatch):
+    # Async mode re-execs the shim with `--worker <cap>` (+ optional
+    # `--connector <value>`). Exercise the worker branch directly to
+    # prove the connector survives the subprocess round-trip.
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "--worker", "connect", "--connector", "workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"

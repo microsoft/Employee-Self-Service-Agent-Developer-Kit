@@ -30,6 +30,7 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
     assert "start with that skill's live `inspect` contract" in prompt
     assert "src/skills/connect/servicenow-da/SKILL.md" in router
     assert "releaseLine" in router
+    assert "emit_capability.py connect --connector servicenow" in router
 
 
 def test_global_gate_allows_connection_blocked_foundation() -> None:

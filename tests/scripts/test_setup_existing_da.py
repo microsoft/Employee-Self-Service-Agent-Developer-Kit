@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
+import da_product_registry
 import setup_existing_da
 
 
@@ -24,6 +25,7 @@ OTHER_AGENT_ID = "00000000-0000-4000-8000-000000006666"
 TENANT_ID = "00000000-0000-4000-8000-000000009999"
 FAMILY_ID = "00000000-0000-4000-8000-000000003333"
 SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
+IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 HOST = (
     "https://0000000000004000800000000000111."
     "1.environment.api.test.powerplatform.com"
@@ -390,7 +392,6 @@ def _complete_setup_flightchecks(root: Path) -> None:
     for checkpoint, statuses in (
         ("DA-AGENT-001", ("Passed",)),
         ("ENV-CAPACITY-001", ("Passed",)),
-        ("DA-CONN-*", ("Passed", "Warning")),
         ("DA-CONTENT-001", ("Passed",)),
     ):
         setup_existing_da.maintain_setup_flightcheck(
@@ -493,8 +494,35 @@ def test_inspect_agent_route_returns_service_realm(
     )
 
     assert result["realm"] == expected
+    assert result["almEnrollment"] == "enrolled"
     assert result["agentId"] == AGENT_ID
     assert result["tenantId"] == TENANT_ID
+
+
+def test_inspect_agent_route_distinguishes_missing_alm_enrollment() -> None:
+    client = FakeClient()
+
+    def missing_realms(_agent_id: str) -> dict[str, Any]:
+        raise setup_existing_da.AgentBuilderHTTPError(
+            "Agent realm family",
+            404,
+            error_code="ObjectNotFound",
+            request_id="request-123",
+        )
+
+    client.get_realms = missing_realms  # type: ignore[method-assign]
+
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["realm"] is None
+    assert result["almEnrollment"] == "not-enrolled"
+    assert result["statusCode"] == 404
+    assert result["errorCode"] == "ObjectNotFound"
+    assert result["requestId"] == "request-123"
 
 
 def test_inspect_agent_route_rejects_unknown_realm() -> None:
@@ -612,6 +640,7 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
         (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
     )
     assert config["setup"] == "complete"
+    assert config["ring"] == "test"
     assert config["agent"]["botId"] == AGENT_ID
 
     canonical_state = _setup_state(tmp_path)
@@ -627,9 +656,14 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
-    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-05", "SETUP-06"):
+    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-06"):
         assert setup_state["steps"][step_id]["state"] == "pending"
         assert setup_state["steps"][step_id]["mode"] is None
+    assert setup_state["steps"]["SETUP-05"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert "declares no foundation connection requirement" in (
+        setup_state["steps"]["SETUP-05"]["note"]
+    )
     assert setup_state["steps"]["SETUP-04"]["mode"] == "skipped"
     assert "does not apply" in setup_state["steps"]["SETUP-04"]["note"]
     assert setup_state["workspace"]["agent_path"] == "agent.mcs.yml"
@@ -637,6 +671,26 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["workspace"]["unprojected_component_kinds"] == {
         "CloudFlowDefinitionComponent": 1
     }
+
+
+def test_unregistered_product_preserves_registry_uncertainty(
+    tmp_path: Path,
+) -> None:
+    _attach(
+        FakeClient(
+            agent_name="Future Employee Agent",
+            schema_name="gptagent_futureemployeeagent",
+        ),
+        tmp_path,
+    )
+
+    connection_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert connection_step["state"] == "done"
+    assert connection_step["mode"] == "skipped"
+    assert connection_step["note"] == (
+        "This agent's product identity is not registered in the product "
+        "setup registry; no foundation connection requirement was applied."
+    )
 
 
 def test_same_environment_agents_keep_independent_state_and_folders(
@@ -1112,7 +1166,8 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
         loaded_agent["steps"]["SETUP-02.2"]["checkpoint"]
         == "ENV-CAPACITY-001"
     )
-    assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] == "DA-CONN-*"
+    assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] is None
+    assert loaded_agent["steps"]["SETUP-05"]["mode"] == "skipped"
     assert (
         loaded_agent["steps"]["SETUP-06"]["checkpoint"]
         == "DA-CONTENT-001"
@@ -1158,41 +1213,149 @@ def test_setup_rerun_requires_fresh_flightcheck_evidence(
         )
 
 
-def test_not_configured_connection_blocks_setup(tmp_path: Path) -> None:
+def test_broad_connection_diagnostic_is_not_a_setup_gate(
+    tmp_path: Path,
+) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "DA-CONN-*",
-        "NotConfigured",
-    )
-    payload = json.loads(results_path.read_text(encoding="utf-8"))
-    payload["overall"] = "READY"
-    results_path.write_text(json.dumps(payload), encoding="utf-8")
-    step_started = datetime.fromisoformat(
-        _agent_setup_state(tmp_path)["steps"]["SETUP-05"]["updated_at"]
-    ).timestamp()
-    fresh_time = max(results_path.stat().st_mtime, step_started + 1)
-    os.utime(results_path, (fresh_time, fresh_time))
 
-    result = setup_existing_da.maintain_setup_flightcheck(
+    assert "DA-CONN-*" not in setup_existing_da.SETUP_FLIGHTCHECK_STEPS
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["state"] == "done"
+    assert setup_step["failure_causes"] == []
+
+
+def _write_required_connection_results(
+    root: Path,
+    *,
+    self_help_status: str,
+    service_now_status: str = "NotConfigured",
+) -> Path:
+    path = root / "DA-CONN-family.json"
+    rows = [
+        {
+            "checkpoint_id": "DA-CONN-001",
+            "status": "NotConfigured",
+            "description": "Native agent connection readiness",
+            "result": "Two logical references were observed.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-002",
+            "status": self_help_status,
+            "description": "Native connection reference: shared_alchemy",
+            "result": f"Self-Help returned {self_help_status}.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-003",
+            "status": service_now_status,
+            "description": "Native connection reference: shared_service-now",
+            "result": f"ServiceNow returned {service_now_status}.",
+        },
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "scope": "checkpoint:DA-CONN-*",
+                "failed": sum(
+                    row["status"] == "Failed" for row in rows
+                ),
+                "errors": sum(
+                    row["status"] == "Error" for row in rows
+                ),
+                "results": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(root)["steps"]["SETUP-05"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+    return path
+
+
+def test_registry_required_connection_conditionally_gates_setup(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+
+    requirement = _agent_setup_state(tmp_path)["steps"]["SETUP-05"][
+        "requirement"
+    ]
+    assert requirement == {
+        "productKey": "employee-self-service-it",
+        "matchedBy": ["agent-schema-name", "catalog-name"],
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
         tmp_path,
         agent_id=AGENT_ID,
         checkpoint="DA-CONN-*",
-        results_path=results_path,
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="NotConfigured",
+        ),
     )
 
-    assert result["state"] == "blocked"
-    assert result["evidenceStatuses"] == ["NotConfigured"]
-    assert result["failureCauses"] == [
-        "DA-CONN-* returned NotConfigured"
+    assert blocked["state"] == "blocked"
+    assert blocked["failureCauses"] == [
+        "Self-Help returned NotConfigured."
     ]
-    assert result["connectReady"] is False
-    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
-    assert loaded is not None
-    assert loaded["agents"][AGENT_ID]["steps"]["SETUP-05"]["failure_causes"]
+
+    ready = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-CONN-*",
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="Passed",
+            service_now_status="Failed",
+        ),
+    )
+
+    assert ready["state"] == "done"
+    assert ready["evidenceStatuses"] == ["Passed"]
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["mode"] == "automated"
+    assert "Microsoft 365 Self-Help satisfies" in setup_step["note"]
 
 
-def test_authoring_ready_allows_connection_blocked_setup(
+def test_product_registry_resolves_exact_it_requirement() -> None:
+    product = da_product_registry.resolve_product_setup(
+        agent_schema_name=IT_SCHEMA_NAME,
+    )
+
+    assert product is not None
+    assert product["productKey"] == "employee-self-service-it"
+    assert product["requiredConnection"] == {
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Employee Self-Service (HR)",
+        )["requiredConnection"]
+        is None
+    )
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Unknown product",
+        )
+        is None
+    )
+
+
+def test_authoring_ready_allows_incomplete_runtime_readiness(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
@@ -1214,7 +1377,9 @@ def test_authoring_ready_allows_connection_blocked_setup(
     assert loaded is not None
     agent_state = loaded["agents"][AGENT_ID]
     assert agent_state["authoring_ready"] is True
-    assert agent_state["steps"]["SETUP-05"]["state"] == "pending"
+    assert agent_state["steps"]["SETUP-05"]["state"] == "done"
+    assert agent_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert agent_state["steps"]["SETUP-02.2"]["state"] == "pending"
 
 
 def test_sync_authoring_readiness_migrates_schema_v4_state(
@@ -1584,6 +1749,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "attach",
         "cached-accounts",
         "inspect-agent",
+        "list-environments",
         "list-agents",
         "maintain-flightcheck",
         "select-agent",
@@ -1602,6 +1768,192 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         ]
     )
     assert parsed.account == "test.user@example.test"
+    inspect_help = " ".join(
+        subparsers.choices["inspect-agent"].format_help().split()
+    )
+    assert (
+        "Microsoft account sign-in name used to access the target Power "
+        "Platform environment"
+        in inspect_help
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["list-environments"])
+
+
+def test_list_environments_emits_visible_non_dataverse_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "test",
+            "--account",
+            "test.user@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    evidence_path = (
+        tmp_path / ".local" / "setup" / "environment-list-test.json"
+    )
+    assert result == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "evidencePath": str(evidence_path.resolve()),
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "name": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "region": "unitedstates",
+            }
+        ],
+    }
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    }
+
+
+def test_list_environments_preserves_empty_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    assert result["environments"] == []
+    assert result["ring"] == "prod"
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_list_environments_preserves_authorization_failure(
+    status_code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    response = SimpleNamespace(
+        json=lambda: {"error": {"code": "AuthorizationFailed"}},
+        text="forbidden",
+    )
+
+    def deny_listing(
+        _token: str,
+        _ring: str,
+        *,
+        api_version: str,
+    ) -> list[dict[str, Any]]:
+        raise setup_existing_da.AgentBuilderHTTPError(
+            "Environment listing",
+            status_code,
+            error_code="AuthorizationFailed",
+            request_id="request-123",
+            response=response,
+        )
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        deny_listing,
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    error_result = json.loads(
+        next(
+            line.removeprefix("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+            for line in captured.out.splitlines()
+            if line.startswith("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+        )
+    )
+    assert error_result == {
+        "statusCode": status_code,
+        "errorCode": "AuthorizationFailed",
+        "requestId": "request-123",
+        "authorizationFailure": True,
+    }
+    assert "DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:" in captured.out
+    assert "DA_ENVIRONMENT_LIST_JSON:" not in captured.out
+    assert f"HTTP {status_code}" in captured.err
 
 
 def test_maintain_flightcheck_command_updates_local_state(
@@ -1633,6 +1985,133 @@ def test_maintain_flightcheck_command_updates_local_state(
     output = capsys.readouterr().out
     assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
     assert '"state": "done"' in output
+
+
+def test_maintain_flightcheck_command_accepts_connection_family(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+    results_path = _write_required_connection_results(
+        tmp_path,
+        self_help_status="Passed",
+        service_now_status="NotConfigured",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "DA-CONN-*",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
+    assert '"step": "SETUP-05"' in output
+    assert '"state": "done"' in output
+
+
+def test_capacity_manual_result_requires_explicit_attestation(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+
+    assert blocked["state"] == "blocked"
+    assert blocked["evidenceStatuses"] == ["Manual"]
+    assert blocked["mode"] is None
+
+
+def test_capacity_manual_result_accepts_explicit_attestation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "ENV-CAPACITY-001",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--manual-attested",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"state": "done"' in output
+    assert '"mode": "manual-attested"' in output
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    assert step["state"] == "done"
+    assert step["mode"] == "manual-attested"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "status"),
+    [
+        ("ENV-CAPACITY-001", "Failed"),
+        ("ENV-CAPACITY-001", "Passed"),
+        ("DA-AGENT-001", "Manual"),
+    ],
+)
+def test_manual_attestation_rejects_unsupported_evidence(
+    tmp_path: Path,
+    checkpoint: str,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        checkpoint,
+        status,
+    )
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint=checkpoint,
+            results_path=results_path,
+            manual_attested=True,
+        )
 
 
 def test_authentication_uses_workspace_cache_and_account_hint(

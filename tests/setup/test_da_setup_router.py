@@ -24,11 +24,31 @@ _DA_PROD_TO_DEV = (
 _DA_MOS_STARTER = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-mos-starter.md"
 )
+_DA_ENVIRONMENT_TARGET = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "da-environment-target.md"
+)
+_PRODUCT_LINE_RECONCILIATION = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "product-line-reconciliation.md"
+)
+_PRODUCT_LINE_RELEASES = (
+    _SOLUTION / "src" / "reference" / "product-line-releases.json"
+)
 _NATIVE_ALM_REFERENCE = (
     _SOLUTION / "src" / "reference" / "native-alm-import.md"
 )
 _MOS_STARTER_REFERENCE = (
     _SOLUTION / "src" / "reference" / "mos-starter-package.md"
+)
+_DA_PRODUCT_REGISTRY = (
+    _SOLUTION / "src" / "reference" / "da-product-setup-registry.json"
 )
 _UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
@@ -55,6 +75,175 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
 
+def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized_foundation = " ".join(foundation.split())
+    prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
+    reconciliation = _PRODUCT_LINE_RECONCILIATION.read_text(encoding="utf-8")
+    normalized_reconciliation = " ".join(reconciliation.split())
+    existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    mos_starter = _DA_MOS_STARTER.read_text(encoding="utf-8")
+    alm_import = _DA_ALM_IMPORT.read_text(encoding="utf-8")
+    prod_to_dev = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
+
+    assert _PRODUCT_LINE_RECONCILIATION.is_file()
+    assert _PRODUCT_LINE_RELEASES.is_file()
+    assert "## Reconcile every selected agent" in foundation
+    assert (
+        "regardless of whether the identity came from a supplied URL, active "
+        "local setup state, a configured-agent switch, environment candidate "
+        "selection, MOS creation, or ALM import"
+    ) in normalized_foundation
+    assert foundation.index("product-line-reconciliation.md") < foundation.index(
+        "setup_existing_da.py inspect-agent"
+    )
+    assert "product-line reconciliation before the next DA-GA-only operation" in (
+        " ".join(prompt.split())
+    )
+    assert normalized_prompt.index(
+        "product-line reconciliation now"
+    ) < normalized_prompt.index(
+        "check the Microsoft Object Model converter"
+    )
+    assert (
+        "do not install or validate the Microsoft Object Model converter"
+        in normalized_prompt
+    )
+    assert "complete its kit-switch handoff" in normalized_prompt
+    assert "python scripts/reconcile_setup_agent.py" in reconciliation
+    assert '--known-native-schema "{RETURNED_SCHEMA_NAME}"' in reconciliation
+    assert "--probe dataverse" in reconciliation
+    assert "--probe native" in reconciliation
+    assert reconciliation.index("Run the Dataverse probe") < (
+        reconciliation.index("Run the native MinimalBot probe")
+    )
+    assert "`agentBackend` query value is an ordering hint only" in reconciliation
+    assert "`dataverse` means run the Dataverse probe first" in reconciliation
+    assert "`cosmos` means run the native probe first" in reconciliation
+    assert "Run the second probe even when the first probe returns `found`" in (
+        reconciliation
+    )
+    assert "DA_SETUP_PRODUCT_RECONCILIATION_JSON:" in reconciliation
+    assert "`authentication-required`" in reconciliation
+    assert "`access-denied`" in reconciliation
+    assert "`not-found`" in reconciliation
+    assert "`uncertain`" in reconciliation
+    assert (
+        "Do not convert `authentication-required`, `access-denied`, or "
+        "`uncertain` into `not-found`."
+    ) in normalized_reconciliation
+    assert "msdyn_copilotforemployeeselfservice*" in reconciliation
+    assert "gptagent_copilotforemployeeselfservice*" in reconciliation
+    assert "classic CA and DA-Preview variants" in reconciliation
+    assert "When both probes returned `found`" in reconciliation
+    assert "When both probes returned `not-found`" in reconciliation
+    assert "Preserve a backend-hint mismatch as internal evidence" in reconciliation
+    assert "For a native `found` DA-GA observation" in reconciliation
+    assert "For a Dataverse-only `found` DA-GA observation" in reconciliation
+    for mismatch_state in (
+        "**Choose the starting point and target environment** as complete",
+        "**Verify access and agent identity** as blocked",
+        "**Establish an editable Dev agent** and "
+        "**Materialize the local workspace** as pending",
+        "**Review the setup handoff** as in progress",
+    ):
+        assert mismatch_state in normalized_reconciliation
+    assert "How would you like to continue setup?" in reconciliation
+    for recovery_choice in (
+        "Install and open the compatible kit",
+        "Choose a different agent",
+        "Choose a different environment",
+        "Go back",
+    ):
+        assert f"**{recovery_choice}**" in reconciliation
+    assert "**Not now**" not in reconciliation
+    assert "**Cancel setup**" not in reconciliation
+    assert "For **Install and open the compatible kit**, run `recoveryCommand`" in (
+        reconciliation
+    )
+    legacy_message = """**Message:**
+
+{agent display name or Selected agent} belongs to a legacy agent family, so this Developer Kit cannot safely continue its setup.
+
+**End message.**"""
+    assert legacy_message in reconciliation
+    assert "belongs to the solution-backed Employee Self-Service" not in reconciliation
+    assert "classic Employee Self-Service agent product line" not in reconciliation
+    compatible_handoff = reconciliation.split(
+        "When `outcome` is `available`", 1
+    )[1].split("## Unsupported agent", 1)[0]
+    assert '"header": "Continue setup"' in compatible_handoff
+    assert (
+        '"question": "How would you like to continue setup?"'
+        in compatible_handoff
+    )
+    assert '"allowFreeformInput": false' in compatible_handoff
+    assert '"recommended"' not in compatible_handoff
+    assert '"default"' not in compatible_handoff
+    assert "Leave the selection initially unset." in compatible_handoff
+    assert "Keyboard focus or a visual highlight is not a selected value" in (
+        compatible_handoff
+    )
+    assert "wait for the maker to submit an explicit choice" in compatible_handoff
+    assert "without adding Markdown emphasis" in compatible_handoff
+    assert (
+        'Do not emit an operational progress line between them.'
+        in reconciliation
+    )
+    assert (
+        "Do not emit **Verified replacement agent identities and resolved "
+        "compatible ESS kit**"
+        in reconciliation
+    )
+    assert "it is not part of a supported Employee Self-Service agent family" in (
+        reconciliation
+    )
+    assert "continue from its environment-scoped `list-agents`" in reconciliation
+    assert "rerun `list-environments`" in reconciliation
+    assert "Return to **Choose the sign-in account**" in reconciliation
+    assert "**Go back** is the account-reset route" in reconciliation
+    unavailable_recovery = reconciliation[
+        reconciliation.index("When `outcome` is `unavailable`") :
+        reconciliation.index("When `outcome` is `available`")
+    ]
+    for recovery_choice in (
+        "Choose a different agent",
+        "Choose a different environment",
+        "Go back",
+    ):
+        assert f"**{recovery_choice}**" in unavailable_recovery
+    assert (
+        "Do not offer **Install and open the compatible kit**"
+        in unavailable_recovery
+    )
+    assert (
+        "Follow the shared recovery routes under **Unsupported agent**."
+        in unavailable_recovery
+    )
+    assert "stop without guessing" not in reconciliation
+    assert "When command execution fails" in reconciliation
+    assert "Do not label the unchanged command as a retry" in reconciliation
+    assert "verify that its checkout matches `releaseTag`" in reconciliation
+    assert "offer to open its `solutions/ess-maker-skills` workspace directly" in (
+        reconciliation
+    )
+    assert reconciliation.count("**Review the setup handoff** as complete") == 1
+    assert reconciliation.count("**Review the setup handoff** as blocked") == 2
+    assert "No Copilot Studio agent or setup state was changed" in reconciliation
+    assert "installation was not changed" not in reconciliation
+    assert "identity returned by this native list" in existing_dev
+    assert "--known-native-schema" in existing_dev
+    assert mos_starter.count("selected-agent product-line reconciliation") >= 2
+    assert mos_starter.count("--known-native-schema") >= 2
+    assert alm_import.count("selected-agent product-line reconciliation") >= 2
+    assert alm_import.count("--known-native-schema") >= 2
+    assert "selected-agent product-line reconciliation" in prod_to_dev
+    assert "--known-native-schema" in prod_to_dev
+    assert "`agentBackend` query value as an ordering hint" in foundation
+    assert "`almEnrollment` is `not-enrolled`" in foundation
+
+
 def test_foundation_defines_setup_state_sources() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized = " ".join(foundation.split())
@@ -74,9 +263,54 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_prompt = " ".join(prompt.split())
     normalized_foundation = " ".join(foundation.split())
+    runtime_message = """**Message:**
+
+**Setup command approvals**
+
+VS Code will ask you to approve commands that:
+
+- check Python and prepare the required local tools;
+- sign you in and inspect the selected environment and agent;
+- perform the setup actions you confirm and prepare the local workspace;
+- download required Microsoft components when needed.
+
+To avoid repeated prompts, open the permissions menu below the chat input and
+select **Allow all** for this chat session. This applies to every tool used in
+the session, not only setup. Provide a screenshot of your chat input if you
+need guidance finding the setting.
+
+**End message.**"""
+    declined_command_message = """> **Run this command manually**
+>
+> Setup paused before running this command:
+
+```{SHELL}
+{COMMAND}
+```
+
+> Run it from the current workspace. When it finishes, return here with the
+> result and I'll continue setup from this step."""
 
     assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
         prompt.index("{PYTHON} -m pip install")
+    )
+    assert runtime_message in foundation
+    assert foundation.index(runtime_message) < foundation.index(
+        '{PYTHON} -c "import sys; print(sys.executable)"'
+    )
+    command_runtime = foundation.split("## Command runtime", 1)[1].split(
+        "## Shared workspace choices", 1
+    )[0]
+    assert "informational disclosure, not another setup confirmation" in (
+        " ".join(command_runtime.split())
+    )
+    assert "**Continue setup**" not in command_runtime
+    assert "**Cancel setup**" not in command_runtime
+    assert "### When command approval is declined" in foundation
+    assert declined_command_message in foundation
+    assert (
+        "Resume from the paused operation when the maker returns."
+        in normalized_foundation
     )
     object_model_check = (
         "{PYTHON} -c \"import sys; sys.path.insert(0, 'scripts'); "
@@ -91,8 +325,11 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert normalized_prompt.index(object_model_check) < normalized_prompt.index(
         "{PYTHON} scripts/install_agentbuilder_object_model.py"
     )
-    assert "If the check fails" in prompt
+    assert "If the check fails, run:" in prompt
     assert "Then rerun the check" in prompt
+    assert "without showing it to the user" not in prompt
+    assert "Prepare the local setup tools" not in prompt
+    assert "Prepare agent-file support" not in prompt
     assert "python -m pip install" not in prompt
     assert "python scripts/mcp_config.py" not in prompt
     assert "For any command failure" in normalized_prompt
@@ -131,6 +368,8 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         in normalized_foundation
     )
     assert "At the first interactive setup surface in a turn" in normalized_prompt
+    assert "Begin every snapshot with:" in prompt
+    assert "Here's your ESS agent setup:" in prompt
     assert "when a marker changes" in normalized_prompt
     assert "when a blocked state requires maker action" in normalized_prompt
     assert "in the final handoff" in normalized_prompt
@@ -178,7 +417,6 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "flightcheck.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
         "run.prompt.md",
@@ -208,17 +446,74 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     assert "schema_version: 4" in connect_prompt
     assert "`authoring_ready: true`" in connect_prompt
     assert "`connect_ready`" in connect_prompt
+    assert 'steps.SETUP-07.state: "done"' in connect_prompt
+    assert "Do not require\n`connect_ready: true`" in connect_prompt
+    assert "workspace evidence" in connect_prompt
 
-    assert "read `.local/config.json`" in instructions
+    flightcheck_prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(
+        encoding="utf-8"
+    )
+    normalized_flightcheck_prompt = " ".join(flightcheck_prompt.split())
+    assert "FlightCheck entry contract" in normalized_flightcheck_prompt
+    assert "Standalone FlightCheck" in normalized_flightcheck_prompt
+    assert "Canonical setup ready" in normalized_flightcheck_prompt
 
 
-def test_global_gate_preserves_flightcheck_only_mode() -> None:
+def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     normalized = " ".join(instructions.split())
+    prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
-    assert "typed `/flightcheck`" in normalized
+    assert "typed `/flightcheck` or explicitly asked to validate setup" in normalized
+    assert "FlightCheck entry contract" in instructions
     assert "`flightCheckOnly: true`" in normalized
-    assert "This exception applies only to `/flightcheck`" in normalized
+    assert "Apply the first matching state" in normalized
+    assert "**Standalone FlightCheck:**" in instructions
+    assert "**Canonical setup ready:**" in instructions
+    assert "**Setup readiness outstanding:**" in instructions
+    assert "**Workspace preparation required:**" in instructions
+    assert "exact maker-facing copy" in normalized
+    assert "Running FlightCheck requires Setup to be complete." in instructions
+    assert "Some setup items still require attention:" in normalized
+    assert "Setup needs to prepare the local agent workspace." in normalized
+    assert "Collect every non-empty `failure_causes` entry" in normalized
+    assert "**Environment capacity**" in instructions
+    assert "**Connections**" in instructions
+    assert "**Agent content**" in instructions
+    assert "keep the canonical setup IDs internal" in normalized
+    assert "{READINESS_ISSUES}" in instructions
+    assert "{READINESS_ITEM}" in instructions
+    assert "{READINESS_DETAIL}" in instructions
+    assert '"question": "Would you like to return to Setup now?"' in instructions
+    assert '"label": "Return to Setup"' in instructions
+    assert '"question": "Would you like to run Setup now?"' in instructions
+    assert '"label": "Run Setup"' in instructions
+    assert instructions.count('"label": "Not now"') == 2
+    assert instructions.count('"allowFreeformInput": false') >= 2
+    assert "treat the selection as a `/setup` invocation" in normalized
+    assert "src/skills/foundation-setup/SKILL.md" in instructions
+    assert "selection already confirms setup intent" in normalized
+    assert "Carry forward the active agent" in instructions
+    assert "Do not ask the maker to select **Resume setup for this agent**" in normalized
+    assert "first setup decision or operation not already established" in normalized
+    assert "normal target-selection flow" in normalized
+    assert "canonical setup state unchanged" in normalized
+
+    assert "Follow the **FlightCheck entry contract**" in normalized_prompt
+    assert "Standalone FlightCheck" in normalized_prompt
+    assert "Canonical setup ready" in normalized_prompt
+    assert "owns the maker interaction and next route" in normalized_skill
+
+    entry_contract = instructions.split("#### FlightCheck entry contract", 1)[1]
+    entry_contract = entry_contract.split("### If canonical setup is ready", 1)[0]
+    assert entry_contract.count("**Message:**") == 2
+    assert entry_contract.count("**End message.**") == 2
+    assert entry_contract.count("```json") == 2
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -235,11 +530,15 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
     assert "configPattern" not in text
 
 
-def test_workday_routing_remains_separate() -> None:
+def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    normalized_step1 = " ".join(step1.split())
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/SKILL.md" in step1
+    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "gptagent_copilotforemployeeselfservicehr" in step1
+    assert "Workday integration with the ESS IT Agent isn't supported" in step1
+    assert "or run `WD-PKG-001`" in normalized_step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
     assert _WORKDAY.is_file()
     assert "Hybrid Workday extension setup is not available" in workday
@@ -256,11 +555,19 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
 
     assert set(_PATH_RE.findall(text)) == {
         "src/skills/foundation-setup/da-alm-import.md",
+        "src/skills/foundation-setup/da-environment-target.md",
         "src/skills/foundation-setup/da-existing-dev.md",
         "src/skills/foundation-setup/da-prod-to-dev.md",
         "src/skills/foundation-setup/da-mos-starter.md",
+        "src/skills/foundation-setup/product-line-reconciliation.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
+    assert (
+        "Never route from `/setup` into an integration or topic playbook" in normalized
+    )
+    assert "**Finish setup** advertises separate commands and ends the current request" in (
+        normalized
+    )
     assert "src/reference/native-alm-import.md" in import_text
     assert "DA_ALM_IMPORT_JSON:" in import_text
     assert "setup_existing_da.py validate-agent" in import_text
@@ -272,8 +579,8 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "accept an environment url and infer its environment id" in (
         normalized_import
     )
-    assert "segment denoting the service ring" in normalized_import
-    assert "confirm the `prod` ring with the user" in normalized_import
+    assert "resolve the service ring" in normalized_import
+    assert "da-environment-target.md" in normalized_import
     assert "ask the maker only when" in normalized_import
     assert "`connectReady: true`" in import_text
     assert "including when `connectReady` is false" in import_text
@@ -305,7 +612,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
-    assert "confirm the `prod` ring with the user" in normalized.casefold()
+    assert "resolve the service ring" in normalized.casefold()
     assert text.index("setup_existing_da.py inspect-agent") < text.index(
         "da-existing-dev.md"
     )
@@ -323,6 +630,7 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     imported = _DA_ALM_IMPORT.read_text(encoding="utf-8")
     prod_to_dev = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
     mos = _DA_MOS_STARTER.read_text(encoding="utf-8")
+    environment_target = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
 
     for text in (foundation, existing, imported, prod_to_dev, mos):
         assert "--target-url" not in text
@@ -341,9 +649,19 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     assert '--ring "{TARGET_RING}"' in prod_to_dev
 
     for text in (foundation, existing, imported, prod_to_dev, mos):
-        assert "confirm the `prod` ring with the user" in " ".join(
-            text.split()
-        ).casefold()
+        normalized_text = " ".join(text.split()).casefold()
+        assert "resolve the service ring" in normalized_text
+        assert "da-environment-target.md" in normalized_text
+    assert "Which Power Platform service ring should setup use?" in (
+        environment_target
+    )
+    assert "recognized Copilot Studio hostname" in environment_target
+    assert "copilotstudio.preview.microsoft.com" in environment_target
+    assert "completes ring selection" in environment_target
+    assert "render this exact decision surface" in environment_target
+    assert "Present all three labels unchanged with no default selection" in (
+        environment_target
+    )
 
 
 def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
@@ -449,6 +767,16 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Create editable Dev agent" in text
     assert "Do not preselect **Create editable Dev agent**" in text
     assert "Use related Dev agent" in text
+    assert "**Cancel setup**" not in text
+    assert "If the maker goes back after export" in normalized
+    assert (
+        "When the maker selected a different target environment, clear that "
+        "target and return to **Choose the sign-in account**"
+    ) in normalized
+    assert "Never reuse the cleaned-up package" in normalized
+    assert (
+        "Do not rerun export or import" in normalized
+    )
     assert "render the factual workspace and runtime-readiness report there" in normalized
     assert "Existing Prod agent; related Dev reused" in normalized
     assert "Existing Prod agent; new Dev created" in normalized
@@ -468,12 +796,90 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     normalized_foundation = " ".join(foundation.split())
     text = _DA_MOS_STARTER.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
+    environment_target = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    normalized_environment_target = " ".join(environment_target.split())
     reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
     existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
     assert "src/reference/mos-starter-package.md" in text
+    assert "src/skills/foundation-setup/da-environment-target.md" in text
+    assert "setup_existing_da.py list-environments" in environment_target
+    assert "DA_ENVIRONMENT_LIST_JSON:" in environment_target
+    assert "compact environment-selection result" in environment_target
+    assert "Retain its `evidencePath`" in environment_target
+    assert "read that file only when richer diagnostics" in environment_target
+    assert "Environment discovery is separate from agent discovery" in (
+        normalized_environment_target
+    )
+    assert "Which Power Platform service ring should setup use?" in (
+        environment_target
+    )
+    for ring_choice in ("Production / Preview", "Pre-production", "Test"):
+        assert f"**{ring_choice}**" in environment_target
+    assert "Map **Production / Preview** to `prod`" in environment_target
+    assert "Present all three labels unchanged with no default selection" in (
+        normalized_environment_target
+    )
+    assert "A ring is resolved only by an explicit URL segment" in (
+        normalized_environment_target
+    )
+    assert "Before showing the shared authorization message" in (
+        normalized_environment_target
+    )
+    assert "do not run `list-agents`" in normalized_environment_target
+    assert "Present every environment returned by the Power Platform API" in (
+        normalized_environment_target
+    )
+    assert "without filtering by URL, Dataverse metadata, or environment type" in (
+        normalized_environment_target
+    )
+    assert "No Power Platform environments were listed for this account" in (
+        environment_target
+    )
+    for empty_environment_choice in (
+        "Use another account",
+        "Use an environment URL",
+        "Create a Power Platform environment",
+        "Go back",
+    ):
+        assert f"**{empty_environment_choice}**" in environment_target
+    assert "does not require a Dataverse database" in environment_target
+    assert "Do not route into a Dataverse provisioning skill" in (
+        normalized_environment_target
+    )
+    assert "authorizationFailure" in environment_target
+    assert "DA_ENVIRONMENT_LIST_ERROR_JSON:" in environment_target
+    assert "DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:" in environment_target
+    assert "Do not convert an authorization failure" in (
+        normalized_environment_target
+    )
+    assert "## Retry setup with another target" in environment_target
+    assert "How would you like to continue setup?" in environment_target
+    for retry_choice in (
+        "Try with a different user",
+        "Try a different environment",
+        "Go back",
+    ):
+        assert f"**{retry_choice}**" in environment_target
+    assert "present these labels unchanged with the selection initially unset" in (
+        normalized_environment_target
+    )
+    assert "rerun environment discovery for that account" in (
+        normalized_environment_target
+    )
+    assert "retain the current account and ring" in normalized_environment_target
+    assert "**Use another account** remains the account-switch route" in (
+        normalized_environment_target
+    )
+    assert (
+        "return to the parent skill's **What would you like to set up in this "
+        "environment?** choice surface"
+    ) in normalized_environment_target
+    assert "also offer **Use an agent URL**" in environment_target
     assert "setup_mos_starter.py list" in text
     assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
+    assert "setup_mos_starter.py inspect-connection" not in text
+    assert "DA_MOS_CONNECTION_PREFLIGHT" not in text
     assert "setup_mos_starter.py create" in text
     assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
     assert "DA_MOS_STARTER_CREATE_JSON:" in text
@@ -488,36 +894,133 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "--target-url" not in text
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--ring "{RING}"' in text
+    assert "--setup-prerequisite-status" not in text
+    assert "--setup-prerequisite-evidence" not in text
+    assert _DA_PRODUCT_REGISTRY.is_file()
+    assert "src/reference/da-product-setup-registry.json" in text
+    assert "evaluated after creation and attachment" in normalized
+    assert "do not inspect or require a physical connection before" in normalized
     assert "outcome: created" in text
     assert "Never show the internal `packageId` to the maker" in normalized
     assert "`connectReady: true`" in existing_dev
     assert "`setupStatus`" not in text
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
     assert "infer a concise user-friendly product name" in normalized
-    assert "render `Employee Self-Service IT` as `Employee Self-Service (IT)`" in normalized
-    assert "render `Employee Self-Service HR` as `Employee Self-Service (HR)`" in normalized
+    assert (
+        "Render `Employee Self-Service` as `Employee Self-Service (Hub)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service IT` or `Employee Self-Service (IT)` as "
+        "`Employee Self-Service (IT)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service HR` or `Employee Self-Service (HR)` as "
+        "`Employee Self-Service (HR)`"
+        in normalized
+    )
     assert "use the exact service-provided product name unchanged" in normalized
     assert "must not change the underlying `packageId`" in normalized
+    assert (
+        "render the following friendly product name and supporting description "
+        "exactly as written"
+        in normalized
+    )
+    assert (
+        "Do not paraphrase, shorten, or combine this copy with the "
+        "service-provided description."
+        in normalized
+    )
+    assert (
+        "Use this product if you want to organize HR, IT, or other agents as "
+        "connected agents behind one unified employee experience."
+        in normalized
+    )
+    assert (
+        "Create an HR agent that helps employees get HR answers and complete "
+        "requests."
+        in normalized
+    )
+    assert (
+        "Create an IT agent that helps employees resolve technical issues and "
+        "access support."
+        in normalized
+    )
+    assert (
+        "For every other product, use its exact service-provided name unchanged "
+        "and use `shortDescription`, then `description`"
+        in normalized
+    )
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type a product name" in normalized
     assert "**{friendly product name} {version}**" in text
     assert "Create a new ESS agent" in normalized
     assert "**{selected product label}**" in text
     assert "Choose a different product" in text
+    assert (
+        "For **Choose a different product**, return to the valid rows from the "
+        "latest successful catalog result"
+    ) in normalized
     assert _PREPARE_FRESH_WORKSPACE.is_file()
     assert "Create and open a new workspace" in foundation
     assert "Create a new workspace without opening it" not in foundation
     assert "Use suggested location -- {suggested absolute sibling-folder path}" in foundation
     assert "Choose another location" in foundation
     assert "Do not ask the maker to type a path unless" in normalized_foundation
+    workspace_location = foundation[
+        foundation.index("When an occupied workspace needs a new environment") :
+        foundation.index("For **Reset and use this workspace**")
+    ]
+    assert "**Go back**" in workspace_location
+    assert "**Cancel setup**" not in workspace_location
+    assert (
+        "return to the Setup choice surface that offered **Create and open a new "
+        "workspace**"
+    ) in " ".join(workspace_location.split())
     assert "scripts/prepare_fresh_workspace.py" in foundation
     assert "--open-vscode" in foundation
     assert "DA_PREPARED_WORKSPACE_JSON:" in foundation
-    assert "Do you have a test tenant user?" in foundation
+    assert (
+        "Which Microsoft account should setup use to access the target "
+        "Power Platform environment?"
+    ) in foundation
+    assert (
+        "Send the complete **Message** block as its own chat message"
+    ) in normalized_foundation
+    assert (
+        "Finish that message before opening the next question or interactive "
+        "control; the next control begins with its own prompt, explanation, and choices"
+    ) in normalized_foundation
+    assert "Ask exactly one account question" in foundation
+    assert (
+        "**Skip — Use the Microsoft account picker** first, followed by every "
+        "cached sign-in name"
+    ) in foundation
+    assert "separate from GitHub/Copilot sign-in" in foundation
+    assert "Do not add a separate **Use another account** choice" in foundation
+    assert "**Continue with this account**" not in foundation
+    assert (
+        "When the maker selects **Skip — Use the Microsoft account picker**, "
+        "omit `--account`"
+    ) in normalized_foundation
+    assert (
+        "append `--select-account` only to the first command that can authenticate"
+    ) in normalized_foundation
+    assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
+    assert (
+        "later commands reuse its cached token and sign-in name"
+        in normalized_foundation
+    )
+    assert "setup_existing_da.py cached-accounts` again" in foundation
+    assert "Do you have a test tenant user?" not in foundation
+    assert "does not prove that the maker holds a particular administrator role" in (
+        normalized_foundation
+    )
     assert "setup_existing_da.py cached-accounts" in foundation
     assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
-    assert "**Continue with this account**" in foundation
     assert '--account "{SETUP_ACCOUNT}"' in foundation
+    assert "reconcile_setup_agent.py" in foundation
     assert "Never infer a corp account" in normalized_foundation
     assert "Present account confirmation once" in normalized_foundation
     assert "Continue in an occupied workspace" in normalized
@@ -548,6 +1051,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "The agent was created. Preparing its local authoring workspace" in normalized
     assert "{PRODUCT_COUNT} entitled products are available" in text
     assert "Loading entitled products for **{environment name}**..." in text
+    assert "no entitled products are currently available in the selected environment" in (
+        normalized
+    )
+    assert normalized.count("**Retry setup with another target**") == 2
+    assert "entitled products could not be loaded and nothing was changed" in (
+        normalized
+    )
     assert text.index("Loading entitled products for **{environment name}**...") < (
         text.index("{PRODUCT_COUNT} entitled products are available")
     )
@@ -594,7 +1104,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "uses a new client request UUID" in normalized
     collision_choices = text[text.index("When the annotations report `outcome: collision`") :]
     collision_choices = collision_choices[: collision_choices.index("## Enable ALM")]
-    assert "**Go back**" not in collision_choices
+    assert "**Go back**" in collision_choices
+    assert "**Cancel setup**" not in collision_choices
+    assert "do not repeat that create request" in " ".join(collision_choices.split())
     assert "does not identify the corresponding agent" in reference
 
     assert "createFromStarterPackage" in reference
@@ -626,6 +1138,15 @@ def test_foundation_offers_local_workspace_reset() -> None:
     assert "report its `ERROR:` and `NOTE:` output" in normalized
     assert "will not change or delete any agent in Copilot Studio" in normalized
     assert "archive its current local agent files" in normalized
+    assert (
+        "For **Go back**, make no changes and return to the choice surface that "
+        "offered **Reset and use this workspace**."
+    ) in normalized
+    reset_confirmation = text[
+        text.index("For **Reset and use this workspace**") :
+        text.index("For **Switch to another configured agent**")
+    ]
+    assert "**Cancel setup**" not in reset_confirmation
 
 
 def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
@@ -639,10 +1160,24 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Continue customizing this agent",
-        "Finish for now",
+        "Finish setup",
     ):
         assert f"**{choice}**" in text
+    completion_choices = text.split(
+        "The final handoff is the sole completion summary.", 1
+    )[1].split("## Start", 1)[0]
+    assert "- **Continue customizing this agent**" not in completion_choices
+    assert "- **Finish for now**" not in completion_choices
+    assert "The {agent display name} agent is now active." in completion_choices
+    assert (
+        "- Run `/landing-page` to configure branding and the content employees see."
+        in completion_choices
+    )
+    assert "- Run `/connect` to choose an integration." in completion_choices
+    assert "- Type `/menu` to see all available capabilities." in completion_choices
+    assert "What would you like to customize?" not in completion_choices
+    assert "**Create a topic**" not in completion_choices
+    assert "Then end the request." in completion_choices
     assert "Create a new workspace without opening it" not in text
     assert "setup_existing_da.py select-agent" in text
     assert "one Power Platform environment" in normalized
@@ -688,7 +1223,7 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "a blocked state that requires maker action" in normalized
     assert "A sequence of setup operations that retains the same markers" in normalized
     assert "The final handoff is the sole completion summary" in normalized
-    assert "**Finish for now** ends immediately" in normalized
+    assert "**Finish setup** closes the setup flow" in normalized
     assert "first decision surface rather than rendering another completion summary" in (
         normalized
     )
@@ -707,6 +1242,58 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "Do you already have an ESS agent in Copilot Studio?" in text
     assert "Yes, I have an agent" in text
     assert "No, I need a fresh agent" in text
+
+
+def test_environment_only_request_resolves_agent_intent_before_routing() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert (
+        "When the request identifies an environment and explicitly asks to "
+        "connect to an existing agent"
+    ) in normalized
+    assert (
+        "When the request identifies an environment but not an agent or "
+        "create-versus-connect intent"
+    ) in normalized
+    assert (
+        "What would you like to set up in "
+        "`{environment name or the selected Power Platform environment}`?"
+    ) in normalized
+    for choice in (
+        "Create a fresh agent in this environment",
+        "Connect to an existing agent in this environment",
+        "Cancel setup",
+    ):
+        assert choice in text
+    assert "Require an explicit selection; all choices begin unselected" in normalized
+    assert "then ask exactly" in normalized
+    assert (
+        "This question confirms the selected target; the access-verification "
+        "stage remains current until a service operation succeeds"
+    ) in normalized
+    assert "retain the resolved environment ID and service ring" in normalized
+    assert (
+        "Send the current progress snapshot using the shared **Message** contract"
+    ) in normalized
+    assert (
+        "continue directly through "
+        "`src/skills/foundation-setup/da-mos-starter.md` with the retained "
+        "environment and ring"
+    ) in normalized
+    assert (
+        "follow its environment-candidate selection path with the retained "
+        "environment and ring"
+    ) in normalized
+    assert (
+        "When the request identifies an environment but not an agent or "
+        "fresh-agent intent"
+    ) not in normalized
+    assert normalized.index(
+        "What would you like to set up in"
+    ) < normalized.index(
+        "For **Connect to an existing agent in this environment**"
+    )
 
 
 def test_foundation_has_one_authorization_wait_contract() -> None:
@@ -745,15 +1332,33 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     for choice in (
         "Choose an existing agent in this environment",
         "Replace an existing agent with this package",
-        "Cancel setup",
         "Continue replacement",
+        "Go back",
         "Retry import",
         "Stop without retrying",
     ):
         assert choice in text
+    assert "**Cancel setup**" not in text
+    assert "Choose the existing agent without replacement" not in text
     assert "Do not preselect a choice or recommend replacement" in normalized
     assert "setup_existing_da.py list-agents" in text
     assert "Never preselect or recommend **Continue replacement**" in text
+    assert (
+        "For **Go back**, make no changes and return to **Handle a collision**."
+        in normalized
+    )
+    assert (
+        "Reuse the latest successful visible-agent list instead of rerunning "
+        "`list-agents` solely because the maker went back."
+    ) in normalized
+    assert (
+        "Clear the replacement intent and selected replacement candidate"
+        in normalized
+    )
+    assert (
+        "Clear package-import and replacement intent, but preserve the import "
+        "receipt and collision evidence."
+    ) in normalized
     assert "could not be proven" in normalized
     assert "avoid creating or replacing the agent twice" in normalized
     assert "only after the maker selects **Retry import**" in normalized
@@ -782,6 +1387,9 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "`connectReady: true`" in text
     assert "visible Dev-realm candidates" in text
     assert "Validate only the selected candidate" in text
+    assert "No visible editable Dev agents were listed in this environment" in text
+    assert "A directly addressable agent may still be available" in text
+    assert "including its **Use an agent URL** choice" in text
     assert "before authentication or remote agent validation" in text
     assert "Do not run `validate-agent` immediately before `attach`" in text
     assert "Your local workspace is ready for authoring." in text
@@ -830,8 +1438,29 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "`connectionStatus: workspace-ready`" in text
     assert "`connectReady: true`" in text
     assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
-    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
-    assert "treat all four setup-owned FlightChecks and their maintenance calls as one presentation unit" in normalized
+    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the setup-readiness verdict" in normalized
+    assert "`DA-CONN-*` remains broad diagnostic evidence" in text
+    assert "src/reference/da-product-setup-registry.json" in text
+    assert "do not use its aggregate summary row" in normalized
+    assert "current registry maps the IT product to `shared_alchemy`" in normalized
+    assert (
+        "Do not project `shared_service-now` or another undeclared reference"
+    ) in normalized
+    assert "keep canonical `connectReady` false" in normalized
+    assert "keep `SETUP-05` skipped" in normalized
+    assert (
+        "no foundation connection requirement was applied because the "
+        "product identity is not registered"
+    ) in normalized
+    assert (
+        "do not claim that the registry declares no requirement for that "
+        "product"
+    ) in normalized
+    assert (
+        "run the three setup-readiness FlightChecks and the broad connection "
+        "diagnostic"
+    ) in normalized
+    assert "present all four together" in normalized
     assert "attempt every available check before producing the final runtime-readiness table" in normalized
     assert "Render both even when `connectReady` is false" in normalized
     for readiness_status in (
@@ -839,13 +1468,58 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
+        "**⛔ Manual confirmation required**",
+        "**✅ Ready — manually confirmed**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
-    assert "When `connectReady` is false after materialization" in normalized
-    assert "local authoring is ready while the reported runtime prerequisites remain" in normalized
-    assert "Present **Connection required**" in normalized
+    assert "### Capacity follow-up" in text
+    assert (
+        "We weren’t able to automatically verify capacity for this "
+        "environment."
+    ) in text
+    assert "Your agent and local authoring workspace are already available." in text
+    assert "#### Copilot Studio message capacity" in text
+    assert "In the left navigation, select **Licensing**." in text
+    assert "Under **Products**, select **Copilot Studio**." in text
+    assert "Select **Manage Copilot Credits**." in text
+    assert (
+        "Confirm that the environment has more than zero allocated Copilot "
+        "Credits."
+    ) in normalized
+    assert (
+        "After checking Power Platform Admin Center, is Copilot Studio "
+        "message capacity allocated to this environment?"
+    ) in text
+    assert "Complete this check to finish foundation readiness" not in text
+    assert "https://admin.powerplatform.microsoft.com" in text
+    assert "https://admin.preprod.powerplatform.microsoft.com" in text
+    assert "https://admin.test.powerplatform.microsoft.com" in text
+    assert (
+        "Do not send a maker from a non-production setup ring to the "
+        "production admin center."
+    ) in normalized
+    assert "using `ring_from_environment_host()`" in normalized
+    assert "do not assume production" in normalized
+    assert '--ring "{CONFIRMED_RING}"' in text
+    assert "--manual-attested" in text
+    assert "never overrides a known zero allocation" in normalized
+    assert "When it is false after materialization" in normalized
+    assert (
+        "local authoring is ready while the setup-owned prerequisites remain"
+        in normalized
+    )
+    assert "### Connection follow-up" in text
+    assert "#### Microsoft 365 Self-Help" in text
+    assert "Select **New connection**" in text
+    assert "ask me to check it again" in text
+    assert "Complete this connection to finish foundation readiness" in normalized
+    assert "https://make.powerapps.com" in text
+    assert "https://make.preprod.powerapps.com" in text
+    assert "https://make.test.powerapps.com" in text
+    assert "Do not send a maker from a non-production setup ring" in normalized
+    assert "Do not add another completion choice" in normalized
     assert "a factual handoff, not another readiness gate" in normalized
     assert "changing canonical state conversationally" in normalized
     assert "Do not infer the realm from the URL" in normalized
@@ -880,6 +1554,15 @@ def test_ui_guidance_keeps_ux_meta_intentions_out_of_maker_copy() -> None:
     assert "Authoring rationale or UX-policy language presented as setup progress" in (
         normalized
     )
+    assert "Send each progress snapshot as its own complete chat message" in normalized
+    assert (
+        "Finish that message before opening the next question or interactive control"
+        in normalized
+    )
+    assert (
+        "The next control begins with its own decision prompt, explanation, and choices"
+        in normalized
+    )
 
 
 def test_foundation_router_paths_resolve() -> None:
@@ -909,7 +1592,6 @@ def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "DA-GA agent is not yet available",
         "delete.prompt.md": "DA-GA agent is not yet available",
-        "connect.prompt.md": "requires the corresponding product extension",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),
@@ -919,6 +1601,10 @@ def test_da_commands_degrade_by_operation() -> None:
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
         assert "transport" not in prompt.casefold(), name
+
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert "src/skills/connect/SKILL.md" in connect_prompt
+    assert "Extension setup is not yet available" not in connect_prompt
 
 
 def test_hybrid_workday_config_commands_remain_available() -> None:
@@ -969,11 +1655,15 @@ def test_da_local_capabilities_remain_available() -> None:
         assert "unchanged deployed" in normalized, name
 
 
-def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
+def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
     normalized = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
-    assert "flightCheckOnly: true" in normalized
-    assert "proceed without canonical setup state" in normalized
-    assert "only the local-files FlightCheck scope" in normalized
-    assert "scope fixed to `local`" in normalized
+    assert "flightCheckOnly: true" in instructions
+    assert "scope selection supported by the active configuration" in normalized
+    assert "supported scopes are `full`, `environment`" in skill
+    assert "scope fixed to `local`" not in normalized

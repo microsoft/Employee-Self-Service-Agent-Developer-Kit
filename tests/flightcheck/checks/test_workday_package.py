@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import responses
+from unittest.mock import patch
 
 from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
@@ -355,6 +356,32 @@ class TestPackageConnectionCompleteness:
 
         assert r.status == "Passed"
         assert "Workday Runtime (OBO)" in r.result
+
+    def test_runtime_detection_ignores_agent_scoped_refs(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        refs = dv.workday_connection_refs_runtime()
+        refs.append({
+            "connectionreferencelogicalname": (
+                "gptagent_copilotforemployeeselfservicehr."
+                "3164dae9-3a2b-5843-98dd-e62bb5123324.shared_workdaysoap"
+            ),
+            "connectionreferencedisplayname": "Agent Workday Runtime",
+            "connectorid": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+            "connectionid": "agent-connection",
+            "statuscode": 1,
+        })
+        runner._workday_connection_refs = refs
+
+        with patch("auth.query_all", return_value=refs):
+            results = _check_package_flavor(runner, wd_flows=[{"name": "runtime"}])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Passed"
+        assert runner._workday_package_flavor == "simplified"
+        assert len(runner._workday_connection_refs) == 1
 
     def test_runtime_unbound_fails(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_package_connection_completeness

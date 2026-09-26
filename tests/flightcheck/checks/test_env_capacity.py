@@ -50,8 +50,18 @@ def _mcs(allocated: int) -> list[dict]:
     return [{"currencyType": "MCSMessages", "allocated": allocated}]
 
 
-def _runner(*, powerplatform, payg=None, env_id="env-guid"):
-    runner = SimpleNamespace(powerplatform=powerplatform, env_id=env_id)
+def _runner(
+    *,
+    powerplatform,
+    payg=None,
+    env_id="env-guid",
+    ring="prod",
+):
+    runner = SimpleNamespace(
+        powerplatform=powerplatform,
+        env_id=env_id,
+        ring=ring,
+    )
     if payg is not None:
         runner._payg_configured = payg
     return runner
@@ -97,18 +107,43 @@ def test_fails_zero_capacity_unknown_payg():
     assert "cannot continue" in r.remediation.lower()
 
 
-def test_fails_when_no_powerplatform_client():
+def test_requires_manual_confirmation_when_no_powerplatform_client():
     r = _run(_runner(powerplatform=None, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
     assert "Manage capacity" in r.remediation
+    assert "explicitly attest" in r.remediation
 
 
-def test_fails_when_allocation_read_denied():
+def test_requires_manual_confirmation_when_allocation_read_denied():
     pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
     r = _run(_runner(powerplatform=pp_denied, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
+
+
+@pytest.mark.parametrize(
+    ("ring", "expected_origin"),
+    [
+        ("prod", "https://admin.powerplatform.microsoft.com"),
+        ("preprod", "https://admin.preprod.powerplatform.microsoft.com"),
+        ("test", "https://admin.test.powerplatform.microsoft.com"),
+    ],
+)
+def test_capacity_remediation_uses_ring_admin_center(
+    ring: str,
+    expected_origin: str,
+) -> None:
+    r = _run(_runner(powerplatform=None, ring=ring))
+    assert expected_origin in r.remediation
+
+
+def test_capacity_remediation_rejects_an_unresolved_ring():
+    with pytest.raises(
+        ValueError,
+        match="ring is unavailable or unsupported",
+    ):
+        _run(_runner(powerplatform=None, ring=None))
 
 
 def test_fails_when_no_env_id():
