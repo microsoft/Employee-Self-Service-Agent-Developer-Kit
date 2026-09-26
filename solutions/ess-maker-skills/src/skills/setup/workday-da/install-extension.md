@@ -16,8 +16,10 @@ python scripts/workday_connect.py preflight
 
 Fresh native-agent setup state identifies the exact environment ID but may not
 contain a Dataverse organization URL. The controller first resolves that URL
-from setup's cached environment inventory. Do not ask the maker to re-enter or
-reselect the environment when an exact ID match exists.
+from setup's cached environment inventory, then asks an existing PAC profile
+for the organization whose environment ID exactly matches setup. Do not ask
+the maker to re-enter or reselect the environment when either source proves an
+exact ID match.
 
 When the controller reports that no Dataverse URL can be resolved, explain
 that refreshing Power Platform environment inventory uses its own Microsoft
