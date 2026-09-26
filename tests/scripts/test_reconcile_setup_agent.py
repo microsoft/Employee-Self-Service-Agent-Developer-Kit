@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 import reconcile_setup_agent as reconcile
-from agentbuilder import AgentBuilderError
+from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
+from http_errors import APIError
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -20,203 +21,174 @@ DATAVERSE_URL = "https://example.crm.dynamics.com"
 @pytest.mark.parametrize(
     ("schema_name", "expected"),
     [
-        ("msdyn_copilotforemployeeselfservice", "cea"),
-        ("msdyn_copilotforemployeeselfservicecore", "cea"),
-        ("msdyn_copilotforemployeeselfservicehr", "cea"),
-        ("msdyn_copilotforemployeeselfserviceit", "cea"),
-        ("gptagent_copilotforemployeeselfservice", "da"),
-        ("gptagent_copilotforemployeeselfservicecore", "da"),
-        ("gptagent_copilotforemployeeselfservicehr", "da"),
-        ("gptagent_copilotforemployeeselfserviceit", "da"),
+        (
+            "msdyn_copilotforemployeeselfservice",
+            "solution-backed-ess",
+        ),
+        (
+            "msdyn_copilotforemployeeselfservicecore",
+            "solution-backed-ess",
+        ),
+        (
+            "msdyn_copilotforemployeeselfservicedahr",
+            "solution-backed-ess",
+        ),
+        (
+            "msdyn_copilotforemployeeselfservicecustomsuffix",
+            "solution-backed-ess",
+        ),
+        (
+            "gptagent_copilotforemployeeselfservice",
+            "da-ga",
+        ),
+        (
+            "gptagent_copilotforemployeeselfservicehr",
+            "da-ga",
+        ),
+        (
+            "gptagent_copilotforemployeeselfservicecustomsuffix",
+            "da-ga",
+        ),
         ("gptagent_employee_self_service", "unknown"),
-        ("MSDYN_COPILOTFOREMPLOYEESELFSERVICEHR", "cea"),
+        (
+            "MSDYN_COPILOTFOREMPLOYEESELFSERVICEDAHR",
+            "solution-backed-ess",
+        ),
+        (
+            "GPTAGENT_COPILOTFOREMPLOYEESELFSERVICEIT",
+            "da-ga",
+        ),
         (None, "unknown"),
     ],
 )
-def test_classifies_only_exact_recognized_schema_names(
+def test_classifies_supported_schema_prefixes(
     schema_name: str | None,
     expected: str,
 ) -> None:
     assert reconcile.classify_schema_name(schema_name) == expected
 
 
-def test_authoritative_native_evidence_short_circuits_remote_probes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        reconcile,
-        "_probe_native_agent",
-        lambda *_args, **_kwargs: pytest.fail("native lookup should be skipped"),
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "_resolve_dataverse_url",
-        lambda *_args, **_kwargs: pytest.fail("Dataverse lookup should be skipped"),
-    )
-
-    result = reconcile.reconcile_selected_agent(
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        ring="prod",
-        native_da_ga=True,
+def test_known_native_identity_preserves_product_evidence() -> None:
+    result = reconcile.known_native_identity(
+        "gptagent_copilotforemployeeselfservicehr"
     )
 
     assert result == {
-        "action": "continue-da-ga-setup",
-        "classification": "da-ga",
+        "backend": "native",
+        "outcome": "found",
         "evidence": "provided-native",
+        "productFamily": "da-ga",
+        "identity": {
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
     }
 
 
-def test_live_native_identity_is_authoritative(
+def test_native_probe_returns_identity_without_dataverse_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         reconcile,
         "_probe_native_agent",
         lambda *_args, **_kwargs: {
-            "schemaName": "gptagent_copilotforemployeeselfservicehr"
+            "fullBotName": "Employee Self-Service HR",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+            "managedProperties": {"isManaged": True},
         },
     )
     monkeypatch.setattr(
         reconcile,
         "_resolve_dataverse_url",
-        lambda *_args, **_kwargs: pytest.fail("Dataverse lookup should be skipped"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "Each probe must remain independent."
+        ),
     )
 
     result = reconcile.reconcile_selected_agent(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         ring="prod",
+        probe="native",
     )
 
-    assert result["classification"] == "da-ga"
-    assert result["evidence"] == "native-minimal-bot"
+    assert result == {
+        "backend": "native",
+        "outcome": "found",
+        "evidence": "minimalbot-direct",
+        "productFamily": "da-ga",
+        "identity": {
+            "displayName": "Employee Self-Service HR",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+            "isManaged": True,
+        },
+    }
 
 
-def test_positive_cea_schema_stops_with_release_pinned_recovery(
+@pytest.mark.parametrize(
+    ("status_code", "outcome"),
+    [
+        (401, "authentication-required"),
+        (403, "access-denied"),
+        (404, "not-found"),
+        (500, "uncertain"),
+    ],
+)
+def test_native_probe_preserves_http_failure_class(
     monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    outcome: str,
 ) -> None:
     def fail_native(*_args, **_kwargs):
-        raise AgentBuilderError("not available through the native service")
+        raise AgentBuilderHTTPError(
+            "Direct agent lookup",
+            status_code,
+            error_code="ObjectNotFound" if status_code == 404 else "Failure",
+            request_id="request-123",
+        )
 
     monkeypatch.setattr(reconcile, "_probe_native_agent", fail_native)
-    monkeypatch.setattr(
-        reconcile,
-        "_resolve_dataverse_url",
-        lambda *_args, **_kwargs: DATAVERSE_URL,
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "_read_dataverse_agent",
-        lambda *_args, **_kwargs: {
-            "schemaname": "msdyn_copilotforemployeeselfserviceit"
-        },
-    )
 
-    result = reconcile.reconcile_selected_agent(
+    result = reconcile.probe_native_identity(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         ring="prod",
-        operating_system="Windows",
     )
 
-    assert result["action"] == "stop-and-use-cea-kit"
-    assert result["classification"] == "cea"
-    assert result["releaseTag"] == "cea-v1.0.0-rc.1"
-    assert "/cea-v1.0.0-rc.1/setup/bootstrap.ps1" in result["recoveryCommand"]
-    assert "-Branch cea-v1.0.0-rc.1" in result["recoveryCommand"]
-    assert (
-        "-SourceBaseUrl https://raw.githubusercontent.com/"
-        "microsoft/Employee-Self-Service-Agent-Developer-Kit/"
-        "cea-v1.0.0-rc.1/setup"
-    ) in result["recoveryCommand"]
-    assert (
-        "-InstallRoot (Join-Path $env:USERPROFILE 'source-cea')"
-        in result["recoveryCommand"]
-    )
-    assert result["recoveryShell"] == "powershell"
+    assert result["backend"] == "native"
+    assert result["outcome"] == outcome
+    assert result["stage"] == "agent-lookup"
+    assert result["error"]["statusCode"] == status_code
+    assert result["error"]["errorCode"]
+    assert result["error"]["requestId"] == "request-123"
+    assert result["error"]["causes"][0]["type"] == "AgentBuilderHTTPError"
 
 
-def test_non_cea_and_unknown_evidence_continue(
+def test_native_transport_failure_is_uncertain_and_keeps_cause_chain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    try:
+        raise OSError("socket closed")
+    except OSError as cause:
+        failure = AgentBuilderError("native lookup unavailable")
+        failure.__cause__ = cause
+
     monkeypatch.setattr(
         reconcile,
         "_probe_native_agent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AgentBuilderError("native lookup failed")
-        ),
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "_resolve_dataverse_url",
-        lambda *_args, **_kwargs: DATAVERSE_URL,
-    )
-    records = iter(
-        [
-            {"schemaname": "gptagent_copilotforemployeeselfservicehr"},
-            {"schemaname": "contoso_unrecognized"},
-        ]
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "_read_dataverse_agent",
-        lambda *_args, **_kwargs: next(records),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
     )
 
-    da_schema = reconcile.reconcile_selected_agent(
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        ring="prod",
-    )
-    unknown = reconcile.reconcile_selected_agent(
+    result = reconcile.probe_native_identity(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         ring="prod",
     )
 
-    assert da_schema == {
-        "action": "continue-da-ga-setup",
-        "classification": "da",
-        "evidence": "dataverse-schema",
-    }
-    assert unknown == {
-        "action": "continue-da-ga-setup",
-        "classification": "unknown",
-        "evidence": "dataverse-schema",
-    }
-
-
-def test_lookup_failures_are_not_cea_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        reconcile,
-        "_probe_native_agent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AgentBuilderError("service unavailable")
-        ),
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "_resolve_dataverse_url",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("authentication unavailable")
-        ),
-    )
-
-    result = reconcile.reconcile_selected_agent(
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        ring="prod",
-    )
-
-    assert result == {
-        "action": "continue-da-ga-setup",
-        "classification": "unknown",
-        "evidence": "not-classified",
-    }
+    assert result["outcome"] == "uncertain"
+    assert [item["type"] for item in result["error"]["causes"]] == [
+        "AgentBuilderError",
+        "OSError",
+    ]
 
 
 def test_environment_resolution_uses_user_scoped_api_and_selected_account(
@@ -254,7 +226,63 @@ def test_environment_resolution_uses_user_scoped_api_and_selected_account(
     }
 
 
-def test_dataverse_lookup_is_bounded_to_exact_agent_and_account(
+@pytest.mark.parametrize(
+    ("status_code", "outcome"),
+    [(401, "authentication-required"), (403, "access-denied")],
+)
+def test_environment_resolution_preserves_permission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    outcome: str,
+) -> None:
+    class FakeClient:
+        def __init__(self, _tenant: str) -> None:
+            pass
+
+        def authenticate(self, preferred_username=None):
+            return "token"
+
+        def list_environments_for_user(self):
+            return {
+                "_error": "insufficient_permissions",
+                "_status": status_code,
+            }
+
+    monkeypatch.setattr(reconcile, "PowerPlatformClient", FakeClient)
+
+    result = reconcile.probe_dataverse_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["outcome"] == outcome
+    assert result["stage"] == "environment-resolution"
+    assert result["error"]["statusCode"] == status_code
+
+
+def test_missing_dataverse_url_is_uncertain_not_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        reconcile,
+        "_resolve_dataverse_url",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = reconcile.probe_dataverse_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "environment-resolution"
+    assert (
+        result["error"]["causes"][0]["type"]
+        == "EnvironmentUrlNotResolved"
+    )
+
+
+def test_dataverse_lookup_is_exact_and_preserves_selected_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, object] = {}
@@ -263,47 +291,100 @@ def test_dataverse_lookup_is_bounded_to_exact_agent_and_account(
         observed["auth"] = (env_url, preferred_username)
         return "token"
 
-    def fake_query_all(env_url, token, **kwargs):
-        observed["query"] = (env_url, token, kwargs)
-        return [
-            {
-                "botid": AGENT_ID,
-                "name": "ESS",
-                "schemaname": "msdyn_CopilotForEmployeeSelfServiceIT",
-                "ismanaged": True,
-            }
-        ]
+    def fake_dataverse_get(env_url, token, path, params):
+        observed["query"] = (env_url, token, path, params)
+        return {
+            "botid": AGENT_ID,
+            "name": "Employee Self-Service IT",
+            "schemaname": "msdyn_CopilotForEmployeeSelfServiceDAIT",
+            "ismanaged": True,
+        }
 
     monkeypatch.setattr(reconcile, "authenticate", fake_authenticate)
-    monkeypatch.setattr(reconcile, "query_all", fake_query_all)
+    monkeypatch.setattr(reconcile, "dataverse_get", fake_dataverse_get)
 
-    record = reconcile._read_dataverse_agent(
-        DATAVERSE_URL,
-        AGENT_ID,
-        "maker@example.com",
+    result = reconcile.probe_dataverse_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        account="maker@example.com",
+        dataverse_url=DATAVERSE_URL,
     )
 
-    assert record is not None
     assert observed["auth"] == (DATAVERSE_URL, "maker@example.com")
     assert observed["query"] == (
         DATAVERSE_URL,
         "token",
-        {
-            "entity_set": "bots",
-            "select": "botid,name,schemaname,ismanaged",
-            "filter_expr": f"botid eq {AGENT_ID}",
+        f"bots({AGENT_ID})",
+        {"$select": "botid,name,schemaname,ismanaged"},
+    )
+    assert result == {
+        "backend": "dataverse",
+        "outcome": "found",
+        "evidence": "dataverse-direct",
+        "productFamily": "solution-backed-ess",
+        "identity": {
+            "displayName": "Employee Self-Service IT",
+            "schemaName": "msdyn_CopilotForEmployeeSelfServiceDAIT",
+            "isManaged": True,
         },
+    }
+
+
+@pytest.mark.parametrize(
+    ("status_code", "outcome"),
+    [
+        (401, "authentication-required"),
+        (403, "access-denied"),
+        (404, "not-found"),
+        (503, "uncertain"),
+    ],
+)
+def test_dataverse_probe_preserves_http_failure_class(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    outcome: str,
+) -> None:
+    monkeypatch.setattr(
+        reconcile,
+        "_read_dataverse_agent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            APIError(
+                status_code=status_code,
+                message="Dataverse lookup failed",
+                tip="",
+            )
+        ),
     )
 
+    result = reconcile.probe_dataverse_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        dataverse_url=DATAVERSE_URL,
+    )
 
-def test_posix_recovery_is_release_pinned_and_side_by_side() -> None:
-    command, shell = reconcile.build_recovery_command("Darwin")
+    assert result["backend"] == "dataverse"
+    assert result["outcome"] == outcome
+    assert result["error"]["statusCode"] == status_code
 
-    assert shell == "bash"
-    assert 'ESS_ADK_INSTALL_ROOT="$HOME/source-cea"' in command
-    assert "/cea-v1.0.0-rc.1/setup/bootstrap-mac.sh" in command
-    assert "--branch cea-v1.0.0-rc.1" in command
-    assert "--source-base-url" in command
+
+def test_compatible_kit_result_is_release_pinned_and_side_by_side() -> None:
+    windows = reconcile.compatible_kit_result("Windows")
+    posix = reconcile.compatible_kit_result("Darwin")
+
+    assert windows["outcome"] == "available"
+    assert windows["releaseTag"] == "cea-v1.0.0-rc.1"
+    assert "/cea-v1.0.0-rc.1/setup/bootstrap.ps1" in windows[
+        "recoveryCommand"
+    ]
+    assert "-Branch cea-v1.0.0-rc.1" in windows["recoveryCommand"]
+    assert (
+        "-InstallRoot (Join-Path $env:USERPROFILE 'source-cea')"
+        in windows["recoveryCommand"]
+    )
+    assert posix["recoveryShell"] == "bash"
+    assert 'ESS_ADK_INSTALL_ROOT="$HOME/source-cea"' in posix[
+        "recoveryCommand"
+    ]
 
 
 def test_release_manifest_rejects_a_moving_branch(tmp_path: Path) -> None:
@@ -329,18 +410,13 @@ def test_release_manifest_rejects_a_moving_branch(tmp_path: Path) -> None:
         reconcile.build_recovery_command("Windows", manifest)
 
 
-def test_cli_emits_bounded_json_for_native_evidence(
+def test_cli_emits_one_bounded_known_native_result(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code = reconcile.main(
         [
-            "--environment-id",
-            ENVIRONMENT_ID,
-            "--agent-id",
-            AGENT_ID,
-            "--ring",
-            "prod",
-            "--native-da-ga",
+            "--known-native-schema",
+            "gptagent_copilotforemployeeselfservicehr",
         ]
     )
 
@@ -348,21 +424,23 @@ def test_cli_emits_bounded_json_for_native_evidence(
     assert exit_code == 0
     assert output.startswith(reconcile.RESULT_PREFIX)
     result = json.loads(output.removeprefix(reconcile.RESULT_PREFIX))
-    assert result["action"] == "continue-da-ga-setup"
-    assert ENVIRONMENT_ID not in output
-    assert AGENT_ID not in output
+    assert result["backend"] == "native"
+    assert result["outcome"] == "found"
+    assert result["productFamily"] == "da-ga"
 
 
-def test_positive_cea_result_still_stops_when_recovery_is_unavailable(
+def test_cli_rejects_probe_without_exact_identity(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = reconcile.main(["--probe", "native", "--ring", "prod"])
+
+    assert exit_code == 2
+    assert "Environment ID and agent ID are required" in capsys.readouterr().out
+
+
+def test_compatible_kit_failure_is_not_success_shaped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        reconcile,
-        "_probe_native_agent",
-        lambda *_args, **_kwargs: {
-            "schemaName": "msdyn_copilotforemployeeselfservicehr"
-        },
-    )
     monkeypatch.setattr(
         reconcile,
         "build_recovery_command",
@@ -371,15 +449,8 @@ def test_positive_cea_result_still_stops_when_recovery_is_unavailable(
         ),
     )
 
-    result = reconcile.reconcile_selected_agent(
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        ring="prod",
-    )
+    result = reconcile.compatible_kit_result("Windows")
 
-    assert result == {
-        "action": "stop-and-use-cea-kit",
-        "classification": "cea",
-        "evidence": "native-schema",
-        "recoveryUnavailable": True,
-    }
+    assert result["outcome"] == "unavailable"
+    assert "recoveryCommand" not in result
+    assert result["error"]["causes"][0]["type"] == "ValueError"
