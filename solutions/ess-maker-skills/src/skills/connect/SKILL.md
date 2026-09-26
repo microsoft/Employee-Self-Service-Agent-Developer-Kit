@@ -15,14 +15,14 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 
 Read `.local/config.json`.
 
-Resolve the entry in `agents` whose `slug` equals `activeAgent`. If that
-entry's `releaseLine` is `da` and the selected integration is ServiceNow,
+If the selected integration is ServiceNow and any entry in `agents` has
+`releaseLine: da`,
 record anonymous usage telemetry attributed to ServiceNow (best-effort,
 non-blocking, and with no user-facing message):
 `python scripts/emit_capability.py connect --connector servicenow`.
 Then read `src/skills/connect/servicenow-da/SKILL.md` and follow it. This is
-the DA-GA HR prototype and it must not route through the retained Preview-era
-ServiceNow steps.
+the shared DA-GA HRSD/ITSM workflow and it must not route through the retained
+Preview-era ServiceNow steps.
 
 Otherwise read `src/skills/connect/step1.md` and follow it. That file records
 anonymous usage telemetry after routing knows which integration was chosen, so
@@ -41,11 +41,15 @@ already-installed lifecycle or the existing unsupported-install boundary.)
 Each integration routes differently — ServiceNow has its own step files;
 Workday routes by architecture before package detection:
 
-- **ServiceNow DA-GA HR prototype**:
+- **ServiceNow DA-GA HRSD/ITSM workflow**:
   `src/skills/connect/servicenow-da/SKILL.md`
   - State:
     `.local/connect/servicenow/agents/<agent-id>/state.json`
   - Uses MinimalBot Components and Power Platform Connectivity APIs.
+  - Lists live ESS HR/IT agents and selects one for the current invocation
+    without changing `activeAgent`.
+  - Selects the explicit HRSD or ITSM product profile from the chosen agent
+    schema.
   - Does not use Dataverse connection-reference or workflow operations.
 
 - **ServiceNow retained Preview path**: `src/skills/connect/servicenow/`
