@@ -16,6 +16,11 @@ from workday_connect_model import (
     WorkdayConnectModelError,
     plan_hash,
 )
+from workday_connect_auth import authentication_plan
+from workday_connect_preflight import (
+    WorkdayConnectPreflightError,
+    run_preflight,
+)
 from workday_connect_store import (
     WorkdayConnectPlanChangedError,
     WorkdayConnectStore,
@@ -65,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("initialize")
     subparsers.add_parser("status")
+    subparsers.add_parser("auth-plan")
+
+    preflight = subparsers.add_parser("preflight")
+    preflight.add_argument("--dataverse-url")
+    preflight.add_argument("--maker-username")
 
     merge = subparsers.add_parser("merge-section")
     merge.add_argument(
@@ -112,6 +122,21 @@ def main() -> None:
             _emit("initialize", {"state": state, "status": store.status()})
         elif args.command == "status":
             _emit("status", store.status())
+        elif args.command == "auth-plan":
+            _emit(
+                "auth-plan",
+                {"authenticationPlan": authentication_plan()},
+            )
+        elif args.command == "preflight":
+            _emit(
+                "preflight",
+                run_preflight(
+                    Path(args.root),
+                    dataverse_url=args.dataverse_url,
+                    maker_username=args.maker_username,
+                    store=store,
+                ),
+            )
         elif args.command == "merge-section":
             state = store.merge_section(
                 args.section,
@@ -179,6 +204,7 @@ def main() -> None:
         OSError,
         WorkdayConnectModelError,
         WorkdayConnectPlanChangedError,
+        WorkdayConnectPreflightError,
         WorkdayConnectStoreError,
     ) as exc:
         print(
