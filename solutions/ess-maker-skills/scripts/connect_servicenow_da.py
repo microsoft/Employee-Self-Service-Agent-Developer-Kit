@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Connect the DA-GA HR agent to ServiceNow HRSD without Dataverse."""
+"""Connect supported DA-GA ESS agents to ServiceNow without Dataverse."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -37,11 +38,135 @@ CONNECTOR_NAME = "shared_service-now"
 CONNECTIVITY_API_VERSION = "1"
 SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
+IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 
 
+@dataclass(frozen=True)
+class ServiceNowProductProfile:
+    """ServiceNow package contract for one supported ESS agent."""
+
+    key: str
+    agent_schema_name: str
+    agent_display_name: str
+    product_name: str
+    topic_prefix: str
+    connection_display_name: str
+    test_prompt: str
+    topic_suffixes: tuple[str, ...]
+    agent_names: tuple[str, ...]
+
+
+HRSD_PROFILE = ServiceNowProductProfile(
+    key="hrsd",
+    agent_schema_name=HR_SCHEMA_NAME,
+    agent_display_name="Employee Self-Service (HR)",
+    product_name="ServiceNow HRSD",
+    topic_prefix="ServiceNowHRSD",
+    connection_display_name="ESS HR ServiceNow HRSD Connection",
+    test_prompt="Show my HR cases",
+    topic_suffixes=(
+        "ServiceNowHRSDAddAttachmentsorCommentsToCase",
+        "ServiceNowHRSDCreateCase",
+        "ServiceNowHRSDEmployeeHandoffScenarios",
+        "ServiceNowHRSDGetCaseDetails",
+        "ServiceNowHRSDGetCaseUpdates",
+        "ServiceNowHRSDGetUserCases",
+        "ServiceNowHRSDSetupConfigurations",
+        "ServiceNowHRSDSystemCaseDetailsCacheLookup",
+        "ServiceNowHRSDSystemCommonExecution",
+        "ServiceNowHRSDSystemCommonOrchestrator",
+        "ServiceNowHRSDSystemCreateCase",
+        "ServiceNowHRSDSystemCreateCaseExecution",
+        "ServiceNowHRSDSystemGetCaseDetails",
+        "ServiceNowHRSDSystemGetCasesList",
+        "ServiceNowHRSDSystemGetMetadataCached",
+        "ServiceNowHRSDSystemResponseMapper",
+        "ServiceNowHRSDSystemUpdateCase",
+        "ServiceNowHRSDSystemUserPermissionCheck",
+        "ServiceNowHRSDUpdateCase",
+    ),
+    agent_names=("Employee Self-Service HR", "Employee Self-Service (HR)"),
+)
+
+ITSM_PROFILE = ServiceNowProductProfile(
+    key="itsm",
+    agent_schema_name=IT_SCHEMA_NAME,
+    agent_display_name="Employee Self-Service (IT)",
+    product_name="ServiceNow ITSM",
+    topic_prefix="ServiceNowITSM",
+    connection_display_name="ESS IT ServiceNow ITSM Connection",
+    test_prompt="Show my open IT tickets",
+    topic_suffixes=(
+        "ServiceNowITSMCreateTicket",
+        "ServiceNowITSMEmployeeHandoffScenarios",
+        "ServiceNowITSMGetTicketDetails",
+        "ServiceNowITSMGetTicketUpdates",
+        "ServiceNowITSMGetUserTickets",
+        "ServiceNowITSMSetupConfigurations",
+        "ServiceNowITSMSystemCommonExecution",
+        "ServiceNowITSMSystemCommonOrchestrator",
+        "ServiceNowITSMSystemCreateTicket",
+        "ServiceNowITSMSystemGetTicketDetails",
+        "ServiceNowITSMSystemGetTicketsList",
+        "ServiceNowITSMSystemResponseMapper",
+        "ServiceNowITSMSystemUpdateTicket",
+        "ServiceNowITSMSystemUserPermissionCheck",
+        "ServiceNowITSMUpdateTicket",
+    ),
+    agent_names=("Employee Self-Service IT", "Employee Self-Service (IT)"),
+)
+
+PRODUCT_PROFILES = (HRSD_PROFILE, ITSM_PROFILE)
+
+
 class ServiceNowConnectError(RuntimeError):
-    """Raised when the DA-GA ServiceNow prototype cannot proceed safely."""
+    """Raised when the DA-GA ServiceNow workflow cannot proceed safely."""
+
+
+def product_profile_for_schema(
+    schema_name: str,
+) -> ServiceNowProductProfile | None:
+    folded = schema_name.casefold()
+    return next(
+        (
+            profile
+            for profile in PRODUCT_PROFILES
+            if profile.agent_schema_name.casefold() == folded
+        ),
+        None,
+    )
+
+
+def product_profile_for_name(
+    display_name: str,
+) -> ServiceNowProductProfile | None:
+    folded = display_name.strip().casefold()
+    return next(
+        (
+            profile
+            for profile in PRODUCT_PROFILES
+            if any(name.casefold() == folded for name in profile.agent_names)
+        ),
+        None,
+    )
+
+
+def _context_profile(context: dict[str, Any]) -> ServiceNowProductProfile:
+    profile = context.get("profile")
+    if isinstance(profile, ServiceNowProductProfile):
+        return profile
+    agent = context.get("agent")
+    schema_name = agent.get("schema_name") if isinstance(agent, dict) else None
+    if isinstance(schema_name, str):
+        selected = product_profile_for_schema(schema_name)
+        if selected is not None:
+            return selected
+    if schema_name is None:
+        return HRSD_PROFILE
+    raise ServiceNowConnectError(
+        "The active agent is not a supported ServiceNow ESS product."
+    )
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -85,7 +210,145 @@ def _state_path(agent_id: str) -> Path:
     return Path(".local/connect/servicenow/agents") / agent_id / "state.json"
 
 
-def load_context(root: Path = Path(".")) -> dict[str, Any]:
+def _normalize_agent_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise ServiceNowConnectError("The selected agent ID is invalid.") from exc
+
+
+def _agent_card_identity(card: dict[str, Any]) -> tuple[str, str] | None:
+    raw_id = str(
+        card.get("botId")
+        or card.get("cdsBotId")
+        or card.get("componentIdUnique")
+        or ""
+    )
+    try:
+        agent_id = _normalize_agent_id(raw_id)
+    except ServiceNowConnectError:
+        return None
+    display_name = str(
+        card.get("fullBotName")
+        or card.get("displayName")
+        or card.get("shortBotName")
+        or agent_id
+    )
+    return agent_id, display_name
+
+
+def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
+    setup = _load_json(root / SETUP_STATE)
+    config = _load_json(root / ACTIVE_CONFIG)
+    if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
+        raise ServiceNowConnectError(
+            f"Expected /setup schema {SETUP_SCHEMA_VERSION}."
+        )
+    environment = setup.get("environment")
+    canonical_agents = setup.get("agents")
+    operational_agents = config.get("agents")
+    if not isinstance(environment, dict):
+        raise ServiceNowConnectError("The setup handoff has no environment.")
+    if not isinstance(canonical_agents, dict):
+        raise ServiceNowConnectError("Canonical setup state has no agent map.")
+    if not isinstance(operational_agents, list):
+        raise ServiceNowConnectError("Operational setup config has no agent list.")
+
+    client = _agentbuilder_client({"environment": environment})
+    choices = []
+    for card in client.list_agents():
+        identity = _agent_card_identity(card)
+        if identity is None:
+            continue
+        agent_id, display_name = identity
+        canonical = next(
+            (
+                value
+                for key, value in canonical_agents.items()
+                if isinstance(key, str)
+                and key.casefold() == agent_id.casefold()
+                and isinstance(value, dict)
+            ),
+            None,
+        )
+        agent = canonical.get("agent") if isinstance(canonical, dict) else None
+        schema_name = (
+            str(agent.get("schema_name") or "")
+            if isinstance(agent, dict)
+            else ""
+        )
+        profile = (
+            product_profile_for_schema(schema_name)
+            if isinstance(agent, dict)
+            else product_profile_for_name(display_name)
+        )
+        if profile is None:
+            continue
+        operational = next(
+            (
+                item
+                for item in operational_agents
+                if isinstance(item, dict)
+                and str(item.get("botId") or "").casefold()
+                == agent_id.casefold()
+            ),
+            None,
+        )
+        workspace = (
+            canonical.get("workspace")
+            if isinstance(canonical, dict)
+            else None
+        )
+        setup_ready = (
+            isinstance(canonical, dict)
+            and canonical.get("authoring_ready") is True
+            and isinstance(workspace, dict)
+            and bool(workspace.get("folder"))
+            and bool(workspace.get("agent_path"))
+            and isinstance(operational, dict)
+            and bool(operational.get("agentBuilderChangeSetPath"))
+        )
+        status = "setup-required"
+        if setup_ready:
+            status = "ready"
+            state_path = root / _state_path(agent_id)
+            if state_path.exists():
+                state = _load_json(state_path)
+                attestation = state.get("agentConnection")
+                steps = state.get("steps")
+                if (
+                    isinstance(attestation, dict)
+                    and attestation.get("makerAttested") is True
+                    and isinstance(steps, dict)
+                    and steps.get("agentConnection") == "done"
+                ):
+                    status = "connected-revalidation-required"
+        choices.append(
+            {
+                "id": agent_id,
+                "name": display_name,
+                "product": profile.product_name,
+                "status": status,
+                "selectable": setup_ready,
+            }
+        )
+    return {
+        "environmentId": environment.get("id"),
+        "agents": sorted(
+            choices,
+            key=lambda item: (
+                str(item["name"]).casefold(),
+                str(item["id"]),
+            ),
+        ),
+    }
+
+
+def load_context(
+    root: Path = Path("."),
+    *,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
     setup = _load_json(root / SETUP_STATE)
     if setup.get("schema_version") != SETUP_SCHEMA_VERSION:
         raise ServiceNowConnectError(
@@ -96,34 +359,52 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
 
     environment = setup.get("environment")
     config = _load_json(root / ACTIVE_CONFIG)
-    active_slug = config.get("activeAgent")
     operational_agents = config.get("agents")
     if not isinstance(environment, dict):
         raise ServiceNowConnectError("The setup handoff has no environment.")
-    if not isinstance(active_slug, str) or not active_slug:
-        raise ServiceNowConnectError("Operational config has no active agent.")
     if not isinstance(operational_agents, list):
         raise ServiceNowConnectError("Operational setup config has no agent list.")
-    active = next(
-        (
-            item
-            for item in operational_agents
-            if isinstance(item, dict) and item.get("slug") == active_slug
-        ),
-        None,
-    )
-    if not isinstance(active, dict):
-        raise ServiceNowConnectError("Could not resolve the active setup agent.")
-
-    active_bot_id = active.get("botId")
-    if not isinstance(active_bot_id, str):
-        raise ServiceNowConnectError("The active agent has no bot ID.")
-    try:
-        normalized_bot_id = str(uuid.UUID(active_bot_id))
-    except ValueError as exc:
-        raise ServiceNowConnectError(
-            "The active agent bot ID is invalid."
-        ) from exc
+    if agent_id is None:
+        active_slug = config.get("activeAgent")
+        if not isinstance(active_slug, str) or not active_slug:
+            raise ServiceNowConnectError("Operational config has no active agent.")
+        selected = next(
+            (
+                item
+                for item in operational_agents
+                if isinstance(item, dict) and item.get("slug") == active_slug
+            ),
+            None,
+        )
+        if not isinstance(selected, dict):
+            raise ServiceNowConnectError(
+                "Could not resolve the active setup agent."
+            )
+        selected_bot_id = selected.get("botId")
+        if not isinstance(selected_bot_id, str):
+            raise ServiceNowConnectError("The active agent has no bot ID.")
+        normalized_bot_id = _normalize_agent_id(selected_bot_id)
+    else:
+        normalized_bot_id = _normalize_agent_id(agent_id)
+        selected = next(
+            (
+                item
+                for item in operational_agents
+                if isinstance(item, dict)
+                and str(item.get("botId") or "").casefold()
+                == normalized_bot_id.casefold()
+            ),
+            None,
+        )
+        if not isinstance(selected, dict):
+            raise ServiceNowConnectError(
+                "The selected agent has no local /setup workspace."
+            )
+        active_slug = selected.get("slug")
+        if not isinstance(active_slug, str) or not active_slug:
+            raise ServiceNowConnectError(
+                "The selected agent has no workspace slug."
+            )
 
     canonical_agents = setup.get("agents")
     if not isinstance(canonical_agents, dict):
@@ -140,7 +421,7 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
     )
     if not isinstance(canonical, dict):
         raise ServiceNowConnectError(
-            "The active agent has no canonical /setup record."
+            "The selected agent has no canonical /setup record."
         )
     agent = canonical.get("agent")
     if not isinstance(agent, dict):
@@ -155,9 +436,12 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
         )
     if agent.get("realm") != "dev":
         raise ServiceNowConnectError("/connect only supports the editable Dev realm.")
-    if agent.get("schema_name") != HR_SCHEMA_NAME:
+    schema_name = str(agent.get("schema_name") or "")
+    profile = product_profile_for_schema(schema_name)
+    if profile is None:
         raise ServiceNowConnectError(
-            "This prototype supports only Employee Self-Service (HR)."
+            "ServiceNow connect supports only Employee Self-Service (HR) "
+            "and Employee Self-Service (IT)."
         )
     if canonical.get("authoring_ready") is not True:
         raise ServiceNowConnectError(
@@ -173,7 +457,7 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
             "DA foundation setup has no materialized agent workspace."
         )
 
-    relative_snapshot = active.get("agentBuilderChangeSetPath")
+    relative_snapshot = selected.get("agentBuilderChangeSetPath")
     if not isinstance(relative_snapshot, str) or not relative_snapshot:
         raise ServiceNowConnectError("The active agent has no component snapshot path.")
     snapshot_path = root / Path(relative_snapshot)
@@ -184,7 +468,8 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
         "config": config,
         "environment": environment,
         "agent": agent,
-        "active": active,
+        "profile": profile,
+        "active": selected,
         "snapshotPath": snapshot_path,
     }
 
@@ -204,6 +489,23 @@ def _component_schema(change: dict[str, Any]) -> str:
     if not isinstance(component, dict):
         return ""
     return str(component.get("schemaName") or "")
+
+
+def _profile_topic_suffix(
+    change: dict[str, Any],
+    profile: ServiceNowProductProfile,
+) -> str | None:
+    schema_name = _component_schema(change)
+    schema_prefix = f"{profile.agent_schema_name}.topic."
+    if not schema_name.casefold().startswith(schema_prefix.casefold()):
+        return None
+    suffix = schema_name[len(schema_prefix):]
+    if not any(
+        suffix.casefold() == official.casefold()
+        for official in profile.topic_suffixes
+    ):
+        return None
+    return suffix
 
 
 def find_servicenow_reference(components: dict[str, Any]) -> dict[str, Any]:
@@ -257,18 +559,29 @@ def _parameter_value(parameters: dict[str, Any], name: str) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
+def summarize_components(
+    components: dict[str, Any],
+    profile: ServiceNowProductProfile = HRSD_PROFILE,
+) -> dict[str, Any]:
     reference = find_servicenow_reference(components)
-    service_now_topics = [
-        change
-        for change in components.get("botComponentChanges") or []
-        if "ServiceNowHRSD" in _component_schema(change)
-    ]
+    topic_changes = components.get("botComponentChanges") or []
+    service_now_topics = []
+    topic_suffixes: dict[int, str] = {}
+    for change in topic_changes:
+        if not isinstance(change, dict):
+            continue
+        suffix = _profile_topic_suffix(change, profile)
+        if suffix is not None:
+            service_now_topics.append(change)
+            topic_suffixes[id(change)] = suffix
     action_counts = {"InvokeFlowAction": 0, "InvokeConnectorAction": 0}
     service_now_action_counts = {"InvokeFlowAction": 0, "InvokeConnectorAction": 0}
     flow_ids: set[str] = set()
-    for change in components.get("botComponentChanges") or []:
-        is_service_now = "ServiceNowHRSD" in _component_schema(change)
+    service_now_flow_ids: set[str] = set()
+    for change in topic_changes:
+        if not isinstance(change, dict):
+            continue
+        is_service_now = _profile_topic_suffix(change, profile) is not None
         for node in _walk(change):
             kind = node.get("$kind")
             if kind in action_counts:
@@ -278,6 +591,8 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             flow_id = node.get("flowId")
             if isinstance(flow_id, str) and flow_id:
                 flow_ids.add(flow_id)
+                if is_service_now:
+                    service_now_flow_ids.add(flow_id)
 
     parameters = _shared_parameters(reference)
     topic_summaries = sorted(
@@ -287,6 +602,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
                 "version": change["component"].get("version"),
                 "displayName": change["component"].get("displayName"),
                 "schemaName": change["component"].get("schemaName"),
+                "suffix": topic_suffixes[id(change)],
                 "state": change["component"].get("state"),
                 "status": change["component"].get("status"),
             }
@@ -296,6 +612,14 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
         key=lambda item: str(item.get("displayName") or ""),
     )
     return {
+        "profile": {
+            "key": profile.key,
+            "agentSchemaName": profile.agent_schema_name,
+            "agentDisplayName": profile.agent_display_name,
+            "productName": profile.product_name,
+            "topicPrefix": profile.topic_prefix,
+            "testPrompt": profile.test_prompt,
+        },
         "botComponentCount": len(components.get("botComponentChanges") or []),
         "serviceNowTopicCount": len(service_now_topics),
         "activeServiceNowTopicCount": sum(
@@ -324,6 +648,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             "InvokeConnectorAction"
         ],
         "flowIds": sorted(flow_ids),
+        "serviceNowFlowIds": sorted(service_now_flow_ids),
         "reference": {
             "id": reference.get("id"),
             "connectionId": reference.get("connectionId"),
@@ -506,6 +831,7 @@ def connection_summary(record: dict[str, Any]) -> dict[str, Any]:
 def find_servicenow_topic(
     components: dict[str, Any],
     topic_id: str,
+    profile: ServiceNowProductProfile = HRSD_PROFILE,
 ) -> dict[str, Any]:
     normalized_topic_id = str(uuid.UUID(topic_id))
     for change in components.get("botComponentChanges") or []:
@@ -514,11 +840,12 @@ def find_servicenow_topic(
             isinstance(component, dict)
             and str(component.get("id") or "").casefold()
             == normalized_topic_id.casefold()
-            and "ServiceNowHRSD" in str(component.get("schemaName") or "")
+            and _profile_topic_suffix(change, profile) is not None
         ):
             return component
     raise ServiceNowConnectError(
-        "The requested ServiceNow topic was not found in the active agent."
+        f"The requested {profile.product_name} topic was not found in the "
+        "active agent."
     )
 
 
@@ -526,6 +853,7 @@ def build_topic_state_update_payload(
     components: dict[str, Any],
     topic_id: str,
     target_state: str,
+    profile: ServiceNowProductProfile = HRSD_PROFILE,
 ) -> dict[str, Any]:
     if target_state not in {"Active", "Inactive"}:
         raise ServiceNowConnectError(
@@ -536,7 +864,9 @@ def build_topic_state_update_payload(
         raise ServiceNowConnectError(
             "MinimalBot component state has no concurrency change token."
         )
-    component = copy.deepcopy(find_servicenow_topic(components, topic_id))
+    component = copy.deepcopy(
+        find_servicenow_topic(components, topic_id, profile)
+    )
     if component.get("$kind") != "DialogComponent":
         raise ServiceNowConnectError(
             "The requested ServiceNow component is not a dialog topic."
@@ -560,6 +890,7 @@ def build_topic_state_update_payload(
 
 def build_enable_all_topics_payload(
     components: dict[str, Any],
+    profile: ServiceNowProductProfile = HRSD_PROFILE,
 ) -> dict[str, Any]:
     change_token = components.get("changeToken")
     if not isinstance(change_token, str) or not change_token:
@@ -571,7 +902,7 @@ def build_enable_all_topics_payload(
         component = change.get("component")
         if (
             not isinstance(component, dict)
-            or "ServiceNowHRSD" not in str(component.get("schemaName") or "")
+            or _profile_topic_suffix(change, profile) is None
             or (
                 component.get("state") == "Active"
                 and component.get("status") == "Active"
@@ -587,6 +918,7 @@ def build_enable_all_topics_payload(
             components,
             str(topic_id),
             "Active",
+            profile,
         )
         changes.extend(topic_payload["botComponentChanges"])
     return {
@@ -650,12 +982,15 @@ def _state_base(
     context: dict[str, Any],
     components: dict[str, Any],
 ) -> dict[str, Any]:
-    summary = summarize_components(components)
+    profile = _context_profile(context)
+    summary = summarize_components(components, profile)
     return {
         "schemaVersion": 1,
-        "intent": "DA-GA ServiceNow HRSD connection",
+        "intent": f"DA-GA {profile.product_name} connection",
         "agentId": context["agent"]["id"],
-        "agentSchemaName": context["agent"]["schema_name"],
+        "agentSchemaName": profile.agent_schema_name,
+        "profileKey": profile.key,
+        "productName": profile.product_name,
         "environmentId": context["environment"]["id"],
         "ring": context["environment"]["ring"],
         "componentHash": _component_hash(components),
@@ -675,9 +1010,11 @@ def _state_for_components(
 
 
 def _inspection_progress(
+    context: dict[str, Any],
     state: dict[str, Any],
     result: dict[str, Any],
 ) -> dict[str, dict[str, str]]:
+    profile = _context_profile(context)
     components = result["components"]
     connections = result.get("connectivity", {}).get("connections", [])
     connected = {
@@ -737,7 +1074,8 @@ def _inspection_progress(
         "topics": {
             "status": "done" if topics_done else "pending",
             "message": (
-                f"{active_topics}/{total_topics} ServiceNow HRSD topics are "
+                f"{active_topics}/{total_topics} {profile.product_name} "
+                "topics are "
                 f"active."
             ),
         },
@@ -808,17 +1146,19 @@ def _inspection_progress(
 
 
 def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]:
+    profile = _context_profile(context)
     if offline:
         components = _load_json(context["snapshotPath"])
     else:
         components = _agentbuilder_client(context).fetch_components(
             context["agent"]["id"]
         )
-    summary = summarize_components(components)
+    summary = summarize_components(components, profile)
     result = {
         "mode": "offline" if offline else "live",
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
+        "profile": summary["profile"],
         "components": summary,
     }
     if not offline:
@@ -845,7 +1185,7 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
             },
         }
         state = _state_for_components(context, components)
-        result["progress"] = _inspection_progress(state, result)
+        result["progress"] = _inspection_progress(context, state, result)
         state["lastInspection"] = result
         _write_json_atomic(_state_path(context["agent"]["id"]), state)
     return result
@@ -858,10 +1198,11 @@ def prepare_manual_connection(
     resource_uri: str | None,
     display_name: str | None,
 ) -> dict[str, Any]:
+    profile = _context_profile(context)
     components = _agentbuilder_client(context).fetch_components(
         context["agent"]["id"]
     )
-    summary = summarize_components(components)
+    summary = summarize_components(components, profile)
     reference = summary["reference"]
     instance_name = instance_name or reference.get("instanceName")
     resource_uri = resource_uri or reference.get("resourceUri")
@@ -890,7 +1231,7 @@ def prepare_manual_connection(
     state["connection"] = {
         "connectionId": None,
         "displayName": (
-            display_name or "ESS HR ServiceNow HRSD Connection"
+            display_name or profile.connection_display_name
         ),
         "status": "maker-action-required",
         "authMode": "entraIDUserLogin",
@@ -914,7 +1255,7 @@ def prepare_manual_connection(
         "connection": state["connection"],
         "instructions": [
             "Open https://copilotstudio.microsoft.com and select the target environment.",
-            "Open the Employee Self-Service HR agent.",
+            f"Open the {profile.agent_display_name} agent.",
             "Select Settings, then Connection settings.",
             "Find the ServiceNow connection and select its status link.",
             "Open the connection configuration and select Create new connection.",
@@ -1015,9 +1356,10 @@ def set_topic_state(
         raise ServiceNowConnectError(
             "Topic state mutation requires explicit confirmation (--yes)."
         )
+    profile = _context_profile(context)
     agentbuilder = _agentbuilder_client(context)
     before = agentbuilder.fetch_components(context["agent"]["id"])
-    before_topic = find_servicenow_topic(before, topic_id)
+    before_topic = find_servicenow_topic(before, topic_id, profile)
     before_state = before_topic.get("state")
     before_status = before_topic.get("status")
     changed = (
@@ -1029,10 +1371,11 @@ def set_topic_state(
             before,
             topic_id,
             target_state,
+            profile,
         )
         agentbuilder.update_components(context["agent"]["id"], payload)
     after = agentbuilder.fetch_components(context["agent"]["id"])
-    after_topic = find_servicenow_topic(after, topic_id)
+    after_topic = find_servicenow_topic(after, topic_id, profile)
     if (
         after_topic.get("state") != target_state
         or after_topic.get("status") != target_state
@@ -1065,9 +1408,10 @@ def enable_all_servicenow_topics(
             "Enabling all ServiceNow topics requires explicit confirmation "
             "(--yes)."
         )
+    profile = _context_profile(context)
     agentbuilder = _agentbuilder_client(context)
     before = agentbuilder.fetch_components(context["agent"]["id"])
-    before_summary = summarize_components(before)
+    before_summary = summarize_components(before, profile)
     inactive = [
         topic
         for topic in before_summary["serviceNowTopics"]
@@ -1075,10 +1419,10 @@ def enable_all_servicenow_topics(
         or topic.get("status") != "Active"
     ]
     if inactive:
-        payload = build_enable_all_topics_payload(before)
+        payload = build_enable_all_topics_payload(before, profile)
         agentbuilder.update_components(context["agent"]["id"], payload)
     after = agentbuilder.fetch_components(context["agent"]["id"])
-    after_summary = summarize_components(after)
+    after_summary = summarize_components(after, profile)
     not_active = [
         topic
         for topic in after_summary["serviceNowTopics"]
@@ -1091,7 +1435,8 @@ def enable_all_servicenow_topics(
             for topic in not_active
         )
         raise ServiceNowConnectError(
-            "MinimalBot update completed, but these ServiceNow topics "
+            f"MinimalBot update completed, but these {profile.product_name} "
+            "topics "
             f"remained inactive: {names}."
         )
     result = {
@@ -1134,10 +1479,11 @@ def enable_all_servicenow_topics(
 def record_keep_current_topic_choice(
     context: dict[str, Any],
 ) -> dict[str, Any]:
+    profile = _context_profile(context)
     components = _agentbuilder_client(context).fetch_components(
         context["agent"]["id"]
     )
-    summary = summarize_components(components)
+    summary = summarize_components(components, profile)
     counts = {
         "total": summary["serviceNowTopicCount"],
         "active": summary["activeServiceNowTopicCount"],
@@ -1200,6 +1546,7 @@ def record_test_attestation(
     result: str,
     details: str | None,
 ) -> dict[str, Any]:
+    profile = _context_profile(context)
     prompt = prompt.strip()
     if not prompt:
         raise ServiceNowConnectError("A Test pane prompt is required.")
@@ -1210,8 +1557,11 @@ def record_test_attestation(
     state_path = _state_path(context["agent"]["id"])
     state = _load_json(state_path) if state_path.exists() else {
         "schemaVersion": 1,
-        "intent": "DA-GA ServiceNow HRSD connection",
+        "intent": f"DA-GA {profile.product_name} connection",
         "agentId": context["agent"]["id"],
+        "agentSchemaName": profile.agent_schema_name,
+        "profileKey": profile.key,
+        "productName": profile.product_name,
         "environmentId": context["environment"]["id"],
     }
     attestation = {
@@ -1231,13 +1581,25 @@ def record_test_attestation(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prototype DA-GA ServiceNow HRSD connection setup.",
+        description="DA-GA ESS ServiceNow connection setup.",
+    )
+    parser.add_argument(
+        "--agent-id",
+        help=(
+            "Operate on one locally set up ESS agent without changing "
+            ".local/config.json activeAgent."
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    subparsers.add_parser(
+        "list-agents",
+        help="List recognizable ESS HR/IT agents in the live environment.",
+    )
+
     inspect_parser = subparsers.add_parser(
         "inspect",
-        help="Inspect the active HR agent and ServiceNow connection state.",
+        help="Inspect the selected ESS agent and ServiceNow connection state.",
     )
     inspect_parser.add_argument(
         "--offline",
@@ -1282,7 +1644,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     enable_all_parser = subparsers.add_parser(
         "enable-all-topics",
-        help="Enable every ServiceNow HRSD topic after customer confirmation.",
+        help="Enable every profiled ServiceNow topic after confirmation.",
     )
     enable_all_parser.add_argument("--yes", action="store_true")
 
@@ -1298,13 +1660,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish_parser = subparsers.add_parser(
         "publish",
-        help="Publish the active Dev agent.",
+        help="Publish the selected Dev agent.",
     )
     publish_parser.add_argument("--yes", action="store_true")
 
     test_parser = subparsers.add_parser(
         "record-test",
-        help="Record the maker's ServiceNow HRSD Test pane attestation.",
+        help="Record the maker's ServiceNow Test pane attestation.",
     )
     test_parser.add_argument("--prompt", required=True)
     test_parser.add_argument(
@@ -1319,48 +1681,51 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        context = load_context()
-        if args.command == "inspect":
-            result = inspect(context, offline=args.offline)
-        elif args.command == "create":
-            result = prepare_manual_connection(
-                context,
-                instance_name=args.instance_name,
-                resource_uri=args.resource_uri,
-                display_name=args.display_name,
-            )
-        elif args.command == "record-agent-connection":
-            result = record_agent_connection_attestation(
-                context,
-                args.connection_id,
-            )
-        elif args.command == "record-parameter-sharing":
-            result = record_parameter_sharing(context, args.status)
-        elif args.command == "set-topic-state":
-            result = set_topic_state(
-                context,
-                args.topic_id,
-                args.state.title(),
-                confirmed=args.yes,
-            )
-        elif args.command == "enable-all-topics":
-            result = enable_all_servicenow_topics(
-                context,
-                confirmed=args.yes,
-            )
-        elif args.command == "record-topic-choice":
-            result = record_keep_current_topic_choice(context)
-        elif args.command == "publish":
-            result = publish(context, confirmed=args.yes)
-        elif args.command == "record-test":
-            result = record_test_attestation(
-                context,
-                prompt=args.prompt,
-                result=args.result,
-                details=args.details,
-            )
-        else:  # pragma: no cover
-            raise ServiceNowConnectError("Unsupported command.")
+        if args.command == "list-agents":
+            result = list_agent_choices()
+        else:
+            context = load_context(agent_id=args.agent_id)
+            if args.command == "inspect":
+                result = inspect(context, offline=args.offline)
+            elif args.command == "create":
+                result = prepare_manual_connection(
+                    context,
+                    instance_name=args.instance_name,
+                    resource_uri=args.resource_uri,
+                    display_name=args.display_name,
+                )
+            elif args.command == "record-agent-connection":
+                result = record_agent_connection_attestation(
+                    context,
+                    args.connection_id,
+                )
+            elif args.command == "record-parameter-sharing":
+                result = record_parameter_sharing(context, args.status)
+            elif args.command == "set-topic-state":
+                result = set_topic_state(
+                    context,
+                    args.topic_id,
+                    args.state.title(),
+                    confirmed=args.yes,
+                )
+            elif args.command == "enable-all-topics":
+                result = enable_all_servicenow_topics(
+                    context,
+                    confirmed=args.yes,
+                )
+            elif args.command == "record-topic-choice":
+                result = record_keep_current_topic_choice(context)
+            elif args.command == "publish":
+                result = publish(context, confirmed=args.yes)
+            elif args.command == "record-test":
+                result = record_test_attestation(
+                    context,
+                    prompt=args.prompt,
+                    result=args.result,
+                    details=args.details,
+                )
+            else:  # pragma: no cover
+                raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
         print(json.dumps({"status": "error", "message": str(exc)}, indent=2))
         return 1

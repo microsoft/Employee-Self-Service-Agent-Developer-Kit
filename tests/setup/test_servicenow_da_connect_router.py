@@ -15,11 +15,12 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
     router = (
         _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
 
     assert "src/skills/connect/SKILL.md" in prompt
     assert "Extension setup is not yet available" not in prompt
     assert "`authoring_ready: true`" in prompt
-    assert "Ignore" in prompt
+    assert "ignore" in prompt
     assert "`connect_ready`" in prompt
     assert "`activeAgent` slug" in prompt
     assert "`botId`" in prompt
@@ -29,8 +30,13 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
     assert "start with that skill's live `inspect` contract" in prompt
     assert "src/skills/connect/servicenow-da/SKILL.md" in router
-    assert "releaseLine" in router
+    assert "any entry in `agents`" in router
+    assert "`releaseLine: da`" in router
     assert "emit_capability.py connect --connector servicenow" in router
+    assert "HRSD/ITSM" in router
+    assert "explicit HRSD or ITSM product profile" in router
+    assert "do not gate this invocation" in normalized_prompt
+    assert "lists the live ESS HR/IT agents" in prompt
 
 
 def test_global_gate_allows_connection_blocked_foundation() -> None:
@@ -72,3 +78,11 @@ def test_da_servicenow_skill_is_resumable_across_maker_questions() -> None:
     assert "Use **Task completed** only after a passing Test pane result" in skill
     assert "record-parameter-sharing --status enabled" in skill
     assert "record-parameter-sharing --status not-exposed" in skill
+    assert "Employee Self-Service (HR) -> ServiceNow HRSD" in skill
+    assert "Employee Self-Service (IT) -> ServiceNow ITSM" in skill
+    assert "python scripts/connect_servicenow_da.py list-agents" in skill
+    assert "Do not change" in skill
+    assert "`.local/config.json` or its `activeAgent`" in skill
+    assert "customer custom topics" in normalized
+    assert "profile.agentDisplayName" in skill
+    assert "profile.testPrompt" in skill

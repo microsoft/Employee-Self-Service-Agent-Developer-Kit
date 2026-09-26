@@ -15,6 +15,7 @@ import connect_servicenow_da as snow
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000-0000-4000-8000-000000003333"
+IT_AGENT_ID = "00000000-0000-4000-8000-000000002223"
 
 
 def _components(connection_id: str | None = None) -> dict:
@@ -88,6 +89,90 @@ def _components(connection_id: str | None = None) -> dict:
     }
 
 
+def _profile_components(
+    profile: snow.ServiceNowProductProfile,
+    *,
+    inactive_suffixes: set[str] | None = None,
+) -> dict:
+    inactive_suffixes = inactive_suffixes or set()
+    components = _components(CONNECTION_ID)
+    topic_changes = []
+    for index, suffix in enumerate(profile.topic_suffixes):
+        state = "Inactive" if suffix in inactive_suffixes else "Active"
+        dialog: dict = {"$kind": "TaskDialog"}
+        if suffix.endswith("SystemCommonExecution"):
+            dialog["actions"] = [
+                {
+                    "$kind": "InvokeConnectorAction",
+                    "connectionReference": "servicenow-ref",
+                }
+                for _ in range(4)
+            ]
+        topic_changes.append(
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": (
+                        "00000000-0000-4000-8000-"
+                        f"{6000 + index:012d}"
+                    ),
+                    "version": 1,
+                    "displayName": suffix,
+                    "schemaName": (
+                        f"{profile.agent_schema_name}.topic.{suffix}"
+                    ),
+                    "state": state,
+                    "status": state,
+                    "dialog": dialog,
+                },
+            }
+        )
+    topic_changes.extend(
+        [
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": "00000000-0000-4000-8000-000000008888",
+                    "version": 1,
+                    "displayName": "Unrelated ServiceNow HRSD Topic",
+                    "schemaName": (
+                        f"{profile.agent_schema_name}.topic."
+                        f"{profile.topic_prefix}CustomerCustom"
+                    ),
+                    "state": "Inactive",
+                    "status": "Inactive",
+                    "dialog": {"$kind": "TaskDialog"},
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": "00000000-0000-4000-8000-000000009999",
+                    "version": 1,
+                    "displayName": "Unrelated Workday Topic",
+                    "schemaName": (
+                        f"{profile.agent_schema_name}.topic.WorkdayRuntime"
+                    ),
+                    "state": "Inactive",
+                    "status": "Inactive",
+                    "dialog": {
+                        "$kind": "TaskDialog",
+                        "action": {
+                            "$kind": "InvokeFlowAction",
+                            "flowId": "workday-flow",
+                        },
+                    },
+                },
+            },
+        ]
+    )
+    components["botComponentChanges"] = topic_changes
+    return components
+
+
 def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
     result = snow.summarize_components(_components(CONNECTION_ID))
 
@@ -102,6 +187,24 @@ def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
     assert result["cloudFlowDefinitionCount"] == 0
     assert result["reference"]["instanceName"] == "dev123"
     assert result["reference"]["resourceUri"] == "resource-id"
+
+
+def test_itsm_profile_discovers_official_topics_and_connector_actions() -> None:
+    result = snow.summarize_components(
+        _profile_components(snow.ITSM_PROFILE),
+        snow.ITSM_PROFILE,
+    )
+
+    assert result["profile"]["key"] == "itsm"
+    assert result["serviceNowTopicCount"] == 15
+    assert result["activeServiceNowTopicCount"] == 15
+    assert result["serviceNowInvokeConnectorActionCount"] == 4
+    assert result["serviceNowInvokeFlowActionCount"] == 0
+    assert result["invokeFlowActionCount"] == 1
+    assert result["serviceNowFlowIds"] == []
+    assert {
+        topic["suffix"] for topic in result["serviceNowTopics"]
+    } == set(snow.ITSM_PROFILE.topic_suffixes)
 
 
 def test_summarize_components_requires_active_state_and_status() -> None:
@@ -179,6 +282,67 @@ def test_enable_all_topics_payload_contains_only_inactive_servicenow_topics() ->
     assert change["component"]["id"] == topic["id"]
     assert change["component"]["state"] == "Active"
     assert change["component"]["status"] == "Active"
+
+
+def test_itsm_enable_all_requires_confirmation_and_leaves_unrelated_topics_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    inactive = {
+        "ServiceNowITSMCreateTicket",
+        "ServiceNowITSMSystemCreateTicket",
+    }
+    components = _profile_components(
+        snow.ITSM_PROFILE,
+        inactive_suffixes=inactive,
+    )
+    unrelated = components["botComponentChanges"][-2]["component"]
+    updated_ids: list[str] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(
+            self,
+            _agent_id: str,
+            payload: dict,
+        ) -> dict:
+            for update in payload["botComponentChanges"]:
+                updated = update["component"]
+                updated_ids.append(updated["id"])
+                for existing in components["botComponentChanges"]:
+                    if existing["component"].get("id") == updated["id"]:
+                        existing["component"] = updated
+                        break
+            components["changeToken"] = "token-2"
+            return {}
+
+    context = {
+        "agent": {
+            "id": IT_AGENT_ID,
+            "schema_name": snow.IT_SCHEMA_NAME,
+        },
+        "environment": {"id": ENVIRONMENT_ID, "ring": "test"},
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(snow.ServiceNowConnectError, match="confirmation"):
+        snow.enable_all_servicenow_topics(context, confirmed=False)
+
+    result = snow.enable_all_servicenow_topics(context, confirmed=True)
+
+    assert result["before"] == {"total": 15, "active": 13, "inactive": 2}
+    assert result["after"] == {"total": 15, "active": 15, "inactive": 0}
+    assert len(updated_ids) == 2
+    assert unrelated["id"] not in updated_ids
+    assert unrelated["state"] == "Inactive"
+    assert unrelated["status"] == "Inactive"
 
 
 def test_enable_all_topics_refetches_and_verifies(
@@ -458,7 +622,175 @@ def test_load_context_requires_matching_schema_v4_hr_agent(
     result = snow.load_context(tmp_path)
 
     assert result["agent"]["id"] == AGENT_ID
+    assert result["profile"] == snow.HRSD_PROFILE
     assert result["snapshotPath"] == tmp_path / snapshot
+
+
+def test_load_context_selects_itsm_profile(
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+    setup_path = tmp_path / snow.SETUP_STATE
+    config_path = tmp_path / snow.ACTIVE_CONFIG
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    canonical = setup["agents"][AGENT_ID]
+    canonical["agent"]["schema_name"] = snow.IT_SCHEMA_NAME
+    canonical["agent"]["workspace_slug"] = "employee-self-service-it"
+    canonical["workspace"]["folder"] = (
+        "workspace/agents/employee-self-service-it"
+    )
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["activeAgent"] = "employee-self-service-it"
+    config["agents"][0]["slug"] = "employee-self-service-it"
+    config["agents"][0]["agentBuilderChangeSetPath"] = (
+        "workspace/agents/employee-self-service-it/"
+        ".agentbuilder/components.json"
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    result = snow.load_context(tmp_path)
+
+    assert result["profile"] == snow.ITSM_PROFILE
+    assert result["agent"]["schema_name"] == snow.IT_SCHEMA_NAME
+
+
+def test_agent_selection_lists_live_hr_and_it_without_changing_active_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+    setup_path = tmp_path / snow.SETUP_STATE
+    config_path = tmp_path / snow.ACTIVE_CONFIG
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    hr = setup["agents"][AGENT_ID]
+    it = json.loads(json.dumps(hr))
+    it["agent"].update(
+        {
+            "id": IT_AGENT_ID,
+            "schema_name": snow.IT_SCHEMA_NAME,
+            "workspace_slug": "employee-self-service-it",
+        }
+    )
+    it["workspace"]["folder"] = "workspace/agents/employee-self-service-it"
+    setup["agents"][IT_AGENT_ID] = it
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["agents"].append(
+        {
+            "slug": "employee-self-service-it",
+            "botId": IT_AGENT_ID,
+            "agentBuilderChangeSetPath": (
+                "workspace/agents/employee-self-service-it/"
+                ".agentbuilder/components.json"
+            ),
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    original_config = config_path.read_text(encoding="utf-8")
+
+    state_path = tmp_path / snow._state_path(AGENT_ID)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "agentConnection": {"makerAttested": True},
+                "steps": {"agentConnection": "done"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeAgentBuilder:
+        def list_agents(self) -> list[dict]:
+            return [
+                {
+                    "botId": IT_AGENT_ID,
+                    "displayName": "Employee Self-Service IT",
+                },
+                {
+                    "botId": AGENT_ID,
+                    "displayName": "Employee Self-Service HR",
+                },
+                {
+                    "botId": "00000000-0000-4000-8000-000000007777",
+                    "displayName": "Unrelated Agent",
+                },
+            ]
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    choices = snow.list_agent_choices(tmp_path)
+    selected = snow.load_context(tmp_path, agent_id=IT_AGENT_ID)
+
+    assert choices["agents"] == [
+        {
+            "id": AGENT_ID,
+            "name": "Employee Self-Service HR",
+            "product": "ServiceNow HRSD",
+            "status": "connected-revalidation-required",
+            "selectable": True,
+        },
+        {
+            "id": IT_AGENT_ID,
+            "name": "Employee Self-Service IT",
+            "product": "ServiceNow ITSM",
+            "status": "ready",
+            "selectable": True,
+        },
+    ]
+    assert selected["agent"]["id"] == IT_AGENT_ID
+    assert selected["profile"] == snow.ITSM_PROFILE
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_agent_selection_shows_unset_up_live_ess_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+
+    class FakeAgentBuilder:
+        def list_agents(self) -> list[dict]:
+            return [
+                {
+                    "botId": IT_AGENT_ID,
+                    "displayName": "Employee Self-Service IT",
+                }
+            ]
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.list_agent_choices(tmp_path)
+
+    assert result["agents"][0]["status"] == "setup-required"
+    assert result["agents"][0]["selectable"] is False
+
+
+def test_load_context_rejects_unsupported_da_product(
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+    setup_path = tmp_path / snow.SETUP_STATE
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    setup["agents"][AGENT_ID]["agent"]["schema_name"] = "gptagent_custom"
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="supports only Employee Self-Service",
+    ):
+        snow.load_context(tmp_path)
 
 
 def test_load_context_rejects_incomplete_foundation_step(
@@ -1002,3 +1334,142 @@ def test_record_test_attestation_persists_result(
     assert result["result"] == "pass"
     assert state["test"]["prompt"] == "Show my HR cases"
     assert state["steps"]["test"] == "done"
+
+
+def test_itsm_inspect_discovers_connection_and_persists_agent_scoped_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _profile_components(snow.ITSM_PROFILE)
+
+    class FakeAgentBuilder:
+        def fetch_components(self, agent_id: str) -> dict:
+            assert agent_id == IT_AGENT_ID
+            return components
+
+    class FakeConnectivity:
+        def get_connector(self) -> dict:
+            return {
+                "properties": {
+                    "displayName": "ServiceNow",
+                    "tier": "Premium",
+                    "isCustomApi": False,
+                }
+            }
+
+        def list_connections(self) -> list[dict]:
+            return [
+                {
+                    "name": CONNECTION_ID.replace("-", ""),
+                    "properties": {
+                        "displayName": "ITSM maker connection",
+                        "statuses": [
+                            {"target": "token", "status": "Connected"}
+                        ],
+                        "connectionParametersSet": {
+                            "name": "entraIDUserLogin",
+                        },
+                    },
+                }
+            ]
+
+    context = {
+        "agent": {
+            "id": IT_AGENT_ID,
+            "schema_name": snow.IT_SCHEMA_NAME,
+        },
+        "environment": {"id": ENVIRONMENT_ID, "ring": "test"},
+    }
+    monkeypatch.chdir(tmp_path)
+    state_path = tmp_path / snow._state_path(IT_AGENT_ID)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "agentConnection": {
+                    "connectionId": CONNECTION_ID.replace("-", ""),
+                    "makerAttested": True,
+                },
+                "steps": {"agentConnection": "done"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    result = snow.inspect(context)
+
+    assert result["profile"]["key"] == "itsm"
+    assert result["progress"]["topics"]["status"] == "done"
+    assert result["progress"]["credential"]["status"] == "done"
+    assert "prior maker attestation" in (
+        result["progress"]["agentConnection"]["message"]
+    )
+    assert result["components"]["serviceNowInvokeConnectorActionCount"] == 4
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["profileKey"] == "itsm"
+    assert state["agentId"] == IT_AGENT_ID
+    assert not (
+        tmp_path
+        / ".local"
+        / "connect"
+        / "servicenow"
+        / "agents"
+        / AGENT_ID
+        / "state.json"
+    ).exists()
+
+def test_itsm_publish_requires_confirmation_and_does_not_mutate_components(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _profile_components(snow.ITSM_PROFILE)
+    calls: list[str] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, agent_id: str) -> dict:
+            assert agent_id == IT_AGENT_ID
+            calls.append("fetch")
+            return components
+
+        def publish_agent(self, agent_id: str) -> dict:
+            assert agent_id == IT_AGENT_ID
+            calls.append("publish")
+            return {"operationId": "publish-operation"}
+
+        def update_components(self, _agent_id: str, _payload: dict) -> dict:
+            raise AssertionError("publish must not update topic components")
+
+    context = {
+        "agent": {
+            "id": IT_AGENT_ID,
+            "schema_name": snow.IT_SCHEMA_NAME,
+        },
+        "environment": {"id": ENVIRONMENT_ID, "ring": "test"},
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(snow.ServiceNowConnectError, match="confirmation"):
+        snow.publish(context, confirmed=False)
+    assert calls == []
+
+    result = snow.publish(context, confirmed=True)
+
+    assert calls == ["fetch", "publish"]
+    assert result["profileKey"] == "itsm"
+    assert result["steps"]["publish"] == "done"
+    assert result["publish"]["responseKeys"] == ["operationId"]

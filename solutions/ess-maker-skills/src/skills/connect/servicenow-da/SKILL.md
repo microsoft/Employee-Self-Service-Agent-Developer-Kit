@@ -1,9 +1,39 @@
-# Connect ServiceNow HRSD to a DA-GA HR Agent
+# Connect ServiceNow to a supported DA-GA ESS Agent
 
-This prototype uses the DA foundation handoff, MinimalBot Components, and the
-Power Platform Connectivity API. It does not query Dataverse or activate cloud
-flows. In the GA HR package, ServiceNow HRSD topics use direct connector
-actions; the packaged flows are Workday-only.
+This shared workflow uses the DA foundation handoff, MinimalBot Components,
+and the Power Platform Connectivity API. It does not query Dataverse or
+activate cloud flows. It selects an explicit product profile from the chosen
+agent schema:
+
+- Employee Self-Service (HR) -> ServiceNow HRSD
+- Employee Self-Service (IT) -> ServiceNow ITSM
+
+Both packaged ServiceNow profiles use direct connector actions. Reuse this
+workflow for both products; do not create a second ITSM-specific workflow.
+
+## Agent selection
+
+At the start of every `/connect servicenow` invocation, run:
+
+```text
+python scripts/connect_servicenow_da.py list-agents
+```
+
+Show each returned agent's name, ID, product, and concise status. Ask the maker
+to choose exactly one agent for this invocation. Agents with
+`status: setup-required` are not selectable; tell the maker to run `/setup`
+for that agent first.
+
+Store the chosen ID as `SELECTED_AGENT_ID` for this invocation only. Pass it to
+every command as `--agent-id <SELECTED_AGENT_ID>`. Do not change
+`.local/config.json` or its `activeAgent`.
+
+If an agent reports `connected-revalidation-required`, explain that local
+per-agent state indicates a prior connection, then run the normal live
+`inspect` before calling it connected. When live inspection confirms the
+attested physical credential is still Connected, tell the maker this agent is
+already connected and suggest any other listed selectable ESS agent that is
+not connected.
 
 ## Resume and interaction contract
 
@@ -54,19 +84,20 @@ Skip messages:
 Run:
 
 ```text
-python scripts/connect_servicenow_da.py inspect
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> inspect
 ```
 
 If setup is not schema v4, has not established the environment, exact editable
-Dev agent, and local workspace, or is not the HR agent, show the returned error
-and stop. Canonical setup uses `authoring_ready` for this foundation boundary.
-Do not require aggregate `connect_ready`: setup can report the ServiceNow
-connection as not configured, and this workflow exists to resolve that
-condition.
+Dev agent, and local workspace, or the selected agent is not a supported HR/IT
+product, show the returned error and stop. Canonical setup uses
+`authoring_ready` for this foundation boundary. Do not require aggregate
+`connect_ready`: setup can report the ServiceNow connection as not configured,
+and this workflow exists to resolve that condition.
 
 Summarize:
 
-- ServiceNow topic count and active count.
+- The selected `profile.productName` and `profile.agentDisplayName`.
+- ServiceNow official topic count and active count.
 - ServiceNow connector-action count.
 - Physical connection count.
 - Whether the currently referenced connection exists and is Connected.
@@ -81,17 +112,18 @@ agent binding.
 If `progress.topics.status` is `done`, print the Topics skip message and
 continue to step 3.
 
-Otherwise show every ServiceNow HRSD topic with its current `Active` or
-`Inactive` state. Summarize the total, active, and inactive counts, then ask:
+Otherwise show every official topic recognized by the selected ServiceNow
+product profile with its current `Active` or `Inactive` state. Summarize the
+total, active, and inactive counts, then ask:
 
-> There are {INACTIVE_COUNT} inactive ServiceNow HRSD topics. Would you like
-> to enable all ServiceNow HRSD topics?
+> There are {INACTIVE_COUNT} inactive {PRODUCT_NAME} topics. Would you like
+> to enable all {PRODUCT_NAME} topics?
 
 If the maker says no, do not mutate any topic or continue to physical
 connection creation. Record the choice and unchanged counts:
 
 ```text
-python scripts/connect_servicenow_da.py record-topic-choice --choice keep-current
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> record-topic-choice --choice keep-current
 ```
 
 Report that the workflow is paused by the maker's topic choice. Do not call it
@@ -101,17 +133,20 @@ If the maker says yes, show the exact inactive topic names one more time and
 ask for final confirmation. After confirmation, run:
 
 ```text
-python scripts/connect_servicenow_da.py enable-all-topics --yes
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> enable-all-topics --yes
 ```
 
 The command sends `BotComponentUpdate` entries containing the complete fetched
 `DialogComponent` objects, preserves identity, version, schema, parent
 metadata, and dialog graphs, and changes `state` and `status` together. It
-refetches and requires every ServiceNow HRSD topic to be `Active`.
+refetches and requires every topic selected by the active HRSD/ITSM profile to
+be `Active`.
 
-Do not include Workday or other integration topics. Do not publish during topic
-preparation. Record the before counts, customer choice, changed topic IDs and
-names, and verified after counts.
+Only mutate the exact Microsoft official topic suffixes in the selected
+profile. Do not include Workday, the other ServiceNow product, or customer
+custom topics that merely share the product prefix. Do not publish during
+topic preparation. Record the before counts, customer choice, changed topic
+IDs and names, and verified after counts.
 
 ## 3. Guide the maker to create the physical connection
 
@@ -123,7 +158,7 @@ use.
 Otherwise run:
 
 ```powershell
-python scripts\connect_servicenow_da.py create
+python scripts\connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> create
 ```
 
 This command is read-only. It derives the instance name and resource URI from
@@ -144,7 +179,7 @@ When all required values are known, the command returns the exact values plus
 these maker steps:
 
 1. Open Copilot Studio and select the target environment.
-2. Open the Employee Self-Service HR agent.
+2. Open the agent named by `profile.agentDisplayName`.
 3. Select **Settings** -> **Connection settings**.
 4. Find ServiceNow and select the status link.
 5. Open the connection configuration and select **Create new connection**.
@@ -160,7 +195,7 @@ connection-create API.
 After the maker confirms, rerun:
 
 ```powershell
-python scripts\connect_servicenow_da.py inspect
+python scripts\connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> inspect
 ```
 
 If exactly one matching Connected Entra user-login connection is present, show
@@ -196,7 +231,7 @@ manual action and independently verify that the selected physical connection
 is still Connected:
 
 ```text
-python scripts/connect_servicenow_da.py record-agent-connection --connection-id <id>
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> record-agent-connection --connection-id <id>
 ```
 
 This command records non-secret maker attestation and physical health evidence
@@ -229,8 +264,8 @@ No supported automation API has been proven for this conditional step.
 After the maker answers, persist the observed status:
 
 ```text
-python scripts/connect_servicenow_da.py record-parameter-sharing --status enabled
-python scripts/connect_servicenow_da.py record-parameter-sharing --status not-exposed
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> record-parameter-sharing --status enabled
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> record-parameter-sharing --status not-exposed
 ```
 
 Run only the command matching the maker's answer.
@@ -244,18 +279,18 @@ Otherwise show the pending ServiceNow changes. Publish only after explicit
 confirmation in the current question:
 
 ```text
-python scripts/connect_servicenow_da.py publish --yes
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> publish --yes
 ```
 
 ## 7. Test
 
-Ask the maker to run one HRSD request in the Copilot Studio Test pane. This is
-a maker-confirmed step and must be asked during every validation because no API
-can prove the current functional result. Record
+Ask the maker to run `profile.testPrompt` in the Copilot Studio Test pane.
+This is a maker-confirmed step and must be asked during every validation
+because no API can prove the current functional result. Record
 the prompt and pass/fail attestation in the connector-owned state:
 
 ```text
-python scripts/connect_servicenow_da.py record-test --prompt "<prompt>" --result <pass-or-fail> --details "<optional details>"
+python scripts/connect_servicenow_da.py --agent-id <SELECTED_AGENT_ID> record-test --prompt "<prompt>" --result <pass-or-fail> --details "<optional details>"
 ```
 
 Do not claim success from connection health alone.
