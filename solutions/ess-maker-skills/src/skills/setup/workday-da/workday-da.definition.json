@@ -122,6 +122,78 @@
       "DA5.1"
     ]
   },
+  "customerMilestones": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "description": "Verify the selected agent, environment, Dataverse, and Workday extension package.",
+      "stepIds": [
+        "DA1.1"
+      ]
+    },
+    {
+      "id": "microsoft-entra",
+      "title": "Microsoft Entra",
+      "description": "Configure and verify the Workday sign-in application.",
+      "stepIds": [
+        "DA2.1",
+        "DA2.2",
+        "DA2.3",
+        "DA2.4",
+        "DA2.5",
+        "DA2.6",
+        "DA2.7"
+      ]
+    },
+    {
+      "id": "workday-administrator",
+      "title": "Workday administrator",
+      "description": "Complete the Workday tenant security, certificate, API client, and employee sign-in configuration.",
+      "stepIds": [
+        "DA3.1",
+        "DA3.2",
+        "DA3.3",
+        "DA3.4"
+      ]
+    },
+    {
+      "id": "connections",
+      "title": "Connections",
+      "description": "Create the Workday and Microsoft Dataverse connections.",
+      "stepIds": [
+        "DA4.1",
+        "DA4.2"
+      ]
+    },
+    {
+      "id": "runtime-configuration",
+      "title": "Runtime configuration",
+      "description": "Bind the connections, activate flows, authorize the agent, and configure employee context and topics.",
+      "stepIds": [
+        "DA4.3",
+        "DA4.4",
+        "DA4.5",
+        "DA4.6",
+        "DA4.7"
+      ]
+    },
+    {
+      "id": "network-readiness",
+      "title": "Network readiness",
+      "description": "Review Workday host restrictions only when the organization applies connector or tenant network controls.",
+      "stepIds": [
+        "DA4.8"
+      ]
+    },
+    {
+      "id": "employee-validation",
+      "title": "Employee validation",
+      "description": "Publish and validate a read-only Workday scenario with a non-maker employee.",
+      "stepIds": [
+        "DA5.1"
+      ]
+    }
+  ],
   "steps": [
     {
       "id": "DA1.1",
@@ -566,16 +638,16 @@
     {
       "id": "DA4.8",
       "phase": 4,
-      "title": "Allow Workday through the firewall",
-      "description": "Allow the Workday REST and SOAP hosts used by the Power Platform managed connectors.",
+      "title": "Review network restrictions",
+      "description": "Review the Workday REST and SOAP hosts only when organizational network controls restrict managed-connector access.",
       "role": "InfoSec/IT",
       "owner": "da-4",
       "automation": "no",
       "automationLabel": "No",
       "checkpoints": [],
       "checkpointLabel": "n/a",
-      "gate": "attest",
-      "gateLabel": "attest",
+      "gate": "advisory",
+      "gateLabel": "advisory",
       "dependsOn": [
         "DA3.2"
       ],

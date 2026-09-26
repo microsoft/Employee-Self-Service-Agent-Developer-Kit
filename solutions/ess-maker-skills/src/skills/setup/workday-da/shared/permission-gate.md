@@ -46,7 +46,7 @@ directory:
 | Power Platform Admin | `programmatic` | Power Platform admin API |
 | Dataverse maker / system roles | `programmatic` | Dataverse security-role query |
 | **Workday Administrator** | `attested` | No directory here → explicit named-role attestation + captured evidence |
-| **InfoSec / IT** (firewall allowlisting) | `attested` | No directory here → explicit named-role attestation + captured evidence |
+| **InfoSec / IT** (conditional network remediation) | Not a setup gate | Involve only when organizational controls or runtime validation identify a Workday host restriction |
 
 The calling file picks `GATE_MODE` from this table. **Never** silently pass an
 attested role — always require the explicit confirmation in section G.2.

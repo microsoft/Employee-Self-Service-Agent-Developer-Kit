@@ -111,8 +111,8 @@ On failure, leave DA5.1 `in-progress`. Run
 `python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`
 to recheck the environment and DA package. That scope does not prove the live
 connection, flow authorization, employee-context wiring, or topic execution,
-so also revisit the DA4 connection, flow, authorization, topic, and firewall
-evidence. If connection parameters recently changed, reconnect the Workday
+so also revisit the DA4 connection, flow, authorization, topic, and conditional
+network review. If connection parameters recently changed, reconnect the Workday
 connection and retry with a fresh conversation or test user.
 
 ---

@@ -109,9 +109,14 @@ Read `workspace/flightcheck/results.json` — the run that led here wrote it. It
 { "results": [ { "checkpoint_id": "...", "description": "...", "status": "..." }, ... ] }
 ```
 
-Render a GitHub-flavoured markdown table in chat, **one row per entry** in
-`results`, using `description` verbatim for **Check** and `status` verbatim for
-**Status**:
+If every entry is `Passed`, do not render a result table. Show one concise
+sentence that the current action was verified, using the calling playbook's
+customer-facing action name. Successful internal checks are evidence, not a
+second customer checklist.
+
+When any entry is not `Passed`, render a GitHub-flavoured markdown table in
+chat, **one row per entry** in `results`, using `description` verbatim for
+**Check** and `status` verbatim for **Status**:
 
 ```
 | Check | Status |
@@ -124,7 +129,7 @@ Rules:
   identifier — there is no ID column; `description` is the only label shown.
 - If a `description` or `status` contains a `|`, escape it as `\|`; collapse any
   newline to a single space.
-- If `results` is empty, render **no** table.
+- If `results` is empty, or every result is `Passed`, render **no** table.
 - This table is **in addition to** the row's own **Message** blocks and the
   manual verification steps below (see U.0a) — it does not replace or alter them.
 - Draw the table yourself in chat. Do not mention `results.json`, file paths, or

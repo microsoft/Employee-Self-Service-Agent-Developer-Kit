@@ -100,8 +100,8 @@ express; all items start `pending`.
   <!-- id: DA4.6 | role: Power Platform Administrator | skill: da-4 | automatable: Yes | checkpoints: authorization script verification | gate: prog | status: pending -->
 - [ ] **Configure employee context and topics** — Use the Workday package's V2 signed-in-user context and enable the Workday topics selected for this agent.
   <!-- id: DA4.7 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: WD-DA-CTX-001 | gate: prog user-context + manual topics | status: pending -->
-- [ ] **Allow Workday through the firewall** — Allow the Workday REST and SOAP hosts used by the Power Platform managed connectors.
-  <!-- id: DA4.8 | role: InfoSec/IT | skill: da-4 | automatable: No | checkpoints: n/a | gate: attest | status: pending -->
+- [ ] **Review network restrictions** — Review the Workday REST and SOAP hosts only when organizational network controls restrict managed-connector access.
+  <!-- id: DA4.8 | role: InfoSec/IT | skill: da-4 | automatable: No | checkpoints: n/a | gate: advisory | status: pending -->
 
 ### 5. Validate Workday readiness
 

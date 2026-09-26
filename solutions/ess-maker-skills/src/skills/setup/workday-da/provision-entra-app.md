@@ -42,25 +42,25 @@ Run any one with:
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
 
-**After every checkpoint run, show its result in chat first.** As soon as a
-`--checkpoint` run returns, render the result to the user per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
-its full verification steps — **before** you show any later **Message** or ask any
-attestation question. Single-checkpoint runs never open the HTML report, so this
-in-chat render is the only place the user sees the manual steps; never ask a user
-to attest to steps they have not been shown.
+**After every checkpoint run, surface the customer-relevant result first.**
+Follow [`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a:
+show one concise verification sentence when everything passed, and show the
+result table plus full instructions for any `MANUAL`, `Warning`,
+`NotConfigured`, or failed outcome before a later message or attestation.
+Single-checkpoint runs never open the HTML report, so manual instructions must
+still appear in chat.
 
 **Build order (row order now matches it).** Row **DA2.1** — the SSO gallery app —
 is the foundation every other row configures, so it is built first and the rows
 are numbered in build order (DA2.1 → DA2.7). Each section below is titled by the
 checklist row it completes. **On every resume, always re-run DA2.0 (role gate),
-DA2.0b (Workday tenant URL) and DA2.1 (ensure the app exists) first — all
-idempotent — before working the first incomplete row.** This is required, not
-cosmetic: DA2.2–DA2.4 configure the app through the in-memory
+DA2.0b (Workday tenant URL), DA2.0c (one scoped change approval), and DA2.1
+(ensure the app exists) first — all idempotent except the explicit approval —
+before working the first incomplete row.** This is required, not cosmetic:
+DA2.2–DA2.4 configure the app through the in-memory
 `WD_ENTRA_APP_OBJECT_ID` that only DA2.1 populates, so entering directly at a
 later row after a resume would leave it undefined. After re-running DA2.0, DA2.0b
-and DA2.1, skip any row whose `setupStatus` state is already `done`.
+through DA2.1, skip any row whose `setupStatus` state is already `done`.
 
 ---
 
@@ -203,6 +203,44 @@ derived.
 
 **If the user leaves it blank**, record nothing and continue — DA2.1 will
 identify the app by display name and ask you to choose if more than one matches.
+
+---
+
+## DA2.0c — Approve the Microsoft Entra change plan
+
+Before the first incomplete DA2 mutation, show one scoped plan covering all
+remaining Microsoft Entra work. Do not ask for separate approval before each
+Graph or Azure CLI operation.
+
+**Message:**
+
+I am ready to configure the selected Workday application in Microsoft Entra.
+The remaining plan may:
+
+- create or reuse the Workday enterprise application;
+- configure its SAML identifier, reply URL, and signing certificate;
+- expose the Workday connector permission and required Microsoft Graph
+  permissions;
+- grant or verify administrator consent;
+- configure user assignment and the signed-in employee identifier; and
+- verify the application belongs to the selected Microsoft Entra tenant.
+
+I will apply changes only to the selected tenant and the exact Workday
+application discovered or created during this plan, verify every supported
+change after it is made, and stop on an ambiguous target. Continue with this
+plan?
+
+**End message.**
+
+Use `vscode_askQuestions` with **Continue** and **Cancel** options. Do not
+preselect an answer. **Continue** approves the remaining DA2 operations for
+the current tenant and selected application during this invocation. **Cancel**
+pauses without mutation.
+
+Show later preview or verification details only when they identify an
+unexpected target, a warning, or a failure. Do not request another approval
+for a step already covered by this plan. If the resolved tenant or application
+changes, discard the approval and return here.
 
 ---
 

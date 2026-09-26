@@ -83,6 +83,28 @@ def test_initialize_creates_complete_versioned_state_and_checklist(tmp_path) -> 
     )
 
 
+def test_customer_status_projects_internal_rows_into_seven_milestones(
+    tmp_path,
+) -> None:
+    store = WorkdayDAStateStore(tmp_path)
+    store.initialize()
+
+    initial = store.customer_status()
+
+    assert len(initial["milestones"]) == 7
+    assert initial["nextMilestoneId"] == "preflight"
+    assert {milestone["state"] for milestone in initial["milestones"]} == {
+        "pending"
+    }
+
+    store.update_row("DA1.1", checkpoint_result="Passed")
+    progressed = store.customer_status()
+
+    assert progressed["milestones"][0]["state"] == "done"
+    assert progressed["milestones"][1]["state"] == "pending"
+    assert progressed["nextMilestoneId"] == "microsoft-entra"
+
+
 def test_initialize_moves_legacy_checklist_without_rewriting_it(tmp_path) -> None:
     legacy = tmp_path / ".local/setup/workday-da/tasks.md"
     legacy.parent.mkdir(parents=True)

@@ -67,6 +67,20 @@ def test_default_definition_is_valid_and_complete() -> None:
     assert definition["definitionVersion"] == 1
     assert definition["stateSchemaVersion"] == 1
     assert len(definition["steps"]) == 21
+    assert [milestone["id"] for milestone in definition["customerMilestones"]] == [
+        "preflight",
+        "microsoft-entra",
+        "workday-administrator",
+        "connections",
+        "runtime-configuration",
+        "network-readiness",
+        "employee-validation",
+    ]
+    assert {
+        step_id
+        for milestone in definition["customerMilestones"]
+        for step_id in milestone["stepIds"]
+    } == {step["id"] for step in definition["steps"]}
     assert definition["packages"]["runtime"]["flowNames"] == [
         "ESS Workday Runtime References",
         "ESS Workday Runtime REST Execution",
@@ -101,6 +115,27 @@ def test_definition_rejects_unknown_dependency() -> None:
     invalid["steps"][0]["dependsOn"] = ["DA5.9"]
 
     with pytest.raises(WorkdayDAContractError, match="unknown dependency DA5.9"):
+        validate_definition(invalid)
+
+
+def test_definition_rejects_duplicate_customer_milestone_assignment() -> None:
+    definition = load_definition()
+    invalid = deepcopy(definition)
+    invalid["customerMilestones"][1]["stepIds"].append("DA1.1")
+
+    with pytest.raises(
+        WorkdayDAContractError,
+        match="assigned to multiple customer milestones",
+    ):
+        validate_definition(invalid)
+
+
+def test_definition_requires_every_step_in_a_customer_milestone() -> None:
+    definition = load_definition()
+    invalid = deepcopy(definition)
+    invalid["customerMilestones"][4]["stepIds"].remove("DA4.7")
+
+    with pytest.raises(WorkdayDAContractError, match="do not cover steps: DA4.7"):
         validate_definition(invalid)
 
 

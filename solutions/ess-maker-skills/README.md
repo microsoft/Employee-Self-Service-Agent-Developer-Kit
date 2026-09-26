@@ -271,10 +271,11 @@ integration with the ESS IT Agent is not supported in this release.
 
 **Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. On the legacy path, if ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
 
-**Test and production deployment:** `/connect workday` is the development
-environment experience. After the ESS DA HR agent and Workday package are
-deployed to Test or Production, an administrator runs the post-deployment
-Dataverse authorization script for that target environment. See
+**Test and production deployment:** `/connect workday` uses the same readiness
+gates for whichever supported environment is selected. When the ESS DA HR
+agent and Workday package are moved through managed ALM, an administrator must
+also run the post-deployment Dataverse authorization script in each target
+environment. See
 [`scripts/alm/README.md`](scripts/alm/README.md) for the required parameters,
 safe preview, execution, and verification procedure.
 
@@ -286,11 +287,11 @@ end-to-end Workday scenario. Settings without a reliable DA-scoped API require
 explicit maker or administrator confirmation rather than being reported as
 automatically verified.
 
-At the beginning of the experience, the skill presents the complete setup plan
-and identifies when an Entra administrator, Workday administrator, Power
-Platform/Dataverse administrator, InfoSec administrator, or Workday test user
-is required. This lets the maker arrange the required participants before the
-setup reaches a permission-dependent step.
+The skill presents seven customer milestones—preflight, Microsoft Entra,
+Workday administrator, connections, runtime configuration, conditional network
+readiness, and employee validation—while retaining detailed technical checks
+internally. It shows the administrator needed for the current milestone rather
+than repeating the full technical checklist on every resume.
 
 **What you can build after connecting:**
 - Look up employee information, compensation, service anniversary, cost center

@@ -386,6 +386,47 @@ class WorkdayDAStateStore:
         self._validate_canonical_config(config)
         return config
 
+    def customer_status(self) -> dict[str, Any]:
+        """Project internal step state into the concise customer journey."""
+        config = self.validate()
+        milestones: list[dict[str, Any]] = []
+        for milestone in self.definition["customerMilestones"]:
+            step_states = [
+                config["setupStatus"][step_id]["state"]
+                for step_id in milestone["stepIds"]
+            ]
+            if all(state == "done" for state in step_states):
+                state = "done"
+            elif any(state == "blocked" for state in step_states):
+                state = "blocked"
+            elif any(state != "pending" for state in step_states):
+                state = "in-progress"
+            else:
+                state = "pending"
+            milestones.append(
+                {
+                    "id": milestone["id"],
+                    "title": milestone["title"],
+                    "description": milestone["description"],
+                    "state": state,
+                }
+            )
+        next_milestone = next(
+            (
+                milestone
+                for milestone in milestones
+                if milestone["state"] != "done"
+            ),
+            None,
+        )
+        return {
+            "status": config["status"],
+            "milestones": milestones,
+            "nextMilestoneId": (
+                next_milestone["id"] if next_milestone is not None else None
+            ),
+        }
+
     def _normalize_result(self, result: str | None) -> str | None:
         if result is None:
             return None
@@ -803,6 +844,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("initialize")
     subparsers.add_parser("reconcile")
     subparsers.add_parser("validate")
+    subparsers.add_parser("customer-status")
     subparsers.add_parser("revalidation-plan")
 
     update = subparsers.add_parser("update-row")
@@ -838,6 +880,9 @@ def main() -> int:
             config = store.reconcile()
         elif args.command == "validate":
             config = store.validate()
+        elif args.command == "customer-status":
+            print(json.dumps(store.customer_status(), sort_keys=True))
+            return 0
         elif args.command == "revalidation-plan":
             plan = store.revalidation_plan()
             print(json.dumps(plan["actions"], sort_keys=True))

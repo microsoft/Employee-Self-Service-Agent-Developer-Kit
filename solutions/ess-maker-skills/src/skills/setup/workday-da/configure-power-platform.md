@@ -2,9 +2,10 @@
 # DA-4 — Configure Power Platform and Agent Integration
 
 Role: **Environment Maker**, with a **Power Platform Administrator** for
-bot-to-flow authorization and **InfoSec/IT** for network allowlisting. This step
-applies the Workday and Entra values captured earlier to the installed ESS DA HR
-extension. It owns checklist rows **DA4.1 through DA4.8**.
+bot-to-flow authorization. Involve **InfoSec/IT** only when organizational
+network controls restrict the Workday hosts. This step applies the Workday and
+Entra values captured earlier to the installed ESS DA HR extension. It owns
+checklist rows **DA4.1 through DA4.8**.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim. Do
 not claim that a manual portal setting was verified automatically.
@@ -104,6 +105,38 @@ bind both references first, then turn on and verify the Workday flows.
 
 **End message.**
 
+## DA4.2a — Approve the remaining runtime changes
+
+When any of DA4.3, DA4.4, DA4.6, or the programmatic UserContext portion of
+DA4.7 remains incomplete, prepare one scoped automation plan for the current
+environment and active agent.
+
+**Message:**
+
+The two connections are ready. I can now complete the supported runtime
+configuration for this environment:
+
+- bind the Workday and Dataverse connection references;
+- turn on the reviewed Workday cloud flows;
+- authorize this agent to use those flows; and
+- connect the employee-context setup topic to Workday User Context V2.
+
+Each operation will run a read-only preview first, apply only to the selected
+environment and agent, and verify the result. Topic selection and connecting
+the Workday flows in Copilot Studio remain manual. Continue with this runtime
+plan?
+
+**End message.**
+
+Use `vscode_askQuestions` with **Continue** and **Cancel** options. Do not
+preselect an answer. **Continue** approves all remaining helper operations in
+the listed scope for this invocation. **Cancel** pauses without mutation.
+
+Show each helper's preview target names, but do not ask for another approval
+when they match the approved environment, agent, connections, and reviewed
+flow catalog. If any target or operation differs, stop and return here with a
+new consolidated plan.
+
 ## DA4.3 — Bind the extension connections
 
 Use the checked-in binding helper:
@@ -127,9 +160,10 @@ ambiguous. If multiple connected connections exist for a connector, show their
 safe display names and ask the maker which one to use, then rerun the preview
 with `--workday-connection-id` and/or `--dataverse-connection-id`.
 
-Show the `WORKDAY_DA_BINDING_PLAN_JSON` target display names and obtain
-approval. Then run the identical command with `--apply`. Do not translate or
-replace the helper with ad hoc PATCH calls.
+Show the `WORKDAY_DA_BINDING_PLAN_JSON` target display names. When they match
+the approved DA4.2a scope, run the identical command with `--apply` without a
+second approval. Do not translate or replace the helper with ad hoc PATCH
+calls.
 
 The apply run must emit `WORKDAY_DA_BINDING_APPLIED_JSON`, report
 `"verified": true`, and post-read:
@@ -170,9 +204,10 @@ python scripts/activate_workday_da_flows.py `
 
 The helper fails closed when either runtime reference is unbound, a reviewed
 flow is missing or duplicated, or a matched record is not a cloud flow. Show
-the `WORKDAY_DA_FLOW_ACTIVATION_PLAN_JSON` actions and obtain approval before
-running the identical command with `--apply`. Do not replace the helper with
-an ad hoc Dataverse PATCH.
+the `WORKDAY_DA_FLOW_ACTIVATION_PLAN_JSON` actions. When they match the
+approved DA4.2a scope and reviewed catalog, run the identical command with
+`--apply` without a second approval. Do not replace the helper with an ad hoc
+Dataverse PATCH.
 
 The apply run must emit `WORKDAY_DA_FLOWS_ACTIVATED_JSON` and report
 `"verified": true`. If the selected package has no reviewed flow catalog, show:
@@ -311,9 +346,9 @@ delegated-authorization and team lookups documented by the script:
   require administrator remediation. The script also fails closed on these
   ambiguous records.
 
-First run the script with `-WhatIf`, show the target organization, agent, and
-flow display names, and obtain explicit approval. Then run the same command
-without `-WhatIf`.
+First run the script with `-WhatIf` and show the target organization, agent,
+and flow display names. When they match the approved DA4.2a scope, run the same
+command without `-WhatIf`; do not request another approval.
 
 The script's `-WhatIf` run may exit `1` after showing a correct `would create`
 or `would share` plan. This happens because its final verification checks for
@@ -370,7 +405,8 @@ or bare setup scaffold, reports an already-correct redirect as unchanged, and
 refuses to overwrite custom or ambiguous content.
 
 Show the `WORKDAY_DA_USER_CONTEXT_PLAN_JSON` action. If the action is
-`configure`, obtain approval and rerun the identical command with `--apply`.
+`configure` and it matches the approved DA4.2a scope, rerun the identical
+command with `--apply` without another approval.
 The apply run must emit `WORKDAY_DA_USER_CONTEXT_APPLIED_JSON`, report
 `"verified": true`, and confirm that the setup topic now redirects to the
 installed target topic's exact schema name. The helper changes draft topic
@@ -472,21 +508,25 @@ Put customer-specific behavior in separate custom topics.
 
 **End message.**
 
-## DA4.8 — Record firewall allowlisting
+## DA4.8 — Review network restrictions
 
 **Message:**
 
-Your InfoSec/IT team must allow outbound access from the Power Platform Workday
-managed connectors to these Workday hosts:
+The Workday connection uses these hosts:
 
 - REST: `{restBaseUrl host}`
 - SOAP: `{soapBaseUrl host}`
 
-Has that allowlisting been put in place for this environment?
+Most environments need no separate action. If your organization restricts
+managed-connector destinations or Workday enforces network/IP restrictions,
+share these hosts with the responsible Workday or network administrator before
+employee validation. Otherwise continue.
 
 **End message.**
 
-This is an attestation, not a local connectivity test. Record DA4.8 only after
-explicit acknowledgement and captured evidence.
+This is a non-blocking advisory. Record DA4.8 with `GATE="advisory"` after the
+message is shown. Do not request an attestation and do not block setup solely
+because no firewall change was required. If runtime validation later reports a
+network restriction, return here and show the same hosts as remediation.
 
 Return to the orchestrator.

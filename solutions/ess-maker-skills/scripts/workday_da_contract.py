@@ -184,6 +184,34 @@ def _validate_definition_semantics(document: Mapping[str, Any]) -> None:
     for step_id in step_by_id:
         visit(step_id)
 
+    milestone_ids: set[str] = set()
+    milestone_step_ids: set[str] = set()
+    for milestone in document["customerMilestones"]:
+        milestone_id = milestone["id"]
+        if milestone_id in milestone_ids:
+            raise WorkdayDAContractError(
+                f"Duplicate Workday DA customer milestone id: {milestone_id}"
+            )
+        milestone_ids.add(milestone_id)
+        for step_id in milestone["stepIds"]:
+            if step_id not in step_by_id:
+                raise WorkdayDAContractError(
+                    f"Customer milestone {milestone_id} references unknown "
+                    f"step {step_id}"
+                )
+            if step_id in milestone_step_ids:
+                raise WorkdayDAContractError(
+                    f"Workday DA step {step_id} is assigned to multiple "
+                    "customer milestones"
+                )
+            milestone_step_ids.add(step_id)
+    ungrouped_step_ids = set(step_by_id) - milestone_step_ids
+    if ungrouped_step_ids:
+        raise WorkdayDAContractError(
+            "Workday DA customer milestones do not cover steps: "
+            + ", ".join(sorted(ungrouped_step_ids))
+        )
+
     completion = document["completion"]
     final_step_id = completion["finalStepId"]
     if final_step_id not in step_by_id:

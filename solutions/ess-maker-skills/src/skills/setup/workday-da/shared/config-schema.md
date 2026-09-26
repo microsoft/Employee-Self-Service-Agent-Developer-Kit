@@ -132,9 +132,10 @@ same data.
 ## Power Platform integration state
 
 DA-4 records programmatic evidence for solution-reference binding and supported
-flow activation. Agent connection sharing, topic selection, and firewall
-allowlisting remain manual or attested until reliable DA-scoped APIs are
-available. It must not reuse CEA checkpoints as proof. DA4.6 uses programmatic
+flow activation. Agent connection sharing and topic selection remain manual
+until reliable DA-scoped APIs are available. Network restrictions are a
+non-blocking advisory unless runtime validation identifies a concrete access
+failure. DA-4 must not reuse CEA checkpoints as proof. DA4.6 uses programmatic
 evidence from the checked-in authorization script.
 
 ---

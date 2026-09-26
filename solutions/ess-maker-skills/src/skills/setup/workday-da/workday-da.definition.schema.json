@@ -16,6 +16,7 @@
     "unsupportedAgentSchemaNames",
     "failurePolicy",
     "completion",
+    "customerMilestones",
     "steps"
   ],
   "properties": {
@@ -161,6 +162,13 @@
         }
       }
     },
+    "customerMilestones": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/customerMilestone"
+      },
+      "minItems": 1
+    },
     "steps": {
       "type": "array",
       "items": {
@@ -271,6 +279,38 @@
         "packageFlavor": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "customerMilestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "description",
+        "stepIds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stepIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stepId"
+          },
+          "minItems": 1,
+          "uniqueItems": true
         }
       }
     },
