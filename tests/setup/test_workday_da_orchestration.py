@@ -95,7 +95,7 @@ def test_workday_security_changes_are_explicitly_manual_admin_actions() -> None:
     assert "The skill will not sign in to Workday" in text
     assert "normal organization-approved Workday account" in normalized
     assert "must never request or collect a Workday administrator's password" in normalized
-    assert "Do not ask a second question that repeats these fields" in normalized
+    assert "Do not ask a second question that repeats the classification" in normalized
     assert "Have your Workday administrator open" in text
 
 
@@ -111,6 +111,22 @@ def test_saml_safety_gate_allows_only_an_explicit_admin_approved_replacement() -
     assert "SAML_REPLACEMENT_APPROVED=true" in text
     assert "documented for rollback" in normalized
     assert "The skill will not overwrite it automatically" in normalized
+
+
+def test_saml_precheck_requests_only_the_minimum_provider_information() -> None:
+    text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    precheck = text[
+        text.index("## DA3.0b — Single-tenant SAML pre-gate"):
+        text.index("## DA3.0c — Upload the X.509 signing certificate")
+    ]
+
+    assert "No Identity Provider is enabled" in precheck
+    assert "Provide only its **Service Provider ID**" in precheck
+    assert "A different Identity Provider is enabled, or we're not sure" in precheck
+    assert "x509 Certificate" not in precheck
+    assert "Valid From" not in precheck
+    assert "Valid To" not in precheck
+    assert "certificate verification belongs only to DA3.0c" in precheck
 
 
 def test_connections_are_created_before_binding_and_flow_activation() -> None:

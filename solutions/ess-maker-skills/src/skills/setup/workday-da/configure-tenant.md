@@ -150,38 +150,45 @@ tenant's current sign-on configuration. The skill will not sign in to Workday
 or change these security settings.
 
 Have a Workday administrator open **Edit Tenant Setup – Security**, find
-**SAML Setup**, and provide the currently enabled Identity Provider row:
+**SAML Setup**, and tell me which description applies:
 
-- **Issuer** or identity-provider name
-- **Service Provider ID**
-- **x509 Certificate** name
-- **Valid From** date
-- **Valid To** date
+1. **No Identity Provider is enabled.**
+2. **The Microsoft Entra Identity Provider intended for this setup is
+   enabled.** Provide only its **Service Provider ID** so I can confirm it
+   matches the Entra application.
+3. **A different Identity Provider is enabled, or we're not sure.**
 
-If no Identity Provider row is enabled, reply **none**.
+Reply with **1**, **2** plus the Service Provider ID, or **3**.
 
 **End message.**
 
-Wait for the user's answer. Do not ask a second question that repeats these
-fields. Then record the answer as the pre-gate evidence
-(`SAML_ISSUER`, `SAML_SP_ID`, `SAML_CERT`).
+Wait for the user's answer and record the classification plus
+`SAML_SP_ID` when option 2 was selected. Do not request certificate names or
+validity dates here; certificate verification belongs only to DA3.0c. Do not
+ask a second question that repeats the classification or Service Provider ID.
 
 The controlled replacement path below replaces the current row with the
 Microsoft Entra application configured by this lifecycle. The skill must not
 configure direct Workday federation through Okta, Ping, or another provider;
 do not offer steps for configuring those providers.
 
-- **If the user asks to skip the read-only review or cannot provide the row
-  values**, do not treat the safety check as passed. Explain that the skill
+- **Option 1** → record that no active IdP was reported and continue.
+- **Option 2 with a Service Provider ID that exactly matches this setup's
+  `appIdUri`** → record the match and continue without replacing the
+  federation.
+- **Option 2 with a missing or non-matching Service Provider ID, option 3, or
+  an unclear answer** → treat the provider as different or unknown and use the
+  decision flow below.
+- **If the user asks to skip the read-only classification**, do not treat the
+  safety check as passed. Explain that the skill
   cannot make the replacement itself, then offer the same **Keep current
   federation** / **Replace with Microsoft Entra** decision below. An authorized
-  replacement may proceed without copying the existing values into chat only
-  when the Workday administrator has documented the current configuration for
-  rollback and both required administrators explicitly approve the replacement.
+  replacement may proceed without copying the current provider details into
+  chat only when the Workday administrator has documented the current
+  configuration for rollback and both required administrators explicitly
+  approve the replacement.
 
-- **If an IdP is already active AND it is not the Entra app DA-2 provisioned**
-  (the Issuer / Service Provider ID does not match this tenant's `appIdUri` /
-  `entraAppId` from `.local/connect/workday-da/config.json`):
+- **For a different or unknown provider**:
 
   **Message:**
 
@@ -221,13 +228,9 @@ do not offer steps for configuring those providers.
     **End message.**
 
     Only the exact, unambiguous approval **I approve replacement** continues.
-    Record `SAML_REPLACEMENT_APPROVED=true`, the reviewed issuer and Service
-    Provider ID when supplied, and whether the prior settings were documented
-    for rollback in `GATE_EVIDENCE`. Any other response pauses setup without
-    changing Workday.
-
-- **Otherwise** (no active IdP, or the active one is this tenant's own Entra app)
-  → continue.
+    Record `SAML_REPLACEMENT_APPROVED=true`, the Service Provider ID when
+    supplied, and whether the prior settings were documented for rollback in
+    `GATE_EVIDENCE`. Any other response pauses setup without changing Workday.
 
 ---
 
