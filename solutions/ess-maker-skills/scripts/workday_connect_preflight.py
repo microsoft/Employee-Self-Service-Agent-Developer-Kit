@@ -425,6 +425,7 @@ def run_preflight(
             "packageFlavor": target.package_flavor,
             "ring": target.foundation_ring,
             "vertical": "hr",
+            "entraTenantId": identity["tenantId"],
         },
     )
     state_store.merge_section(
