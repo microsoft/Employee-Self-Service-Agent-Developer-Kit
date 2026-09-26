@@ -119,6 +119,11 @@ environment is outside this lifecycle and must not affect DA1.1.
 
 ## P1.1 — Attempt an automated install
 
+If no matching PAC CLI profile exists, the installer requests one device-code
+sign-in. This is separate from the Dataverse browser session because PAC CLI
+uses its own credential store. Tell the maker to use the same Environment Maker
+account; repeat the sign-in URL and one-time code as copyable chat text.
+
 ```
 python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}" --ring "{RING}"
 ```

@@ -175,6 +175,7 @@ class TestTransitiveRequirements:
         assert len(plan.ordered_fns) == 1
         assert plan.requires_config is False
         assert plan.requires_dataverse_endpoint is True
+        assert plan.requires_flow_token is False
 
     def test_env_capacity_001_resolves_and_unions_powerplatform(self):
         spec = registry.resolve("ENV-CAPACITY-001")
@@ -208,6 +209,12 @@ class TestTransitiveRequirements:
         ]
 
     def test_workday_da_agent_checks_use_only_their_required_clients(self):
+        package = registry.transitive_requirements("WD-DA-PKG-001")
+        assert package.clients == frozenset({registry.DATAVERSE})
+        assert package.requires_dataverse_endpoint is True
+        assert package.requires_flow_token is False
+        assert [label for label, _ in package.ordered_fns] == ["Workday DA"]
+
         sharing = registry.transitive_requirements("WD-DA-CONN-001")
         assert sharing.clients == frozenset({registry.AGENTBUILDER})
         assert sharing.requires_dataverse_endpoint is False
@@ -217,6 +224,11 @@ class TestTransitiveRequirements:
         assert context.clients == frozenset({registry.DATAVERSE})
         assert context.requires_dataverse_endpoint is True
         assert [label for label, _ in context.ordered_fns] == ["Workday DA"]
+
+    def test_workday_flow_checks_request_the_flow_admin_token(self):
+        plan = registry.transitive_requirements("WD-CONN-AUTH-001")
+        assert registry.PP_ADMIN in plan.clients
+        assert plan.requires_flow_token is True
 
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")

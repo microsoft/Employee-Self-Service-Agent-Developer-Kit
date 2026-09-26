@@ -936,7 +936,9 @@ def _run_single_checkpoint(args):
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            pp_admin.authenticate(
+                include_flow=getattr(plan, "requires_flow_token", False)
+            )
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
