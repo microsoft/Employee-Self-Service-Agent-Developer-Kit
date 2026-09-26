@@ -14,19 +14,29 @@ Then run:
 python scripts/workday_connect.py preflight
 ```
 
-Fresh native-agent setup state normally identifies the Agent Builder
-environment but may not contain a Dataverse organization URL. When no exact
-Dataverse URL is available, explain that Power Platform environment inventory
-uses its own Microsoft sign-in, then run:
+Fresh native-agent setup state identifies the exact environment ID but may not
+contain a Dataverse organization URL. The controller first resolves that URL
+from setup's cached environment inventory. Do not ask the maker to re-enter or
+reselect the environment when an exact ID match exists.
+
+When the controller reports that no Dataverse URL can be resolved, explain
+that refreshing Power Platform environment inventory uses its own Microsoft
+sign-in, then run:
 
 ```powershell
 python scripts/list_environments.py
 ```
 
-Show only Dataverse-linked environment display names, types, regions, and
-URLs. Ask the maker to choose from that list and pass the selected exact URL
-with `--dataverse-url`. Inventory is a discovery fallback only; once an exact
-URL is known, direct Dataverse verification is authoritative even if a later
+Match the inventory result to `.local/config.json` `environmentId`. When there
+is exactly one matching environment with a Dataverse URL, rerun preflight with
+that URL automatically. Do not show a selection list or ask the maker to
+choose again.
+
+If the recorded environment ID is absent or has no linked Dataverse URL, stop
+and explain the exact mismatch. Ask for an exact Dataverse URL only when the
+maker confirms it belongs to the already recorded setup environment; never
+silently select a different environment by display name. Once an exact URL is
+known, direct Dataverse verification is authoritative even if a later
 inventory call omits it.
 
 Use `--maker-username` only to pin an intended maker account or resolve account

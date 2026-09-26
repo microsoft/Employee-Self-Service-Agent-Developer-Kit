@@ -104,6 +104,40 @@ def test_resolve_target_accepts_exact_url_without_inventory_lookup(
     assert target.dataverse_url == ENV_URL
 
 
+def test_resolve_target_reuses_setup_environment_inventory(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path)
+    inventory = (
+        tmp_path / ".local" / "setup" / "environment-list-prod.json"
+    )
+    inventory.write_text(
+        json.dumps(
+            {
+                "environments": [
+                    {
+                        "id": "agent-environment",
+                        "displayName": "ESS HR",
+                        "url": ENV_URL,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target = preflight.resolve_target(
+        tmp_path,
+        dataverse_url=None,
+        state=model.default_state(),
+    )
+
+    assert target.dataverse_url == ENV_URL
+
+
 def test_resolve_target_rejects_classic_da(tmp_path: Path) -> None:
     import workday_connect_model as model
     import workday_connect_preflight as preflight
