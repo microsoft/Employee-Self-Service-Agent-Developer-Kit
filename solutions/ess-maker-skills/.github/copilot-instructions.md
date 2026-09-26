@@ -306,7 +306,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
-| Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
+| Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`) | `src/skills/connect/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |

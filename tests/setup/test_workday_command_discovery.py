@@ -60,3 +60,19 @@ def test_connect_workday_bypasses_runtime_readiness_gate() -> None:
 
     assert "typed `/connect` or `/connect-workday`" in normalized
     assert "even when runtime `connect_ready` is false" in normalized
+
+
+def test_connect_workday_instruction_routes_to_architecture_aware_connect() -> None:
+    instructions = (
+        _SOLUTION / ".github" / "copilot-instructions.md"
+    ).read_text(encoding="utf-8")
+    normalized = _normalize(instructions)
+
+    assert (
+        "(`/connect workday` or `/connect-workday`) | "
+        "`src/skills/connect/SKILL.md`"
+    ) in normalized
+    assert (
+        "Provision/connect the Workday setup environment (`/connect workday`) "
+        "| `src/skills/setup/SKILL.md`"
+    ) not in normalized

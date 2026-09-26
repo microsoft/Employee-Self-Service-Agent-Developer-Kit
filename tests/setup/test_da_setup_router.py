@@ -392,6 +392,9 @@ def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
     assert "completion.requiredStepIds" in step1
     assert "Never use shared DA provider state to label an ESS DA IT" in step1
     assert _WORKDAY.is_file()
+    assert "not** the entry point for `/connect workday`" in workday
+    assert "src/skills/connect/SKILL.md" in workday
+    assert "do not show the hybrid-unavailable message" in workday
     assert "Hybrid Workday extension setup is not available" in workday
     assert "Do not run the retained Workday setup playbooks" in workday
 
