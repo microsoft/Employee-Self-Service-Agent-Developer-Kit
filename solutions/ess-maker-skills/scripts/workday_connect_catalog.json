@@ -1,0 +1,43 @@
+{
+  "catalogVersion": 1,
+  "provider": "workday",
+  "supportedAgents": {
+    "gptagent_copilotforemployeeselfservicehr": {
+      "architecture": "native-da",
+      "packageFlavor": "runtime"
+    },
+    "msdyn_copilotforemployeeselfservicedahr": {
+      "architecture": "classic-da",
+      "packageFlavor": "legacy-da"
+    }
+  },
+  "unsupportedAgents": [
+    "gptagent_copilotforemployeeselfserviceit",
+    "msdyn_copilotforemployeeselfservicedait"
+  ],
+  "packages": {
+    "runtime": {
+      "applicationName": "msdyn_EssWorkdayRuntime",
+      "solutionSchemaName": "msdyn_EssWorkdayRuntime",
+      "flowNames": [
+        "ESS Workday Runtime References",
+        "ESS Workday Runtime REST Execution",
+        "ESS Workday Runtime"
+      ]
+    },
+    "legacy-da": {
+      "applicationName": "msdyn_EssDAHRWorkdayHCM",
+      "solutionSchemaName": "msdyn_EssDAHRWorkday"
+    }
+  },
+  "connectionReferences": {
+    "workday": {
+      "logicalName": "msdyn_sharedworkdaysoap_workdayruntime",
+      "connectorName": "shared_workdaysoap"
+    },
+    "dataverse": {
+      "logicalName": "msdyn_sharedcommondataserviceforapps_workdayruntime",
+      "connectorName": "shared_commondataserviceforapps"
+    }
+  }
+}
