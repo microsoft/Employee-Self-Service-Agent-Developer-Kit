@@ -102,7 +102,9 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 # upgrade-posture and CA-vs-DA attribution — ADO 7943642.
 # 1.3: added derived ``agentType`` (custom_agent | declarative_agent |
 # unknown) driven by ``toolkitGitBranch`` — ADO 7830949.
-TELEMETRY_SCHEMA_VERSION = "1.3"
+# 1.4: added derived ``connector`` (workday|servicenow|"") on run + check —
+#      ADO 7943641.
+TELEMETRY_SCHEMA_VERSION = "1.4"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -834,6 +836,75 @@ def derive_run_outcome(run_result: Any) -> str:
     return RUN_OUTCOME_READY
 
 
+# --- Connector attribution (ADO 7943641) ----------------------------------
+# Derive a bounded ``connector`` value (workday | servicenow | "") from the
+# run scope (for the run event) and from the check's category (for each check
+# event) so Aria can split adoption / reliability by backend HR system
+# instead of collapsing everything under the FlightCheck-wide donut.
+#
+# Emitted at telemetry time (not stamped on the CheckResult in-process)
+# because 1DS RTA cubes cannot compute one dimension from another; the
+# derivation stays here alongside classify_tenant / derive_run_outcome.
+
+# Scopes explicitly bound to a single connector. "full" spans multiple
+# connectors -> "" (drill down via the check-level connector dimension).
+# Local / infra / auth / etc. are not connector-scoped.
+_WORKDAY_SCOPES = frozenset({
+    "workday", "workdaytenant", "workdayextension",
+    # Also connector-scoped for Workday even though the naming doesn't lead
+    # with the "workday" token: the "Workday DA" scope (workdayda) and the
+    # topic-authoring scope (topics, which SCOPE_MAP labels "Workday Topics")
+    # both exercise Workday paths exclusively. Missing these here left real
+    # Workday runs emitting connector="" (ADO 7943641 review).
+    "workdayda", "topics",
+})
+_SERVICENOW_SCOPES = frozenset({"servicenow"})
+
+# Check categories from checks/*.py. Category strings are set at CheckResult
+# construction time (e.g. category="Workday", "Workday Tenant", "ServiceNow").
+# Match on the leading token so future subcategories ("Workday Workflows",
+# "Workday Extension", "ServiceNow HRSD") inherit the same attribution
+# without requiring a taxonomy edit here.
+_WORKDAY_CATEGORY_PREFIX = "workday"
+_SERVICENOW_CATEGORY_PREFIX = "servicenow"
+
+
+def derive_connector_from_scope(scope: str) -> str:
+    """Return "workday" / "servicenow" / "" for a FlightCheck ``--scope`` value.
+
+    "full" and other cross-connector scopes return "" (empty). The per-check
+    ``connector`` field carries the finer-grained attribution.
+    """
+    if not scope:
+        return ""
+    s = str(scope).strip().lower()
+    if s in _WORKDAY_SCOPES:
+        return "workday"
+    if s in _SERVICENOW_SCOPES:
+        return "servicenow"
+    return ""
+
+
+def derive_connector_from_category(category: str) -> str:
+    """Return "workday" / "servicenow" / "" for a CheckResult ``category``.
+
+    Matches the leading token so "Workday", "Workday Tenant", "Workday
+    Extension", "Workday Workflows", "ServiceNow", "ServiceNow HRSD", etc.
+    all attribute correctly. Cross-cutting categories (Environment,
+    Authentication, Prerequisites, Local Files, Publishing, External
+    Systems, Licensing, Solution, Topics, Configuration) return "" — they
+    aren't scoped to a single backend.
+    """
+    if not category:
+        return ""
+    c = str(category).strip().lower()
+    if c.startswith(_WORKDAY_CATEGORY_PREFIX):
+        return "workday"
+    if c.startswith(_SERVICENOW_CATEGORY_PREFIX):
+        return "servicenow"
+    return ""
+
+
 def _run_data(
     run_result: Any,
     *,
@@ -863,6 +934,7 @@ def _run_data(
         "agentType": classify_agent_type(get_toolkit_git_branch()),
         "scope": scope,
         "invocationSource": invocation_source,
+        "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
         "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
         "durationSecs": getattr(run_result, "duration_secs", 0),
@@ -889,6 +961,7 @@ def _check_data(
     tenant_name: str = "",
 ) -> dict[str, Any]:
     # Identifiers + enums ONLY. Never `result` / `remediation` (EUII risk).
+    _category = getattr(check, "category", "")
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -898,7 +971,8 @@ def _check_data(
         "tenantClass": classify_tenant(tenant_id),
         "tenantName": tenant_name,
         "checkpointId": getattr(check, "checkpoint_id", ""),
-        "category": getattr(check, "category", ""),
+        "category": _category,
+        "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),

@@ -377,8 +377,8 @@ def test_classify_branch_privacy_bounded():
 
 
 def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
-    """Version-gate the new dimensions so dashboards can pin on schema 1.3."""
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"
+    """Version-gate the new dimensions so dashboards can pin on schema 1.4."""
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"
 
 
 def test_classify_agent_type_maps_main_ca_to_custom_agent():
@@ -609,3 +609,128 @@ def test_emit_noop_when_disabled(monkeypatch, tmp_path):
     assert out["sent"] is False
     assert out["reason"] == "disabled"
     assert called["n"] == 0
+
+
+# --- connector derivation (ADO 7943641) -----------------------------------
+@pytest.mark.parametrize("scope,expected", [
+    ("workday", "workday"),
+    ("workdaytenant", "workday"),
+    ("workdayextension", "workday"),
+    # ADO 7943641 review — SCOPE_MAP also defines these Workday-only scopes;
+    # earlier revisions left them attributing to "" which under-counted real
+    # Workday runs on the connector-adoption rollups.
+    ("workdayda", "workday"),
+    ("topics", "workday"),          # SCOPE_MAP label: "Workday Topics"
+    ("Workday", "workday"),
+    (" workday ", "workday"),
+    ("WORKDAYDA", "workday"),       # case-insensitive
+    (" topics ", "workday"),        # whitespace-tolerant
+    ("servicenow", "servicenow"),
+    ("ServiceNow", "servicenow"),
+])
+def test_derive_connector_from_scope_known(scope, expected):
+    assert telemetry.derive_connector_from_scope(scope) == expected
+
+
+@pytest.mark.parametrize("scope", [
+    "full",                    # cross-connector run: per-check attribution wins
+    "authentication",
+    "environment",
+    "external",
+    "local",
+    "publishing",
+    "entraapp",
+    "",
+    None,
+])
+def test_derive_connector_from_scope_non_connector_is_empty(scope):
+    assert telemetry.derive_connector_from_scope(scope) == ""
+
+
+@pytest.mark.parametrize("category,expected", [
+    ("Workday", "workday"),
+    ("Workday Tenant", "workday"),
+    ("Workday Extension", "workday"),
+    ("Workday Workflows", "workday"),
+    ("workday", "workday"),
+    ("ServiceNow", "servicenow"),
+    ("ServiceNow HRSD", "servicenow"),
+    ("servicenow", "servicenow"),
+])
+def test_derive_connector_from_category_known(category, expected):
+    assert telemetry.derive_connector_from_category(category) == expected
+
+
+@pytest.mark.parametrize("category", [
+    "Environment", "Authentication", "Prerequisites", "Local Files",
+    "Publishing", "External Systems", "Licensing", "Solution", "Topics",
+    "Configuration", "", None,
+])
+def test_derive_connector_from_category_cross_cutting_is_empty(category):
+    # Cross-cutting checks intentionally do not attribute to a connector so
+    # per-connector rollups aren't inflated by shared prerequisites.
+    assert telemetry.derive_connector_from_category(category) == ""
+
+
+def test_run_event_carries_connector_from_scope():
+    events = telemetry.build_events(
+        FakeRun(),
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="workday",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    assert events[0]["data"]["connector"] == "workday"
+
+
+def test_run_event_connector_empty_for_full_scope():
+    events = telemetry.build_events(
+        FakeRun(),
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    # "full" scope leaves the run-level connector empty — per-check
+    # categories give the finer split downstream.
+    assert events[0]["data"]["connector"] == ""
+
+
+def test_check_events_carry_connector_from_category():
+    run = FakeRun(results=[
+        FakeCheck(checkpoint_id="WD-1", category="Workday Tenant"),
+        FakeCheck(checkpoint_id="SN-1", category="ServiceNow HRSD"),
+        FakeCheck(checkpoint_id="AUTH-1", category="Authentication"),
+    ], total=3, passed=3, failed=0)
+    events = telemetry.build_events(
+        run,
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    check_events = [e for e in events if e["name"] == telemetry.EVENT_CHECK]
+    connectors = [e["data"]["connector"] for e in check_events]
+    assert connectors == ["workday", "servicenow", ""]
+
+
+def test_schema_version_bump_records_connector_dim():
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"

@@ -80,7 +80,9 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.5.0: added derived ``agent_type`` common dimension (custom_agent |
 #        declarative_agent | unknown), driven by ``toolkit_git_branch``,
 #        so PMs can split adoption dashboards by CA vs DA — ADO 7830949.
-SCHEMA_VERSION = "1.5.0"
+# 1.6.0: added derived ``connector`` (workday|servicenow|"") on
+#        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
+SCHEMA_VERSION = "1.6.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -239,6 +241,55 @@ def normalize_capability(capability: str) -> str:
         return ""
     c = str(capability).strip().lower()
     return c if c in _CAPABILITY_SET else CAPABILITY_UNKNOWN
+
+
+# --- Connector taxonomy (ADO 7943641) -------------------------------------
+# Attribute Connect + FlightCheck usage to the specific backend HR system so
+# Workday vs ServiceNow adoption / reliability can be reported separately
+# instead of collapsed under a single generic "connect" wedge. Bounded enum
+# keeps the dashboard dimension controlled (cardinality never grows).
+#
+# Values:
+#   workday    -> Workday connect flow, Workday-scope FlightCheck runs,
+#                 checks in the Workday / Workday Tenant / Workday Extension
+#                 categories.
+#   servicenow -> ServiceNow connect flow, ServiceNow-scope FlightCheck runs,
+#                 checks in the ServiceNow category.
+#   legacy     -> Explicit label for older events that emitted the generic
+#                 "connect" capability WITHOUT a connector arg. Emitted by
+#                 emit_capability.py when the caller passed no --connector
+#                 flag AND the capability is one that a future maker MIGHT
+#                 have connector context for (today: "connect"). Keeps the
+#                 pre-attribution corpus queryable as its own bucket rather
+#                 than double-counted against a real connector.
+#   unknown    -> Out-of-taxonomy value provided by the caller (typo,
+#                 future-connector name not yet in the enum).
+#   ""         -> Legitimately not connector-scoped (most capabilities,
+#                 checks in Environment / Authentication / Prerequisites /
+#                 Local Files categories, "full"-scope FlightCheck runs
+#                 that span multiple connectors).
+CONNECTORS = ("workday", "servicenow")
+_CONNECTOR_SET = frozenset(CONNECTORS)
+CONNECTOR_LEGACY = "legacy"
+CONNECTOR_UNKNOWN = "unknown"
+
+
+def normalize_connector(connector: str) -> str:
+    """Normalize a ``connector`` value to the canonical enum.
+
+    Empty stays empty (event is not connector-scoped).
+    Non-empty inputs are lower-cased / stripped and mapped to themselves if
+    they are in :data:`CONNECTORS`, to :data:`CONNECTOR_LEGACY` if the caller
+    explicitly passed that sentinel, else to :data:`CONNECTOR_UNKNOWN`.
+    """
+    if not connector:
+        return ""
+    c = str(connector).strip().lower()
+    if c in _CONNECTOR_SET:
+        return c
+    if c == CONNECTOR_LEGACY:
+        return CONNECTOR_LEGACY
+    return CONNECTOR_UNKNOWN
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -1286,11 +1337,16 @@ def emit_api_call(
 
 
 def emit_capability_use(
-    adk_capability: str, *, surface: str = SURFACE_CLI, block: bool = False
+    adk_capability: str,
+    *,
+    connector: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
     data["adk_capability"] = normalize_capability(adk_capability)
+    data["connector"] = normalize_connector(connector)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
 
 
@@ -1298,6 +1354,7 @@ def emit_flightcheck_run(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     surface: str = SURFACE_CLI,
     block: bool = False,
@@ -1307,6 +1364,7 @@ def emit_flightcheck_run(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
     })
     return _emit(EVENT_FLIGHTCHECK_RUN, data, block=block)
@@ -1316,6 +1374,7 @@ def emit_flightcheck_result(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     result: str = "pass",
     duration_ms: int = 0,
@@ -1327,6 +1386,7 @@ def emit_flightcheck_result(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
         "result": result,
         "duration_ms": int(duration_ms),
@@ -1337,6 +1397,7 @@ def emit_flightcheck_result(
 def emit_flightcheck_error(
     *,
     agent_id: str = "",
+    connector: str = "",
     error_code: str = "",
     error_category: str = "runtime",
     error_message: str = "",
@@ -1345,7 +1406,10 @@ def emit_flightcheck_error(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data.update({"agent_id": agent_id})
+    data.update({
+        "agent_id": agent_id,
+        "connector": normalize_connector(connector),
+    })
     _apply_error_fields(data, "server_error", error_code, error_message, error_category)
     return _emit(EVENT_FLIGHTCHECK_ERROR, data, block=block)
 
