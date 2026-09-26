@@ -68,3 +68,45 @@ def test_readiness_requires_real_employee_runtime_evidence() -> None:
     assert "without an unexpected repeated sign-in" in text
     assert "Never record employee data or credentials" in text
     assert "Do not reset completed phases" in normalized
+
+
+def test_capability_claims_match_controller_surface() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
+        encoding="utf-8"
+    )
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(
+        encoding="utf-8"
+    )
+    power_platform = (
+        _WORKDAY_DA / "configure-power-platform.md"
+    ).read_text(encoding="utf-8")
+    employee = (_WORKDAY_DA / "verify-connection.md").read_text(
+        encoding="utf-8"
+    )
+
+    normalized = {
+        "skill": " ".join(skill.split()),
+        "entra": " ".join(entra.split()),
+        "tenant": " ".join(tenant.split()),
+        "power_platform": " ".join(power_platform.split()),
+        "employee": " ".join(employee.split()),
+    }
+
+    assert "## Capability contract" in skill
+    assert "Claim an automated change only after" in normalized["skill"]
+    assert "has no `entra-apply` command" in normalized["entra"]
+    assert "does not create or modify the Entra application" in (
+        normalized["entra"]
+    )
+    assert "This phase never modifies Workday" in normalized["tenant"]
+    assert "does not create physical connector connections" in (
+        normalized["power_platform"]
+    )
+    assert "do not describe it as automatically verified" in (
+        normalized["power_platform"]
+    )
+    assert "These are real automated changes" in (
+        normalized["power_platform"]
+    )
+    assert "The skill cannot publish the agent" in normalized["employee"]

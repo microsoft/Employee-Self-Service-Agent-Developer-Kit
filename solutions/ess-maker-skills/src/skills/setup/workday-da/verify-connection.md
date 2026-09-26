@@ -4,6 +4,10 @@
 This phase requires a real signed-in employee scenario. Configuration checks
 alone cannot complete it.
 
+The skill cannot publish the agent, impersonate an employee, or perform this
+scenario on the employee's behalf. It guides the maker through the test and
+records only the safe outcome.
+
 Ask the maker to:
 
 1. publish the ESS HR agent;

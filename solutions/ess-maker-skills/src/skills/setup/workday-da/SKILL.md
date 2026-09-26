@@ -25,6 +25,24 @@ copy, update, or infer status from a Markdown checklist.
 - Never diagnose a permission problem from a guess. Show the API, CLI, or
   checked-in script evidence that produced the diagnosis.
 
+## Capability contract
+
+Describe each action according to who actually performs it:
+
+| Phase | What the skill can do | What remains a user or administrator action |
+| --- | --- | --- |
+| Preflight | Verify the selected agent, environment, account, and package; install the reviewed package through PAC when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
+| Microsoft Entra | Discover exact applications, validate roles, build and hash the plan, reread Graph, and record verified evidence | Create or change the Entra application in the portal; the controller has no `entra-apply` command |
+| Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
+| Connections | Discover connected physical connections, verify agent parameter sharing, and record the maker's flow-attachment confirmation | Create connector connections, complete connector OAuth, connect flows to the agent, and enable parameter sharing in Copilot Studio |
+| Runtime | After approval, bind reviewed solution connection references, activate reviewed package flows, configure delegated authorization, redirect an empty User Context scaffold, and reread every write | Resolve custom topic content or a package without a reviewed runtime catalog |
+| Employee validation | Record safe validation evidence and retain the current blocker | Publish the agent, sign in as an employee, and run the real employee scenario |
+
+Never say "I changed," "I configured," "I enabled," or "I updated" for a
+manual action. Say what the administrator or maker must do, then say what the
+skill can verify or record afterward. Claim an automated change only after its
+command succeeded and the target was reread.
+
 ## Start or resume
 
 Run:

@@ -3,6 +3,14 @@
 
 ## Connections
 
+The skill does not create physical connector connections, complete connector
+OAuth, connect flows to the agent, or enable parameter sharing. The maker
+performs those actions; the skill discovers and verifies the result.
+
+The current helpers do not independently read the Copilot Studio
+flow-to-agent attachment. Record the maker's confirmation of that attachment
+as manual handoff evidence; do not describe it as automatically verified.
+
 Ask the maker to create or confirm exactly two connected Power Platform
 connections in the selected environment:
 
@@ -32,18 +40,25 @@ flows, selected agent, and User Context V2 topics.
 - If exactly one connection exists for each connector, discovery is
   deterministic.
 - If more than one exists, show safe display names and ask which connection to
-  use, then rerun with `--workday-connection-id` and/or
-  `--dataverse-connection-id`.
+  use. Resolve the selected display name to its ID internally, then rerun with
+  `--workday-connection-id` and/or `--dataverse-connection-id`; never ask the
+  maker to paste or repeat an ID.
 - If none exists or a connection is not connected, leave the phase waiting and
   show the exact missing connector.
 - Run the existing FlightCheck and require `WD-CONN-013` to pass. If it does
   not, show only its safe display-name remediation, have the maker enable
   parameter sharing in Copilot Studio, and rerun that check.
 
-After successful discovery and a passing `WD-CONN-013`, record both as evidence
-and set `connections` to `complete`.
+After successful discovery, a passing `WD-CONN-013`, and the maker's recorded
+confirmation that the reviewed flows are connected to the selected agent,
+record the distinct automated and manual evidence and set `connections` to
+`complete`.
 
 ## Runtime approval and apply
+
+For a package with a reviewed runtime flow catalog, the controller performs the
+following writes after exact-plan approval. These are real automated changes,
+not instructions for the maker:
 
 Show only the returned `approvalSummary`, not raw connection, application,
 workflow, or bot identifiers. The combined runtime plan will:
@@ -77,6 +92,10 @@ authorization script, and verifies bindings, flow state, authorization, and
 User Context V2 after the write. Report permission issues only from an
 explicit forbidden response, `[FAIL]` marker, ambiguity result, or nonzero
 script exit.
+
+If runtime discovery reports that the selected package has no reviewed flow
+catalog, record a manual handoff. Do not claim that connection references,
+flows, authorization, or topics were changed.
 
 Topic/business-scenario selection that is not represented by a reviewed
 deterministic helper remains a concise manual handoff; do not expand it into a
