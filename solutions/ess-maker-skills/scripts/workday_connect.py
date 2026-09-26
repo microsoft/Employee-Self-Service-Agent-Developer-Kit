@@ -26,6 +26,10 @@ from workday_connect_preflight import (
     WorkdayConnectPreflightError,
     run_preflight,
 )
+from workday_connect_runtime import (
+    WorkdayConnectRuntimeError,
+    run_runtime_operation,
+)
 from workday_connect_store import (
     WorkdayConnectPlanChangedError,
     WorkdayConnectStore,
@@ -80,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     entra_plan = subparsers.add_parser("entra-plan")
     entra_plan.add_argument("--discovery-json", required=True)
     subparsers.add_parser("workday-admin-packet")
+
+    runtime_plan = subparsers.add_parser("runtime-plan")
+    runtime_plan.add_argument("--workday-connection-id")
+    runtime_plan.add_argument("--dataverse-connection-id")
+
+    runtime_apply = subparsers.add_parser("runtime-apply")
+    runtime_apply.add_argument("--plan-hash", required=True)
+    runtime_apply.add_argument("--workday-connection-id")
+    runtime_apply.add_argument("--dataverse-connection-id")
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--dataverse-url")
@@ -145,6 +158,45 @@ def main() -> None:
         elif args.command == "workday-admin-packet":
             packet = build_workday_admin_packet(store.load())
             _emit("workday-admin-packet", {"packet": packet})
+        elif args.command == "runtime-plan":
+            _emit(
+                "runtime-plan",
+                run_runtime_operation(
+                    store.load(),
+                    apply=False,
+                    workday_connection_id=args.workday_connection_id,
+                    dataverse_connection_id=args.dataverse_connection_id,
+                ),
+            )
+        elif args.command == "runtime-apply":
+            result = run_runtime_operation(
+                store.load(),
+                apply=True,
+                approved_hash=args.plan_hash,
+                verifier=lambda plan, approved_hash: store.verify_plan(
+                    "runtime",
+                    plan,
+                    approved_hash,
+                ),
+                workday_connection_id=args.workday_connection_id,
+                dataverse_connection_id=args.dataverse_connection_id,
+            )
+            for action, evidence in (
+                ("connection-references-bound", "Dataverse reread"),
+                ("runtime-flows-active", "Dataverse reread"),
+                ("delegated-authorization-configured", "authorization script"),
+                ("user-context-v2-configured", "Dataverse reread"),
+            ):
+                store.complete_action(
+                    "runtime",
+                    action,
+                    evidence={
+                        "outcome": "verified",
+                        "provenance": evidence,
+                    },
+                )
+            state = store.set_phase_status("runtime", "complete")
+            _emit("runtime-apply", {**result, "state": state})
         elif args.command == "preflight":
             _emit(
                 "preflight",
@@ -224,6 +276,7 @@ def main() -> None:
         WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
+        WorkdayConnectRuntimeError,
         WorkdayConnectStoreError,
     ) as exc:
         print(
