@@ -95,6 +95,8 @@ Present account confirmation once per setup invocation. Do not repeat it before 
 
 Whenever one exact environment and agent has been selected, read `src/skills/foundation-setup/product-line-reconciliation.md` and complete that handoff before the next DA-GA-only operation. This applies regardless of whether the identity came from a supplied URL, active local setup state, a configured-agent switch, environment candidate selection, MOS creation, or ALM import. Run it once per selected identity in this invocation and again only when the selection changes.
 
+For a supplied Copilot Studio URL, retain its exact `agentBackend` query value as an ordering hint for that handoff. Do not infer existence, product family, support, or ALM enrollment from the hint.
+
 ## Shared authorization message
 
 The account question is the confirmation for a selected account. When the maker chose the Microsoft account picker, show:
@@ -307,10 +309,11 @@ already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
 not explicitly selected package import, infer its environment ID, agent ID,
-and service ring. When the URL does not identify the ring, use **Resolve the
-service ring** in `src/skills/foundation-setup/da-environment-target.md`
-exactly. Ask only when the environment ID or agent ID is unclear. Complete the
-selected-agent product-line reconciliation before running:
+service ring, and optional `agentBackend` ordering hint. When the URL does not
+identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when
+the environment ID or agent ID is unclear. Complete the selected-agent
+product-line reconciliation before running:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -322,6 +325,12 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
+- When `almEnrollment` is `not-enrolled`, the earlier native identity probe
+  still proves that the agent exists. Say that the agent is not enrolled in
+  the ALM family required for local authoring, then offer **Choose a different
+  agent**, **Choose a different environment**, and **Go back** using the exact
+  recovery routes in `product-line-reconciliation.md`. Do not call the agent
+  missing and do not continue to validation or attachment.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent

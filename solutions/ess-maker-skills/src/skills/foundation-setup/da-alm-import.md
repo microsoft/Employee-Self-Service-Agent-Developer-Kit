@@ -54,8 +54,8 @@ When `kind` is `success`, use the returned environment, tenant, host, ring, API
 version, and agent identity only as internal command inputs. Do not display
 those identifiers. The successful native import verification is authoritative
 DA-GA evidence, so run the parent's selected-agent product-line reconciliation
-with `--native-da-ga`. Mark **Verify access and agent identity** and **Establish
-an editable Dev agent** complete, then show:
+with `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Mark **Verify access and
+agent identity** and **Establish an editable Dev agent** complete, then show:
 
 > Agent package imported and verified as an editable Dev agent. Preparing its
 > local authoring workspace...
@@ -111,7 +111,7 @@ Offer exactly:
 - **Replace an existing agent with this package**
 - **Go back**
 
-Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. The native candidate result is authoritative DA-GA evidence; run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or replacement. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
+Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. The native candidate result is authoritative identity evidence; run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or replacement. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
 
 For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Clear package-import and replacement intent, but preserve the import receipt and collision evidence.
 

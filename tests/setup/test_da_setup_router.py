@@ -112,12 +112,35 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     )
     assert "complete its kit-switch handoff" in normalized_prompt
     assert "python scripts/reconcile_setup_agent.py" in reconciliation
-    assert "--native-da-ga" in reconciliation
+    assert '--known-native-schema "{RETURNED_SCHEMA_NAME}"' in reconciliation
+    assert "--probe dataverse" in reconciliation
+    assert "--probe native" in reconciliation
+    assert reconciliation.index("Run the Dataverse probe") < (
+        reconciliation.index("Run the native MinimalBot probe")
+    )
+    assert "`agentBackend` query value is an ordering hint only" in reconciliation
+    assert "`dataverse` means run the Dataverse probe first" in reconciliation
+    assert "`cosmos` means run the native probe first" in reconciliation
+    assert "Run the second probe even when the first probe returns `found`" in (
+        reconciliation
+    )
     assert "DA_SETUP_PRODUCT_RECONCILIATION_JSON:" in reconciliation
-    assert "action: stop-and-use-cea-kit" in reconciliation
-    assert "action: continue-da-ga-setup" in reconciliation
-    assert "deliberately fail-open" in normalized_reconciliation
-    assert "generic API failures" in normalized_reconciliation
+    assert "`authentication-required`" in reconciliation
+    assert "`access-denied`" in reconciliation
+    assert "`not-found`" in reconciliation
+    assert "`uncertain`" in reconciliation
+    assert (
+        "Do not convert `authentication-required`, `access-denied`, or "
+        "`uncertain` into `not-found`."
+    ) in normalized_reconciliation
+    assert "msdyn_copilotforemployeeselfservice*" in reconciliation
+    assert "gptagent_copilotforemployeeselfservice*" in reconciliation
+    assert "classic CA and DA-Preview variants" in reconciliation
+    assert "When both probes returned `found`" in reconciliation
+    assert "When both probes returned `not-found`" in reconciliation
+    assert "Preserve a backend-hint mismatch as internal evidence" in reconciliation
+    assert "For a native `found` DA-GA observation" in reconciliation
+    assert "For a Dataverse-only `found` DA-GA observation" in reconciliation
     for mismatch_state in (
         "**Choose the starting point and target environment** as complete",
         "**Verify access and agent identity** as blocked",
@@ -139,13 +162,50 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "For **Install and open the compatible kit**, run `recoveryCommand`" in (
         reconciliation
     )
+    legacy_message = """**Message:**
+
+{agent display name or Selected agent} belongs to a legacy agent family, so this Developer Kit cannot safely continue its setup.
+
+**End message.**"""
+    assert legacy_message in reconciliation
+    assert "belongs to the solution-backed Employee Self-Service" not in reconciliation
+    assert "classic Employee Self-Service agent product line" not in reconciliation
+    compatible_handoff = reconciliation.split(
+        "When `outcome` is `available`", 1
+    )[1].split("## Unsupported agent", 1)[0]
+    assert '"header": "Continue setup"' in compatible_handoff
+    assert (
+        '"question": "How would you like to continue setup?"'
+        in compatible_handoff
+    )
+    assert '"allowFreeformInput": false' in compatible_handoff
+    assert '"recommended"' not in compatible_handoff
+    assert '"default"' not in compatible_handoff
+    assert "Leave the selection initially unset." in compatible_handoff
+    assert "Keyboard focus or a visual highlight is not a selected value" in (
+        compatible_handoff
+    )
+    assert "wait for the maker to submit an explicit choice" in compatible_handoff
+    assert "without adding Markdown emphasis" in compatible_handoff
+    assert (
+        'Do not emit an operational progress line between them.'
+        in reconciliation
+    )
+    assert (
+        "Do not emit **Verified replacement agent identities and resolved "
+        "compatible ESS kit**"
+        in reconciliation
+    )
+    assert "it is not part of a supported Employee Self-Service agent family" in (
+        reconciliation
+    )
     assert "continue from its environment-scoped `list-agents`" in reconciliation
     assert "rerun `list-environments`" in reconciliation
     assert "Return to **Choose the sign-in account**" in reconciliation
     assert "**Go back** is the account-reset route" in reconciliation
     unavailable_recovery = reconciliation[
-        reconciliation.index("When `recoveryUnavailable` is `true`") :
-        reconciliation.index("Otherwise say:")
+        reconciliation.index("When `outcome` is `unavailable`") :
+        reconciliation.index("When `outcome` is `available`")
     ]
     for recovery_choice in (
         "Choose a different agent",
@@ -157,7 +217,10 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
         "Do not offer **Install and open the compatible kit**"
         in unavailable_recovery
     )
-    assert "Follow the corresponding Setup routes below." in unavailable_recovery
+    assert (
+        "Follow the shared recovery routes under **Unsupported agent**."
+        in unavailable_recovery
+    )
     assert "stop without guessing" not in reconciliation
     assert "When command execution fails" in reconciliation
     assert "Do not label the unchanged command as a retry" in reconciliation
@@ -170,9 +233,15 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "No Copilot Studio agent or setup state was changed" in reconciliation
     assert "installation was not changed" not in reconciliation
     assert "identity returned by this native list" in existing_dev
+    assert "--known-native-schema" in existing_dev
     assert mos_starter.count("selected-agent product-line reconciliation") >= 2
+    assert mos_starter.count("--known-native-schema") >= 2
     assert alm_import.count("selected-agent product-line reconciliation") >= 2
+    assert alm_import.count("--known-native-schema") >= 2
     assert "selected-agent product-line reconciliation" in prod_to_dev
+    assert "--known-native-schema" in prod_to_dev
+    assert "`agentBackend` query value as an ordering hint" in foundation
+    assert "`almEnrollment` is `not-enrolled`" in foundation
 
 
 def test_foundation_defines_setup_state_sources() -> None:

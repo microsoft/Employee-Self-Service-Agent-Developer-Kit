@@ -159,8 +159,9 @@ relationship from the failed Prod operation.
 ## Attach and complete
 
 On a validated related-Dev path or successful import result, run the parent's
-selected-agent product-line reconciliation with `--native-da-ga` for the
-returned identity, then attach it:
+selected-agent product-line reconciliation with
+`--known-native-schema "{RETURNED_SCHEMA_NAME}"` for the returned identity,
+then attach it:
 
 ```text
 python scripts/setup_existing_da.py attach \
