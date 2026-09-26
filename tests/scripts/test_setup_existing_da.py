@@ -494,8 +494,35 @@ def test_inspect_agent_route_returns_service_realm(
     )
 
     assert result["realm"] == expected
+    assert result["almEnrollment"] == "enrolled"
     assert result["agentId"] == AGENT_ID
     assert result["tenantId"] == TENANT_ID
+
+
+def test_inspect_agent_route_distinguishes_missing_alm_enrollment() -> None:
+    client = FakeClient()
+
+    def missing_realms(_agent_id: str) -> dict[str, Any]:
+        raise setup_existing_da.AgentBuilderHTTPError(
+            "Agent realm family",
+            404,
+            error_code="ObjectNotFound",
+            request_id="request-123",
+        )
+
+    client.get_realms = missing_realms  # type: ignore[method-assign]
+
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["realm"] is None
+    assert result["almEnrollment"] == "not-enrolled"
+    assert result["statusCode"] == 404
+    assert result["errorCode"] == "ObjectNotFound"
+    assert result["requestId"] == "request-123"
 
 
 def test_inspect_agent_route_rejects_unknown_realm() -> None:

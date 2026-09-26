@@ -83,9 +83,10 @@ Offer exactly:
 
 - **Create agent**
 - **Choose a different product**
-- **Cancel setup**
+- **Go back**
 
 Do not preselect **Create agent**. After the maker explicitly selects **Create agent** for the displayed product and target, begin the create operation immediately; the confirmation surface already communicates the selected product and environment.
+For **Choose a different product**, return to the valid rows from the latest successful catalog result and continue through this confirmation surface for the new selection. For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface.
 
 ## Create
 
@@ -113,17 +114,19 @@ The response, outcome label, fuse disposition, HTTP status, and request details 
 
 When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
 
-The successful native create result is authoritative DA-GA evidence. Run the parent's selected-agent product-line reconciliation with the returned identity and `--native-da-ga` before the enable-ALM operation.
+The successful native create result is authoritative identity evidence. Run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
 
 When the annotations report `outcome: collision`, do not infer which visible agent corresponds to the package. List visible Dev agents in the same environment through `setup_existing_da.py list-agents`, then offer exactly:
 
 - **Choose an existing agent in this environment**
 - **Choose a different catalog product**
-- **Cancel setup**
+- **Go back**
 
-Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, run the parent's selected-agent product-line reconciliation with `--native-da-ga`, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
+Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
 
 For **Choose a different catalog product**, present the valid rows from the latest successful catalog result and let the maker select another exact product. Continue through **Confirm the exact product and target** for that selection. A new create request becomes available only after the maker confirms the new product and uses a new client request UUID.
+
+For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Preserve the collided create result and its client request UUID; do not repeat that create request.
 
 ## Enable ALM
 

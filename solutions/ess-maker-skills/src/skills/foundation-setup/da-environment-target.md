@@ -44,7 +44,7 @@ Use the host's interactive single-selection control and offer exactly:
 - **Use another account**
 - **Use an environment URL**
 - **Create a Power Platform environment**
-- **Cancel setup**
+- **Go back**
 
 Do not preselect a choice.
 
@@ -56,7 +56,7 @@ Do not preselect a choice.
 
   Stop until the maker confirms that the environment is ready or supplies its URL. Do not route into a Dataverse provisioning skill.
 
-- For **Cancel setup**, make no changes and stop.
+- For **Go back**, retain the selected account and return to **Resolve the service ring**. Do not rerun environment discovery until the maker explicitly selects a ring. **Use another account** remains the account-switch route on this surface.
 
 When environment discovery fails, parse `DA_ENVIRONMENT_LIST_ERROR_JSON:` and preserve it with `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:` or `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_TEXT:` as diagnostic evidence. When `authorizationFailure` is `true`, say that the selected account could not list its Power Platform environments and offer the same four choices. Do not convert an authorization failure into an empty environment list. For any other failure, report the observed blocker and stop.
 
@@ -72,12 +72,12 @@ Use the host's interactive single-selection control and present these labels unc
 
 - **Try with a different user**
 - **Try a different environment**
-- **Cancel setup**
+- **Go back**
 
 For **Try with a different user**, return to **Choose the sign-in account** in `SKILL.md`. After the maker selects or supplies a different user, rerun environment discovery for that account and continue from its environment picker.
 
 For **Try a different environment**, retain the current account and ring, rerun `list-environments`, and continue from the returned environment picker.
 
-For **Cancel setup**, make no changes and stop.
+For **Go back**, retain the current account, ring, and environment, then return to the parent skill's **What would you like to set up in this environment?** choice surface. Do not rerun the failed environment-scoped operation.
 
 When direct agent lookup remains available after an empty visible-agent list, also offer **Use an agent URL**. Place it before the three shared choices, ask for the exact Copilot Studio agent URL when selected, and continue through direct inspection in `da-existing-dev.md`.

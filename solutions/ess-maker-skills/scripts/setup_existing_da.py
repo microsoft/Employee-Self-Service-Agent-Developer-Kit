@@ -191,7 +191,27 @@ def inspect_agent_route(
     """Return the service-owned route realm for one exact agent."""
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
-    realms = client.get_realms(normalized_agent_id)
+    result = {
+        "environmentId": normalized_environment_id,
+        "tenantId": client.tenant_id,
+        "host": client.host,
+        "ring": client.ring,
+        "apiVersion": client.api_version,
+        "agentId": normalized_agent_id,
+    }
+    try:
+        realms = client.get_realms(normalized_agent_id)
+    except AgentBuilderHTTPError as exc:
+        if exc.status_code != 404:
+            raise
+        return {
+            **result,
+            "realm": None,
+            "almEnrollment": "not-enrolled",
+            "statusCode": exc.status_code,
+            "errorCode": exc.error_code,
+            "requestId": exc.request_id,
+        }
     route_realm = realms.get("routeRealm")
     realm_name = next(
         (
@@ -210,13 +230,9 @@ def inspect_agent_route(
             "Agent realm discovery did not return a recognized route realm."
         )
     return {
-        "environmentId": normalized_environment_id,
-        "tenantId": client.tenant_id,
-        "host": client.host,
-        "ring": client.ring,
-        "apiVersion": client.api_version,
-        "agentId": normalized_agent_id,
+        **result,
         "realm": realm_name,
+        "almEnrollment": "enrolled",
     }
 
 
