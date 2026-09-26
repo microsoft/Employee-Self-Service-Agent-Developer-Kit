@@ -47,7 +47,8 @@ checklist. When it completes:
 Your ESS foundation and local workspace are complete.
 
 Run `/landing-page` to configure branding and the content employees see. Run
-`/connect` to choose an integration. Topic creation remains a separate
-`/create` workflow.
+`/org-announcements` to post an announcement for your selected deployed agent,
+or run `/connect` to choose an integration. Topic creation remains a separate
+`/create` workflow. Type `/menu` to see every capability.
 
 **End message.**

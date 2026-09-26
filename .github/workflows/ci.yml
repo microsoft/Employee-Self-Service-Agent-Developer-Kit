@@ -135,6 +135,7 @@ jobs:
         tests/mcp/agentconfig
         tests/scripts/test_setup_preserves_title_id.py
         tests/scripts/test_validate_branding.py
+        tests/scripts/test_maker_profile_vsix.py
         -q
 
     - name: Test ESS Maker Quick Actions
@@ -165,6 +166,7 @@ jobs:
       run: >-
         python -m pytest
         tests/mcp/agentconfig_org_announcements
+        tests/setup/test_foundation_setup_router.py
         -q
 
   flightcheck-tests:

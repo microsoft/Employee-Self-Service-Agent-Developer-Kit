@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.26 (POC)
+
+- Added **Post an announcement** to Quick Actions. The setup-gated action opens
+  a guided Copilot chat for announcements in the selected deployed ESS agent.
+- Current and archived announcement limits apply per tenant and agent, not
+  across every agent in the organization.
+- Bumped the package version so the in-extension update check can prompt
+  existing 0.4.25 installs to reinstall and receive the new Quick Action.
+
 ## 0.4.25 (POC)
 
 - **Customize landing page** is available in Quick Actions. The setup-gated action opens a guided Copilot chat for branding, quick links, starter prompts, and insight cards.

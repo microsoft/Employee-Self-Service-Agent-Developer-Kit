@@ -11,8 +11,9 @@ When the extension activates inside the ESS Maker workspace it:
 1. **Hides every developer surface** — activity bar, status bar, editor tabs, minimap, breadcrumbs, layout controls, menu bar, command center, custom title bar, and bottom panel.
 2. **Opens GitHub Copilot Chat in the editor area** — chat lives in the center of the window, not tucked into a side panel.
 3. **Pins a "Quick actions" button rail in the primary sidebar** — a custom Webview view with big icon-labeled buttons:
-   - **Connect** → `/setup`
+   - **Setup** → `/setup`
    - **Customize landing page** → guided landing-page configuration
+   - **Post an announcement** → guided organization-announcement authoring
    - **Create a topic** → `/create`
    - **Update a topic** → `/update`
    - **Scan for issues** → `/scan`
