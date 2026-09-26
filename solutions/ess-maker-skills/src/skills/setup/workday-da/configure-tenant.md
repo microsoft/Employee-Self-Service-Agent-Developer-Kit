@@ -134,26 +134,36 @@ again.
 
 ---
 
-## DA3.0b — Single-tenant SAML pre-gate *(do this before any tenant change)*
+## DA3.0b — Single-tenant SAML pre-gate *(before the administrator changes the tenant)*
 
 Workday supports exactly **one** active Entra-tenant SAML federation at a time.
 Pointing a second Entra tenant at the same Workday tenant silently breaks the
-first. Before changing anything, identify and record the **current active SAML
-IdP** so a later step never overwrites an unrelated federation.
+first. The skill cannot sign in to the Workday administration interface or
+change these settings. A Workday administrator must review the current active
+SAML IdP using their normal organization-approved Workday account so a later
+manual step never overwrites an unrelated federation.
 
 **Message:**
 
-Before I change any Workday security settings, I need to check the tenant's
-current SAML sign-on. In Workday, search for and open the **Edit Tenant Setup –
-Security** task and find the **SAML Setup** section. Tell me, for the currently
-enabled Identity Provider row: the **Issuer** (or IdP name), the **Service
-Provider ID**, and the **x509 Certificate** name plus its **Valid From** /
-**Valid To** dates (Workday shows no thumbprint). If there is
-no active SAML IdP yet, just say **none**.
+Before your Workday administrator updates SAML settings, we need to confirm the
+tenant's current sign-on configuration. The skill will not sign in to Workday
+or change these security settings.
+
+Have a Workday administrator open **Edit Tenant Setup – Security**, find
+**SAML Setup**, and provide the currently enabled Identity Provider row:
+
+- **Issuer** or identity-provider name
+- **Service Provider ID**
+- **x509 Certificate** name
+- **Valid From** date
+- **Valid To** date
+
+If no Identity Provider row is enabled, reply **none**.
 
 **End message.**
 
-Wait for the user's answer, then record it as the pre-gate evidence
+Wait for the user's answer. Do not ask a second question that repeats these
+fields. Then record the answer as the pre-gate evidence
 (`SAML_ISSUER`, `SAML_SP_ID`, `SAML_CERT`).
 
 - **If an IdP is already active AND it is not the Entra app DA-2 provisioned**
@@ -268,15 +278,25 @@ Use the `vscode_askQuestions` tool:
 
 ## DA3.0d — Edit Tenant Setup – Security
 
-Configure the tenant's security so OAuth and SAML sign-on work. This is captured
-as part of the `WD-TENANT-001` attestation (verified at the end of DA3.3).
+These are manual Workday-administrator actions. The skill does not authenticate
+to the Workday administration interface and must never request or collect a
+Workday administrator's password. The administrator uses their normal
+organization-approved Workday sign-in. Completion is captured as part of the
+`WD-TENANT-001` attestation at the end of DA3.3.
 
 **Message:**
 
-In Workday, run **Edit Tenant Setup – Security**. Set the **Redirect URL** for
-the sign-on, and enable both **OAuth 2.0 Clients Enabled** and **SAML**. In the
-SAML Setup, confirm the **Service Provider ID** matches your Entra app's
-**Identifier (Entity ID)** — they must be identical. Type **done** when saved.
+Have your Workday administrator open **Edit Tenant Setup – Security** using
+their normal Workday admin access. Ask them to:
+
+1. Set the sign-on **Redirect URL**.
+2. Enable **OAuth 2.0 Clients Enabled**.
+3. Enable **SAML**.
+4. Confirm the SAML **Service Provider ID** exactly matches the Entra
+   application's **Identifier (Entity ID)**.
+5. Save the changes.
+
+Return here and type **done** after the administrator confirms the save.
 
 **End message.**
 

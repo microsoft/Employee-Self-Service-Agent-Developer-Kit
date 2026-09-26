@@ -87,6 +87,18 @@ def test_entra_checks_reuse_the_verified_admin_account() -> None:
     assert '--preferred-username "{ENTRA_ADMIN_ACCOUNT}"' in tenant
 
 
+def test_workday_security_changes_are_explicitly_manual_admin_actions() -> None:
+    text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Before I change any Workday security settings" not in text
+    assert "The skill will not sign in to Workday" in text
+    assert "normal organization-approved Workday account" in normalized
+    assert "must never request or collect a Workday administrator's password" in normalized
+    assert "Do not ask a second question that repeats these fields" in normalized
+    assert "Have your Workday administrator open" in text
+
+
 def test_connections_are_created_before_binding_and_flow_activation() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"
