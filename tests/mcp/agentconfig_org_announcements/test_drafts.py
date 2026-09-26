@@ -91,6 +91,24 @@ def test_a_suggested_draft_accepts_only_the_agreed_contract_fields() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("payload", "sensitive_value"),
+    [
+        ({"type": "sensitive-invalid-type"}, "sensitive-invalid-type"),
+        ({"title": {"sensitive": "wrong type"}}, "wrong type"),
+        (
+            {"title": "Hi", "internalNote": "sensitive extra field"},
+            "sensitive extra field",
+        ),
+    ],
+)
+def test_validation_errors_do_not_echo_input_values(payload, sensitive_value) -> None:
+    with pytest.raises(ValidationError) as caught:
+        drafts.SuggestedBulletinDraft.model_validate(payload)
+
+    assert sensitive_value not in str(caught.value)
+
+
 # --------------------------------------------------------------------------
 # Defaults and field mapping
 # --------------------------------------------------------------------------

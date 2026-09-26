@@ -37,10 +37,10 @@ sys.path.insert(
 from _odata import (  # noqa: E402
     _require_odata_id,
     _validate_https_base_url,
-    _validate_title_id,
 )
 from agent_discovery import AgentDiscoveryClient  # noqa: E402
 from base_client import AgentConfigApiError  # noqa: E402
+from validation import validate_bulletin_id, validate_title_id  # noqa: E402
 
 
 DEFAULT_ORG_ANNOUNCEMENTS_BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
@@ -49,9 +49,6 @@ DEFAULT_ORG_ANNOUNCEMENTS_BASE_URL = "https://substrate.office.com/weveb2/api/v1
 # items, with no envelope metadata. Hitting the cap means the archived window is
 # truncated; it does not reveal an exact archived total.
 ARCHIVED_WINDOW_SIZE = 50
-
-_MAX_BULLETIN_ID_LENGTH = 256
-
 
 class IndeterminateWriteError(AgentConfigApiError):
     """An unkeyed create may have committed but was never acknowledged.
@@ -81,30 +78,6 @@ class BulletinValidationError(AgentConfigApiError):
             http_status=200,
         )
         self.errors = errors
-
-
-def _validate_bulletin_id(bulletin_id: str) -> str:
-    """Validate a path-bound bulletin ID.
-
-    The ID is a backend-assigned opaque identifier, so this rejects anything
-    that could reshape the route (empty, padded, control characters, or a path
-    separator) rather than trying to canonicalize it.
-    """
-    if not isinstance(bulletin_id, str) or not bulletin_id:
-        raise ValueError("bulletinId must be a non-empty string")
-    if bulletin_id != bulletin_id.strip():
-        raise ValueError("bulletinId must not have surrounding whitespace")
-    if len(bulletin_id) > _MAX_BULLETIN_ID_LENGTH:
-        raise ValueError(
-            f"bulletinId must not exceed {_MAX_BULLETIN_ID_LENGTH} characters"
-        )
-    if any(
-        ord(character) < 0x20 or ord(character) == 0x7F for character in bulletin_id
-    ):
-        raise ValueError("bulletinId must not contain control characters")
-    if "/" in bulletin_id or "\\" in bulletin_id or "?" in bulletin_id:
-        raise ValueError("bulletinId must not contain path or query separators")
-    return bulletin_id
 
 
 def _parse_instant(value: Any) -> Optional[datetime]:
@@ -182,7 +155,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         )
 
     def _collection_path(self, title_id: str) -> str:
-        encoded = _require_odata_id(_validate_title_id(title_id), "titleId")
+        encoded = _require_odata_id(validate_title_id(title_id), "titleId")
         return f"tenants('{self.tenant_id}')/EmployeeAgents('{encoded}')/essbulletins"
 
     @staticmethod
@@ -343,7 +316,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
 
     async def get_bulletin(self, title_id: str, bulletin_id: str) -> dict[str, Any]:
         """Load one canonical stored configuration."""
-        path = f"{self._collection_path(title_id)}/{_validate_bulletin_id(bulletin_id)}"
+        path = f"{self._collection_path(title_id)}/{validate_bulletin_id(bulletin_id)}"
         return self._require_config(
             await self._request("GET", path, transform_payload=False), title_id
         )
@@ -397,7 +370,7 @@ class OrgAnnouncementsClient(AgentDiscoveryClient):
         save returns, so it is unwrapped identically — including the ID check
         that proves the transition landed on the requested record.
         """
-        validated_id = _validate_bulletin_id(bulletin_id)
+        validated_id = validate_bulletin_id(bulletin_id)
         return self._unwrap_save_result(
             await self._request(
                 "POST",
