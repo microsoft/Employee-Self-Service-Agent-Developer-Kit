@@ -21,8 +21,42 @@ Resolve the target environment automatically:
    `sidecarDataverseEndpoint`.
 3. If neither exists, show the environments available to the
    signed-in account and ask the maker to choose one. Do not ask them to type or
-   copy a URL when a selectable environment is available. Persist the selected
-   Dataverse URL as `sidecarDataverseEndpoint`.
+   copy a URL when a selectable environment is available.
+
+Before persisting the selection, confirm that the selected environment record
+has a non-empty Dataverse organization URL (`instanceUrl` or its equivalent).
+An environment record with no Dataverse organization URL exists in Power
+Platform but does not have a Dataverse database. Do not substitute the
+AgentBuilder or Power Platform API endpoint, do not persist an empty value, and
+do not run the package checkpoint or installer.
+
+When the selected environment has no Dataverse database, show:
+
+**Message:**
+
+This Power Platform environment doesn't have a Dataverse database yet.
+Workday needs Dataverse to host its solution, connection references, and cloud
+flows.
+
+1. Open the [Power Platform admin
+   center](https://admin.powerplatform.microsoft.com/).
+2. Select this environment.
+3. Choose **Add Dataverse** or **Add database**, then complete the database
+   setup.
+4. Wait until the Dataverse environment URL is available.
+5. Return here and tell me it's ready. I'll refresh the environment and verify
+   it before continuing.
+
+If the add-database action isn't available to you, ask a Power Platform
+administrator to complete it. Don't create Workday connections or install the
+Workday package until this check passes.
+
+**End message.**
+
+Keep DA1.1 `in-progress` and stop. After the maker confirms, refresh the
+environment inventory rather than trusting acknowledgement alone. Continue
+only when the selected environment now exposes a Dataverse organization URL,
+then persist that URL as `sidecarDataverseEndpoint`.
 
 Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
 `.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
@@ -72,11 +106,14 @@ environment is outside this lifecycle and must not affect DA1.1.
   Continue to **P1.1**.
 - Any other **`FAILED`** result → show the result and stop. Do not guess
   whether installation is safe from an unrecognized failure reason.
-- **`WARNING` / `SKIPPED`** (Dataverse verification could not run, e.g.
-  authentication, permissions, endpoint initialization, or a transient error)
-  → show the result verbatim, keep DA1.1 `in-progress`, and stop; ask the user
-  to resolve the underlying issue and re-run this step. Never attempt package
-  installation from an inconclusive result.
+- **`WARNING` / `SKIPPED`** (Dataverse verification could not run):
+  - If the result says the Dataverse environment URL is unavailable, show the
+    no-Dataverse message and provisioning steps above.
+  - For authentication, permissions, endpoint initialization, or a transient
+    error, show the result and its remediation verbatim.
+  - Keep DA1.1 `in-progress` and stop. Re-run the checkpoint after the maker
+    resolves the reported issue. Never attempt package installation from an
+    inconclusive result.
 
 ---
 

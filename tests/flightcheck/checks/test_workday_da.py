@@ -170,14 +170,19 @@ def test_skipped_when_env_url_missing() -> None:
     assert r.checkpoint_id == "WD-DA-PKG-001"
     assert r.category == "Workday DA"
     assert r.status == "Skipped"
-    assert "Dataverse URL or access token not available" in r.result
+    assert "does not expose a Dataverse environment URL" in r.result
+    assert "Add Dataverse or Add database" in r.remediation
+    assert "Power Platform administrator" in r.remediation
 
 
 def test_skipped_when_token_missing() -> None:
     results = _check_workday_da_package_installed(
         _MinimalRunner(env_url=BASE_URL, dv_token=None)
     )
-    assert results[0].status == "Skipped"
+    result = results[0]
+    assert result.status == "Skipped"
+    assert "Dataverse access token is not available" in result.result
+    assert "Refresh Dataverse authentication" in result.remediation
 
 
 @responses.activate

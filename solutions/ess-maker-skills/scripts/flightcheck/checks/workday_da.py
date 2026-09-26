@@ -309,10 +309,29 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
     env_url = getattr(runner, "env_url", None)
     token = getattr(runner, "dv_token", None)
 
-    if not env_url or not token:
+    if not env_url:
         return [_result(
             Status.SKIPPED.value,
-            "Dataverse URL or access token not available in this run.",
+            "The selected Power Platform environment does not expose a "
+            "Dataverse environment URL.",
+            remediation=(
+                "Confirm that the selected environment has a Dataverse "
+                "database. In Power Platform admin center, select the "
+                "environment and choose Add Dataverse or Add database. Wait "
+                "for provisioning to finish, refresh the environment list, "
+                "and rerun this checkpoint. Ask a Power Platform "
+                "administrator if the action is unavailable."
+            ),
+        )]
+
+    if not token:
+        return [_result(
+            Status.SKIPPED.value,
+            "A Dataverse access token is not available in this run.",
+            remediation=(
+                "Refresh Dataverse authentication for the selected "
+                "environment and rerun this checkpoint."
+            ),
         )]
 
     selected = _selected_agent(runner)

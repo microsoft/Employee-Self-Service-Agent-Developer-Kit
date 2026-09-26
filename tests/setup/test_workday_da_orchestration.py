@@ -51,6 +51,20 @@ def test_extension_install_uses_the_ring_aware_runtime_installer() -> None:
     assert "do not restart the Workday checklist" in normalized
 
 
+def test_extension_install_guides_missing_dataverse_provisioning() -> None:
+    text = (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "doesn't have a Dataverse database yet" in text
+    assert "https://admin.powerplatform.microsoft.com/" in text
+    assert "**Add Dataverse** or **Add database**" in text
+    assert "solution, connection references, and cloud flows" in normalized
+    assert "refresh the environment inventory" in normalized
+    assert "rather than trusting acknowledgement alone" in normalized
+    assert "do not run the package checkpoint or installer" in normalized
+    assert "Power Platform administrator" in normalized
+
+
 def test_connections_are_created_before_binding_and_flow_activation() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"

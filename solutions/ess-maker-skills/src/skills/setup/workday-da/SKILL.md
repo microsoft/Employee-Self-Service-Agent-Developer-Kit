@@ -148,7 +148,7 @@ access tokens, refresh tokens, passwords, or cookies.
 
    | Phase | What we'll do | Who is needed |
    | --- | --- | --- |
-   | Workday extension | Install or verify the Workday package for the ESS HR agent | Power Platform Environment Maker |
+   | Workday extension | Verify Dataverse, then install or verify the Workday package for the ESS HR agent | Power Platform Environment Maker; Power Platform administrator if a Dataverse database must be added |
    | Microsoft Entra | Configure Workday SSO, API permission, consent, user assignment, NameID, and SAML signing | Entra Application Administrator or Cloud Application Administrator; a consent-capable administrator if required |
    | Workday tenant | Configure tenant security, the API client, functional areas, endpoints, authentication policy, and certificate trust | Workday Administrator |
    | Power Platform connections | Configure Workday OAuthUser and Dataverse connections, shared parameters, bindings, and cloud flows | Power Platform Environment Maker |
