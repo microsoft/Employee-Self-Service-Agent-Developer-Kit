@@ -14,21 +14,16 @@ import shutil
 import subprocess
 import sys
 
-from flightcheck.checks.workday_da import (
-    _DA_HR_WORKDAY_CHILD_SCHEMA,
-    _MOS_WORKDAY_RUNTIME_SCHEMA,
-)
+from workday_connect_model import load_catalog
 
 
+_CATALOG = load_catalog()
 WORKDAY_PACKAGES = {
-    "runtime": {
-        "applicationName": _MOS_WORKDAY_RUNTIME_SCHEMA,
-        "schemaName": _MOS_WORKDAY_RUNTIME_SCHEMA,
-    },
-    "legacy-da": {
-        "applicationName": "msdyn_EssDAHRWorkdayHCM",
-        "schemaName": _DA_HR_WORKDAY_CHILD_SCHEMA,
-    },
+    flavor: {
+        "applicationName": package["applicationName"],
+        "schemaName": package["solutionSchemaName"],
+    }
+    for flavor, package in _CATALOG["packages"].items()
 }
 CLOUD_FOR_RING = {
     "preprod": "Preprod",
@@ -101,10 +96,19 @@ def _parse_profiles(output: str) -> list[dict]:
             None,
         )
         if cloud:
+            username = next(
+                (
+                    token
+                    for token in re.split(r"\s+", remainder)
+                    if "@" in token and not token.casefold().startswith("http")
+                ),
+                None,
+            )
             profiles.append(
                 {
                     "index": match.group(1),
                     "active": bool(match.group(2)),
+                    "username": username,
                     "cloud": cloud,
                     "environment_url": environment_url,
                 }
@@ -117,38 +121,47 @@ def ensure_pac_auth(
     *,
     ring: str,
     environment_url: str,
+    preferred_username: str | None = None,
     runner=_run,
-) -> None:
+) -> dict:
     """Select or create a PAC profile for the requested Power Platform ring."""
     cloud = CLOUD_FOR_RING[ring]
-    listed = runner(
-        [pac_executable, "auth", "list"],
-        capture_output=True,
-        timeout=60,
+    normalized_environment = environment_url.rstrip("/").casefold()
+    normalized_username = (
+        preferred_username.casefold() if preferred_username else None
     )
-    profiles = (
-        _parse_profiles(listed.stdout or "")
-        if listed.returncode == 0
-        else []
-    )
-    cloud_matching = [
-        profile
-        for profile in profiles
-        if profile["cloud"].casefold() == cloud.casefold()
+
+    def matches_target(profile: dict) -> bool:
+        if profile["cloud"].casefold() != cloud.casefold():
+            return False
+        if ring == "preprod" and (
+            profile["environment_url"] or ""
+        ).casefold() != normalized_environment:
+            return False
+        if normalized_username and (
+            profile["username"] or ""
+        ).casefold() != normalized_username:
+            return False
+        return True
+
+    def list_profiles() -> list[dict]:
+        listed = runner(
+            [pac_executable, "auth", "list"],
+            capture_output=True,
+            timeout=60,
+        )
+        return (
+            _parse_profiles(listed.stdout or "")
+            if listed.returncode == 0
+            else []
+        )
+
+    matching = [
+        profile for profile in list_profiles() if matches_target(profile)
     ]
-    if ring == "preprod":
-        normalized_environment = environment_url.rstrip("/").casefold()
-        matching = [
-            profile
-            for profile in cloud_matching
-            if (profile["environment_url"] or "").casefold()
-            == normalized_environment
-        ]
-    else:
-        matching = cloud_matching
     active = [profile for profile in matching if profile["active"]]
     if len(active) == 1:
-        return
+        return active[0]
     if len(matching) == 1:
         selected = runner(
             [
@@ -163,7 +176,19 @@ def ensure_pac_auth(
         )
         if selected.returncode != 0:
             raise PacCliError("PAC could not select the required auth profile.")
-        return
+        if not preferred_username:
+            return {**matching[0], "active": True}
+        verified = [
+            profile
+            for profile in list_profiles()
+            if profile["active"] and matches_target(profile)
+        ]
+        if len(verified) != 1:
+            raise PacCliError(
+                "PAC selected a profile, but the active profile could not be "
+                "verified for the requested environment and account."
+            )
+        return verified[0]
     if len(matching) > 1:
         raise PacCliError(
             f"Multiple PAC profiles exist for {cloud}. Select the correct "
@@ -189,6 +214,27 @@ def ensure_pac_auth(
         raise PacCliError(
             f"PAC authentication for {cloud} did not complete successfully."
         )
+    if not preferred_username:
+        return {
+            "index": None,
+            "active": True,
+            "username": None,
+            "cloud": cloud,
+            "environment_url": (
+                environment_url.rstrip("/") if ring == "preprod" else None
+            ),
+        }
+    verified = [
+        profile
+        for profile in list_profiles()
+        if profile["active"] and matches_target(profile)
+    ]
+    if len(verified) != 1:
+        raise PacCliError(
+            "PAC authentication completed, but the active profile does not "
+            "match the requested environment and maker account."
+        )
+    return verified[0]
 
 
 def install_workday_package(
@@ -196,9 +242,10 @@ def install_workday_package(
     package_flavor: str,
     *,
     ring: str,
+    preferred_username: str | None = None,
     pac_resolver=resolve_pac_executable,
     runner=_run,
-) -> str:
+) -> dict:
     """Install one Workday AppSource package through the supported PAC flow."""
     if package_flavor not in WORKDAY_PACKAGES:
         raise ValueError(f"Unsupported Workday package flavor: {package_flavor}")
@@ -208,10 +255,11 @@ def install_workday_package(
 
     package = WORKDAY_PACKAGES[package_flavor]
     pac_executable = pac_resolver()
-    ensure_pac_auth(
+    profile = ensure_pac_auth(
         pac_executable,
         ring=ring,
         environment_url=environment_url,
+        preferred_username=preferred_username,
         runner=runner,
     )
     installed = runner(
@@ -232,7 +280,13 @@ def install_workday_package(
             "PAC could not install the Workday package. Review the PAC output "
             "above, confirm environment access, and retry /connect workday."
         )
-    return package["schemaName"]
+    return {
+        "schemaName": package["schemaName"],
+        "authenticatedAccount": profile.get("username"),
+        "pacProfileIndex": profile.get("index"),
+        "cloud": profile.get("cloud"),
+        "environmentUrl": environment_url,
+    }
 
 
 def main() -> None:
@@ -262,6 +316,10 @@ def main() -> None:
         default="prod",
         help="Power Platform ring captured during setup.",
     )
+    parser.add_argument(
+        "--preferred-username",
+        help="Environment Maker account that PAC must use.",
+    )
     args = parser.parse_args()
 
     package = WORKDAY_PACKAGES[args.package_flavor]
@@ -274,10 +332,11 @@ def main() -> None:
         "applicationName": package["applicationName"],
     }
     try:
-        schema_name = install_workday_package(
+        result = install_workday_package(
             args.url,
             args.package_flavor,
             ring=args.ring,
+            preferred_username=args.preferred_username,
         )
     except (OSError, PacCliError, RuntimeError, ValueError) as error:
         print(
@@ -290,7 +349,7 @@ def main() -> None:
 
     print(
         "INSTALLED_WORKDAY_DA_EXTENSION_JSON:"
-        f"{json.dumps({**base_result, 'schemaName': schema_name})}"
+        f"{json.dumps({**base_result, **result})}"
     )
 
 
