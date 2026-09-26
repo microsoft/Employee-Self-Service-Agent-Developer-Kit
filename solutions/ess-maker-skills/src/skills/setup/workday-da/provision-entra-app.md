@@ -84,6 +84,24 @@ canonical tenant selected during `/setup`:
    az login --tenant "{SETUP_TENANT_ID}" --use-device-code --allow-no-subscriptions
    ```
 
+   Run this interactively without hiding its output. Read the emitted device
+   sign-in URL and one-time code, then repeat both in chat as copyable text:
+
+   **Message:**
+
+   Sign in to Microsoft Entra:
+
+   1. Open `{DEVICE_LOGIN_URL}`
+   2. Enter code **`{DEVICE_CODE}`**
+   3. Sign in with the administrator account for the selected tenant
+
+   I will continue only after the CLI confirms the sign-in. Do not paste any
+   password or token into chat.
+
+   **End message.**
+
+   Never require the user to copy a URL or code from the inline terminal.
+
 4. Re-run `az account show --query tenantId -o tsv`. If it still differs, halt
    before running the role query or any `az ad` / Graph mutation. Persist
    `tenantId = SETUP_TENANT_ID` to

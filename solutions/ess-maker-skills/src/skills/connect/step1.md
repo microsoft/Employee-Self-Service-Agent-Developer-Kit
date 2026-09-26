@@ -11,11 +11,20 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected only if
-  `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
-  its `agentSlug` exactly matches the active agent, and every phase is `done`.
-  Shared provider setup state is not agent connection state and must not make
-  a sibling or newly selected agent appear connected.
+- **Workday** — connected when either architecture's own completion contract
+  passes:
+  - **CEA:** `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json`
+    exists, its `agentSlug` exactly matches the active agent, and every phase
+    is `done`.
+  - **DA:** the active agent resolves to a supported ESS DA HR schema,
+    `.local/connect/workday-da/config.json` has `status: "ready"`, and every
+    step listed in `workday-da.definition.json`
+    `completion.requiredStepIds` is `done`.
+
+  Never use shared DA provider state to label an ESS DA IT, CEA, sibling, or
+  unresolved agent as connected. The DA lifecycle performs full live
+  revalidation when the maker selects Workday again; this summary reflects the
+  last successfully verified persisted state.
 
 ---
 
@@ -262,8 +271,32 @@ Please select the ESS HR Agent or contact your administrator.
 Stop immediately without creating Workday state or entering a lifecycle.
 
 For `gptagent_copilotforemployeeselfservicehr` or the legacy
-`msdyn_copilotforemployeeselfservicedahr` alias, read
-`src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
+`msdyn_copilotforemployeeselfservicedahr` alias, read the current Git branch
+and short commit with `git branch --show-current` and
+`git rev-parse --short HEAD` when this is a Git checkout. These commands are
+diagnostic only: never switch branches or fetch code during `/connect`. Then
+show:
+
+**Message:**
+
+Workday setup path selected:
+
+- Agent: **{ACTIVE_AGENT_DISPLAY_NAME}**
+- Architecture: **Declarative Agent — ESS HR**
+- Authentication: **Microsoft Entra ID Integrated**
+- Workspace revision: **{BRANCH}@{SHORT_SHA}**
+- Setup state: **`.local/connect/workday-da/`**
+
+This release does not configure direct Workday federation through Okta, Ping,
+or another identity provider.
+
+**End message.**
+
+If Git revision information is unavailable, replace the workspace-revision
+value with **packaged workspace (Git revision unavailable)**; do not omit the
+other diagnostics.
+
+Read `src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
 `WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
 `WD-PKG-001`: DA packages share some Workday connection-reference names with
 CEA, so the CEA package fingerprint is not an architecture discriminator.

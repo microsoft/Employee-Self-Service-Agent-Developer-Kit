@@ -96,10 +96,19 @@ def _parse_profiles(output: str) -> list[dict]:
             None,
         )
         if cloud:
+            username = next(
+                (
+                    token
+                    for token in re.split(r"\s+", remainder)
+                    if "@" in token and not token.casefold().startswith("http")
+                ),
+                None,
+            )
             profiles.append(
                 {
                     "index": match.group(1),
                     "active": bool(match.group(2)),
+                    "username": username,
                     "cloud": cloud,
                     "environment_url": environment_url,
                 }
@@ -112,10 +121,28 @@ def ensure_pac_auth(
     *,
     ring: str,
     environment_url: str,
+    preferred_username: str | None = None,
     runner=_run,
 ) -> None:
     """Select or create a PAC profile for the requested Power Platform ring."""
     cloud = CLOUD_FOR_RING[ring]
+    normalized_environment = environment_url.rstrip("/").casefold()
+    normalized_username = (
+        preferred_username.casefold() if preferred_username else None
+    )
+
+    def matches_target(profile: dict) -> bool:
+        if profile["cloud"].casefold() != cloud.casefold():
+            return False
+        if ring == "preprod":
+            if (profile["environment_url"] or "").casefold() != (
+                normalized_environment
+            ):
+                return False
+        if normalized_username:
+            return (profile["username"] or "").casefold() == normalized_username
+        return True
+
     listed = runner(
         [pac_executable, "auth", "list"],
         capture_output=True,
@@ -126,21 +153,7 @@ def ensure_pac_auth(
         if listed.returncode == 0
         else []
     )
-    cloud_matching = [
-        profile
-        for profile in profiles
-        if profile["cloud"].casefold() == cloud.casefold()
-    ]
-    if ring == "preprod":
-        normalized_environment = environment_url.rstrip("/").casefold()
-        matching = [
-            profile
-            for profile in cloud_matching
-            if (profile["environment_url"] or "").casefold()
-            == normalized_environment
-        ]
-    else:
-        matching = cloud_matching
+    matching = [profile for profile in profiles if matches_target(profile)]
     active = [profile for profile in matching if profile["active"]]
     if len(active) == 1:
         return
@@ -184,6 +197,27 @@ def ensure_pac_auth(
         raise PacCliError(
             f"PAC authentication for {cloud} did not complete successfully."
         )
+    if preferred_username:
+        verified = runner(
+            [pac_executable, "auth", "list"],
+            capture_output=True,
+            timeout=60,
+        )
+        verified_profiles = (
+            _parse_profiles(verified.stdout or "")
+            if verified.returncode == 0
+            else []
+        )
+        verified_active = [
+            profile
+            for profile in verified_profiles
+            if profile["active"] and matches_target(profile)
+        ]
+        if len(verified_active) != 1:
+            raise PacCliError(
+                "PAC authentication completed, but the active profile does "
+                "not match the requested environment and maker account."
+            )
 
 
 def install_workday_package(

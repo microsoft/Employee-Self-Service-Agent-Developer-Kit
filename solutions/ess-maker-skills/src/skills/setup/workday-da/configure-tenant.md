@@ -100,7 +100,7 @@ Use the `vscode_askQuestions` tool:
     "header": "Workday administrator",
     "question": "Have you looped in a Workday admin to perform the Workday side of configuration?",
     "options": [
-      { "label": "Yes, I have", "recommended": true },
+      { "label": "Yes, I have" },
       { "label": "No, I have not" }
     ],
     "allowFreeformInput": false
@@ -164,8 +164,11 @@ Wait for the user's answer, then record it as the pre-gate evidence
 
   This Workday tenant already has a **different** SAML identity provider active.
   Workday only allows one at a time, and replacing it would break the existing
-  sign-on for its users. I'm stopping here so nothing is overwritten — please
-  confirm with whoever owns that federation before continuing, then come back.
+  sign-on for its users. This V1 setup supports Microsoft Entra ID Integrated
+  authentication only; direct Workday federation through Okta, Ping, or another
+  provider is not supported. I'm stopping here so nothing is overwritten.
+  Confirm the intended federation with the Workday and identity administrators
+  before continuing.
 
   **End message.**
 
@@ -240,7 +243,7 @@ Use the `vscode_askQuestions` tool:
     "header": "Certificate parity",
     "question": "Does the uploaded Workday certificate (and its Valid From / Valid To dates) match the Entra signing certificate?",
     "options": [
-      { "label": "Yes, they match", "recommended": true },
+      { "label": "Yes, they match" },
       { "label": "No / not sure" }
     ],
     "allowFreeformInput": false
@@ -392,8 +395,7 @@ Use the `vscode_askQuestions` tool:
     "options": [
       {
         "label": "Existing active policy already allows employee SAML",
-        "description": "No policy change or activation was needed",
-        "recommended": true
+        "description": "No policy change or activation was needed"
       },
       {
         "label": "Reviewed policy change was activated",

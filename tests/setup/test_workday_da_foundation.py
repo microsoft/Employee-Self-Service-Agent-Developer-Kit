@@ -75,6 +75,15 @@ def test_state_contract_requires_immediate_durable_updates() -> None:
     assert '"provenance"' in schema
     assert '`reviewed`' in updater
     assert "FAILED` or `ERROR` always produces `blocked`" in updater
+    assert "**What FlightCheck found**" in updater
+    assert "**What you need to verify**" in updater
+    assert '"question": "Have you completed this step' not in updater
+    assert '"recommended": true' not in updater
+    normalized_updater = " ".join(updater.split())
+    assert (
+        "Never infer acknowledgement from a FlightCheck pass, a bare `done`"
+        in normalized_updater
+    )
 
 
 def test_workday_skills_have_discovery_metadata_and_direct_navigation() -> None:
@@ -93,6 +102,8 @@ def test_workday_skills_have_discovery_metadata_and_direct_navigation() -> None:
     assert da_skill.startswith("---\nname: connect-workday-da\n")
     assert "description: >-" in da_skill
     assert "## Playbook map" in da_skill
+    assert "checked-in playbooks and the executable definition are the controlled" in da_skill
+    assert "Do not browse for, merge in, or improvise setup steps" in da_skill
     for reference in (
         "install-extension.md",
         "provision-entra-app.md",
@@ -123,6 +134,11 @@ def test_entra_setup_pins_tenant_and_exact_app_identity() -> None:
     assert "Never downgrade a programmatic privileged-role" in gate
     assert "user_impersonation" in entra
     assert "claimsMappingPolicy" in entra
+    assert "repeat both in chat as copyable text" in entra
+    assert (
+        "Never require the user to copy a URL or code from the inline terminal"
+        in entra
+    )
 
 
 def test_workday_tenant_setup_preserves_manual_gates_and_safe_order() -> None:
@@ -146,6 +162,7 @@ def test_workday_tenant_setup_preserves_manual_gates_and_safe_order() -> None:
     assert "There is no separate domain-to-integration-security-group" in tenant
     assert "Do not look for an OAuth-client restriction" in tenant
     assert "Existing active policy already allows employee SAML" in tenant
+    assert "direct Workday federation through Okta, Ping" in tenant
 
 
 def test_workday_portal_tasks_start_only_after_the_admin_gate() -> None:

@@ -67,6 +67,11 @@ def test_default_definition_is_valid_and_complete() -> None:
     assert definition["definitionVersion"] == 1
     assert definition["stateSchemaVersion"] == 1
     assert len(definition["steps"]) == 21
+    assert definition["packages"]["runtime"]["flowNames"] == [
+        "ESS Workday Runtime References",
+        "ESS Workday Runtime REST Execution",
+        "ESS Workday Runtime",
+    ]
     assert definition["completion"]["finalStepId"] == "DA5.1"
     assert set(definition["completion"]["requiredStepIds"]) == {
         step["id"] for step in definition["steps"]

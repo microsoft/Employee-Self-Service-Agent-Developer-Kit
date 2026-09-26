@@ -132,7 +132,7 @@ Use the `vscode_askQuestions` tool:
     "header": "Confirm role",
     "question": "Do you have the {REQUIRED_ROLE} role to perform this step?",
     "options": [
-      { "label": "Yes, I have this role", "recommended": true },
+      { "label": "Yes, I have this role" },
       { "label": "No / not sure" }
     ],
     "allowFreeformInput": false

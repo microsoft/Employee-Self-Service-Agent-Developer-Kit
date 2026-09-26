@@ -25,6 +25,13 @@ Every **Message** block is the exact text to show the user.
 not rephrase, add commentary, or tell the user what tools you are calling or what
 files you are reading.
 
+These checked-in playbooks and the executable definition are the controlled
+sources for this flow. Do not browse for, merge in, or improvise setup steps
+from unrelated web pages, LMC articles, prior chat transcripts, or another
+Workday architecture. If a required detail is absent or conflicts with these
+files, stop at that step and report the missing decision instead of inventing
+instructions.
+
 This router sequences the five Workday connect steps for the **ESS HR agent**,
 using the master checklist as a
 **resume-aware spine**: it renders the working checklist on first run, resumes at
@@ -61,6 +68,42 @@ because this file must remain safe if invoked directly.
 
 ---
 
+## V1 identity boundary
+
+This release supports only the Workday connection option named **Microsoft
+Entra ID Integrated**. Do not present an identity-provider decision tree and do
+not configure direct Workday federation through Okta, Ping, or another
+identity provider.
+
+If the user says their Workday tenant is directly federated to a provider other
+than Microsoft Entra ID, show:
+
+**Message:**
+
+This version of Workday setup supports **Microsoft Entra ID Integrated**
+authentication only. Direct Workday federation through Okta, Ping, or another
+identity provider is outside the V1 scope, so I won't change this environment.
+Contact your Workday and identity administrators before continuing.
+
+**End message.**
+
+Stop without creating or updating Workday state.
+
+When this file is invoked directly instead of through `/connect workday`, show
+the same routing diagnostics defined by the Workday branch in
+`src/skills/connect/step1.md` before the readiness briefing. The architecture,
+authentication mode, workspace revision, and canonical state path must be
+visible so a test run cannot silently use the CEA lifecycle or an unexpected
+checkout.
+
+Use the same five-phase lifecycle and the same completion gates for
+Development, Sandbox, and Production Power Platform environments. Environment
+type never skips, reorders, or relaxes a Workday step. Only discovered
+environment identifiers, tenant-specific values, and the ring-specific
+Power Platform host may differ.
+
+---
+
 ## Handling Workday credentials — never put secrets in chat
 
 The Workday **password is a secret**. **Never** ask for it with a chat question
@@ -82,6 +125,11 @@ Non-secret connection identifiers (tenant, SOAP/REST/token URLs, OAuth client
 ID, App ID URI) are safe to capture in chat — see
 [`shared/connection-fields.md`](./shared/connection-fields.md). The Workday
 **username** is likewise not masked (`"password": false`); only the password is.
+
+Whenever a command starts device-code authentication, read the command output
+and repeat the sign-in URL and one-time code as plain, copyable chat text.
+Never require the user to copy them from an inline terminal. Do not repeat
+access tokens, refresh tokens, passwords, or cookies.
 
 ---
 

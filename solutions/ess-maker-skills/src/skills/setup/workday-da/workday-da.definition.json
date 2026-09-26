@@ -18,6 +18,11 @@
     "runtime": {
       "applicationName": "msdyn_EssWorkdayRuntime",
       "solutionSchemaName": "msdyn_EssWorkdayRuntime",
+      "flowNames": [
+        "ESS Workday Runtime References",
+        "ESS Workday Runtime REST Execution",
+        "ESS Workday Runtime"
+      ],
       "versionPolicy": {
         "status": "pending-product-confirmation",
         "minimumInclusive": null,

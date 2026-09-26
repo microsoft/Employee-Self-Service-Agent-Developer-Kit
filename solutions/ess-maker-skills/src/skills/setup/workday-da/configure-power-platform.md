@@ -47,17 +47,27 @@ Open this environment's **Connections** page:
 
 1. Select **New connection**, search for **Workday**, and create a connection
    using **Microsoft Entra ID Integrated** authentication.
-3. Enter the values below. Complete the sign-in/consent window if one opens.
+2. Enter the connection fields in the order shown below.
+3. Complete the sign-in or consent window if one opens.
 4. Wait until the Workday connection shows **Connected**.
 
-Use the values captured earlier:
+**Connection worksheet**
 
-- Microsoft Entra resource URL: the Workday SAML identifier configured for
-  this tenant, not the `api://` application ID URI.
-- OAuth token URL: `{oauthTokenUrl}`.
-- Workday API client ID: `{oauthClientId}`.
-- SOAP base URL: `{soapBaseUrl}`.
-- REST base URL: `{restBaseUrl}`. It must end exactly at `/api`.
+- Workday tenant: `{tenant}` *(verification context; enter it only if the form
+  displays a tenant field)*
+- Authentication: `Microsoft Entra ID Integrated`
+
+| Connection form field | Value |
+| --- | --- |
+| Microsoft Entra resource URL | `http://www.workday.com/{tenant}` |
+| OAuth token URL | `{oauthTokenUrl}` |
+| Workday API client ID | `{oauthClientId}` |
+| SOAP base URL | `{soapBaseUrl}` |
+| REST base URL | `{restBaseUrl}` |
+
+The Microsoft Entra resource URL is the Workday SAML Identifier / Entity ID
+configured for this tenant, not the `api://` application ID URI. The REST base
+URL must end exactly at `/api`.
 
 **End message.**
 
@@ -85,37 +95,87 @@ Re-read the ring-native connection inventory and confirm the Dataverse
 connection is `Connected` and belongs to this environment. Record DA4.2 with
 the connection name and environment in the evidence.
 
+**Message:**
+
+The physical connections are created. Newly installed managed-solution flows
+can still be **Off** at this point; that is expected until their connection
+references are bound. Do not open the agent's Connection settings yet. I'll
+bind both references first, then turn on and verify the Workday flows.
+
+**End message.**
+
 ## DA4.3 — Bind the extension connections
 
-Bind the installed solution references programmatically:
+Use the checked-in binding helper:
 
-1. Resolve the physical Workday and Dataverse connection IDs created in
-   DA4.1–DA4.2.
-2. PATCH `msdyn_sharedworkdaysoap_workdayruntime.connectionid` to the Workday
-   connection ID.
-3. PATCH
-   `msdyn_sharedcommondataserviceforapps_workdayruntime.connectionid` to the
-   Dataverse connection ID.
-4. Re-read both rows and confirm the IDs persisted.
-5. Confirm neither reference points to a connection from a different
-   environment or user.
+`scripts/bind_workday_da_connections.py`
 
-Preview the two target logical names and connection display names before
-PATCHing. The authorization script does not perform this step. Record DA4.3
-only after the post-write verification passes.
+Resolve `WORKDAY_DATAVERSE_URL`, `RING`, and the maker account from canonical
+setup state; do not ask the maker to paste connection IDs. First preview:
+
+```powershell
+python scripts/bind_workday_da_connections.py `
+  --url "{WORKDAY_DATAVERSE_URL}" `
+  --ring "{RING}" `
+  --preferred-username "{MAKER_ACCOUNT}"
+```
+
+The helper uses the ring-aware PAC profile to discover connected physical
+connections and the Dataverse Web API to read the two installed runtime
+references. It fails closed when either connection or reference is missing or
+ambiguous. If multiple connected connections exist for a connector, show their
+safe display names and ask the maker which one to use, then rerun the preview
+with `--workday-connection-id` and/or `--dataverse-connection-id`.
+
+Show the `WORKDAY_DA_BINDING_PLAN_JSON` target display names and obtain
+approval. Then run the identical command with `--apply`. Do not translate or
+replace the helper with ad hoc PATCH calls.
+
+The apply run must emit `WORKDAY_DA_BINDING_APPLIED_JSON`, report
+`"verified": true`, and post-read:
+
+- `msdyn_sharedworkdaysoap_workdayruntime.connectionid` equal to the selected
+  Workday connection name;
+- `msdyn_sharedcommondataserviceforapps_workdayruntime.connectionid` equal to
+  the selected Dataverse connection name.
+
+If either field remains empty, leave DA4.3 blocked and do not attempt flow
+activation. The authorization script does not perform this binding. Record
+DA4.3 only after the helper's post-write verification passes.
 
 ## DA4.4 — Turn on the Workday cloud flows
+
+The AppSource installer installs the managed package but does not activate its
+cloud flows. Seeing the Workday flows **Off** immediately after installation is
+therefore expected and is not evidence that the physical connection failed.
 
 Do not activate flows until DA4.1–DA4.3 are complete and the two installed
 runtime `connectionreference` rows have non-empty connection bindings. A flow
 whose references are unbound may activate but will fail at runtime.
 
-Discover the Workday flows installed with the ESS DA HR extension when a
-reliable DA-scoped listing is available. If they can be enabled through the
-supported Power Platform API, preview the affected flows and ask for approval
-before enabling them.
+Use the checked-in activation helper:
 
-Otherwise show:
+`scripts/activate_workday_da_flows.py`
+
+The reviewed flow catalog comes from the selected package in
+`workday-da.definition.json`; do not discover targets by name prefix or include
+similarly named flows from another solution. First preview:
+
+```powershell
+python scripts/activate_workday_da_flows.py `
+  --url "{WORKDAY_DATAVERSE_URL}" `
+  --package-flavor "{PACKAGE_FLAVOR}" `
+  --preferred-username "{MAKER_ACCOUNT}"
+```
+
+The helper fails closed when either runtime reference is unbound, a reviewed
+flow is missing or duplicated, or a matched record is not a cloud flow. Show
+the `WORKDAY_DA_FLOW_ACTIVATION_PLAN_JSON` actions and obtain approval before
+running the identical command with `--apply`. Do not replace the helper with
+an ad hoc Dataverse PATCH.
+
+The apply run must emit `WORKDAY_DA_FLOWS_ACTIVATED_JSON` and report
+`"verified": true`. If the selected package has no reviewed flow catalog, show:
 
 **Message:**
 
@@ -125,7 +185,10 @@ flows from other solutions.
 
 **End message.**
 
-Record DA4.4 only after every target Workday flow is verified as active.
+Record DA4.4 only after every target Workday flow is verified as active. If any
+target flow cannot be turned on, show its exact activation error and return to
+DA4.3 to verify both bindings. Never continue to agent Connection settings
+while a required Workday flow is **Off**.
 
 ## DA4.5 — Connect the agent and share parameters
 
@@ -183,6 +246,11 @@ Resolve parameters instead of asking the maker to paste GUIDs:
 
 If the bot or workflow set cannot be resolved unambiguously, stop and explain
 which value is missing. Never guess or run the script with a partial flow set.
+
+Do not run this script before DA4.5 is complete. Both invocations below occur
+after every Workday flow is connected and **Allow permission to share
+parameters** is enabled. The two invocations are preview and apply; they are not
+"before sharing" and "after sharing" runs.
 
 Before invoking the checked-in script, perform the same read-only
 delegated-authorization and team lookups documented by the script:
@@ -251,12 +319,43 @@ topic list and obtain approval before changing anything. Confirm:
 - choosing **Enable all** enables every installed Workday business topic plus
   the required Workday system topics.
 
+For the current ESS HR runtime package, the package-managed Workday system
+topic catalog is:
+
+- **Workday [System] - 1: Set User Context V2**
+- **Workday [System] - 1: Set Runtime Template Configurations**
+- **Workday System ParseError**
+- **Workday System Get CommonExecution**
+- **Workday System Get REST Execution**
+- **Workday System Get ReferenceData**
+- **Workday System Refresh ReferenceData**
+- **Workday System ManagerCheck**
+- **Workday System AccessCheck**
+
+Use the installed component inventory as the runtime source of truth and match
+these names exactly for the current package. If the active package flavor
+exposes a different catalog, stop and report the package/version drift rather
+than renaming, recreating, or guessing a substitute system topic.
+
 Topic activation is server-only state and is not stored in the topic YAML.
 The current AgentBuilder client can fetch components, update the bot entity,
 import, and publish, but it has no proven per-component status mutation API.
 Until a supported API is added, do not guess a MinimalBot payload. Provide the
 equivalent Copilot Studio enablement steps, including the **Enable all**
 selection, and record DA4.7 as manual after confirmation.
+
+After the selected Workday topics and required dependencies are confirmed,
+show:
+
+**Message:**
+
+The Workday topic selection is complete. Do not edit, rename, delete, or
+repurpose package-managed Workday topics or their required system
+dependencies. In an environment that also contains ServiceNow, do not change
+ServiceNow or other package-managed system topics while configuring Workday.
+Put customer-specific behavior in separate custom topics.
+
+**End message.**
 
 ## DA4.8 — Record firewall allowlisting
 

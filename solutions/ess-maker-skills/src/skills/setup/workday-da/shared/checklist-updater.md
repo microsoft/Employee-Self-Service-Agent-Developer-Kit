@@ -154,21 +154,38 @@ not just `description`/`status` but also the finding and the how-to:
 
 For **every** entry in `results` whose `status` is `Manual` (also `Warning` or
 `NotConfigured`, when present), render a block in chat — one per entry, in the
-order they appear — using `description` as the heading, then `result`, then
-`remediation`:
+order they appear — using `description` as the heading and separating the
+finding from the required action:
 
 ```
 **<description>**
 
+**What FlightCheck found**
+
 <result>
+
+**What you need to verify**
 
 <remediation>
 ```
 
 Rules:
-- Copy `result` and `remediation` **verbatim** — keep the numbered/bulleted steps
-  and every line break. Do **not** summarise, shorten, re-order, or paraphrase the
-  steps; the operator follows them exactly.
+- Preserve every word, URL, command, warning, and ordering dependency from
+  `result` and `remediation`. Do **not** summarise, shorten, re-order, or
+  paraphrase the content.
+- Apply presentation-only Markdown formatting so instructions are not rendered
+  as dense parallel prose:
+  - Preserve existing paragraphs and line breaks.
+  - Render lines beginning with `Step <number>` as bold subheadings.
+  - Render existing alphabetic or numeric action markers as list items.
+  - When a single remediation paragraph contains inline `(1)`, `(2)`, and later
+    ordered markers, split only at those markers and render the unchanged text
+    as a numbered list.
+  - Put standalone commands on their own indented or fenced line. Never alter a
+    command while formatting it.
+- Keep each action group to at most seven visible items. When more detail
+  exists, first show the current action group, wait for its completion, and
+  then show the next group; do not omit any instruction.
 - Still **never** surface `checkpoint_id`, the Step ID, or the hidden comment.
 - Do **not** open, mention, or link `report.html` — the steps live in chat now.
 - If no entry has a `Manual`/`Warning`/`NotConfigured` status, render no block.
@@ -234,22 +251,28 @@ If the row is `manual`/`attest` and `ACK` is `false`, before leaving the row
 manual verification steps — U.0a — for this row's checkpoint must already have been
 rendered in chat. If they were not, show them now, then ask.)
 
+Use the visible checklist title found in U.1. The confirmation must name that
+specific action; never ask the generic question "Have you completed this step?"
+and never preselect or recommend a successful answer.
+
 ```json
 [
   {
-    "header": "Confirm step",
-    "question": "Have you completed this step and is the evidence captured?",
+    "header": "Confirm {VISIBLE_TITLE}",
+    "question": "Did you complete and verify “{VISIBLE_TITLE}” using the requirements shown above?",
     "options": [
-      { "label": "Yes, it's done", "recommended": true },
-      { "label": "Not yet" }
+      { "label": "Completed and verified" },
+      { "label": "Not yet or unsure" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Only treat the row as acknowledged (`ACK = true`) on an explicit "Yes, it's
-done". Never infer acknowledgement from a flightcheck pass.
+Only treat the row as acknowledged (`ACK = true`) on an explicit **Completed
+and verified** answer after row-specific evidence has been captured. Never
+infer acknowledgement from a FlightCheck pass, a bare `done`, or an answer to
+a different row.
 
 ---
 

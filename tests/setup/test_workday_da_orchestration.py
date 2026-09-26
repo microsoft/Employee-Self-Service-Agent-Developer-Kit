@@ -32,6 +32,11 @@ def test_orchestrator_resumes_durable_state_without_restarting_setup() -> None:
     assert "Here's the plan for connecting Workday to your ESS HR agent" in text
     assert "- {m} Verify employee SAML sign-in policy" in text
     assert "Your ESS HR agent is connected to Workday" in text
+    assert "supports only the Workday connection option named **Microsoft" in text
+    assert "direct Workday federation through Okta, Ping" in text
+    assert "workspace revision" in text
+    assert "same five-phase lifecycle and the same completion gates" in text
+    assert "Environment type never skips, reorders, or relaxes" in normalized
 
 
 def test_extension_install_uses_the_ring_aware_runtime_installer() -> None:
@@ -60,12 +65,25 @@ def test_connections_are_created_before_binding_and_flow_activation() -> None:
     assert "Workday and Dataverse connections show **Connected**" in text
     assert "msdyn_sharedworkdaysoap_workdayruntime" in text
     assert "msdyn_sharedcommondataserviceforapps_workdayruntime" in text
+    assert "bind_workday_da_connections.py" in text
+    assert "WORKDAY_DA_BINDING_PLAN_JSON" in text
+    assert "WORKDAY_DA_BINDING_APPLIED_JSON" in text
+    assert "activate_workday_da_flows.py" in text
+    assert "WORKDAY_DA_FLOW_ACTIVATION_PLAN_JSON" in text
+    assert "WORKDAY_DA_FLOWS_ACTIVATED_JSON" in text
+    assert '"verified": true' in text
+    assert "2. Enter the connection fields in the order shown below." in text
+    assert "Workday tenant: `{tenant}`" in text
+    assert "| Microsoft Entra resource URL | `http://www.workday.com/{tenant}` |" in text
+    assert "Newly installed managed-solution flows" in text
+    assert "Do not open the agent's Connection settings yet" in text
 
 
 def test_topic_and_authorization_guidance_matches_the_supported_runtime() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split())
 
     assert "Enable all Workday topics" in text
     assert "Choose specific Workday topics" in text
@@ -73,6 +91,15 @@ def test_topic_and_authorization_guidance_matches_the_supported_runtime() -> Non
     assert "Prefer: return=representation" in text
     assert "fails closed on these" in text
     assert "Do not rely on the script's exit code" not in text
+    assert "Both invocations below occur after every Workday flow is connected" in normalized
+    assert "The two invocations are preview and apply" in normalized
+    assert "AppSource installer installs the managed package but does not activate" in normalized
+    assert "Never continue to agent Connection settings" in normalized
+    assert "Do not edit, rename, delete, or" in text
+    assert "other package-managed system topics" in text
+    assert "Workday [System] - 1: Set User Context V2" in text
+    assert "Workday System Get CommonExecution" in text
+    assert "package/version drift" in text
 
 
 def test_readiness_requires_a_signed_in_runtime_scenario() -> None:
