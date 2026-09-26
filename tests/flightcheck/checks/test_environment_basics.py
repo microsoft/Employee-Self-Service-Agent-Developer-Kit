@@ -59,7 +59,7 @@ class _FakePPAdmin:
 def _runner(pp_admin):
     return SimpleNamespace(
         pp_admin=pp_admin, env_id="env-guid",
-        env_url="https://example.crm.dynamics.com", dv_token="t",
+        env_url="https://example.crm.dynamics.com", dv_token="t", ring="test",
     )
 
 

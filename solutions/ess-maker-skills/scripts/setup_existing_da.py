@@ -40,6 +40,10 @@ from agentbuilder_object_model import (
     object_models_to_yaml,
     validate_object_model_runtime,
 )
+from da_product_registry import (
+    DAProductRegistryError,
+    resolve_product_setup,
+)
 
 
 ATTACH_METADATA = ".agentbuilder/attach.json"
@@ -78,8 +82,8 @@ SETUP_STEP_NOTES = {
         "foundation path."
     ),
     "SETUP-05": (
-        "Native logical connection references checked against environment "
-        "connections by DA-CONN-*."
+        "The product registry declares whether a connection is required for "
+        "foundation readiness."
     ),
     "SETUP-06": (
         "Exact native agent content footprint verified by DA-CONTENT-001."
@@ -92,7 +96,6 @@ SETUP_STEP_NOTES = {
 SETUP_FLIGHTCHECK_STEPS = {
     "DA-AGENT-001": "SETUP-02.1",
     "ENV-CAPACITY-001": "SETUP-02.2",
-    "DA-CONN-*": "SETUP-05",
     "DA-CONTENT-001": "SETUP-06",
 }
 SETUP_PERMANENTLY_SKIPPED_STEPS = {"SETUP-04"}
@@ -522,6 +525,20 @@ def _validate_canonical_agent_state(
             raise ExistingDASetupError(
                 f"Canonical DA setup step {step_id} lacks completion evidence."
             )
+        requirement = record.get("requirement")
+        if requirement is not None and (
+            step_id != "SETUP-05"
+            or not isinstance(requirement, dict)
+            or not isinstance(requirement.get("productKey"), str)
+            or not isinstance(requirement.get("displayName"), str)
+            or not str(requirement.get("connectorApiName") or "")
+            .casefold()
+            .startswith("shared_")
+        ):
+            raise ExistingDASetupError(
+                f"Canonical DA setup step {step_id} has an invalid "
+                "connection requirement."
+            )
     expected_active = next(
         (
             step_id
@@ -610,8 +627,9 @@ def _step_record(
     recorded_at: str | None = None,
     failure_causes: list[str] | None = None,
     checkpoint: str | None = None,
+    requirement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    record = {
         "state": state,
         "updated_at": recorded_at,
         "failure_causes": failure_causes or [],
@@ -620,6 +638,9 @@ def _step_record(
         "mode": mode,
         "recorded_at": recorded_at,
     }
+    if requirement is not None:
+        record["requirement"] = copy.deepcopy(requirement)
+    return record
 
 
 def _next_setup_step(steps: dict[str, dict[str, Any]]) -> str:
@@ -643,7 +664,66 @@ def _remove_directory(path: Path, label: str) -> str | None:
     return None
 
 
-def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
+def _setup_connection_policy(
+    connection: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    try:
+        product = resolve_product_setup(
+            catalog_name=connection["agent"].get("name"),
+            agent_schema_name=connection["agent"].get("schemaName"),
+        )
+    except DAProductRegistryError as exc:
+        raise ExistingDASetupError(str(exc)) from exc
+    if product is None:
+        return None, False
+    if product["requiredConnection"] is None:
+        return None, True
+    return (
+        {
+            "productKey": product["productKey"],
+            "matchedBy": product["matchedBy"],
+            **product["requiredConnection"],
+        },
+        True,
+    )
+
+
+def _setup_connection_step(
+    requirement: dict[str, Any] | None,
+    now: str,
+    *,
+    product_recognized: bool,
+) -> dict[str, Any]:
+    if requirement is None:
+        note = (
+            "The product registry declares no foundation connection "
+            "requirement for this agent."
+            if product_recognized
+            else (
+                "This agent's product identity is not registered in the "
+                "product setup registry; no foundation connection "
+                "requirement was applied."
+            )
+        )
+        return _step_record(
+            "done",
+            mode="skipped",
+            note=note,
+            recorded_at=now,
+        )
+    return _step_record(
+        recorded_at=now,
+        checkpoint="DA-CONN-*",
+        requirement=requirement,
+    )
+
+
+def _setup_steps_in_progress(
+    now: str,
+    connection_requirement: dict[str, Any] | None,
+    *,
+    product_recognized: bool,
+) -> dict[str, dict[str, Any]]:
     steps = {
         step_id: _step_record()
         for step_id in SETUP_STEP_ORDER
@@ -672,6 +752,11 @@ def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
             note=SETUP_STEP_NOTES[step_id],
             recorded_at=now,
         )
+    steps["SETUP-05"] = _setup_connection_step(
+        connection_requirement,
+        now,
+        product_recognized=product_recognized,
+    )
     steps["SETUP-07"] = _step_record(
         "in-progress",
         recorded_at=now,
@@ -682,10 +767,18 @@ def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
 def _begin_flightcheck_maintenance(
     steps: dict[str, dict[str, Any]],
     now: str,
+    connection_requirement: dict[str, Any] | None,
+    *,
+    product_recognized: bool,
 ) -> None:
     """Require fresh setup-owned FlightCheck evidence after every attachment."""
     for step_id in SETUP_FLIGHTCHECK_STEPS.values():
         steps[step_id] = _step_record(recorded_at=now)
+    steps["SETUP-05"] = _setup_connection_step(
+        connection_requirement,
+        now,
+        product_recognized=product_recognized,
+    )
 
 
 def _build_canonical_setup_progress(
@@ -695,13 +788,25 @@ def _build_canonical_setup_progress(
     reopen_flightchecks: bool,
 ) -> dict[str, Any]:
     now = _utc_now()
+    connection_requirement, product_recognized = _setup_connection_policy(
+        connection
+    )
     steps = (
         copy.deepcopy(existing["steps"])
         if existing
-        else _setup_steps_in_progress(now)
+        else _setup_steps_in_progress(
+            now,
+            connection_requirement,
+            product_recognized=product_recognized,
+        )
     )
     if reopen_flightchecks:
-        _begin_flightcheck_maintenance(steps, now)
+        _begin_flightcheck_maintenance(
+            steps,
+            now,
+            connection_requirement,
+            product_recognized=product_recognized,
+        )
     if all(
         steps[step_id]["state"] == "done"
         for step_id in SETUP_STEP_ORDER[:-1]
@@ -801,13 +906,9 @@ def maintain_setup_flightcheck(
     agent_id: str,
     checkpoint: str,
     results_path: Path,
+    manual_attested: bool = False,
 ) -> dict[str, Any]:
     """Persist one supported FlightCheck result into canonical setup state."""
-    step_id = SETUP_FLIGHTCHECK_STEPS.get(checkpoint)
-    if step_id is None:
-        raise ExistingDASetupError(
-            f"Unsupported setup FlightCheck checkpoint: {checkpoint}"
-        )
     state = _load_canonical_setup_state(kit_root)
     if state is None:
         raise ExistingDASetupError(
@@ -819,6 +920,22 @@ def maintain_setup_flightcheck(
         raise ExistingDASetupError(
             "Canonical DA setup state does not contain the requested agent."
         )
+    requirement: dict[str, Any] | None = None
+    if checkpoint == "DA-CONN-*":
+        step_id = "SETUP-05"
+        candidate = agent_state["steps"][step_id].get("requirement")
+        if not isinstance(candidate, dict):
+            raise ExistingDASetupError(
+                "This agent has no registry-declared setup connection "
+                "requirement."
+            )
+        requirement = candidate
+    else:
+        step_id = SETUP_FLIGHTCHECK_STEPS.get(checkpoint)
+        if step_id is None:
+            raise ExistingDASetupError(
+                f"Unsupported setup FlightCheck checkpoint: {checkpoint}"
+            )
     try:
         payload = _load_json(results_path)
     except (OSError, ValueError) as exc:
@@ -856,8 +973,20 @@ def maintain_setup_flightcheck(
         raise ExistingDASetupError(
             "FlightCheck results have an invalid result-row shape."
         )
-    matching = _matching_flightcheck_rows(checkpoint, rows)
-    if not matching:
+    if requirement is not None:
+        description = (
+            "Native connection reference: "
+            f"{requirement['connectorApiName']}"
+        )
+        matching = [
+            row
+            for row in rows
+            if str(row.get("description") or "").casefold()
+            == description.casefold()
+        ]
+    else:
+        matching = _matching_flightcheck_rows(checkpoint, rows)
+    if not matching and requirement is None:
         raise ExistingDASetupError(
             f"FlightCheck results contain no rows for {checkpoint}."
         )
@@ -866,39 +995,79 @@ def maintain_setup_flightcheck(
         str(row.get("status") or "")
         for row in matching
     }
-    run_blocked = (
-        payload.get("failed") != 0
-        or payload.get("errors") != 0
-    )
-    if checkpoint == "DA-CONN-*":
-        complete = (
-            not run_blocked
-            and bool(statuses)
-            and statuses <= {"Passed", "Warning", "Skipped"}
-        )
+    if manual_attested:
+        if checkpoint != "ENV-CAPACITY-001":
+            raise ExistingDASetupError(
+                "Manual attestation is supported only for "
+                "ENV-CAPACITY-001."
+            )
+        if (
+            len(matching) != 1
+            or statuses != {"Manual"}
+            or payload.get("failed") != 0
+            or payload.get("errors") != 0
+        ):
+            raise ExistingDASetupError(
+                "Manual attestation requires a current Manual "
+                "ENV-CAPACITY-001 result."
+            )
+        complete = True
+    elif requirement is not None:
+        complete = bool(statuses) and statuses <= {"Passed", "Warning"}
     else:
+        run_blocked = (
+            payload.get("failed") != 0
+            or payload.get("errors") != 0
+        )
         complete = not run_blocked and statuses == {"Passed"}
 
     now = _utc_now()
     if complete:
+        note = SETUP_STEP_NOTES[step_id]
+        mode = "automated"
+        if manual_attested:
+            mode = "manual-attested"
+            note = (
+                "A maker explicitly confirmed that Copilot Studio message "
+                "capacity is allocated to this environment after the "
+                "Licensing API result required manual verification."
+            )
+        if requirement is not None:
+            note = (
+                f"{requirement['displayName']} satisfies the "
+                "registry-declared setup requirement."
+            )
         agent_state["steps"][step_id] = _step_record(
             "done",
-            mode="automated",
-            note=SETUP_STEP_NOTES[step_id],
+            mode=mode,
+            note=note,
             recorded_at=now,
             checkpoint=checkpoint,
+            requirement=requirement,
         )
     else:
-        causes = [
-            str(row.get("result") or row.get("status") or "FlightCheck failed")
-            for row in matching
-            if str(row.get("status") or "") != "Passed"
-        ]
+        causes = (
+            [
+                str(
+                    row.get("result")
+                    or row.get("status")
+                    or "FlightCheck failed"
+                )
+                for row in matching
+                if str(row.get("status") or "") not in {"Passed", "Warning"}
+            ]
+            if matching
+            else [
+                "The required connection result was not returned by "
+                "FlightCheck."
+            ]
+        )
         agent_state["steps"][step_id] = _step_record(
             "blocked",
             recorded_at=now,
             failure_causes=causes,
             checkpoint=checkpoint,
+            requirement=requirement,
         )
 
     agent_state["active_step"] = _next_setup_step(agent_state["steps"])
@@ -919,6 +1088,7 @@ def maintain_setup_flightcheck(
         "failureCauses": list(
             agent_state["steps"][step_id].get("failure_causes", [])
         ),
+        "mode": agent_state["steps"][step_id].get("mode"),
         "connectReady": agent_state["connect_ready"],
         "activeStep": agent_state["active_step"],
     }
@@ -1746,6 +1916,7 @@ def _write_config(
     agent_entry: dict[str, Any],
     environment_id: str,
     host: str,
+    ring: str,
     api_version: str,
     component_counts: Counter[str],
 ) -> None:
@@ -1777,6 +1948,7 @@ def _write_config(
         "releaseLine": "da",
         "environmentId": environment_id,
         "powerPlatformApiEndpoint": host,
+        "ring": ring,
         "agentBuilderApiVersion": api_version,
         "agent": agent_entry,
         "activeAgent": agent_entry["slug"],
@@ -2250,6 +2422,7 @@ def attach_existing_dev(
             agent_entry=agent_entry,
             environment_id=normalized_environment_id,
             host=client.host,
+            ring=client.ring,
             api_version=client.api_version,
             component_counts=component_counts,
         )
@@ -2463,7 +2636,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     maintain_flightcheck.add_argument(
         "--checkpoint",
-        choices=tuple(SETUP_FLIGHTCHECK_STEPS),
+        choices=(*SETUP_FLIGHTCHECK_STEPS, "DA-CONN-*"),
         required=True,
     )
     maintain_flightcheck.add_argument(
@@ -2476,6 +2649,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to the FlightCheck results.json file.",
+    )
+    maintain_flightcheck.add_argument(
+        "--manual-attested",
+        action="store_true",
+        help=(
+            "Record an explicit maker attestation for a current Manual "
+            "ENV-CAPACITY-001 result."
+        ),
     )
     maintain_flightcheck.add_argument(
         "--kit-root",
@@ -2654,6 +2835,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_id=args.agent_id,
                 checkpoint=args.checkpoint,
                 results_path=results_path,
+                manual_attested=args.manual_attested,
             )
             print(
                 "DA_SETUP_FLIGHTCHECK_JSON:"

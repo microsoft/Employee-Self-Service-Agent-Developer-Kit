@@ -710,6 +710,43 @@ def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
     return str(active.get("releaseLine") or "").casefold() == "da"
 
 
+def _resolve_environment_ring(
+    config: dict,
+    *,
+    explicit_ring: str | None = None,
+) -> str:
+    """Resolve one supported ring and reject contradictory environment state."""
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    requested_ring = str(explicit_ring or "").strip().casefold()
+    host = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    inferred_ring = None
+    if host:
+        inferred_ring = ring_from_environment_host(host)
+
+    candidates = {
+        ring
+        for ring in (requested_ring, configured_ring, inferred_ring)
+        if ring
+    }
+    if not candidates:
+        raise ValueError(
+            "The Power Platform environment ring is unavailable. Confirm "
+            "whether the environment uses prod, preprod, or test, then rerun "
+            "FlightCheck with --ring."
+        )
+    if not candidates <= {"prod", "preprod", "test"}:
+        raise ValueError(
+            "The Power Platform environment ring must be prod, preprod, or "
+            "test."
+        )
+    if len(candidates) != 1:
+        raise ValueError(
+            "The supplied ring, configured ring, and Power Platform endpoint "
+            "do not identify the same environment ring."
+        )
+    return candidates.pop()
+
+
 _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
     "appIdUri",
     "baseUrl",
@@ -813,6 +850,17 @@ def _run_single_checkpoint(args):
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
+
+    resolved_ring = None
+    if target == "ENV-CAPACITY-001":
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=getattr(args, "ring", None),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
 
     quiet_auth = getattr(args, "quiet_auth", False)
     if not quiet_auth:
@@ -975,6 +1023,8 @@ def _run_single_checkpoint(args):
         target_matcher=lambda cid: registry.matches(target, cid),
     )
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
     runner.agent_slug = (
         explicit_agent_slug
         or config.get("activeAgent")
@@ -1085,12 +1135,26 @@ def _run_single_checkpoint(args):
         # --scope emit so checkpoint runs also count toward the adk.* cubes.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_category
 
             _agent_id = _active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Single-checkpoint runs execute exactly one owning check, so the
+            # first result row's category is the run's connector (or "" for
+            # cross-cutting checkpoints like Environment / Authentication).
+            # Derived here rather than passed by the caller so the CLI runtime
+            # path matches the same connector attribution as the legacy
+            # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
+            _connector = ""
+            if result.results:
+                _connector = derive_connector_from_category(
+                    getattr(result.results[0], "category", "") or ""
+                )
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1101,6 +1165,7 @@ def _run_single_checkpoint(args):
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1135,6 +1200,14 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--ring",
+        choices=["prod", "preprod", "test"],
+        help=(
+            "Confirm the Power Platform service ring when it cannot be "
+            "resolved from local setup state."
+        ),
     )
     parser.add_argument(
         "--no-open", action="store_true",
@@ -1289,6 +1362,16 @@ def main():
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
+    resolved_ring = None
+    if args.scope in {"full", "environment"}:
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=args.ring,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
     native_supported_scopes = (
         set(NATIVE_NO_DATAVERSE_SCOPE_MAP)
         | set(NATIVE_NO_DATAVERSE_LOCAL_SCOPES)
@@ -1596,6 +1679,8 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
     runner.agent_slug = (
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")
@@ -1708,12 +1793,20 @@ def main():
         # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_scope
 
             _agent_id = active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Derive connector from the CLI scope so scope-based runs get the
+            # same attribution as the legacy flightcheck events (ADO 7943641
+            # review). "full" and cross-cutting scopes return "" — the finer
+            # per-check attribution lives on the check events, not run events.
+            _connector = derive_connector_from_scope(args.scope)
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1724,6 +1817,7 @@ def main():
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run

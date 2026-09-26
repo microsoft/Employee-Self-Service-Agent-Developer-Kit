@@ -318,6 +318,7 @@ class TestAgentBuilderNativeScopes:
         config = {
             "releaseLine": "da",
             "environmentId": "00000000-0000-4000-8000-000000001111",
+            "ring": "test",
             "agent": {
                 "slug": "mock-agent",
                 "botId": "00000000-0000-4000-8000-000000002222",

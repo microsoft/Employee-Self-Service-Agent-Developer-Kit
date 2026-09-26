@@ -47,6 +47,9 @@ _NATIVE_ALM_REFERENCE = (
 _MOS_STARTER_REFERENCE = (
     _SOLUTION / "src" / "reference" / "mos-starter-package.md"
 )
+_DA_PRODUCT_REGISTRY = (
+    _SOLUTION / "src" / "reference" / "da-product-setup-registry.json"
+)
 _UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
 _RESET_LOCAL_WORKSPACE = _SOLUTION / "scripts" / "reset_local_workspace.py"
@@ -702,6 +705,8 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "also offer **Use an agent URL**" in environment_target
     assert "setup_mos_starter.py list" in text
     assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
+    assert "setup_mos_starter.py inspect-connection" not in text
+    assert "DA_MOS_CONNECTION_PREFLIGHT" not in text
     assert "setup_mos_starter.py create" in text
     assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
     assert "DA_MOS_STARTER_CREATE_JSON:" in text
@@ -716,16 +721,64 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "--target-url" not in text
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--ring "{RING}"' in text
+    assert "--setup-prerequisite-status" not in text
+    assert "--setup-prerequisite-evidence" not in text
+    assert _DA_PRODUCT_REGISTRY.is_file()
+    assert "src/reference/da-product-setup-registry.json" in text
+    assert "evaluated after creation and attachment" in normalized
+    assert "do not inspect or require a physical connection before" in normalized
     assert "outcome: created" in text
     assert "Never show the internal `packageId` to the maker" in normalized
     assert "`connectReady: true`" in existing_dev
     assert "`setupStatus`" not in text
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
     assert "infer a concise user-friendly product name" in normalized
-    assert "render `Employee Self-Service IT` as `Employee Self-Service (IT)`" in normalized
-    assert "render `Employee Self-Service HR` as `Employee Self-Service (HR)`" in normalized
+    assert (
+        "Render `Employee Self-Service` as `Employee Self-Service (Hub)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service IT` or `Employee Self-Service (IT)` as "
+        "`Employee Self-Service (IT)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service HR` or `Employee Self-Service (HR)` as "
+        "`Employee Self-Service (HR)`"
+        in normalized
+    )
     assert "use the exact service-provided product name unchanged" in normalized
     assert "must not change the underlying `packageId`" in normalized
+    assert (
+        "render the following friendly product name and supporting description "
+        "exactly as written"
+        in normalized
+    )
+    assert (
+        "Do not paraphrase, shorten, or combine this copy with the "
+        "service-provided description."
+        in normalized
+    )
+    assert (
+        "Use this product if you want to organize HR, IT, or other agents as "
+        "connected agents behind one unified employee experience."
+        in normalized
+    )
+    assert (
+        "Create an HR agent that helps employees get HR answers and complete "
+        "requests."
+        in normalized
+    )
+    assert (
+        "Create an IT agent that helps employees resolve technical issues and "
+        "access support."
+        in normalized
+    )
+    assert (
+        "For every other product, use its exact service-provided name unchanged "
+        "and use `shortDescription`, then `description`"
+        in normalized
+    )
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type a product name" in normalized
     assert "**{friendly product name} {version}**" in text
@@ -1155,8 +1208,29 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "`connectionStatus: workspace-ready`" in text
     assert "`connectReady: true`" in text
     assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
-    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
-    assert "treat all four setup-owned FlightChecks and their maintenance calls as one presentation unit" in normalized
+    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the setup-readiness verdict" in normalized
+    assert "`DA-CONN-*` remains broad diagnostic evidence" in text
+    assert "src/reference/da-product-setup-registry.json" in text
+    assert "do not use its aggregate summary row" in normalized
+    assert "current registry maps the IT product to `shared_alchemy`" in normalized
+    assert (
+        "Do not project `shared_service-now` or another undeclared reference"
+    ) in normalized
+    assert "keep canonical `connectReady` false" in normalized
+    assert "keep `SETUP-05` skipped" in normalized
+    assert (
+        "no foundation connection requirement was applied because the "
+        "product identity is not registered"
+    ) in normalized
+    assert (
+        "do not claim that the registry declares no requirement for that "
+        "product"
+    ) in normalized
+    assert (
+        "run the three setup-readiness FlightChecks and the broad connection "
+        "diagnostic"
+    ) in normalized
+    assert "present all four together" in normalized
     assert "attempt every available check before producing the final runtime-readiness table" in normalized
     assert "Render both even when `connectReady` is false" in normalized
     for readiness_status in (
@@ -1164,13 +1238,58 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
+        "**⛔ Manual confirmation required**",
+        "**✅ Ready — manually confirmed**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
-    assert "When `connectReady` is false after materialization" in normalized
-    assert "local authoring is ready while the reported runtime prerequisites remain" in normalized
-    assert "Present **Connection required**" in normalized
+    assert "### Capacity follow-up" in text
+    assert (
+        "We weren’t able to automatically verify capacity for this "
+        "environment."
+    ) in text
+    assert "Your agent and local authoring workspace are already available." in text
+    assert "#### Copilot Studio message capacity" in text
+    assert "In the left navigation, select **Licensing**." in text
+    assert "Under **Products**, select **Copilot Studio**." in text
+    assert "Select **Manage Copilot Credits**." in text
+    assert (
+        "Confirm that the environment has more than zero allocated Copilot "
+        "Credits."
+    ) in normalized
+    assert (
+        "After checking Power Platform Admin Center, is Copilot Studio "
+        "message capacity allocated to this environment?"
+    ) in text
+    assert "Complete this check to finish foundation readiness" not in text
+    assert "https://admin.powerplatform.microsoft.com" in text
+    assert "https://admin.preprod.powerplatform.microsoft.com" in text
+    assert "https://admin.test.powerplatform.microsoft.com" in text
+    assert (
+        "Do not send a maker from a non-production setup ring to the "
+        "production admin center."
+    ) in normalized
+    assert "using `ring_from_environment_host()`" in normalized
+    assert "do not assume production" in normalized
+    assert '--ring "{CONFIRMED_RING}"' in text
+    assert "--manual-attested" in text
+    assert "never overrides a known zero allocation" in normalized
+    assert "When it is false after materialization" in normalized
+    assert (
+        "local authoring is ready while the setup-owned prerequisites remain"
+        in normalized
+    )
+    assert "### Connection follow-up" in text
+    assert "#### Microsoft 365 Self-Help" in text
+    assert "Select **New connection**" in text
+    assert "ask me to check it again" in text
+    assert "Complete this connection to finish foundation readiness" in normalized
+    assert "https://make.powerapps.com" in text
+    assert "https://make.preprod.powerapps.com" in text
+    assert "https://make.test.powerapps.com" in text
+    assert "Do not send a maker from a non-production setup ring" in normalized
+    assert "Do not add another completion choice" in normalized
     assert "a factual handoff, not another readiness gate" in normalized
     assert "changing canonical state conversationally" in normalized
     assert "Do not infer the realm from the URL" in normalized
