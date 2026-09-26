@@ -49,6 +49,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | Field | Type | Owner | Notes |
 |-------|------|-------|-------|
 | `sidecarDataverseEndpoint` | string | DA-1 | HTTPS Dataverse organization URL hosting the Workday solution, connections, and flows for a native MOS/AgentBuilder agent. Do not copy it into foundation config. |
+| `entraAdminAccount` | string | DA-2 | Non-secret sign-in name verified from the active Azure CLI tenant. Used only as an exact account hint so later Graph checkpoints reuse the correct cached account without another account-selection prompt. |
 | `baseUrl` | string | DA-2/DA-3 | Workday web host base URL (e.g. `https://wd2-impl.workday.com`). Captured early by DA-2 when the operator has the URL, else by DA-3. |
 | `tenant` | string | DA-2/DA-3 | Workday tenant short name. Captured early by DA-2 to pin the Entra app deterministically, else by DA-3. |
 | `tokenHost` | string | DA-2/DA-3 | Services host used to build token / REST URLs. Derived by DA-2 when the URL matches a known pattern, else by DA-3. |

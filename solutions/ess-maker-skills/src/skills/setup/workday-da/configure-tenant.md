@@ -206,8 +206,12 @@ in Entra to make sure they match.
 
 **Verify (WD-CONN-102):**
 
+Read `entraAdminAccount` from `.local/connect/workday-da/config.json` as
+`ENTRA_ADMIN_ACCOUNT`. If it is absent, re-run DA2.0 before this checkpoint;
+do not allow an unpinned cached account to choose the Entra tenant identity.
+
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 `WD-CONN-102` reports the Entra-side certificate health and returns `MANUAL` for

@@ -45,6 +45,7 @@ def _args(
     invocation_source: str | None = None,
     quiet_auth: bool = False,
     ring: str | None = None,
+    preferred_username: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -57,6 +58,7 @@ def _args(
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
         ring=ring,
+        preferred_username=preferred_username,
     )
 
 
@@ -611,6 +613,59 @@ class TestHermeticRun:
 
         assert exc.value.code == 0
         assert captured["include_flow"] is requires_flow_token
+
+    def test_graph_auth_receives_the_preferred_account(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        captured = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = False
+            requires_dataverse_endpoint = False
+            requires_flow_token = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [("Fake", self._fn)]
+
+            @staticmethod
+            def _fn(runner):
+                assert runner.graph is not None
+                return [_row("FAKE-001", Status.PASSED.value)]
+
+        class _Graph:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self, *, preferred_username: str) -> str:
+                captured["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry, "transitive_requirements", lambda target: _Plan()
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    preferred_username="admin@contoso.com",
+                )
+            )
+
+        assert exc.value.code == 0
+        assert captured["preferred_username"] == "admin@contoso.com"
 
     def test_failed_row_exits_1(
         self,

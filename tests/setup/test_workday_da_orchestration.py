@@ -75,6 +75,18 @@ def test_extension_install_guides_missing_dataverse_provisioning() -> None:
     assert "Power Platform administrator" in normalized
 
 
+def test_entra_checks_reuse_the_verified_admin_account() -> None:
+    text = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+
+    assert "az account show --query user.name -o tsv" in text
+    assert "ENTRA_ADMIN_ACCOUNT" in text
+    assert "entraAdminAccount = ENTRA_ADMIN_ACCOUNT" in text
+    assert text.count('--preferred-username "{ENTRA_ADMIN_ACCOUNT}"') == 7
+    assert "Read `entraAdminAccount`" in tenant
+    assert '--preferred-username "{ENTRA_ADMIN_ACCOUNT}"' in tenant
+
+
 def test_connections_are_created_before_binding_and_flow_activation() -> None:
     text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"

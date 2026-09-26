@@ -863,6 +863,7 @@ def _run_single_checkpoint(args):
             sys.exit(1)
 
     quiet_auth = getattr(args, "quiet_auth", False)
+    preferred_username = getattr(args, "preferred_username", None)
     if not quiet_auth:
         print()
         print("=" * 64)
@@ -924,7 +925,10 @@ def _run_single_checkpoint(args):
             print("Authenticating to Microsoft Graph...")
         graph = GraphClient(tenant_id)
         try:
-            graph.authenticate()
+            if preferred_username:
+                graph.authenticate(preferred_username=preferred_username)
+            else:
+                graph.authenticate()
             if not quiet_auth:
                 print("  Graph: OK")
         except Exception as e:
@@ -1238,6 +1242,15 @@ def main():
         help=(
             "Scope agent-local checks to one workspace/agents/<slug> folder. "
             "Defaults to activeAgent (or agent.slug) from .local/config.json."
+        ),
+    )
+    parser.add_argument(
+        "--preferred-username",
+        default=None,
+        help=(
+            "Prefer this exact account for interactive and cached "
+            "authentication. Connect/setup skills use this to avoid repeated "
+            "account selection in multi-account workspaces."
         ),
     )
     parser.add_argument(

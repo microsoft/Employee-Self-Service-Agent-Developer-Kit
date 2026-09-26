@@ -103,8 +103,13 @@ canonical tenant selected during `/setup`:
    Never require the user to copy a URL or code from the inline terminal.
 
 4. Re-run `az account show --query tenantId -o tsv`. If it still differs, halt
-   before running the role query or any `az ad` / Graph mutation. Persist
-   `tenantId = SETUP_TENANT_ID` to
+   before running the role query or any `az ad` / Graph mutation.
+5. Read the verified Azure CLI account with
+   `az account show --query user.name -o tsv` and save it as
+   `ENTRA_ADMIN_ACCOUNT` for this run. It is a non-secret account hint; do not
+   display it unless the user asks which account is active. Stop if it is empty.
+   Persist `tenantId = SETUP_TENANT_ID` and
+   `entraAdminAccount = ENTRA_ADMIN_ACCOUNT` to
    `.local/connect/workday-da/config.json` only after this verification.
 
 Apply the shared [`shared/permission-gate.md`](shared/permission-gate.md) before
@@ -369,7 +374,7 @@ I'll continue automatically once it finishes.
 **End message.**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 `WD-CONN-102` reports the Entra-side signing-certificate health. It returns
@@ -444,7 +449,7 @@ Platform Workday connector is pre-authorized to call it.
 **Verify (WD-ENTRA-SCOPE-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** → update **DA2.2** via
@@ -491,7 +496,7 @@ permissions.
 **Verify (WD-ENTRA-CONSENT-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** → update **DA2.3** via
@@ -531,7 +536,7 @@ so, that the right users are assigned.
 **Verify (WD-ASSIGN-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** (assignment satisfied via a group, or not required) → update
@@ -596,7 +601,7 @@ your Workday tenant expects.
 **Verify (WD-ENTRA-NAMEID-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** (a NameID-overriding policy is assigned) → update **DA2.5** via
@@ -633,7 +638,7 @@ portal, because the kit can't read the setting directly.
 cannot read the setting).
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 Present the checkpoint's instructions — its remediation now names the customer's
@@ -682,7 +687,7 @@ this phase.
 **Verify (WD-CONN-010):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-010 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-010 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 `WD-CONN-010` summarizes the federated Workday SAML app(s) and their entity IDs.
