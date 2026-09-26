@@ -289,7 +289,7 @@ class GraphClient:
         self.tenant_id = tenant_id
         self._token: str | None = None
 
-    def authenticate(self) -> str:
+    def authenticate(self, preferred_username: str | None = None) -> str:
         """Acquire a Graph access token, reusing the shared MSAL cache."""
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
@@ -305,14 +305,32 @@ class GraphClient:
 
         # Try silent first
         accounts = app.get_accounts()
+        preferred = str(preferred_username or "").casefold()
+        selected_account = next(
+            (
+                account
+                for account in accounts
+                if str(account.get("username") or "").casefold() == preferred
+            ),
+            accounts[0] if accounts and not preferred else None,
+        )
         result = None
-        if accounts:
-            result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
+        if selected_account:
+            result = app.acquire_token_silent(
+                GRAPH_SCOPES,
+                account=selected_account,
+            )
 
         if not result or "access_token" not in result:
             print("Opening browser for Microsoft Graph sign-in...")
+            interactive_options = (
+                {"login_hint": preferred_username}
+                if preferred_username
+                else {"prompt": "select_account"}
+            )
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES, prompt="select_account"
+                GRAPH_SCOPES,
+                **interactive_options,
             )
 
         if "access_token" not in result:

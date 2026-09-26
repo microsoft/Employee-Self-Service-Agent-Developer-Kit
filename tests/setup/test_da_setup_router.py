@@ -537,7 +537,19 @@ def test_workday_da_setup_routes_only_supported_hr_agents() -> None:
     assert "Workday integration with the ESS IT Agent isn't supported" in step1
     assert "or run `WD-PKG-001`" in normalized_step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
+    assert "Workday setup path selected" in step1
+    assert "Microsoft Entra ID Integrated" in step1
+    assert "git branch --show-current" not in step1
+    assert "Workspace revision:" not in step1
+    assert "Setup state:" not in step1
+    assert "either architecture's own completion contract" in step1
+    assert '.local/connect/workday-da/config.json` has `status: "ready"' in step1
+    assert "completion.requiredStepIds" in step1
+    assert "Never use shared DA provider state to label an ESS DA IT" in step1
     assert _WORKDAY.is_file()
+    assert "not** the entry point for `/connect workday`" in workday
+    assert "src/skills/connect/SKILL.md" in workday
+    assert "do not show the hybrid-unavailable message" in workday
     assert "Hybrid Workday extension setup is not available" in workday
     assert "Do not run the retained Workday setup playbooks" in workday
 

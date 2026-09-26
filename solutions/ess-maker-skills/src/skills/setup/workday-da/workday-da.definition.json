@@ -1,0 +1,705 @@
+{
+  "$schema": "./workday-da.definition.schema.json",
+  "definitionVersion": 1,
+  "stateSchemaVersion": 1,
+  "provider": "workday",
+  "displayName": "Workday",
+  "supportedVerticals": [
+    "hr"
+  ],
+  "state": {
+    "configPath": ".local/connect/workday-da/config.json",
+    "checklistPath": ".local/connect/workday-da/tasks.md",
+    "legacyChecklistPaths": [
+      ".local/setup/workday-da/tasks.md"
+    ]
+  },
+  "packages": {
+    "runtime": {
+      "applicationName": "msdyn_EssWorkdayRuntime",
+      "solutionSchemaName": "msdyn_EssWorkdayRuntime",
+      "flowNames": [
+        "ESS Workday Runtime References",
+        "ESS Workday Runtime REST Execution",
+        "ESS Workday Runtime"
+      ],
+      "versionPolicy": {
+        "status": "pending-product-confirmation",
+        "minimumInclusive": null,
+        "maximumExclusive": null
+      }
+    },
+    "legacy-da": {
+      "applicationName": "msdyn_EssDAHRWorkdayHCM",
+      "solutionSchemaName": "msdyn_EssDAHRWorkday",
+      "versionPolicy": {
+        "status": "pending-product-confirmation",
+        "minimumInclusive": null,
+        "maximumExclusive": null
+      }
+    }
+  },
+  "architectures": [
+    {
+      "id": "native-da",
+      "agentSchemaNames": [
+        "gptagent_copilotforemployeeselfservicehr"
+      ],
+      "packageFlavor": "runtime"
+    },
+    {
+      "id": "classic-da",
+      "agentSchemaNames": [
+        "msdyn_copilotforemployeeselfservicedahr"
+      ],
+      "packageFlavor": "legacy-da"
+    }
+  ],
+  "unsupportedAgentSchemaNames": [
+    "msdyn_copilotforemployeeselfservicedait",
+    "gptagent_copilotforemployeeselfserviceit"
+  ],
+  "failurePolicy": {
+    "maxAttempts": 3,
+    "backoffSeconds": [
+      2,
+      5
+    ],
+    "categories": {
+      "transient": {
+        "retryable": true
+      },
+      "authentication": {
+        "retryable": false
+      },
+      "permission": {
+        "retryable": false
+      },
+      "validation": {
+        "retryable": false
+      },
+      "unsupported": {
+        "retryable": false
+      },
+      "conflict": {
+        "retryable": false
+      },
+      "ambiguous-mutation": {
+        "retryable": false
+      },
+      "manual-action": {
+        "retryable": false
+      },
+      "verification-failed": {
+        "retryable": false
+      }
+    }
+  },
+  "completion": {
+    "providerStatus": "ready",
+    "finalStepId": "DA5.1",
+    "requiredStepIds": [
+      "DA1.1",
+      "DA2.1",
+      "DA2.2",
+      "DA2.3",
+      "DA2.4",
+      "DA2.5",
+      "DA2.6",
+      "DA2.7",
+      "DA3.1",
+      "DA3.2",
+      "DA3.3",
+      "DA3.4",
+      "DA4.1",
+      "DA4.2",
+      "DA4.3",
+      "DA4.4",
+      "DA4.5",
+      "DA4.6",
+      "DA4.7",
+      "DA4.8",
+      "DA5.1"
+    ]
+  },
+  "customerMilestones": [
+    {
+      "id": "preflight",
+      "title": "Preflight",
+      "description": "Verify the selected agent, environment, Dataverse, and Workday extension package.",
+      "stepIds": [
+        "DA1.1"
+      ]
+    },
+    {
+      "id": "microsoft-entra",
+      "title": "Microsoft Entra",
+      "description": "Configure and verify the Workday sign-in application.",
+      "stepIds": [
+        "DA2.1",
+        "DA2.2",
+        "DA2.3",
+        "DA2.4",
+        "DA2.5",
+        "DA2.6",
+        "DA2.7"
+      ]
+    },
+    {
+      "id": "workday-administrator",
+      "title": "Workday administrator",
+      "description": "Complete the Workday tenant security, certificate, API client, and employee sign-in configuration.",
+      "stepIds": [
+        "DA3.1",
+        "DA3.2",
+        "DA3.3",
+        "DA3.4"
+      ]
+    },
+    {
+      "id": "connections",
+      "title": "Connections",
+      "description": "Create the Workday and Microsoft Dataverse connections.",
+      "stepIds": [
+        "DA4.1",
+        "DA4.2"
+      ]
+    },
+    {
+      "id": "runtime-configuration",
+      "title": "Runtime configuration",
+      "description": "Bind the connections, activate flows, authorize the agent, and configure employee context and topics.",
+      "stepIds": [
+        "DA4.3",
+        "DA4.4",
+        "DA4.5",
+        "DA4.6",
+        "DA4.7"
+      ]
+    },
+    {
+      "id": "network-readiness",
+      "title": "Network readiness",
+      "description": "Review Workday host restrictions only when the organization applies connector or tenant network controls.",
+      "stepIds": [
+        "DA4.8"
+      ]
+    },
+    {
+      "id": "employee-validation",
+      "title": "Employee validation",
+      "description": "Publish and validate a read-only Workday scenario with a non-maker employee.",
+      "stepIds": [
+        "DA5.1"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "DA1.1",
+      "phase": 1,
+      "title": "Install the Workday extension package",
+      "description": "Add the Workday extension package to your ESS HR agent so it can talk to Workday. If the HR base agent isn't installed yet, this step sends you to `/setup` first.",
+      "role": "Environment Maker",
+      "owner": "da-1",
+      "automation": "attempt",
+      "automationLabel": "Attempt",
+      "checkpoints": [
+        "WD-DA-PKG-001"
+      ],
+      "checkpointLabel": "WD-DA-PKG-001",
+      "gate": "prog",
+      "gateLabel": "prog, else manual",
+      "fallbackGate": "manual",
+      "dependsOn": [],
+      "scopeFields": [
+        "activeAgent",
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA2.1",
+      "phase": 2,
+      "title": "Set up Workday sign-in",
+      "description": "Create the Microsoft Entra application Workday uses to recognize signed-in employees.",
+      "role": "App/Cloud App Admin",
+      "owner": "da-2",
+      "automation": "yes",
+      "automationLabel": "Yes",
+      "checkpoints": [
+        "WD-CONN-102"
+      ],
+      "checkpointLabel": "WD-CONN-102",
+      "gate": "manual",
+      "gateLabel": "manual",
+      "dependsOn": [
+        "DA1.1"
+      ],
+      "scopeFields": [
+        "tenant",
+        "tenantId",
+        "entraAppId",
+        "entraAppObjectId"
+      ]
+    },
+    {
+      "id": "DA2.2",
+      "phase": 2,
+      "title": "Allow Power Platform to call Workday",
+      "description": "Add the permission used by the Workday connector and the Microsoft Graph permissions needed for sign-in.",
+      "role": "App/Cloud App Admin or App Owner",
+      "owner": "da-2",
+      "automation": "yes",
+      "automationLabel": "Yes",
+      "checkpoints": [
+        "WD-ENTRA-SCOPE-001"
+      ],
+      "checkpointLabel": "WD-ENTRA-SCOPE-001",
+      "gate": "prog",
+      "gateLabel": "prog",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "entraAppObjectId",
+        "appIdUri",
+        "scopeGuid"
+      ]
+    },
+    {
+      "id": "DA2.3",
+      "phase": 2,
+      "title": "Approve the sign-in permissions",
+      "description": "Grant organization-wide consent for the permissions the Workday connection needs.",
+      "role": "Consent-capable role (App/Cloud App Admin, Priv Role Admin, GA)",
+      "owner": "da-2",
+      "automation": "attempt",
+      "automationLabel": "Attempt",
+      "checkpoints": [
+        "WD-ENTRA-CONSENT-001"
+      ],
+      "checkpointLabel": "WD-ENTRA-CONSENT-001",
+      "gate": "prog",
+      "gateLabel": "prog; escalate to manual if blocked",
+      "fallbackGate": "manual",
+      "dependsOn": [
+        "DA2.2"
+      ],
+      "scopeFields": [
+        "entraAppObjectId",
+        "tenantId"
+      ]
+    },
+    {
+      "id": "DA2.4",
+      "phase": 2,
+      "title": "Choose who can use Workday",
+      "description": "Assign the employees or groups allowed to use the Workday application, or confirm assignment is not required.",
+      "role": "App/Cloud App Admin",
+      "owner": "da-2",
+      "automation": "yes",
+      "automationLabel": "Yes",
+      "checkpoints": [
+        "WD-ASSIGN-001"
+      ],
+      "checkpointLabel": "WD-ASSIGN-001",
+      "gate": "prog",
+      "gateLabel": "prog",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "entraAppObjectId",
+        "tenantId"
+      ]
+    },
+    {
+      "id": "DA2.5",
+      "phase": 2,
+      "title": "Match the signed-in employee",
+      "description": "Configure the sign-in identifier Workday uses to find the current employee.",
+      "role": "App/Cloud App Admin",
+      "owner": "da-2",
+      "automation": "attempt",
+      "automationLabel": "Attempt",
+      "checkpoints": [
+        "WD-ENTRA-NAMEID-001"
+      ],
+      "checkpointLabel": "WD-ENTRA-NAMEID-001",
+      "gate": "prog",
+      "gateLabel": "prog; degrade to manual portal row if brittle",
+      "fallbackGate": "manual",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "entraAppObjectId",
+        "tenantId"
+      ]
+    },
+    {
+      "id": "DA2.6",
+      "phase": 2,
+      "title": "Sign the Workday sign-in response",
+      "description": "Turn on \"Sign SAML response and assertion\" so Workday trusts the sign-in response.",
+      "role": "App/Cloud App Admin",
+      "owner": "da-2",
+      "automation": "no",
+      "automationLabel": "No (portal-only)",
+      "checkpoints": [
+        "WD-ENTRA-SIGNOPT-001"
+      ],
+      "checkpointLabel": "WD-ENTRA-SIGNOPT-001",
+      "gate": "manual",
+      "gateLabel": "manual",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "entraAppObjectId",
+        "tenantId"
+      ]
+    },
+    {
+      "id": "DA2.7",
+      "phase": 2,
+      "title": "Confirm the correct Microsoft Entra tenant",
+      "description": "Verify Workday is connected to this environment's Microsoft Entra tenant.",
+      "role": "App/Cloud App Admin",
+      "owner": "da-2",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [
+        "WD-CONN-010"
+      ],
+      "checkpointLabel": "WD-CONN-010",
+      "gate": "attest",
+      "gateLabel": "attest",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "tenant",
+        "tenantId",
+        "entraAppObjectId"
+      ]
+    },
+    {
+      "id": "DA3.1",
+      "phase": 3,
+      "title": "Register the Workday API client",
+      "description": "In Workday, register the API client for the agent, including the functional areas and Workday-owned scope.",
+      "role": "Workday Administrator",
+      "owner": "da-3",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [
+        "WD-API-CLIENT-001"
+      ],
+      "checkpointLabel": "WD-API-CLIENT-001",
+      "gate": "attest",
+      "gateLabel": "attest",
+      "dependsOn": [
+        "DA2.7"
+      ],
+      "scopeFields": [
+        "tenant",
+        "oauthClientId",
+        "tokenEndpoint"
+      ]
+    },
+    {
+      "id": "DA3.2",
+      "phase": 3,
+      "title": "Capture your Workday connection details",
+      "description": "Record the client ID, token endpoint, REST and SOAP base URLs, and tenant name needed to connect.",
+      "role": "Workday Administrator",
+      "owner": "da-3",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [
+        "WD-API-CLIENT-001"
+      ],
+      "checkpointLabel": "WD-API-CLIENT-001",
+      "gate": "attest",
+      "gateLabel": "attest",
+      "dependsOn": [
+        "DA3.1"
+      ],
+      "scopeFields": [
+        "tenant",
+        "baseUrl",
+        "tokenEndpoint",
+        "restBaseUrl",
+        "soapBaseUrl",
+        "oauthClientId"
+      ]
+    },
+    {
+      "id": "DA3.3",
+      "phase": 3,
+      "title": "Verify employee SAML sign-in policy",
+      "description": "Confirm an active Workday authentication rule allows SAML for the intended employees, or have the Workday administrator review and activate the required change.",
+      "role": "Workday Administrator",
+      "owner": "da-3",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [
+        "WD-TENANT-001"
+      ],
+      "checkpointLabel": "WD-TENANT-001",
+      "gate": "attest",
+      "gateLabel": "attest",
+      "dependsOn": [
+        "DA3.2"
+      ],
+      "scopeFields": [
+        "tenant",
+        "domainName"
+      ]
+    },
+    {
+      "id": "DA3.4",
+      "phase": 3,
+      "title": "Match the signing certificate",
+      "description": "Confirm the Workday-side signing certificate matches the one in Entra (validity dates, or an externally-computed SHA-1 — Workday shows no thumbprint).",
+      "role": "Workday Administrator",
+      "owner": "da-3",
+      "automation": "no",
+      "automationLabel": "No (Workday cert field not API-reachable)",
+      "checkpoints": [
+        "WD-CONN-102"
+      ],
+      "checkpointLabel": "WD-CONN-102",
+      "gate": "manual",
+      "gateLabel": "manual/attest (WD-CONN-102 returns MANUAL — operator compares certificate: dates / external SHA-1)",
+      "dependsOn": [
+        "DA2.1"
+      ],
+      "scopeFields": [
+        "tenant",
+        "entraAppObjectId"
+      ]
+    },
+    {
+      "id": "DA4.1",
+      "phase": 4,
+      "title": "Create the Workday connection",
+      "description": "Create the signed-in employee Workday connection with the captured Workday endpoints.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [],
+      "checkpointLabel": "n/a",
+      "gate": "manual",
+      "gateLabel": "manual",
+      "dependsOn": [
+        "DA3.2"
+      ],
+      "scopeFields": [
+        "sidecarDataverseEndpoint",
+        "tenant",
+        "oauthClientId",
+        "restBaseUrl",
+        "soapBaseUrl"
+      ]
+    },
+    {
+      "id": "DA4.2",
+      "phase": 4,
+      "title": "Create the Microsoft Dataverse connection",
+      "description": "Create or select an active Dataverse connection owned by the maker in this environment.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [],
+      "checkpointLabel": "n/a",
+      "gate": "manual",
+      "gateLabel": "manual",
+      "dependsOn": [
+        "DA1.1"
+      ],
+      "scopeFields": [
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.3",
+      "phase": 4,
+      "title": "Bind the extension connections",
+      "description": "Attach the Workday and Dataverse connections to the installed Workday runtime references.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "yes",
+      "automationLabel": "Yes",
+      "checkpoints": [],
+      "checkpointLabel": "post-write reference verification",
+      "gate": "prog",
+      "gateLabel": "prog",
+      "dependsOn": [
+        "DA4.1",
+        "DA4.2"
+      ],
+      "scopeFields": [
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.4",
+      "phase": 4,
+      "title": "Turn on the Workday cloud flows",
+      "description": "Enable every Workday runtime flow after its connections are bound.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "attempt",
+      "automationLabel": "Attempt",
+      "checkpoints": [],
+      "checkpointLabel": "flow state verification",
+      "gate": "prog",
+      "gateLabel": "prog, else manual",
+      "fallbackGate": "manual",
+      "dependsOn": [
+        "DA4.3"
+      ],
+      "scopeFields": [
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.5",
+      "phase": 4,
+      "title": "Connect Workday to the agent",
+      "description": "Connect each Workday flow in Copilot Studio and allow it to share the connection parameters used for signed-in employee access.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [
+        "WD-DA-CONN-001"
+      ],
+      "checkpointLabel": "WD-DA-CONN-001",
+      "gate": "prog",
+      "gateLabel": "prog, else manual",
+      "fallbackGate": "manual",
+      "dependsOn": [
+        "DA4.4"
+      ],
+      "scopeFields": [
+        "activeAgent",
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.6",
+      "phase": 4,
+      "title": "Authorize the agent to use the Workday flows",
+      "description": "Preview and apply the delegated authorization and workflow sharing required by the ESS HR agent.",
+      "role": "Power Platform Administrator",
+      "owner": "da-4",
+      "automation": "yes",
+      "automationLabel": "Yes",
+      "checkpoints": [],
+      "checkpointLabel": "authorization script verification",
+      "gate": "prog",
+      "gateLabel": "prog",
+      "dependsOn": [
+        "DA4.5"
+      ],
+      "scopeFields": [
+        "activeAgent",
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.7",
+      "phase": 4,
+      "title": "Configure employee context and topics",
+      "description": "Use the Workday package's V2 signed-in-user context and enable the Workday topics selected for this agent.",
+      "role": "Environment Maker",
+      "owner": "da-4",
+      "automation": "attempt",
+      "automationLabel": "Attempt",
+      "checkpoints": [
+        "WD-DA-CTX-001"
+      ],
+      "checkpointLabel": "WD-DA-CTX-001",
+      "gate": "manual",
+      "gateLabel": "prog user-context + manual topics",
+      "dependsOn": [
+        "DA4.5"
+      ],
+      "scopeFields": [
+        "activeAgent",
+        "sidecarDataverseEndpoint"
+      ]
+    },
+    {
+      "id": "DA4.8",
+      "phase": 4,
+      "title": "Review network restrictions",
+      "description": "Review the Workday REST and SOAP hosts only when organizational network controls restrict managed-connector access.",
+      "role": "InfoSec/IT",
+      "owner": "da-4",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [],
+      "checkpointLabel": "n/a",
+      "gate": "advisory",
+      "gateLabel": "advisory",
+      "dependsOn": [
+        "DA3.2"
+      ],
+      "scopeFields": [
+        "restBaseUrl",
+        "soapBaseUrl"
+      ]
+    },
+    {
+      "id": "DA5.1",
+      "phase": 5,
+      "title": "Validate a signed-in Workday scenario",
+      "description": "Run a Workday topic as a signed-in employee and confirm the agent returns real data before marking the environment ready.",
+      "role": "Environment Maker + Workday test user",
+      "owner": "da-5",
+      "automation": "no",
+      "automationLabel": "No",
+      "checkpoints": [],
+      "checkpointLabel": "n/a",
+      "gate": "manual",
+      "gateLabel": "manual",
+      "dependsOn": [
+        "DA1.1",
+        "DA2.1",
+        "DA2.2",
+        "DA2.3",
+        "DA2.4",
+        "DA2.5",
+        "DA2.6",
+        "DA2.7",
+        "DA3.1",
+        "DA3.2",
+        "DA3.3",
+        "DA3.4",
+        "DA4.1",
+        "DA4.2",
+        "DA4.3",
+        "DA4.4",
+        "DA4.5",
+        "DA4.6",
+        "DA4.7",
+        "DA4.8"
+      ],
+      "scopeFields": [
+        "activeAgent",
+        "sidecarDataverseEndpoint",
+        "tenant",
+        "entraAppObjectId",
+        "oauthClientId",
+        "restBaseUrl",
+        "soapBaseUrl"
+      ]
+    }
+  ]
+}

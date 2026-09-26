@@ -53,7 +53,11 @@ from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
-from flightcheck.checks.workday_da import run_workday_da_checks
+from flightcheck.checks.workday_da import (
+    run_workday_da_connection_checks,
+    run_workday_da_package_checks,
+    run_workday_da_user_context_checks,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -133,6 +137,7 @@ class CheckpointSpec:
     clients: frozenset = frozenset()
     requires_config: bool = True
     requires_dataverse_endpoint: bool = False
+    requires_flow_token: bool = False
     prereqs: tuple = ()
     priority: str = Priority.HIGH.value
     roles: tuple = ()
@@ -154,6 +159,7 @@ class ResolvedPlan:
     clients: frozenset
     requires_config: bool
     requires_dataverse_endpoint: bool
+    requires_flow_token: bool
     # (category_label, category_fn) pairs to register on the runner, ordered
     # by CATEGORY_ORDER (prerequisites' functions first), de-duped by function.
     ordered_fns: list = field(default_factory=list)
@@ -272,17 +278,38 @@ _SPECS: list[CheckpointSpec] = [
     # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
     # (DA) flavor of ESS is installed in the target env. Queries the
     # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
-    # child package. Fully independent of ESS-SOLN-001 / WD-PKG-001, which
-    # only recognize the CEA solution family.
+    # child package. A successful Dataverse query already proves the database
+    # is available, so this check deliberately does not pull ENV-002 and its
+    # separate Power Platform Admin authentication. Fully independent of
+    # ESS-SOLN-001 / WD-PKG-001, which only recognize the CEA solution family.
     CheckpointSpec(
         key="WD-DA-PKG-001",
-        category_fn=run_workday_da_checks,
+        category_fn=run_workday_da_package_checks,
         category_label="Workday DA",
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
-        prereqs=("ENV-002",),
         priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-CONN-001",
+        category_fn=run_workday_da_connection_checks,
+        category_label="Workday DA",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-CTX-001",
+        category_fn=run_workday_da_user_context_checks,
+        category_label="Workday DA",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
     # ---- External Systems: WD-001 (prereq-only, hidden from listing) ----
@@ -295,6 +322,7 @@ _SPECS: list[CheckpointSpec] = [
         clients=frozenset({PP_ADMIN}),
         requires_config=True,
         requires_dataverse_endpoint=True,
+        requires_flow_token=True,
         priority=Priority.HIGH.value,
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
         listable=False,
@@ -536,6 +564,7 @@ _SPECS: list[CheckpointSpec] = [
         clients=frozenset({PP_ADMIN}),
         requires_config=True,
         requires_dataverse_endpoint=True,
+        requires_flow_token=True,
         prereqs=("WD-PKG-001", "WD-001"),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
@@ -764,11 +793,15 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     clients: frozenset = frozenset()
     requires_config = False
     requires_dataverse_endpoint = False
+    requires_flow_token = False
     for spec in closure:
         clients = clients | spec.clients
         requires_config = requires_config or spec.requires_config
         requires_dataverse_endpoint = (
             requires_dataverse_endpoint or spec.requires_dataverse_endpoint
+        )
+        requires_flow_token = (
+            requires_flow_token or spec.requires_flow_token
         )
 
     # De-dupe category functions, then order by CATEGORY_ORDER. Multiple specs
@@ -796,6 +829,7 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
         clients=clients,
         requires_config=requires_config,
         requires_dataverse_endpoint=requires_dataverse_endpoint,
+        requires_flow_token=requires_flow_token,
         ordered_fns=unique,
     )
 

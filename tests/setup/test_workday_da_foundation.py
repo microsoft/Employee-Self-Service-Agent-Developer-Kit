@@ -49,14 +49,20 @@ def test_checklist_uses_readable_titles_without_visible_internal_ids() -> None:
     assert any("Match the signed-in employee" in line for line in visible_rows)
 
 
-def test_orchestrator_renders_canonical_titles_in_canonical_order() -> None:
-    tasks = (_WORKDAY_DA / "tasks.md").read_text(encoding="utf-8")
+def test_orchestrator_renders_only_customer_milestones() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
 
-    canonical_titles = re.findall(r"^- \[ \] \*\*(.+?)\*\*", tasks, re.MULTILINE)
-    rendered_titles = re.findall(r"^\s+- \{m\} (.+)$", skill, re.MULTILINE)
-
-    assert rendered_titles == canonical_titles
+    milestones = re.findall(r"^\s+\| ([A-Za-z ]+) \| \{marker\} \|$", skill, re.MULTILINE)
+    assert milestones == [
+        "Preflight",
+        "Microsoft Entra",
+        "Workday administrator",
+        "Connections",
+        "Runtime configuration",
+        "Network readiness",
+        "Employee validation",
+    ]
+    assert "- {m} Install the Workday extension package" not in skill
 
 
 def test_state_contract_requires_immediate_durable_updates() -> None:
@@ -65,7 +71,9 @@ def test_state_contract_requires_immediate_durable_updates() -> None:
 
     assert "A `MANUAL` or attestation-gated row is never" in updater
     assert "**Persist immediately — never batch.**" in updater
+    assert ".local/connect/workday-da/tasks.md" in updater
     assert ".local/setup/workday-da/tasks.md" in updater
+    assert "Never maintain both paths" in updater
     assert ".local/connect/workday-da/config.json" in updater
     assert "Read" in schema and "Merge" in schema and "Write" in schema
     assert "sidecarDataverseEndpoint" in schema
@@ -73,6 +81,48 @@ def test_state_contract_requires_immediate_durable_updates() -> None:
     assert '"provenance"' in schema
     assert '`reviewed`' in updater
     assert "FAILED` or `ERROR` always produces `blocked`" in updater
+    assert "**What FlightCheck found**" in updater
+    assert "**What you need to verify**" in updater
+    assert '"question": "Have you completed this step' not in updater
+    assert '"recommended": true' not in updater
+    normalized_updater = " ".join(updater.split())
+    assert (
+        "Never infer acknowledgement from a FlightCheck pass, a bare `done`"
+        in normalized_updater
+    )
+
+
+def test_workday_skills_have_discovery_metadata_and_direct_navigation() -> None:
+    da_skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    cea_skill = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert da_skill.startswith("---\nname: connect-workday-da\n")
+    assert "description: >-" in da_skill
+    assert "## Playbook map" in da_skill
+    assert "checked-in playbooks and the executable definition are the controlled" in da_skill
+    assert "Do not browse for, merge in, or improvise setup steps" in da_skill
+    for reference in (
+        "install-extension.md",
+        "provision-entra-app.md",
+        "configure-tenant.md",
+        "configure-power-platform.md",
+        "verify-connection.md",
+        "shared/checklist-updater.md",
+        "shared/permission-gate.md",
+        "shared/config-schema.md",
+        "workday-da.definition.json",
+    ):
+        assert f"]({reference})" in da_skill
+    assert cea_skill.startswith("---\nname: connect-workday\n")
 
 
 def test_entra_setup_pins_tenant_and_exact_app_identity() -> None:
@@ -90,29 +140,31 @@ def test_entra_setup_pins_tenant_and_exact_app_identity() -> None:
     assert "Never downgrade a programmatic privileged-role" in gate
     assert "user_impersonation" in entra
     assert "claimsMappingPolicy" in entra
+    assert "repeat both in chat as copyable text" in entra
+    assert (
+        "Never require the user to copy a URL or code from the inline terminal"
+        in entra
+    )
 
 
 def test_workday_tenant_setup_preserves_manual_gates_and_safe_order() -> None:
     tasks = (_WORKDAY_DA / "tasks.md").read_text(encoding="utf-8")
     tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized = " ".join(tenant.split())
 
-    register = tenant.index("## DA3.1 + DA3.2 — Register the API client")
-    policy = tenant.index("## DA3.3 — Verify the signed-in employee authentication policy")
+    safety = tenant.index("## DA3.0b — Protect the active federation")
+    packet = tenant.index("## DA3.1–DA3.4 — Workday administrator work packet")
 
-    assert register < policy
-    assert "Single-tenant SAML pre-gate" in tenant
+    assert safety < packet
+    assert "active SAML identity provider" in tenant
     assert "CHECKPOINT_RESULT=\"MANUAL\"" in tenant
     assert "ACK=true" in tenant
-    assert "Workday cert field is not API-reachable" in tenant
     assert "checkpoints: WD-CONN-102 | gate: manual" in tasks
     assert "checkpoints: WD-API-CLIENT-001 | gate: attest" in tasks
-    assert (
-        "| DA3.2 | `WD-API-CLIENT-001` — Workday connection fields captured"
-        in tenant
-    )
-    assert "There is no separate domain-to-integration-security-group" in tenant
-    assert "Do not look for an OAuth-client restriction" in tenant
+    assert "Integration System Security Group" in tenant
+    assert "Do not use an ISU" in tenant
     assert "Existing active policy already allows employee SAML" in tenant
+    assert "will not perform or guide that replacement" in normalized
 
 
 def test_workday_portal_tasks_start_only_after_the_admin_gate() -> None:
@@ -126,6 +178,6 @@ def test_workday_portal_tasks_start_only_after_the_admin_gate() -> None:
         in normalized_entra
     )
     assert "Do not ask the maker to open Workday" in entra
-    assert tenant.index("## DA3.0 — Workday administrator gate") < tenant.index(
-        "## DA3.0b — Single-tenant SAML pre-gate"
+    assert tenant.index("## DA3.0 — Confirm the administrator is available") < tenant.index(
+        "## DA3.0b — Protect the active federation"
     )

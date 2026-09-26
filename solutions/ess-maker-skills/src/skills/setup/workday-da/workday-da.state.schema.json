@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/workday-da.state.schema.json",
+  "title": "Workday DA persisted state",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "definitionVersion",
+    "stateSchemaVersion",
+    "status",
+    "setupStatus"
+  ],
+  "properties": {
+    "definitionVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "stateSchemaVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "in-progress",
+        "configured",
+        "ready"
+      ]
+    },
+    "vertical": {
+      "const": "hr"
+    },
+    "verticals": {
+      "type": "array",
+      "items": {
+        "const": "hr"
+      },
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "setupStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^DA[1-5]\\.[1-9][0-9]*$": {
+          "$ref": "#/$defs/stepState"
+        }
+      }
+    },
+    "revalidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredStepIds",
+        "createdAt"
+      ],
+      "properties": {
+        "requiredStepIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^DA[1-5]\\.[1-9][0-9]*$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "provenance",
+        "note",
+        "capturedAt"
+      ],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "scopeFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "scenario": {
+          "$ref": "#/$defs/readinessScenario"
+        },
+        "failureCategory": {
+          "type": "string",
+          "enum": [
+            "transient",
+            "authentication",
+            "permission",
+            "validation",
+            "unsupported",
+            "conflict",
+            "ambiguous-mutation",
+            "manual-action",
+            "verification-failed"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        }
+      }
+    },
+    "readinessScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenarioName",
+        "testUserCategory",
+        "signedInUserConfirmed",
+        "realWorkdayDataConfirmed",
+        "unexpectedSignIn",
+        "completedAt"
+      ],
+      "properties": {
+        "scenarioName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "testUserCategory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nonMakerTestUserConfirmed": {
+          "const": true
+        },
+        "agentSharedWithTestUser": {
+          "const": true
+        },
+        "signedInUserConfirmed": {
+          "const": true
+        },
+        "realWorkdayDataConfirmed": {
+          "const": true
+        },
+        "connectionPromptObserved": {
+          "const": false
+        },
+        "unexpectedSignIn": {
+          "const": false
+        },
+        "testSurface": {
+          "type": "string",
+          "minLength": 1
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "gateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "outcome",
+        "provenance",
+        "note",
+        "capturedAt"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "programmatic",
+            "attested"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "stop"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "role-query",
+            "user-attestation"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "stepState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "checkpoint",
+        "gate",
+        "verifiedBy"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "in-progress",
+            "done",
+            "blocked"
+          ]
+        },
+        "checkpoint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate": {
+          "type": "string",
+          "enum": [
+            "prog",
+            "manual",
+            "attest",
+            "advisory"
+          ]
+        },
+        "verifiedBy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "programmatic",
+            "attested",
+            "reviewed",
+            null
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        },
+        "gateEvidence": {
+          "$ref": "#/$defs/gateEvidence"
+        }
+      }
+    }
+  }
+}

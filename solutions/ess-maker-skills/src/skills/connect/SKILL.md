@@ -58,8 +58,8 @@ Workday routes by architecture before package detection:
 
   CEA per-agent lifecycle state is stored at
   `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state
-  is stored in `.local/connect/workday-da/config.json` and
-  `.local/setup/workday-da/tasks.md`.
+  is stored together in `.local/connect/workday-da/config.json` and
+  `.local/connect/workday-da/tasks.md`.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

@@ -60,29 +60,59 @@ The configuration checklist is complete. Now validate the actual employee
 path:
 
 1. Publish the ESS HR agent.
-2. Use a test employee who is assigned to the Workday Entra application and
-   has valid Workday access.
-3. Start a new conversation so stale user-flow state is not reused.
-4. Run one enabled Workday scenario, such as checking a vacation balance.
-5. Confirm the agent identifies the signed-in employee and returns real
-   Workday data without asking for another unexpected sign-in.
+2. Share the published agent with a test employee who is not the maker who
+   created the Workday connection.
+3. Confirm that employee is assigned to the Workday Entra application and has
+   valid Workday access.
+4. Sign in as that employee and start a new conversation so maker credentials
+   and stale user-flow state are not reused.
+5. Run one enabled, read-only Workday scenario, such as checking a vacation
+   balance.
+6. Confirm the agent identifies the signed-in employee and returns real
+   Workday data without showing a **Connect**, consent, or additional sign-in
+   prompt.
 
 Did the scenario complete successfully?
 
 **End message.**
 
-On success, record the scenario, test user category (never credentials), time,
-and result as evidence. First merge provider `status: "ready"` into the
-provider config, then update **DA5.1** with `GATE="manual"`, `ACK=true`. This
-write order ensures an interruption cannot leave a completed row while the
-public readiness signal is missing. Return to the orchestrator.
+On success, update **DA5.1** with `GATE="manual"`, `ACK=true` and structured
+`ROW_EVIDENCE` in this shape:
+
+```json
+{
+  "outcome": "PASSED",
+  "provenance": "user-acknowledgement",
+  "note": "Signed-in employee scenario completed with real Workday data.",
+  "capturedAt": "<current UTC timestamp>",
+  "scenario": {
+    "scenarioName": "<safe category, for example vacation balance>",
+    "testUserCategory": "non-maker assigned test employee",
+    "nonMakerTestUserConfirmed": true,
+    "agentSharedWithTestUser": true,
+    "signedInUserConfirmed": true,
+    "realWorkdayDataConfirmed": true,
+    "connectionPromptObserved": false,
+    "unexpectedSignIn": false,
+    "testSurface": "<safe category, for example Microsoft 365 Copilot>",
+    "completedAt": "<current UTC timestamp>"
+  }
+}
+```
+
+Never record the employee's name, email, Workday ID, credentials, prompt
+contents, or returned Workday data. Do not write provider `status` directly.
+The deterministic state helper fingerprints the current agent/environment
+scope and derives `status: "ready"` only when every blocking row is done,
+revalidation is complete, and this scenario evidence is valid. Return to the
+orchestrator.
 
 On failure, leave DA5.1 `in-progress`. Run
 `python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`
 to recheck the environment and DA package. That scope does not prove the live
 connection, flow authorization, employee-context wiring, or topic execution,
-so also revisit the DA4 connection, flow, authorization, topic, and firewall
-evidence. If connection parameters recently changed, reconnect the Workday
+so also revisit the DA4 connection, flow, authorization, topic, and conditional
+network review. If connection parameters recently changed, reconnect the Workday
 connection and retry with a fresh conversation or test user.
 
 ---

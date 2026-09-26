@@ -45,6 +45,7 @@ def _args(
     invocation_source: str | None = None,
     quiet_auth: bool = False,
     ring: str | None = None,
+    preferred_username: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -57,6 +58,7 @@ def _args(
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
         ring=ring,
+        preferred_username=preferred_username,
     )
 
 
@@ -556,6 +558,114 @@ class TestHermeticRun:
         assert captured["agent_slug"] == "active-agent"
         assert captured["config"]["tenant"] == "acme"
         assert captured["config"]["_connectConfigPath"] == str(overlay)
+
+    @pytest.mark.parametrize("requires_flow_token", [False, True])
+    def test_power_platform_auth_requests_only_the_planned_audiences(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+        requires_flow_token: bool,
+    ) -> None:
+        captured = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset({registry.PP_ADMIN})
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.requires_flow_token = requires_flow_token
+                self.ordered_fns = [("Fake", self._fn)]
+
+            @staticmethod
+            def _fn(runner):
+                assert runner.pp_admin is not None
+                return [_row("FAKE-001", Status.PASSED.value)]
+
+        class _PowerPlatformAdmin:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self, *, include_flow: bool = True) -> str:
+                captured["include_flow"] = include_flow
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry, "transitive_requirements", lambda target: _Plan()
+        )
+        monkeypatch.setattr(cli, "PPAdminClient", _PowerPlatformAdmin)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    environment_id="00000000-0000-4000-8000-000000001111",
+                )
+            )
+
+        assert exc.value.code == 0
+        assert captured["include_flow"] is requires_flow_token
+
+    def test_graph_auth_receives_the_preferred_account(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        captured = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = False
+            requires_dataverse_endpoint = False
+            requires_flow_token = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [("Fake", self._fn)]
+
+            @staticmethod
+            def _fn(runner):
+                assert runner.graph is not None
+                return [_row("FAKE-001", Status.PASSED.value)]
+
+        class _Graph:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self, *, preferred_username: str) -> str:
+                captured["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry, "transitive_requirements", lambda target: _Plan()
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    preferred_username="admin@contoso.com",
+                )
+            )
+
+        assert exc.value.code == 0
+        assert captured["preferred_username"] == "admin@contoso.com"
 
     def test_failed_row_exits_1(
         self,

@@ -42,25 +42,25 @@ Run any one with:
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
 
-**After every checkpoint run, show its result in chat first.** As soon as a
-`--checkpoint` run returns, render the result to the user per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
-its full verification steps — **before** you show any later **Message** or ask any
-attestation question. Single-checkpoint runs never open the HTML report, so this
-in-chat render is the only place the user sees the manual steps; never ask a user
-to attest to steps they have not been shown.
+**After every checkpoint run, surface the customer-relevant result first.**
+Follow [`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a:
+show one concise verification sentence when everything passed, and show the
+result table plus full instructions for any `MANUAL`, `Warning`,
+`NotConfigured`, or failed outcome before a later message or attestation.
+Single-checkpoint runs never open the HTML report, so manual instructions must
+still appear in chat.
 
 **Build order (row order now matches it).** Row **DA2.1** — the SSO gallery app —
 is the foundation every other row configures, so it is built first and the rows
 are numbered in build order (DA2.1 → DA2.7). Each section below is titled by the
 checklist row it completes. **On every resume, always re-run DA2.0 (role gate),
-DA2.0b (Workday tenant URL) and DA2.1 (ensure the app exists) first — all
-idempotent — before working the first incomplete row.** This is required, not
-cosmetic: DA2.2–DA2.4 configure the app through the in-memory
+DA2.0b (Workday tenant URL), DA2.0c (one scoped change approval), and DA2.1
+(ensure the app exists) first — all idempotent except the explicit approval —
+before working the first incomplete row.** This is required, not cosmetic:
+DA2.2–DA2.4 configure the app through the in-memory
 `WD_ENTRA_APP_OBJECT_ID` that only DA2.1 populates, so entering directly at a
 later row after a resume would leave it undefined. After re-running DA2.0, DA2.0b
-and DA2.1, skip any row whose `setupStatus` state is already `done`.
+through DA2.1, skip any row whose `setupStatus` state is already `done`.
 
 ---
 
@@ -84,9 +84,32 @@ canonical tenant selected during `/setup`:
    az login --tenant "{SETUP_TENANT_ID}" --use-device-code --allow-no-subscriptions
    ```
 
+   Run this interactively without hiding its output. Read the emitted device
+   sign-in URL and one-time code, then repeat both in chat as copyable text:
+
+   **Message:**
+
+   Sign in to Microsoft Entra:
+
+   1. Open `{DEVICE_LOGIN_URL}`
+   2. Enter code **`{DEVICE_CODE}`**
+   3. Sign in with the administrator account for the selected tenant
+
+   I will continue only after the CLI confirms the sign-in. Do not paste any
+   password or token into chat.
+
+   **End message.**
+
+   Never require the user to copy a URL or code from the inline terminal.
+
 4. Re-run `az account show --query tenantId -o tsv`. If it still differs, halt
-   before running the role query or any `az ad` / Graph mutation. Persist
-   `tenantId = SETUP_TENANT_ID` to
+   before running the role query or any `az ad` / Graph mutation.
+5. Read the verified Azure CLI account with
+   `az account show --query user.name -o tsv` and save it as
+   `ENTRA_ADMIN_ACCOUNT` for this run. It is a non-secret account hint; do not
+   display it unless the user asks which account is active. Stop if it is empty.
+   Persist `tenantId = SETUP_TENANT_ID` and
+   `entraAdminAccount = ENTRA_ADMIN_ACCOUNT` to
    `.local/connect/workday-da/config.json` only after this verification.
 
 Apply the shared [`shared/permission-gate.md`](shared/permission-gate.md) before
@@ -180,6 +203,44 @@ derived.
 
 **If the user leaves it blank**, record nothing and continue — DA2.1 will
 identify the app by display name and ask you to choose if more than one matches.
+
+---
+
+## DA2.0c — Approve the Microsoft Entra change plan
+
+Before the first incomplete DA2 mutation, show one scoped plan covering all
+remaining Microsoft Entra work. Do not ask for separate approval before each
+Graph or Azure CLI operation.
+
+**Message:**
+
+I am ready to configure the selected Workday application in Microsoft Entra.
+The remaining plan may:
+
+- create or reuse the Workday enterprise application;
+- configure its SAML identifier, reply URL, and signing certificate;
+- expose the Workday connector permission and required Microsoft Graph
+  permissions;
+- grant or verify administrator consent;
+- configure user assignment and the signed-in employee identifier; and
+- verify the application belongs to the selected Microsoft Entra tenant.
+
+I will apply changes only to the selected tenant and the exact Workday
+application discovered or created during this plan, verify every supported
+change after it is made, and stop on an ambiguous target. Continue with this
+plan?
+
+**End message.**
+
+Use `vscode_askQuestions` with **Continue** and **Cancel** options. Do not
+preselect an answer. **Continue** approves the remaining DA2 operations for
+the current tenant and selected application during this invocation. **Cancel**
+pauses without mutation.
+
+Show later preview or verification details only when they identify an
+unexpected target, a warning, or a failure. Do not request another approval
+for a step already covered by this plan. If the resolved tenant or application
+changes, discard the approval and return here.
 
 ---
 
@@ -351,7 +412,7 @@ I'll continue automatically once it finishes.
 **End message.**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 `WD-CONN-102` reports the Entra-side signing-certificate health. It returns
@@ -426,7 +487,7 @@ Platform Workday connector is pre-authorized to call it.
 **Verify (WD-ENTRA-SCOPE-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** → update **DA2.2** via
@@ -473,7 +534,7 @@ permissions.
 **Verify (WD-ENTRA-CONSENT-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** → update **DA2.3** via
@@ -513,7 +574,7 @@ so, that the right users are assigned.
 **Verify (WD-ASSIGN-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** (assignment satisfied via a group, or not required) → update
@@ -578,7 +639,7 @@ your Workday tenant expects.
 **Verify (WD-ENTRA-NAMEID-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 - **`PASSED`** (a NameID-overriding policy is assigned) → update **DA2.5** via
@@ -615,7 +676,7 @@ portal, because the kit can't read the setting directly.
 cannot read the setting).
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 Present the checkpoint's instructions — its remediation now names the customer's
@@ -664,7 +725,7 @@ this phase.
 **Verify (WD-CONN-010):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-010 --connect-config ".local/connect/workday-da/config.json"
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-010 --connect-config ".local/connect/workday-da/config.json" --preferred-username "{ENTRA_ADMIN_ACCOUNT}"
 ```
 
 `WD-CONN-010` summarizes the federated Workday SAML app(s) and their entity IDs.

@@ -50,6 +50,80 @@ def test_empty_tenant_id_returns_empty():
     assert graph_client.resolve_tenant_display_name_silent("") == ""
 
 
+def test_authenticate_reuses_the_exact_preferred_cached_account():
+    preferred = {"username": "admin@contoso.com"}
+    other = {"username": "other@contoso.com"}
+    app = MagicMock()
+    app.get_accounts.return_value = [other, preferred]
+    app.acquire_token_silent.return_value = {"access_token": "cached-token"}
+
+    with patch.object(
+        graph_client.msal,
+        "PublicClientApplication",
+        return_value=app,
+    ):
+        client = graph_client.GraphClient("tenant-Z")
+        assert (
+            client.authenticate(preferred_username="ADMIN@contoso.com")
+            == "cached-token"
+        )
+
+    app.acquire_token_silent.assert_called_once_with(
+        graph_client.GRAPH_SCOPES,
+        account=preferred,
+    )
+    app.acquire_token_interactive.assert_not_called()
+
+
+def test_authenticate_without_hint_preserves_first_cached_account_behavior():
+    first = {"username": "first@contoso.com"}
+    app = MagicMock()
+    app.get_accounts.return_value = [
+        first,
+        {"username": "second@contoso.com"},
+    ]
+    app.acquire_token_silent.return_value = {"access_token": "cached-token"}
+
+    with patch.object(
+        graph_client.msal,
+        "PublicClientApplication",
+        return_value=app,
+    ):
+        client = graph_client.GraphClient("tenant-Z")
+        assert client.authenticate() == "cached-token"
+
+    app.acquire_token_silent.assert_called_once_with(
+        graph_client.GRAPH_SCOPES,
+        account=first,
+    )
+    app.acquire_token_interactive.assert_not_called()
+
+
+def test_authenticate_uses_login_hint_when_preferred_account_is_not_cached():
+    app = MagicMock()
+    app.get_accounts.return_value = [{"username": "other@contoso.com"}]
+    app.acquire_token_interactive.return_value = {
+        "access_token": "interactive-token"
+    }
+
+    with patch.object(
+        graph_client.msal,
+        "PublicClientApplication",
+        return_value=app,
+    ):
+        client = graph_client.GraphClient("tenant-Z")
+        assert (
+            client.authenticate(preferred_username="admin@contoso.com")
+            == "interactive-token"
+        )
+
+    app.acquire_token_silent.assert_not_called()
+    app.acquire_token_interactive.assert_called_once_with(
+        graph_client.GRAPH_SCOPES,
+        login_hint="admin@contoso.com",
+    )
+
+
 def test_no_cached_account_returns_empty_without_prompt():
     app = _fake_app(accounts=[], silent_result=None)
     with patch.object(graph_client.msal, "PublicClientApplication", return_value=app):

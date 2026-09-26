@@ -3,8 +3,11 @@
 
 The single, trackable checklist spanning the five Workday connect steps for the
 **ESS HR agent**. This file is the
-**canonical row source**: on first run the skill renders it to the working copy
-`.local/setup/workday-da/tasks.md` and then updates **only its own items**
+human-readable template for the versioned machine contract in
+[`workday-da.definition.json`](workday-da.definition.json). Contract tests keep
+the visible rows and hidden metadata synchronized. On first run the skill
+renders this template to the working copy
+`.local/connect/workday-da/tasks.md` and then updates **only its own items**
 through the shared
 [`shared/checklist-updater.md`](shared/checklist-updater.md). The durable
 mirror of each item's status is `setupStatus` in
@@ -92,13 +95,13 @@ express; all items start `pending`.
 - [ ] **Turn on the Workday cloud flows** — Enable every Workday runtime flow after its connections are bound.
   <!-- id: DA4.4 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: flow state verification | gate: prog, else manual | status: pending -->
 - [ ] **Connect Workday to the agent** — Connect each Workday flow in Copilot Studio and allow it to share the connection parameters used for signed-in employee access.
-  <!-- id: DA4.5 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
+  <!-- id: DA4.5 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: WD-DA-CONN-001 | gate: prog, else manual | status: pending -->
 - [ ] **Authorize the agent to use the Workday flows** — Preview and apply the delegated authorization and workflow sharing required by the ESS HR agent.
   <!-- id: DA4.6 | role: Power Platform Administrator | skill: da-4 | automatable: Yes | checkpoints: authorization script verification | gate: prog | status: pending -->
 - [ ] **Configure employee context and topics** — Use the Workday package's V2 signed-in-user context and enable the Workday topics selected for this agent.
-  <!-- id: DA4.7 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: n/a | gate: manual | status: pending -->
-- [ ] **Allow Workday through the firewall** — Allow the Workday REST and SOAP hosts used by the Power Platform managed connectors.
-  <!-- id: DA4.8 | role: InfoSec/IT | skill: da-4 | automatable: No | checkpoints: n/a | gate: attest | status: pending -->
+  <!-- id: DA4.7 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: WD-DA-CTX-001 | gate: prog user-context + manual topics | status: pending -->
+- [ ] **Review network restrictions** — Review the Workday REST and SOAP hosts only when organizational network controls restrict managed-connector access.
+  <!-- id: DA4.8 | role: InfoSec/IT | skill: da-4 | automatable: No | checkpoints: n/a | gate: advisory | status: pending -->
 
 ### 5. Validate Workday readiness
 

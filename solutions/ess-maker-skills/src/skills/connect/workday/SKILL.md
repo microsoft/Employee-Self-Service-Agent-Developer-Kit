@@ -1,3 +1,10 @@
+---
+name: connect-workday
+description: >-
+  Connect an installed Workday extension to an Employee Self-Service agent.
+  Use for live lifecycle discovery, agent wiring, validation, resume, and rollback.
+---
+
 # Connect Workday (already installed)
 
 Entry point for connecting this agent to a Workday extension that is

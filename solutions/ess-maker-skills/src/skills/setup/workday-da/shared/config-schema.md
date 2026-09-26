@@ -7,6 +7,13 @@ cite this file so they agree on field names, owners, and types.
 
 **Canonical data file:** `.local/connect/workday-da/config.json`
 
+The executable persisted-state contract is
+[`../workday-da.state.schema.json`](../workday-da.state.schema.json). New or
+migrated state records `definitionVersion` and `stateSchemaVersion` from
+[`../workday-da.definition.json`](../workday-da.definition.json). Legacy files
+without those fields are migrated by the deterministic state helper before
+schema validation; they are not discarded or treated as fresh setup.
+
 Forked from the CEA `setup/shared/config-schema.md`. The field shapes are the
 same; only the file path and the owning steps differ — DA has five steps
 (DA-1 install, DA-2 Entra, DA-3 tenant, DA-4 Power Platform integration,
@@ -42,6 +49,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | Field | Type | Owner | Notes |
 |-------|------|-------|-------|
 | `sidecarDataverseEndpoint` | string | DA-1 | HTTPS Dataverse organization URL hosting the Workday solution, connections, and flows for a native MOS/AgentBuilder agent. Do not copy it into foundation config. |
+| `entraAdminAccount` | string | DA-2 | Non-secret sign-in name verified from the active Azure CLI tenant. Used only as an exact account hint so later Graph checkpoints reuse the correct cached account without another account-selection prompt. |
 | `baseUrl` | string | DA-2/DA-3 | Workday web host base URL (e.g. `https://wd2-impl.workday.com`). Captured early by DA-2 when the operator has the URL, else by DA-3. |
 | `tenant` | string | DA-2/DA-3 | Workday tenant short name. Captured early by DA-2 to pin the Entra app deterministically, else by DA-3. |
 | `tokenHost` | string | DA-2/DA-3 | Services host used to build token / REST URLs. Derived by DA-2 when the URL matches a known pattern, else by DA-3. |
@@ -72,7 +80,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 Each step records its own checkpoint outcomes under a `setupStatus` object,
 keyed by **Step ID** (`DA1.1` … `DA5.1`) from the DA master checklist. This is
 the durable record `shared/checklist-updater.md` reads and writes; the
-rendered `.local/setup/workday-da/tasks.md` is the human-readable view of the
+rendered `.local/connect/workday-da/tasks.md` is the human-readable view of the
 same data.
 
 ```json
@@ -124,9 +132,10 @@ same data.
 ## Power Platform integration state
 
 DA-4 records programmatic evidence for solution-reference binding and supported
-flow activation. Agent connection sharing, topic selection, and firewall
-allowlisting remain manual or attested until reliable DA-scoped APIs are
-available. It must not reuse CEA checkpoints as proof. DA4.6 uses programmatic
+flow activation. Agent connection sharing and topic selection remain manual
+until reliable DA-scoped APIs are available. Network restrictions are a
+non-blocking advisory unless runtime validation identifies a concrete access
+failure. DA-4 must not reuse CEA checkpoints as proof. DA4.6 uses programmatic
 evidence from the checked-in authorization script.
 
 ---
