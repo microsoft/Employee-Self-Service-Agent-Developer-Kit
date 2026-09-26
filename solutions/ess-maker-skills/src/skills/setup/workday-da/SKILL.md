@@ -90,11 +90,11 @@ Contact your Workday and identity administrators before continuing.
 Stop without creating or updating Workday state.
 
 When this file is invoked directly instead of through `/connect workday`, show
-the same routing diagnostics defined by the Workday branch in
-`src/skills/connect/step1.md` before the readiness briefing. The architecture,
-authentication mode, workspace revision, and canonical state path must be
-visible so a test run cannot silently use the CEA lifecycle or an unexpected
-checkout.
+the same customer-facing routing confirmation defined by the Workday branch in
+`src/skills/connect/step1.md` before the readiness briefing. Resolve and enforce
+the architecture, authentication mode, and canonical state path internally,
+but do not expose Git revisions or local file-system paths in the customer
+conversation.
 
 Use the same five-phase lifecycle and the same completion gates for
 Development, Sandbox, and Production Power Platform environments. Environment

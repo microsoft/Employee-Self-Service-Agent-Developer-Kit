@@ -16,6 +16,7 @@ _WORKDAY_DA = (
     / "setup"
     / "workday-da"
 )
+_CONNECT = _WORKDAY_DA.parents[1] / "connect"
 
 
 def test_orchestrator_resumes_durable_state_without_restarting_setup() -> None:
@@ -34,9 +35,18 @@ def test_orchestrator_resumes_durable_state_without_restarting_setup() -> None:
     assert "Your ESS HR agent is connected to Workday" in text
     assert "supports only the Workday connection option named **Microsoft" in text
     assert "direct Workday federation through Okta, Ping" in text
-    assert "workspace revision" in text
+    assert "do not expose Git revisions or local file-system paths" in normalized
     assert "same five-phase lifecycle and the same completion gates" in text
     assert "Environment type never skips, reorders, or relaxes" in normalized
+
+
+def test_router_keeps_internal_diagnostics_out_of_customer_message() -> None:
+    route = (_CONNECT / "step1.md").read_text(encoding="utf-8")
+
+    assert "Workday setup path selected:" in route
+    assert "Workspace revision:" not in route
+    assert "Setup state:" not in route
+    assert "This release does not configure direct Workday federation" not in route
 
 
 def test_extension_install_uses_the_ring_aware_runtime_installer() -> None:
