@@ -1135,12 +1135,26 @@ def _run_single_checkpoint(args):
         # --scope emit so checkpoint runs also count toward the adk.* cubes.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_category
 
             _agent_id = _active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Single-checkpoint runs execute exactly one owning check, so the
+            # first result row's category is the run's connector (or "" for
+            # cross-cutting checkpoints like Environment / Authentication).
+            # Derived here rather than passed by the caller so the CLI runtime
+            # path matches the same connector attribution as the legacy
+            # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
+            _connector = ""
+            if result.results:
+                _connector = derive_connector_from_category(
+                    getattr(result.results[0], "category", "") or ""
+                )
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1151,6 +1165,7 @@ def _run_single_checkpoint(args):
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1778,12 +1793,20 @@ def main():
         # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_scope
 
             _agent_id = active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Derive connector from the CLI scope so scope-based runs get the
+            # same attribution as the legacy flightcheck events (ADO 7943641
+            # review). "full" and cross-cutting scopes return "" — the finer
+            # per-check attribution lives on the check events, not run events.
+            _connector = derive_connector_from_scope(args.scope)
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1794,6 +1817,7 @@ def main():
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
