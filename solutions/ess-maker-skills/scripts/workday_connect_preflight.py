@@ -12,7 +12,11 @@ from typing import Any, Callable
 
 from auth import authenticate, query_all
 from install_workday_da_extension import install_workday_package
-from workday_connect_auth import authentication_plan, require_identity
+from workday_connect_auth import (
+    WorkdayConnectIdentityError,
+    authentication_plan,
+    require_identity,
+)
 from workday_connect_model import load_catalog
 from workday_connect_store import WorkdayConnectStore
 
@@ -24,6 +28,7 @@ class WorkdayConnectPreflightError(RuntimeError):
 @dataclass(frozen=True)
 class PreflightTarget:
     agent: dict[str, Any]
+    environment_id: str | None
     architecture: str
     package_flavor: str
     dataverse_url: str
@@ -166,12 +171,18 @@ def resolve_target(
             "The Workday Dataverse environment URL must use HTTPS."
         )
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
+    environment_id = str(
+        foundation.get("environmentId")
+        or (setup_state.get("environment") or {}).get("id")
+        or ""
+    ).strip()
     return PreflightTarget(
         agent={
             key: agent[key]
             for key in ("slug", "botId", "schemaName", "name")
             if agent.get(key)
         },
+        environment_id=environment_id or None,
         architecture=supported["architecture"],
         package_flavor=supported["packageFlavor"],
         dataverse_url=exact_url,
@@ -223,6 +234,13 @@ def run_preflight(
     active_catalog = catalog or load_catalog()
     state_store = store or WorkdayConnectStore(workspace_root)
     state = state_store.initialize()
+    stored_maker = str(
+        (
+            state.get("operators", {}).get("powerPlatformMaker") or {}
+        ).get("username")
+        or ""
+    ).strip()
+    intended_maker = str(maker_username or stored_maker or "").strip() or None
     target = resolve_target(
         workspace_root,
         dataverse_url=dataverse_url,
@@ -231,12 +249,15 @@ def run_preflight(
     )
     token = token_provider(
         target.dataverse_url,
-        preferred_username=maker_username,
+        preferred_username=intended_maker,
     )
-    identity = identity_provider(
-        token,
-        preferred_username=maker_username,
-    )
+    try:
+        identity = identity_provider(
+            token,
+            preferred_username=intended_maker,
+        )
+    except WorkdayConnectIdentityError as exc:
+        raise WorkdayConnectPreflightError(str(exc)) from exc
     installed = _installed_solutions(
         target.dataverse_url,
         token,
@@ -280,6 +301,7 @@ def run_preflight(
         {
             "agent": target.agent,
             "dataverseUrl": target.dataverse_url,
+            "environmentId": target.environment_id,
             "architecture": target.architecture,
             "packageFlavor": target.package_flavor,
             "ring": target.foundation_ring,

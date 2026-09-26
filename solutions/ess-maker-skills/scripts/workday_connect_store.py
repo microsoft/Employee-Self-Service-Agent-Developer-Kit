@@ -230,6 +230,7 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
 
     operator_map = {
         "entraAdminUsername": ("entraAdmin", "username"),
+        "entraAdminAccount": ("entraAdmin", "username"),
         "makerUsername": ("powerPlatformMaker", "username"),
     }
     for legacy, (operator, field) in operator_map.items():

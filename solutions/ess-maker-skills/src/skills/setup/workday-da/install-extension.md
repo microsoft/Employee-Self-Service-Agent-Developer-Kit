@@ -20,10 +20,24 @@ Then run:
 python scripts/workday_connect.py preflight
 ```
 
-Use `--dataverse-url` only when canonical setup state has no exact Dataverse
-URL. Use `--maker-username` only to pin an intended maker account or resolve
-account ambiguity; never ask for it when the authenticated account is already
-unambiguous.
+Fresh native-agent setup state normally identifies the Agent Builder
+environment but may not contain a Dataverse organization URL. When no exact
+Dataverse URL is available, explain that Power Platform environment inventory
+uses its own Microsoft sign-in, then run:
+
+```powershell
+python scripts/list_environments.py
+```
+
+Show only Dataverse-linked environment display names, types, regions, and
+URLs. Ask the maker to choose from that list and pass the selected exact URL
+with `--dataverse-url`. Inventory is a discovery fallback only; once an exact
+URL is known, direct Dataverse verification is authoritative even if a later
+inventory call omits it.
+
+Use `--maker-username` only to pin an intended maker account or resolve account
+ambiguity. On resume, the controller reuses the previously verified maker
+identity automatically.
 
 The command performs the complete phase:
 
