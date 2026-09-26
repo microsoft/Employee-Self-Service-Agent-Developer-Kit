@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "products": {
+    "employee-self-service-hr": {
+      "catalogNames": [
+        "Employee Self-Service HR",
+        "Employee Self-Service (HR)"
+      ],
+      "agentSchemaNames": ["gptagent_copilotforemployeeselfservicehr"],
+      "requiredConnection": null
+    },
+    "employee-self-service-it": {
+      "catalogNames": [
+        "Employee Self-Service IT",
+        "Employee Self-Service (IT)"
+      ],
+      "agentSchemaNames": ["gptagent_copilotforemployeeselfserviceit"],
+      "requiredConnection": {
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy"
+      }
+    }
+  }
+}
