@@ -38,14 +38,19 @@ Collect one response form containing only:
 - certificate Valid From and Valid To dates;
 - Workday OAuth client ID;
 - OAuth token URL;
+- REST base URL ending at `/ccx/api`;
+- SOAP base URL;
 - authentication-policy outcome.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Validate the Service Provider ID against the selected tenant and derive
-the SOAP and REST endpoints deterministically. The REST base must end exactly
-at `/ccx/api`.
+key. Pass the response once:
 
-Merge validated non-secret values into `identifiers` and `endpoints`, record
-the administrator evidence with `complete-action`, and set
-`workday-admin` to `complete`. If the administrator is not available, record
-the packet with `record-handoff` and return without losing prior progress.
+```powershell
+python scripts/workday_connect.py record-workday-admin --response-json '{...}'
+```
+
+The controller validates the Service Provider ID, HTTPS endpoints, and exact
+REST base suffix, then records the non-secret identifiers, endpoints, and
+evidence atomically. If the administrator is not available, stop here; rerun
+`workday-admin-packet` later to regenerate the same handoff without losing
+prior progress.

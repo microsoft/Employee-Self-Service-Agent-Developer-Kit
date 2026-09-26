@@ -49,10 +49,17 @@ flows, selected agent, and User Context V2 topics.
   not, show only its safe display-name remediation, have the maker enable
   parameter sharing in Copilot Studio, and rerun that check.
 
-After successful discovery, a passing `WD-CONN-013`, and the maker's recorded
-confirmation that the reviewed flows are connected to the selected agent,
-record the distinct automated and manual evidence and set `connections` to
-`complete`.
+After successful discovery, a passing `WD-CONN-013`, and the maker's
+confirmation that the reviewed flows are connected to the selected agent, run:
+
+```powershell
+python scripts/workday_connect.py record-connections --evidence-json '{...}'
+```
+
+Set all four required booleans only from observed or confirmed evidence:
+Workday connected, Dataverse connected, parameter sharing passed, and flow
+attachment confirmed. The controller records the distinct automated and
+manual evidence and completes the phase atomically.
 
 ## Runtime approval and apply
 
@@ -76,7 +83,7 @@ overwrite or approximate the topic.
 Approve the exact plan:
 
 ```powershell
-python scripts/workday_connect.py approve-plan --phase runtime --plan-json '{...}'
+python scripts/workday_connect.py runtime-approve --plan-json '{...}'
 ```
 
 Apply using the returned hash and the same disambiguating connection IDs, if
@@ -89,7 +96,9 @@ python scripts/workday_connect.py runtime-apply --plan-hash "{hash}"
 The controller rediscovers the current target, rejects stale approval, reuses
 one Dataverse token for Python mutations, invokes the checked-in delegated
 authorization script, and verifies bindings, flow state, authorization, and
-User Context V2 after the write. Report permission issues only from an
+User Context V2 after each ordered stage. It records each verified stage
+immediately, so a later failure resumes from durable evidence rather than
+hiding earlier successful changes. Report permission issues only from an
 explicit forbidden response, `[FAIL]` marker, ambiguity result, or nonzero
 script exit.
 

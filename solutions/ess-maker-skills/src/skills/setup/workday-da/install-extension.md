@@ -1,12 +1,6 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Phase 1 - Preflight
 
-Run the controller authentication briefing once:
-
-```powershell
-python scripts/workday_connect.py auth-plan
-```
-
 Explain only credential stores that may prompt during this phase:
 
 - Dataverse browser sign-in verifies the exact environment and maker account.
@@ -41,7 +35,7 @@ identity automatically.
 
 The command performs the complete phase:
 
-- verifies the selected setup-complete ESS HR agent;
+- verifies the selected setup-complete native ESS HR agent;
 - chooses the architecture-specific Workday package;
 - verifies the exact Dataverse URL directly rather than relying on inventory
   visibility;

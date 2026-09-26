@@ -269,12 +269,15 @@ Please select the ESS HR Agent or contact your administrator.
 
 Stop immediately without creating Workday state or entering a lifecycle.
 
-For `gptagent_copilotforemployeeselfservicehr` or the legacy
-`msdyn_copilotforemployeeselfservicedahr` alias, read
+For `gptagent_copilotforemployeeselfservicehr`, read
 `src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
 `WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
 `WD-PKG-001`: DA packages share some Workday connection-reference names with
 CEA, so the CEA package fingerprint is not an architecture discriminator.
+
+For the classic DA HR schema `msdyn_copilotforemployeeselfservicedahr`, explain
+that the simplified Workday lifecycle currently supports only the native ESS
+HR agent. Stop without creating or changing Workday state.
 
 For a CEA agent, check the currently installed Workday extension before
 honoring lifecycle state:

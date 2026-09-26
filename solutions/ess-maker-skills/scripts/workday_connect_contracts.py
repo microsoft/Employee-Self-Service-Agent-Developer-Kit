@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from workday_connect_model import (
     PhaseStatus,
     WorkdayConnectModelError,
-    plan_hash,
     workday_saml_entity_id,
 )
 
@@ -85,11 +85,11 @@ def _require_preflight(state: Mapping[str, Any]) -> None:
         )
 
 
-def build_entra_plan(
+def build_entra_handoff(
     state: Mapping[str, Any],
     discovery: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build one approval-ready Entra plan after exact app discovery."""
+    """Build one exact Entra administrator handoff after discovery."""
     _require_preflight(state)
     if not isinstance(discovery, Mapping):
         raise WorkdayConnectContractError(
@@ -138,7 +138,7 @@ def build_entra_plan(
         }
     )
     app_id_uri = f"api://{app['appId']}" if app else None
-    plan = {
+    return {
         "phase": "entra",
         "scope": {
             "entraTenantId": entra_tenant_id,
@@ -169,7 +169,85 @@ def build_entra_plan(
             "Grant administrator consent and verify the final configuration",
         ],
     }
-    return {**plan, "planHash": plan_hash(plan)}
+
+
+def validate_entra_verification(
+    state: Mapping[str, Any],
+    verification: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate safe Graph reread evidence after the administrator handoff."""
+    if not isinstance(verification, Mapping):
+        raise WorkdayConnectContractError(
+            "Entra verification must contain a JSON object."
+        )
+    application = _candidate(verification.get("application"))
+    scope = state.get("scope") or {}
+    tenant = _required_text(scope, "workdayTenant", "Workday tenant")
+    expected_entity_id = workday_saml_entity_id(tenant)
+    expected_app_uri = f"api://{application['appId']}"
+    observed_uris = {
+        _normalized_uri(value) for value in application["identifierUris"]
+    }
+    missing_uris = [
+        value
+        for value in (expected_entity_id, expected_app_uri)
+        if _normalized_uri(value) not in observed_uris
+    ]
+    if missing_uris:
+        raise WorkdayConnectContractError(
+            "The verified Entra application is missing required identifier "
+            "URIs: " + ", ".join(missing_uris)
+        )
+    required_checks = {
+        "samlMode",
+        "signingCertificate",
+        "connectorPreauthorized",
+        "graphDelegatedPermissions",
+        "adminConsent",
+        "userAssignmentAndNameId",
+    }
+    checks = verification.get("checks")
+    if not isinstance(checks, Mapping):
+        raise WorkdayConnectContractError(
+            "Entra verification checks must contain an object."
+        )
+    failed_checks = sorted(
+        check for check in required_checks if checks.get(check) is not True
+    )
+    if failed_checks:
+        raise WorkdayConnectContractError(
+            "Entra verification is incomplete: " + ", ".join(failed_checks)
+        )
+    scope_guid = _required_text(
+        verification,
+        "scopeGuid",
+        "Entra user_impersonation scope ID",
+    )
+    certificate = verification.get("certificate")
+    if certificate is not None and not isinstance(certificate, Mapping):
+        raise WorkdayConnectContractError(
+            "Entra certificate metadata must contain an object."
+        )
+    safe_certificate = {
+        key: certificate[key]
+        for key in ("thumbprint", "validFrom", "validTo")
+        if isinstance(certificate, Mapping) and certificate.get(key)
+    }
+    return {
+        "identifiers": {
+            "entraAppId": application["appId"],
+            "entraAppObjectId": application["objectId"],
+            "entraServicePrincipalId": application["servicePrincipalId"],
+            "entraAppIdUri": expected_app_uri,
+            "workdaySamlEntityId": expected_entity_id,
+            "scopeGuid": scope_guid,
+            "signingCertificate": safe_certificate or None,
+        },
+        "evidence": {
+            "applicationDisplayName": application["displayName"],
+            "checks": {key: True for key in sorted(required_checks)},
+        },
+    }
 
 
 def build_workday_admin_packet(
@@ -231,6 +309,8 @@ def build_workday_admin_packet(
                 "certificateValidTo",
                 "oauthClientId",
                 "oauthTokenUrl",
+                "restBaseUrl",
+                "soapBaseUrl",
                 "authenticationPolicyOutcome",
             ],
             "note": (
@@ -239,4 +319,130 @@ def build_workday_admin_packet(
             ),
         },
     }
-    return {**packet, "planHash": plan_hash(packet)}
+    return packet
+
+
+def _https_url(value: Any, label: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    parsed = urlparse(text)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise WorkdayConnectContractError(f"{label} must be an HTTPS URL.")
+    return text
+
+
+def validate_workday_admin_response(
+    state: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(response, Mapping):
+        raise WorkdayConnectContractError(
+            "Workday administrator response must contain a JSON object."
+        )
+    scope = state.get("scope") or {}
+    tenant = _required_text(scope, "workdayTenant", "Workday tenant")
+    expected_entity_id = workday_saml_entity_id(tenant)
+    observed_entity_id = _required_text(
+        response,
+        "enabledServiceProviderId",
+        "Enabled Workday Service Provider ID",
+    )
+    if _normalized_uri(observed_entity_id) != _normalized_uri(
+        expected_entity_id
+    ):
+        raise WorkdayConnectContractError(
+            "The enabled Workday Service Provider ID does not match the "
+            "selected Workday tenant."
+        )
+    oauth_token_url = _https_url(
+        response.get("oauthTokenUrl"),
+        "Workday OAuth token URL",
+    )
+    rest_base_url = _https_url(
+        response.get("restBaseUrl"),
+        "Workday REST base URL",
+    )
+    if not rest_base_url.casefold().endswith("/ccx/api"):
+        raise WorkdayConnectContractError(
+            "Workday REST base URL must end exactly at /ccx/api."
+        )
+    soap_base_url = _https_url(
+        response.get("soapBaseUrl"),
+        "Workday SOAP base URL",
+    )
+    required = {
+        "certificateValidFrom",
+        "certificateValidTo",
+        "oauthClientId",
+        "authenticationPolicyOutcome",
+    }
+    values = {
+        key: _required_text(response, key, key)
+        for key in required
+    }
+    return {
+        "identifiers": {
+            "workdaySamlEntityId": expected_entity_id,
+            "oauthClientId": values["oauthClientId"],
+        },
+        "endpoints": {
+            "oauthTokenUrl": oauth_token_url,
+            "restBaseUrl": rest_base_url,
+            "soapBaseUrl": soap_base_url,
+        },
+        "evidence": {
+            "serviceProviderId": expected_entity_id,
+            "certificateValidFrom": values["certificateValidFrom"],
+            "certificateValidTo": values["certificateValidTo"],
+            "authenticationPolicyOutcome": values[
+                "authenticationPolicyOutcome"
+            ],
+        },
+    }
+
+
+def validate_connections_evidence(
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(evidence, Mapping):
+        raise WorkdayConnectContractError(
+            "Connection evidence must contain a JSON object."
+        )
+    required_true = (
+        "workdayConnectionConnected",
+        "dataverseConnectionConnected",
+        "parameterSharingPassed",
+        "flowAttachmentConfirmed",
+    )
+    missing = sorted(
+        key for key in required_true if evidence.get(key) is not True
+    )
+    if missing:
+        raise WorkdayConnectContractError(
+            "Connection evidence is incomplete: " + ", ".join(missing)
+        )
+    return {key: True for key in required_true}
+
+
+def validate_employee_evidence(
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(evidence, Mapping):
+        raise WorkdayConnectContractError(
+            "Employee validation evidence must contain a JSON object."
+        )
+    allowed = {"scenarioName", "testUserCategory", "timestamp", "outcome"}
+    unexpected = sorted(set(evidence) - allowed)
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Employee validation evidence contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+    result = {
+        key: _required_text(evidence, key, key)
+        for key in allowed
+    }
+    if result["outcome"].casefold() not in {"passed", "verified"}:
+        raise WorkdayConnectContractError(
+            "Employee validation outcome must be passed or verified."
+        )
+    return result

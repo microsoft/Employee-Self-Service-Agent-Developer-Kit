@@ -23,6 +23,7 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
+    assert state["schemaVersion"] == 3
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:

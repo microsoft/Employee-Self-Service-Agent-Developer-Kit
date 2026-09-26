@@ -19,12 +19,12 @@ from workday_connect_model import (
     LEGACY_PHASE_ROWS,
     PHASE_BY_ID,
     PHASE_DEFINITIONS,
+    PHASE_REQUIRED_ACTIONS,
     PhaseStatus,
     WorkdayConnectModelError,
     default_state,
     plan_hash,
     progress_text,
-    scope_hash,
     utc_now,
     validate_state,
     workday_saml_entity_id,
@@ -32,6 +32,17 @@ from workday_connect_model import (
 
 
 CONFIG_PATH = Path(".local/connect/workday-da/config.json")
+
+_PREFLIGHT_SCOPE_KEYS = {
+    "agent",
+    "architecture",
+    "dataverseUrl",
+    "environmentId",
+    "packageFlavor",
+    "ring",
+    "vertical",
+}
+_ENTRA_SCOPE_KEYS = {"entraTenantId", "workdayTenant"}
 
 
 class WorkdayConnectStoreError(RuntimeError):
@@ -247,6 +258,18 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
             and setup_status[row].get("state") == "done"
         ]
         phase_state["evidence"] = _legacy_evidence(setup_status, rows)
+        if phase_state["status"] == PhaseStatus.COMPLETE.value:
+            for action in PHASE_REQUIRED_ACTIONS[phase.value]:
+                if action not in phase_state["completedActions"]:
+                    phase_state["completedActions"].append(action)
+                phase_state["evidence"].append(
+                    {
+                        "source": "legacy-state",
+                        "action": action,
+                        "outcome": "verified",
+                        "capturedAt": utc_now(),
+                    }
+                )
         if phase_state["status"] != PhaseStatus.PENDING.value:
             phase_state["updatedAt"] = utc_now()
 
@@ -267,6 +290,85 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return validate_state(state)
 
 
+def _reset_phase(phase: dict[str, Any]) -> None:
+    phase.update(
+        {
+            "status": PhaseStatus.PENDING.value,
+            "completedActions": [],
+            "approvedPlanHash": None,
+            "approvedPlan": None,
+            "evidence": [],
+            "blocker": None,
+            "updatedAt": utc_now(),
+        }
+    )
+
+
+def _invalidate_from_phase(
+    state: dict[str, Any],
+    phase_id: str,
+) -> None:
+    invalidate = False
+    for definition in PHASE_DEFINITIONS:
+        if definition.identifier.value == phase_id:
+            invalidate = True
+        if invalidate:
+            _reset_phase(state["phases"][definition.identifier.value])
+
+
+def _scope_invalidation_phase(changed_keys: set[str]) -> str:
+    if changed_keys & _PREFLIGHT_SCOPE_KEYS:
+        return "preflight"
+    if changed_keys and changed_keys <= _ENTRA_SCOPE_KEYS:
+        return "entra"
+    return "preflight"
+
+
+def upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    state = copy.deepcopy(dict(document))
+    state["schemaVersion"] = 3
+    first_incomplete: str | None = None
+    for definition in PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        phase = state["phases"][phase_id]
+        phase.pop("scopeHash", None)
+        phase.pop("manualHandoff", None)
+        if phase["status"] == "waiting":
+            phase["status"] = PhaseStatus.ACTIVE.value
+        if first_incomplete is not None:
+            if phase["status"] == PhaseStatus.COMPLETE.value:
+                _reset_phase(phase)
+            continue
+        if phase["status"] != PhaseStatus.COMPLETE.value:
+            first_incomplete = phase_id
+            continue
+        required = PHASE_REQUIRED_ACTIONS[phase_id]
+        completed = set(phase.get("completedActions") or [])
+        evidence_actions = {
+            str(record.get("action") or "")
+            for record in (phase.get("evidence") or [])
+            if isinstance(record, dict)
+        }
+        if not required <= completed or not required <= evidence_actions:
+            phase["status"] = PhaseStatus.ACTIVE.value
+            phase["updatedAt"] = utc_now()
+            first_incomplete = phase_id
+    state["status"] = (
+        "ready"
+        if all(
+            phase["status"] == PhaseStatus.COMPLETE.value
+            for phase in state["phases"].values()
+        )
+        else "in-progress"
+    )
+    state["migration"] = {
+        "source": "workday-connect-state-v2",
+        "migratedAt": utc_now(),
+    }
+    state["updatedAt"] = utc_now()
+    return validate_state(state)
+
+
 class WorkdayConnectStore:
     """Own the single durable Workday connect state file."""
 
@@ -279,7 +381,7 @@ class WorkdayConnectStore:
         self.workspace_root = workspace_root.resolve()
         self.config_path = self.workspace_root / CONFIG_PATH
         self.lock_path = self.config_path.with_name("state.lock")
-        self.backup_path = self.config_path.with_name("config.pre-v2.json")
+        self.backup_path = self.config_path.with_name("config.pre-v3.json")
         self.lock_timeout = lock_timeout
 
     def initialize(self) -> dict[str, Any]:
@@ -289,12 +391,16 @@ class WorkdayConnectStore:
                 state = default_state()
                 _atomic_write_json(self.config_path, state)
                 return state
-            if existing.get("schemaVersion") == 2:
+            if existing.get("schemaVersion") == 3:
                 return validate_state(existing)
             if not self.backup_path.exists():
                 self.backup_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.config_path, self.backup_path)
-            state = migrate_legacy_state(existing)
+            state = (
+                upgrade_v2_state(existing)
+                if existing.get("schemaVersion") == 2
+                else migrate_legacy_state(existing)
+            )
             _atomic_write_json(self.config_path, state)
             return state
 
@@ -308,10 +414,14 @@ class WorkdayConnectStore:
             current = _read_json(self.config_path)
             if not current:
                 current = default_state()
-            elif current.get("schemaVersion") != 2:
+            elif current.get("schemaVersion") != 3:
                 if not self.backup_path.exists():
                     shutil.copy2(self.config_path, self.backup_path)
-                current = migrate_legacy_state(current)
+                current = (
+                    upgrade_v2_state(current)
+                    if current.get("schemaVersion") == 2
+                    else migrate_legacy_state(current)
+                )
             state = copy.deepcopy(validate_state(current))
             mutation(state)
             state["status"] = (
@@ -342,6 +452,16 @@ class WorkdayConnectStore:
             )
 
         def mutation(state: dict[str, Any]) -> None:
+            changed_keys = {
+                key
+                for key, value in values.items()
+                if state[section].get(key) != value
+            }
+            if section == "scope" and changed_keys:
+                _invalidate_from_phase(
+                    state,
+                    _scope_invalidation_phase(changed_keys),
+                )
             state[section].update(dict(values))
 
         return self._mutate(mutation)
@@ -370,11 +490,24 @@ class WorkdayConnectStore:
                         f"Complete '{prerequisite.value}' before '{phase_id}'."
                     )
             phase = state["phases"][phase_id]
+            if status == PhaseStatus.COMPLETE.value:
+                required = PHASE_REQUIRED_ACTIONS[phase_id]
+                completed = set(phase["completedActions"])
+                evidence_actions = {
+                    str(record.get("action") or "")
+                    for record in phase["evidence"]
+                }
+                missing = sorted(
+                    (required - completed) | (required - evidence_actions)
+                )
+                if missing:
+                    raise WorkdayConnectStoreError(
+                        f"Phase '{phase_id}' is missing required verified "
+                        "actions: " + ", ".join(missing) + "."
+                    )
             phase["status"] = status
             phase["blocker"] = dict(blocker) if blocker else None
             phase["updatedAt"] = utc_now()
-            if status == PhaseStatus.COMPLETE.value:
-                phase["scopeHash"] = scope_hash(state["scope"])
 
         return self._mutate(mutation)
 
@@ -397,11 +530,16 @@ class WorkdayConnectStore:
             if action not in phase["completedActions"]:
                 phase["completedActions"].append(action)
             if evidence is not None:
+                phase["evidence"] = [
+                    record
+                    for record in phase["evidence"]
+                    if record.get("action") != action
+                ]
                 phase["evidence"].append(
                     {
+                        **dict(evidence),
                         "action": action,
                         "capturedAt": utc_now(),
-                        **dict(evidence),
                     }
                 )
             if phase["status"] == PhaseStatus.PENDING.value:
@@ -411,32 +549,16 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
-    def record_handoff(
-        self,
-        phase_id: str,
-        handoff: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        if phase_id not in PHASE_BY_ID:
-            raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
-
-        def mutation(state: dict[str, Any]) -> None:
-            phase = state["phases"][phase_id]
-            phase["manualHandoff"] = {
-                **dict(handoff),
-                "capturedAt": utc_now(),
-            }
-            phase["status"] = PhaseStatus.WAITING.value
-            phase["updatedAt"] = utc_now()
-
-        return self._mutate(mutation)
-
     def approve_plan(
         self,
         phase_id: str,
         plan: Mapping[str, Any],
     ) -> tuple[dict[str, Any], str]:
-        if phase_id not in PHASE_BY_ID:
-            raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
+        if phase_id != "runtime":
+            raise WorkdayConnectStoreError(
+                "Exact apply-plan approval is supported only for the "
+                "controller-owned runtime phase."
+            )
         if plan.get("phase") != phase_id:
             raise WorkdayConnectStoreError(
                 "Workday plan phase does not match the requested phase."

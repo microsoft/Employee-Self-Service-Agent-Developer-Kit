@@ -5,13 +5,10 @@
     "gptagent_copilotforemployeeselfservicehr": {
       "architecture": "native-da",
       "packageFlavor": "runtime"
-    },
-    "msdyn_copilotforemployeeselfservicedahr": {
-      "architecture": "classic-da",
-      "packageFlavor": "legacy-da"
     }
   },
   "unsupportedAgents": [
+    "msdyn_copilotforemployeeselfservicedahr",
     "gptagent_copilotforemployeeselfserviceit",
     "msdyn_copilotforemployeeselfservicedait"
   ],

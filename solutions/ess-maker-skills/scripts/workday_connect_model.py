@@ -15,7 +15,7 @@ import re
 from typing import Any, Mapping
 
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 CONTROLLER_CONTRACT_VERSION = 1
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 
@@ -36,7 +36,6 @@ class Phase(str, Enum):
 class PhaseStatus(str, Enum):
     PENDING = "pending"
     ACTIVE = "active"
-    WAITING = "waiting"
     BLOCKED = "blocked"
     COMPLETE = "complete"
 
@@ -85,6 +84,35 @@ PHASE_DEFINITIONS = (
 PHASE_BY_ID = {
     definition.identifier.value: definition
     for definition in PHASE_DEFINITIONS
+}
+
+PHASE_REQUIRED_ACTIONS = {
+    Phase.PREFLIGHT.value: frozenset({"verify-target", "verify-package"}),
+    Phase.ENTRA.value: frozenset(
+        {
+            "exact-application-discovered",
+            "administrator-configuration-verified",
+        }
+    ),
+    Phase.WORKDAY_ADMIN.value: frozenset(
+        {"administrator-response-validated"}
+    ),
+    Phase.CONNECTIONS.value: frozenset(
+        {
+            "physical-connections-verified",
+            "agent-parameter-sharing-verified",
+            "flow-attachment-confirmed",
+        }
+    ),
+    Phase.RUNTIME.value: frozenset(
+        {
+            "connection-references-bound",
+            "runtime-flows-active",
+            "delegated-authorization-configured",
+            "user-context-v2-configured",
+        }
+    ),
+    Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
 }
 
 LEGACY_PHASE_ROWS = {
@@ -206,19 +234,6 @@ def plan_hash(plan: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def scope_hash(scope: Mapping[str, Any]) -> str:
-    if not isinstance(scope, Mapping):
-        raise WorkdayConnectModelError("Workday scope must be an object.")
-    reject_sensitive_data(scope)
-    encoded = json.dumps(
-        scope,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def reject_sensitive_data(document: Any, path: str = "state") -> None:
     if isinstance(document, dict):
         for key, value in document.items():
@@ -236,11 +251,9 @@ def reject_sensitive_data(document: Any, path: str = "state") -> None:
 def default_phase_state() -> dict[str, Any]:
     return {
         "status": PhaseStatus.PENDING.value,
-        "scopeHash": None,
         "completedActions": [],
         "approvedPlanHash": None,
         "approvedPlan": None,
-        "manualHandoff": None,
         "evidence": [],
         "blocker": None,
         "updatedAt": None,
@@ -272,11 +285,9 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         )
     required = {
         "status",
-        "scopeHash",
         "completedActions",
         "approvedPlanHash",
         "approvedPlan",
-        "manualHandoff",
         "evidence",
         "blocker",
         "updatedAt",
@@ -301,9 +312,14 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         raise WorkdayConnectModelError(
             f"Phase '{phase_id}' completedActions contains duplicates."
         )
-    if not isinstance(value["evidence"], list):
+    if not isinstance(value["evidence"], list) or any(
+        not isinstance(record, dict)
+        or not isinstance(record.get("action"), str)
+        or not record.get("action")
+        for record in value["evidence"]
+    ):
         raise WorkdayConnectModelError(
-            f"Phase '{phase_id}' evidence must be an array."
+            f"Phase '{phase_id}' evidence must contain action records."
         )
     approved_plan = value["approvedPlan"]
     approved_hash = value["approvedPlanHash"]
@@ -312,6 +328,29 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         if approved_hash != observed_hash:
             raise WorkdayConnectModelError(
                 f"Phase '{phase_id}' approved plan hash does not match."
+            )
+    if value["status"] == PhaseStatus.COMPLETE.value:
+        required_actions = PHASE_REQUIRED_ACTIONS[phase_id]
+        completed_actions = set(value["completedActions"])
+        missing_actions = sorted(required_actions - completed_actions)
+        evidence_actions = {
+            str(record.get("action") or "") for record in value["evidence"]
+        }
+        missing_evidence = sorted(required_actions - evidence_actions)
+        if missing_actions or missing_evidence:
+            details = []
+            if missing_actions:
+                details.append(
+                    "actions=" + ", ".join(missing_actions)
+                )
+            if missing_evidence:
+                details.append(
+                    "evidence=" + ", ".join(missing_evidence)
+                )
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' cannot be complete without required "
+                + " and ".join(details)
+                + "."
             )
 
 
@@ -342,6 +381,19 @@ def validate_state(state: Any) -> dict[str, Any]:
         )
     for phase_id, value in phases.items():
         _validate_phase_state(phase_id, value)
+    for definition in PHASE_DEFINITIONS:
+        if definition.prerequisite is None:
+            continue
+        phase = phases[definition.identifier.value]
+        prerequisite = phases[definition.prerequisite.value]
+        if (
+            phase["status"] == PhaseStatus.COMPLETE.value
+            and prerequisite["status"] != PhaseStatus.COMPLETE.value
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{definition.identifier.value}' cannot be complete "
+                f"before '{definition.prerequisite.value}'."
+            )
     expected_status = (
         "ready"
         if all(
@@ -372,7 +424,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
     markers = {
         PhaseStatus.PENDING.value: "",
         PhaseStatus.ACTIVE.value: "→",
-        PhaseStatus.WAITING.value: "…",
         PhaseStatus.BLOCKED.value: "!",
         PhaseStatus.COMPLETE.value: "✓",
     }

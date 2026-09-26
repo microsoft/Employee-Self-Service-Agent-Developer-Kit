@@ -269,6 +269,7 @@ def test_runtime_plan_stops_on_custom_user_context():
 def test_runtime_apply_verifies_all_mutations(monkeypatch):
     records = _records()
     verified_hashes = []
+    recorded_stages = []
 
     def updater(_url, _token, entity_set, record_id, data):
         if entity_set == "connectionreferences":
@@ -307,11 +308,23 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         identity_provider=_identity,
         updater=updater,
         authorization_runner=authorization_runner,
+        stage_recorder=lambda action, evidence: recorded_stages.append(
+            (action, evidence["outcome"])
+        ),
         **_discovery_dependencies(records),
     )
 
-    assert verified_hashes == [(result["plan"]["planHash"], "approved")]
+    assert len(verified_hashes) == 1
+    assert len(verified_hashes[0][0]) == 64
+    assert verified_hashes[0][1] == "approved"
+    assert "plan" not in result
     assert result["applied"]["verified"] is True
+    assert recorded_stages == [
+        ("connection-references-bound", "verified"),
+        ("runtime-flows-active", "verified"),
+        ("delegated-authorization-configured", "verified"),
+        ("user-context-v2-configured", "verified"),
+    ]
     assert all(
         value["connectionid"]
         for value in records["references"].values()
@@ -324,6 +337,69 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         records["setup"]["data"],
         records["target"]["schemaname"],
     ) == "configured"
+
+
+def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
+    records = _records()
+    recorded_stages = []
+
+    def updater(_url, _token, entity_set, record_id, data):
+        collections = {
+            "connectionreferences": records["references"].values(),
+            "workflows": records["flows"].values(),
+        }
+        if entity_set in collections:
+            id_key = (
+                "connectionreferenceid"
+                if entity_set == "connectionreferences"
+                else "workflowid"
+            )
+            for value in collections[entity_set]:
+                if value[id_key] == record_id:
+                    value.update(data)
+                    return True
+        raise AssertionError((entity_set, record_id, data))
+
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="authorization failed",
+    ):
+        runtime.run_runtime_operation(
+            _state(),
+            apply=True,
+            approved_hash="approved",
+            verifier=lambda *_args: None,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            updater=updater,
+            authorization_runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout="[FAIL] denied",
+                stderr="",
+            ),
+            stage_recorder=lambda action, _evidence: recorded_stages.append(
+                action
+            ),
+            **_discovery_dependencies(records),
+        )
+
+    assert recorded_stages == [
+        "connection-references-bound",
+        "runtime-flows-active",
+    ]
+    assert all(
+        value["connectionid"] for value in records["references"].values()
+    )
+    assert all(
+        value["statecode"] == 1 and value["statuscode"] == 2
+        for value in records["flows"].values()
+    )
+    assert runtime._redirect_state(
+        records["setup"]["data"],
+        records["target"]["schemaname"],
+    ) == "empty"
 
 
 def test_runtime_requires_completed_connection_phase():
