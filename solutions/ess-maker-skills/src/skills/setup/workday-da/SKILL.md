@@ -27,6 +27,16 @@ it is not a customer-executed phase and must not be shown as an extra step.
   verified result matches the approved plan.
 - Never diagnose a permission problem from a guess. Show the API, CLI, or
   checked-in script evidence that produced the diagnosis.
+- Use structured `vscode_askQuestions` forms for customer evidence. Never
+  replace a multi-field form with one large free-text question or ask the
+  customer to edit a prose template.
+- Leave every option initially unset. Do not add `recommended`, `default`,
+  “recommended” label text, or any equivalent preselection to approvals,
+  factual observations, connection choices, or validation outcomes. Continue
+  only after the customer explicitly submits a choice.
+- Reuse the exact recorded account through the shared credential cache. Run
+  only the narrow verification required for the current phase; do not launch
+  broader checks that request unrelated API audiences.
 
 ## Customer-facing language contract
 

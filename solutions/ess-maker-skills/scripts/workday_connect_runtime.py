@@ -318,7 +318,45 @@ def _runtime_discovery_context(
         "package": package,
         "flowNames": [str(name) for name in flow_names],
         "referencesCatalog": active_catalog["connectionReferences"],
+        "selectedConnectionIds": _selected_connection_ids(state),
     }
+
+
+def _selected_connection_ids(
+    state: Mapping[str, Any],
+) -> dict[str, str]:
+    phase = (state.get("phases") or {}).get("connections") or {}
+    for record in reversed(phase.get("evidence") or []):
+        if (
+            isinstance(record, Mapping)
+            and record.get("action") == "physical-connections-verified"
+            and isinstance(record.get("connectionIds"), Mapping)
+        ):
+            values = record["connectionIds"]
+            return {
+                "workday": str(values.get("workday") or "").strip(),
+                "dataverse": str(values.get("dataverse") or "").strip(),
+            }
+    return {"workday": "", "dataverse": ""}
+
+
+def _effective_connection_id(
+    connector: str,
+    requested: str | None,
+    recorded: str,
+) -> str | None:
+    requested_value = str(requested or "").strip()
+    recorded_value = str(recorded or "").strip()
+    if (
+        requested_value
+        and recorded_value
+        and requested_value.casefold() != recorded_value.casefold()
+    ):
+        raise WorkdayConnectRuntimeError(
+            f"The requested {connector} connection ID differs from the "
+            "connection verified during the Connections phase."
+        )
+    return requested_value or recorded_value or None
 
 
 def _build_runtime_discovery(
@@ -430,10 +468,19 @@ def discover_runtime_plan(
 ) -> dict[str, Any]:
     """Discover exact runtime targets and return a stable approval plan."""
     context = _runtime_discovery_context(state, catalog)
+    selected_ids = context["selectedConnectionIds"]
     workday, dataverse = _discover_physical_connections(
         context,
-        workday_connection_id=workday_connection_id,
-        dataverse_connection_id=dataverse_connection_id,
+        workday_connection_id=_effective_connection_id(
+            "Workday",
+            workday_connection_id,
+            selected_ids["workday"],
+        ),
+        dataverse_connection_id=_effective_connection_id(
+            "Dataverse",
+            dataverse_connection_id,
+            selected_ids["dataverse"],
+        ),
         pac_resolver=pac_resolver,
         pac_auth=pac_auth,
         runner=runner,
@@ -527,17 +574,37 @@ def verify_physical_connections(
     runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
 ) -> dict[str, Any]:
     """Verify selected Workday and Dataverse connections from live state."""
-    context = _runtime_discovery_context(state, catalog)
-    workday, dataverse = _discover_physical_connections(
-        context,
-        workday_connection_id=workday_connection_id,
-        dataverse_connection_id=dataverse_connection_id,
-        pac_resolver=pac_resolver,
-        pac_auth=pac_auth,
-        runner=runner,
-    )
+    try:
+        context = _runtime_discovery_context(state, catalog)
+        selected_ids = context["selectedConnectionIds"]
+        workday, dataverse = _discover_physical_connections(
+            context,
+            workday_connection_id=_effective_connection_id(
+                "Workday",
+                workday_connection_id,
+                selected_ids["workday"],
+            ),
+            dataverse_connection_id=_effective_connection_id(
+                "Dataverse",
+                dataverse_connection_id,
+                selected_ids["dataverse"],
+            ),
+            pac_resolver=pac_resolver,
+            pac_auth=pac_auth,
+            runner=runner,
+        )
+    except WorkdayConnectRuntimeError:
+        raise
+    except (OSError, RuntimeError, ValueError, SystemExit) as exc:
+        raise WorkdayConnectRuntimeError(
+            f"Power Platform connection discovery failed: {exc}"
+        ) from exc
     return {
         "makerUsername": context["maker"],
+        "connectionIds": {
+            "workday": str(workday.get("name") or ""),
+            "dataverse": str(dataverse.get("name") or ""),
+        },
         "connections": [
             {
                 "connector": context["referencesCatalog"]["workday"]["connectorName"],
@@ -588,10 +655,19 @@ def run_runtime_operation(
         "username",
         "Power Platform maker account",
     )
-    token = token_provider(
-        environment_url,
-        preferred_username=maker,
-    )
+    try:
+        token = token_provider(
+            environment_url,
+            preferred_username=maker,
+        )
+    except SystemExit as exc:
+        raise WorkdayConnectRuntimeError(
+            "Dataverse authentication did not complete."
+        ) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkdayConnectRuntimeError(
+            f"Dataverse authentication failed: {exc}"
+        ) from exc
     try:
         identity = identity_provider(
             token,
@@ -599,15 +675,22 @@ def run_runtime_operation(
         )
     except WorkdayConnectIdentityError as exc:
         raise WorkdayConnectRuntimeError(str(exc)) from exc
-    discovery = discover_runtime_plan(
-        state,
-        workday_connection_id=workday_connection_id,
-        dataverse_connection_id=dataverse_connection_id,
-        token=token,
-        token_provider=token_provider,
-        query=query,
-        **discovery_dependencies,
-    )
+    try:
+        discovery = discover_runtime_plan(
+            state,
+            workday_connection_id=workday_connection_id,
+            dataverse_connection_id=dataverse_connection_id,
+            token=token,
+            token_provider=token_provider,
+            query=query,
+            **discovery_dependencies,
+        )
+    except WorkdayConnectRuntimeError:
+        raise
+    except (OSError, RuntimeError, ValueError, SystemExit) as exc:
+        raise WorkdayConnectRuntimeError(
+            f"Runtime target discovery failed: {exc}"
+        ) from exc
     if not apply:
         return {**discovery, "authenticatedAccount": identity["username"]}
     if not approved_hash or verifier is None:
@@ -615,14 +698,21 @@ def run_runtime_operation(
             "Runtime apply requires an approved plan hash."
         )
     verifier(discovery["plan"], approved_hash)
-    applied = apply_runtime_plan(
-        discovery["plan"],
-        token=token,
-        query=query,
-        updater=updater,
-        authorization_runner=authorization_runner,
-        stage_recorder=stage_recorder,
-    )
+    try:
+        applied = apply_runtime_plan(
+            discovery["plan"],
+            token=token,
+            query=query,
+            updater=updater,
+            authorization_runner=authorization_runner,
+            stage_recorder=stage_recorder,
+        )
+    except WorkdayConnectRuntimeError:
+        raise
+    except (OSError, RuntimeError, ValueError, SystemExit) as exc:
+        raise WorkdayConnectRuntimeError(
+            f"Runtime apply failed: {exc}"
+        ) from exc
     return {
         "observedBeforeApply": discovery["observed"],
         "applied": applied,

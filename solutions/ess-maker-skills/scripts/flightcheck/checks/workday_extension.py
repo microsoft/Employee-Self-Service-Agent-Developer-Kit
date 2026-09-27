@@ -57,6 +57,8 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
 
@@ -693,8 +695,10 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
         )]
 
     try:
-        text = topic_file.read_text(encoding="utf-8", errors="replace")
-    except OSError as e:
+        document = yaml.safe_load(
+            topic_file.read_text(encoding="utf-8", errors="replace")
+        )
+    except (OSError, yaml.YAMLError) as e:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
@@ -708,7 +712,19 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    if "BeginDialog" not in text or target_dialog not in text:
+    def has_redirect(value):
+        if isinstance(value, dict):
+            if (
+                value.get("kind") == "BeginDialog"
+                and value.get("dialog") == target_dialog
+            ):
+                return True
+            return any(has_redirect(child) for child in value.values())
+        if isinstance(value, list):
+            return any(has_redirect(child) for child in value)
+        return False
+
+    if not has_redirect(document):
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,

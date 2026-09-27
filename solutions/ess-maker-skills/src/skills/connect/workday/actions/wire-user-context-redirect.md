@@ -94,13 +94,16 @@ Use the `vscode_askQuestions` tool:
     "header": "Publish Workday wiring",
     "question": "Publish this scoped User Context topic change to the active agent?",
     "options": [
-      { "label": "Publish", "recommended": true },
+      { "label": "Publish" },
       { "label": "Not now" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
+
+Leave the selection unset. Publishing is an explicit mutation approval, not a
+recommended answer.
 
 If the user selects **Not now**, set `ACTION_RESULT = "cancelled"`, return to
 the lifecycle runner without pushing, and leave the phase `in-progress`. If

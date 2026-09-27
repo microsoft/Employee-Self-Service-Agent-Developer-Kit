@@ -36,11 +36,13 @@ configure, update, grant, or enable an Entra setting.
    Never select by display name alone and never use substring matching.
 
 Build discovery JSON with `displayName`, application `appId`, application
-`objectId`, service-principal `servicePrincipalId`, and `identifierUris`, then
-run:
+`objectId`, service-principal `servicePrincipalId`, and `identifierUris`.
+Write it directly to `.local/connect/workday-da/entra-discovery.json` using a
+structured file-write tool; never interpolate Graph values into a generated
+shell command. Then run:
 
 ```powershell
-python scripts/workday_connect.py entra-handoff --discovery-json '{"applications":[{...}]}'
+python scripts/workday_connect.py entra-handoff --discovery-file ".local\connect\workday-da\entra-discovery.json"
 ```
 
 If no exact app exists, include `"allowCreate": true` only after the user
@@ -113,9 +115,35 @@ returned JSON locally when necessary.
 Do not ask for or use a broad "everything is done" confirmation as evidence.
 After the Graph reread, use one structured form for only the settings Graph
 cannot prove. Ask for the exact selected SAML signing option and the exact
-NameID source attribute. A reply such as "done", "all good", "continue", or
+NameID source attribute. Store each exact non-secret value as `observedValue`
+in its check object. A reply such as "done", "all good", "continue", or
 "proceed" is not evidence for either field and must not be converted into
 administrator attestation.
+
+Use this exact `vscode_askQuestions` form:
+
+```json
+[
+  {
+    "header": "NameID source",
+    "question": "What exact source attribute is configured for Unique User Identifier (Name ID) in the Workday application's SAML Attributes & Claims?"
+  },
+  {
+    "header": "SAML signing",
+    "question": "What exact SAML Signing Option is selected under SAML Signing Certificate -> Edit?",
+    "options": [
+      { "label": "Sign SAML response and assertion" },
+      { "label": "Sign SAML assertion" },
+      { "label": "Sign SAML response" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave both answers unset. Do not label a factual value as recommended. After
+the administrator submits the form, perform the Graph reread immediately; do
+not add a separate **Verify now** confirmation.
 
 The administrator performs those changes in the Microsoft Entra admin center.
 After the administrator confirms completion, reread the application and
@@ -130,10 +158,12 @@ For a portal-only setting that Graph cannot prove, include its non-secret
 administrator confirmation in the `checks` object rather than claiming the
 skill changed it.
 
-Pass the Graph reread as:
+Write the Graph reread directly to
+`.local/connect/workday-da/entra-verification.json` using a structured
+file-write tool, then run:
 
 ```powershell
-python scripts/workday_connect.py record-entra --verification-json '{...}'
+python scripts/workday_connect.py record-entra --verification-file ".local\connect\workday-da\entra-verification.json"
 ```
 
 The JSON must contain the Graph-authenticated `tenantId`, exact application and
@@ -169,11 +199,13 @@ scope GUID, safe certificate metadata, and one evidence object for each check:
     },
     "nameId": {
       "outcome": "verified",
-      "provenance": "microsoft-graph"
+      "provenance": "microsoft-graph",
+      "observedValue": "user.userPrincipalName"
     },
     "samlSigningOption": {
       "outcome": "confirmed",
-      "provenance": "administrator-attestation"
+      "provenance": "administrator-attestation",
+      "observedValue": "Sign SAML response and assertion"
     }
   }
 }

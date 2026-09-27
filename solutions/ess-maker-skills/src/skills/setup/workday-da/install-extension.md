@@ -8,7 +8,7 @@ Explain only credential stores that may prompt during this phase:
   PAC is a separate Microsoft credential store, so this can be one additional
   sign-in. The controller pins and verifies the resulting PAC account.
 
-Then run:
+Run read-only preflight discovery:
 
 ```powershell
 python scripts/workday_connect.py preflight
@@ -45,14 +45,53 @@ Use `--maker-username` only to pin an intended maker account or resolve account
 ambiguity. On resume, the controller reuses the previously verified maker
 identity automatically.
 
-The command performs the complete phase:
+The command verifies the target and checks whether the package already exists.
+When the package is already installed, it completes the phase without an
+installation approval.
+
+When the returned result contains `requiresApproval: true`, show only its
+`approvalSummary`. Then use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "Install Workday package",
+    "question": "Install the supported Workday package in the verified Power Platform environment?",
+    "options": [
+      { "label": "Install" },
+      { "label": "Not now" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset until the maker explicitly chooses.
+
+If the maker selects **Not now**, leave Preflight waiting and return to the
+lifecycle runner. Do not call either approval or apply.
+
+If the maker selects **Install**, write the returned `plan` object directly to
+`.local/connect/workday-da/preflight-plan.json` using a structured file-write
+tool. Do not serialize it into a generated shell command. Then run:
+
+```powershell
+python scripts/workday_connect.py preflight-approve --plan-file ".local\connect\workday-da\preflight-plan.json"
+python scripts/workday_connect.py preflight --install-plan-hash "{PLAN_HASH}"
+```
+
+The second `preflight` call rediscovers the target and rejects the operation if
+the approved package, environment, agent, or maker changed.
+
+The completed phase:
 
 - verifies the selected setup-complete native ESS HR agent;
 - chooses the architecture-specific Workday package;
 - verifies the exact Dataverse URL directly rather than relying on inventory
   visibility;
 - verifies the authenticated account and Entra tenant;
-- detects or installs the package through PAC; and
+- detects the package or installs it only after exact-plan approval through
+  PAC; and
 - rereads Dataverse to prove the package is installed.
 
 This is a controller-owned automated change. It is accurate to say the package

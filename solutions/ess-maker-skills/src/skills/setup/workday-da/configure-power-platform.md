@@ -9,14 +9,15 @@ result.
 
 Do not begin with a yes/no question asking whether both connections are
 already connected. First explain that this phase needs exactly two Power
-Platform connections and run live discovery:
+Platform connections, then discover them:
 
 ```powershell
 python scripts/workday_connect.py record-connections
 ```
 
-If both required connections are already live, continue without asking the
-maker to recreate or reconfirm them.
+When both required connections resolve exactly, this read-only pass returns
+`requiresConfirmation: true` with safe connection display names and the saved
+non-secret Workday target values. It does not mark the phase complete.
 
 If the Workday connection is missing or disconnected, read the already
 validated values from the Workday state and show them with these
@@ -62,11 +63,30 @@ Reuse a healthy existing connection when one already exists. Do not create
 duplicates merely to satisfy the phase, and do not ask the maker to paste
 connection IDs.
 
-After the maker creates or repairs the missing connection, verify both live
-connections again:
+Show the safe display name of the selected Workday connection and the three
+saved non-secret Workday values. Use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "Confirm Workday connection",
+    "question": "Was this exact Workday connection created with the displayed Microsoft Entra resource URL, Workday OAuth token URL, and Workday OAuth client ID?",
+    "options": [
+      { "label": "Yes, confirm this connection" },
+      { "label": "No, review or repair it" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This is target evidence, not a suggested answer.
+
+If the maker does not confirm, leave Connections waiting. After confirmation,
+verify both live connections using the internally resolved connection IDs:
 
 ```powershell
-python scripts/workday_connect.py record-connections
+python scripts/workday_connect.py record-connections --workday-connection-id "{WORKDAY_CONNECTION_ID}" --dataverse-connection-id "{DATAVERSE_CONNECTION_ID}" --confirm-workday-target
 ```
 
 The command discovers connected physical connections in the selected
@@ -76,7 +96,8 @@ live.
 - If exactly one connection exists for each connector, discovery is
   deterministic.
 - If more than one exists, show safe display names and ask which connection to
-  use. Resolve the selected display name to its ID internally, then rerun
+  use. Do not recommend, preselect, or visually favor a connection based on its
+  name or owner. Resolve the selected display name to its ID internally, then rerun
   `record-connections` with
   `--workday-connection-id` and/or `--dataverse-connection-id`; never ask the
   maker to paste or repeat an ID.
@@ -87,21 +108,47 @@ Do not construct or pass manual connection evidence.
 
 ## Runtime approval and apply
 
-Run runtime discovery:
+Run runtime discovery. The controller reuses the exact connection IDs recorded
+in the Connections phase:
 
 ```powershell
 python scripts/workday_connect.py runtime-plan
 ```
 
 This discovers the installed connection references, supported package flows,
-selected agent, and employee-context topics.
+and selected agent. Employee-context topic wiring is verified later in this
+phase.
 
 For a package with a reviewed runtime flow catalog, the controller performs the
 following writes after exact-plan approval. These are real automated changes,
 not instructions for the maker:
 
 Show only the returned `approvalSummary`, not raw connection, application,
-workflow, or bot identifiers. The combined runtime plan will:
+workflow, or bot identifiers. Then use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "Apply Workday runtime changes",
+    "question": "Apply these exact Workday runtime changes to the selected environment and agent?",
+    "options": [
+      { "label": "Apply changes" },
+      { "label": "Not now" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. Do not represent mutation approval as recommended.
+
+If the maker selects **Not now**, leave Runtime waiting and do not call
+`runtime-approve` or `runtime-apply`.
+
+If the maker approves, write the returned `plan` object directly to
+`.local/connect/workday-da/runtime-plan.json` using a structured file-write
+tool. Do not serialize it into a generated shell command. The combined runtime
+plan will:
 
 - bind the two reviewed connection references;
 - activate only the checked-in Workday flow catalog;
@@ -114,7 +161,7 @@ overwrite or approximate the topic.
 Approve the exact plan:
 
 ```powershell
-python scripts/workday_connect.py runtime-approve --plan-json '{...}'
+python scripts/workday_connect.py runtime-approve --plan-file ".local\connect\workday-da\runtime-plan.json"
 ```
 
 Apply using the returned hash and the same disambiguating connection IDs, if
@@ -126,13 +173,13 @@ python scripts/workday_connect.py runtime-apply --plan-hash "{hash}"
 
 The controller rediscovers the current target, rejects stale approval, reuses
 one Dataverse token for Python mutations, invokes the checked-in delegated
-authorization script, and verifies bindings, flow state, authorization, and
-User Context V2 after each ordered stage. It records each verified stage
-immediately, so a later failure resumes from durable evidence rather than
-hiding earlier successful changes. The runtime phase remains active until the
-maker completes the agent binding below. Report permission issues only from
-an explicit forbidden response, `[FAIL]` marker, ambiguity result, or nonzero
-script exit.
+authorization script, and verifies connection-reference bindings, flow state,
+and authorization after each ordered stage. User Context V2 and selected-agent
+flow attachment are verified separately below. The controller records each
+verified stage immediately, so a later failure resumes from durable evidence
+rather than hiding earlier successful changes. Report permission issues only
+from an explicit forbidden response, `[FAIL]` marker, ambiguity result, or
+nonzero script exit.
 
 ## Agent binding after flow activation
 
@@ -173,10 +220,38 @@ agent-facing connection contract; the latter grants the Cosmos-backed agent
 principal access to the reviewed Dataverse workflows. Do not skip or scope the
 authorization stage solely from `connectionType`.
 
-Run the existing FlightCheck and require `WD-CONN-013` to pass:
+Show the exact agent name and the reviewed agent-facing flow
+**ESS Workday Runtime REST Execution**. Use `vscode_askQuestions`:
 
-```powershell
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-013 --connect-config ".local/connect/workday-da/config.json" --agent-slug "{AGENT_SLUG}" --preferred-username "{POWER_PLATFORM_MAKER}"
+```json
+[
+  {
+    "header": "Confirm Workday flow connection",
+    "question": "In this exact agent, is ESS Workday Runtime REST Execution connected and is parameter sharing enabled for every Workday connection shown by Copilot Studio?",
+    "options": [
+      { "label": "Yes, confirmed" },
+      { "label": "No, review the agent connections" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This confirmation must reflect what the maker
+observed in the selected agent.
+
+If the maker does not confirm, leave Runtime active. If confirmed, write this
+target-bound evidence to
+`.local/connect/workday-da/agent-flow-attachment.json` using a structured
+file-write tool:
+
+```json
+{
+  "outcome": "maker-confirmed",
+  "botId": "{SELECTED_AGENT_BOT_ID}",
+  "flowNames": ["ESS Workday Runtime REST Execution"],
+  "parameterSharingOutcome": "enabled-for-exposed-connections"
+}
 ```
 
 Then run internally:
@@ -199,18 +274,21 @@ the activation result or create a package-repair blocker by themselves.
 Then run:
 
 ```powershell
-python scripts/workday_connect.py record-agent-binding
+python scripts/workday_connect.py record-agent-binding --attachment-file ".local\connect\workday-da\agent-flow-attachment.json"
 ```
 
 This command reruns `WD-REST-002` and `WD-CONN-013` with the recorded Workday
 state, signs in to the native components endpoint as the recorded maker,
 derives the complete Workday topic set from `.component-map.json`, and rereads
 every mapped topic. It completes the runtime phase only when every checkpoint
-passes and every Workday topic is Active. It retains any topic diagnostics for
-support correlation without presenting them as runtime failure evidence. The
-signed-in employee scenario remains the functional confirmation that the
-Workday runtime works. Do not construct or pass manual
-boolean evidence.
+passes, the target-bound flow attachment is confirmed, and every Workday topic
+is Active. It retains any topic diagnostics for support correlation without
+presenting them as runtime failure evidence. The signed-in employee scenario
+remains the functional confirmation that the Workday runtime works. Do not
+substitute an unscoped "done" response for the structured confirmation.
+Do not run `WD-CONN-013` separately or ask for the flow-connection
+confirmation twice; `record-agent-binding` performs the required live check
+after the single target-bound confirmation above.
 
 If runtime discovery reports that the selected package has no reviewed flow
 catalog, record a manual handoff. Do not claim that connection references,

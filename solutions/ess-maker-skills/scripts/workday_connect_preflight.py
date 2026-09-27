@@ -22,7 +22,7 @@ from workday_connect_auth import (
     authentication_plan,
     require_identity,
 )
-from workday_connect_model import load_catalog
+from workday_connect_model import load_catalog, plan_hash
 from workday_connect_store import WorkdayConnectStore
 
 
@@ -322,24 +322,32 @@ def resolve_target(
             "Dataverse URL for the recorded environment ID. Refresh setup "
             "before continuing."
         )
-    exact_url = foundation_url or inventory_url or stored_url
-    if supplied_url:
-        if exact_url and (
-            _normalize_dataverse_url(supplied_url)
-            != _normalize_dataverse_url(exact_url)
-        ):
-            raise WorkdayConnectPreflightError(
-                "The supplied Dataverse URL does not match the URL recorded "
-                "for the setup environment ID."
-            )
-        if not exact_url:
-            exact_url = supplied_url
+    exact_url = foundation_url or inventory_url
     if not exact_url:
-        exact_url = _pac_dataverse_url(
+        pac_url = _pac_dataverse_url(
             environment_id,
             pac_resolver=pac_resolver,
             runner=pac_runner,
         )
+        if not pac_url:
+            raise WorkdayConnectPreflightError(
+                "PAC could not prove the Dataverse URL for the recorded "
+                "environment ID. Refresh Power Platform authentication and "
+                "try again."
+            )
+        exact_url = pac_url
+    for candidate, source in (
+        (stored_url, "stored Workday state"),
+        (supplied_url, "supplied Dataverse URL"),
+    ):
+        if candidate and (
+            _normalize_dataverse_url(candidate)
+            != _normalize_dataverse_url(exact_url)
+        ):
+            raise WorkdayConnectPreflightError(
+                f"The {source} does not match the URL proven for the setup "
+                "environment ID."
+            )
     exact_url = exact_url.rstrip("/")
     if not exact_url:
         raise WorkdayConnectPreflightError(
@@ -405,6 +413,10 @@ def run_preflight(
     installer: Callable[..., dict[str, Any]] = install_workday_package,
     identity_provider: Callable[..., dict[str, str]] = require_identity,
     catalog: dict[str, Any] | None = None,
+    approved_install_hash: str | None = None,
+    plan_verifier: Callable[[dict[str, Any], str], Any] | None = None,
+    pac_resolver: Callable[[], Path] = resolve_pac_executable,
+    pac_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, Any]:
     active_catalog = catalog or load_catalog()
     state_store = store or WorkdayConnectStore(workspace_root)
@@ -415,17 +427,42 @@ def run_preflight(
         ).get("username")
         or ""
     ).strip()
-    intended_maker = str(maker_username or stored_maker or "").strip() or None
+    preflight_phase = (state.get("phases") or {}).get("preflight") or {}
+    approved_plan = preflight_phase.get("approvedPlan") or {}
+    approved_scope = (
+        approved_plan.get("scope")
+        if isinstance(approved_plan, dict)
+        else {}
+    )
+    approved_maker = (
+        str((approved_scope or {}).get("makerUsername") or "").strip()
+        if approved_install_hash
+        else ""
+    )
+    intended_maker = str(
+        maker_username or stored_maker or approved_maker or ""
+    ).strip() or None
     target = resolve_target(
         workspace_root,
         dataverse_url=dataverse_url,
         state=state,
         catalog=active_catalog,
+        pac_resolver=pac_resolver,
+        pac_runner=pac_runner,
     )
-    token = token_provider(
-        target.dataverse_url,
-        preferred_username=intended_maker,
-    )
+    try:
+        token = token_provider(
+            target.dataverse_url,
+            preferred_username=intended_maker,
+        )
+    except SystemExit as exc:
+        raise WorkdayConnectPreflightError(
+            "Dataverse authentication did not complete."
+        ) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkdayConnectPreflightError(
+            f"Dataverse authentication failed: {exc}"
+        ) from exc
     try:
         identity = identity_provider(
             token,
@@ -433,23 +470,75 @@ def run_preflight(
         )
     except WorkdayConnectIdentityError as exc:
         raise WorkdayConnectPreflightError(str(exc)) from exc
-    installed = _installed_solutions(
-        target.dataverse_url,
-        token,
-        query=query,
-        catalog=active_catalog,
-    )
+    try:
+        installed = _installed_solutions(
+            target.dataverse_url,
+            token,
+            query=query,
+            catalog=active_catalog,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkdayConnectPreflightError(
+            f"Dataverse package discovery failed: {exc}"
+        ) from exc
     package = active_catalog["packages"][target.package_flavor]
     required_schema = package["solutionSchemaName"]
     package_action = "unchanged"
     pac_identity = None
     if required_schema.casefold() not in installed:
-        install_result = installer(
-            target.dataverse_url,
-            target.package_flavor,
-            ring=target.pac_ring,
-            preferred_username=identity["username"],
-        )
+        install_plan = {
+            "phase": "preflight",
+            "scope": {
+                "environmentId": target.environment_id,
+                "dataverseUrl": target.dataverse_url,
+                "agent": {
+                    key: target.agent.get(key)
+                    for key in ("slug", "botId", "schemaName")
+                },
+                "makerUsername": identity["username"],
+            },
+            "package": {
+                "flavor": target.package_flavor,
+                "schemaName": required_schema,
+            },
+            "actions": [
+                "Install the supported Workday runtime package",
+                "Reread Dataverse to verify the package installation",
+            ],
+        }
+        if not approved_install_hash:
+            return {
+                "requiresApproval": True,
+                "plan": {
+                    **install_plan,
+                    "planHash": plan_hash(install_plan),
+                },
+                "approvalSummary": {
+                    "environmentUrl": target.dataverse_url,
+                    "agent": target.agent.get("name") or target.agent.get("slug"),
+                    "makerAccount": identity["username"],
+                    "packageSchema": required_schema,
+                    "actions": install_plan["actions"],
+                },
+                "authenticationPlan": authentication_plan(),
+                "status": state_store.status(),
+            }
+        if plan_verifier is None:
+            raise WorkdayConnectPreflightError(
+                "Package installation requires a stored approved plan."
+            )
+        plan_verifier(install_plan, approved_install_hash)
+        try:
+            install_result = installer(
+                target.dataverse_url,
+                target.package_flavor,
+                ring=target.pac_ring,
+                preferred_username=identity["username"],
+            )
+        except (OSError, PacCliError, RuntimeError) as exc:
+            raise WorkdayConnectPreflightError(
+                f"Workday package installation failed: {exc}"
+            ) from exc
         pac_identity = install_result.get("authenticatedAccount")
         if not pac_identity or (
             pac_identity.casefold() != identity["username"].casefold()
@@ -458,12 +547,17 @@ def run_preflight(
                 "PAC package installation did not prove the intended "
                 "Environment Maker account."
             )
-        installed = _installed_solutions(
-            target.dataverse_url,
-            token,
-            query=query,
-            catalog=active_catalog,
-        )
+        try:
+            installed = _installed_solutions(
+                target.dataverse_url,
+                token,
+                query=query,
+                catalog=active_catalog,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise WorkdayConnectPreflightError(
+                f"Post-install package verification failed: {exc}"
+            ) from exc
         if required_schema.casefold() not in installed:
             raise WorkdayConnectPreflightError(
                 "PAC completed, but the required Workday package was not "
@@ -471,6 +565,20 @@ def run_preflight(
             )
         package_action = "installed"
 
+    existing_operator = (
+        state_store.load().get("operators", {}).get("powerPlatformMaker") or {}
+    )
+    existing_credential_stores = (
+        existing_operator.get("credentialStores") or {}
+        if isinstance(existing_operator, dict)
+        else {}
+    )
+    pac_status = (
+        "verified"
+        if pac_identity
+        or existing_credential_stores.get("pac") == "verified"
+        else "not-required"
+    )
     state_store.merge_section(
         "scope",
         {
@@ -492,7 +600,7 @@ def run_preflight(
                 "tenantId": identity["tenantId"],
                 "credentialStores": {
                     "dataverse-msal": "verified",
-                    "pac": "verified" if pac_identity else "not-required",
+                    "pac": pac_status,
                 },
             }
         },

@@ -802,17 +802,32 @@ class MinimalBotEvaluationClient:
             raise MinimalBotEvaluationError(
                 "MinimalBot dialog verification returned no component changes."
             )
-        verified_by_id = {
-            str(component.get("id") or "").casefold(): component
-            for change in verified_changes
-            if isinstance(change, dict)
-            and isinstance((component := change.get("component")), dict)
-        }
+        verified_by_id: dict[str, list[dict[str, Any]]] = {}
+        for change in verified_changes:
+            if not isinstance(change, dict):
+                continue
+            component = change.get("component")
+            if not isinstance(component, dict):
+                continue
+            component_id = str(component.get("id") or "").casefold()
+            if component_id:
+                verified_by_id.setdefault(component_id, []).append(component)
         all_diagnostics: list[dict[str, str]] = []
         for update in updates:
             component_id = str(update["componentId"])
-            component = verified_by_id.get(component_id.casefold())
-            verified_update = component is not None
+            matches = verified_by_id.get(component_id.casefold()) or []
+            if len(matches) != 1:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog verification found a missing or "
+                    f"duplicate component ID: {component_id}."
+                )
+            component = matches[0]
+            expected_schema = str(update.get("schemaName") or "")
+            verified_update = (
+                component.get("$kind") == "DialogComponent"
+                and str(component.get("schemaName") or "").casefold()
+                == expected_schema.casefold()
+            )
             if verified_update and "dialog" in update:
                 verified_update = _without_diagnostics(
                     component.get("dialog")

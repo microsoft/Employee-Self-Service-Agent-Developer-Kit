@@ -43,7 +43,9 @@ python scripts/push.py {WORKDAY_TOPIC_ARGS} --activate --dry-run --preferred-use
 
 The preview count must equal the selected component-map count. Every previewed
 component must be one of the resolved Workday dialog topics. Stop if the count
-differs or any non-Workday topic appears.
+differs, any non-Workday topic appears, or the command reports pending local
+content changes. Content changes require their own scoped review and push;
+activation approval never approves topic-content edits.
 
 **Message:**
 
@@ -61,13 +63,16 @@ Use the `vscode_askQuestions` tool:
     "header": "Enable Workday topics",
     "question": "Enable all Workday topics in the active ESS HR agent?",
     "options": [
-      { "label": "Enable", "recommended": true },
+      { "label": "Enable" },
       { "label": "Not now" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
+
+Leave the selection unset. Enabling topics is an explicit mutation approval,
+not a recommended answer.
 
 If the user selects **Not now**, set `ACTION_RESULT = "cancelled"` and leave
 the runtime phase active.

@@ -82,6 +82,28 @@ def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
     assert connect_tasks.read_text(encoding="utf-8") == ("legacy connect checklist")
 
 
+def test_future_schema_is_rejected_without_rewriting_state(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    original = {
+        "schemaVersion": 999,
+        "futureField": {"mustRemain": True},
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(
+        store_module.WorkdayConnectStoreError,
+        match="Unsupported Workday connect state schema version",
+    ):
+        store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
 def test_legacy_ready_state_reopens_runtime_for_live_topic_proof(
     tmp_path: Path,
 ) -> None:
@@ -140,6 +162,28 @@ def test_complete_action_is_idempotent(tmp_path: Path) -> None:
 
     assert state["phases"]["preflight"]["completedActions"] == ["verify-target"]
     assert len(state["phases"]["preflight"]["evidence"]) == 1
+
+
+def test_complete_action_does_not_regress_completed_phase(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _complete_phase(
+        store,
+        "preflight",
+        store_module.PHASE_REQUIRED_ACTIONS["preflight"],
+    )
+
+    state = store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+
+    assert state["phases"]["preflight"]["status"] == "complete"
 
 
 def test_complete_action_reactivates_a_blocked_phase(tmp_path: Path) -> None:
@@ -212,6 +256,36 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
         store.verify_plan("runtime", changed, approved_hash)
 
 
+def test_approving_completed_runtime_invalidates_employee_validation(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for definition in model.PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+
+    state, _hash = store.approve_plan(
+        "runtime",
+        {
+            "phase": "runtime",
+            "scope": {"botId": "bot-id"},
+            "actions": ["Reapply reviewed runtime bindings"],
+        },
+    )
+
+    assert state["phases"]["runtime"]["status"] == "active"
+    assert state["phases"]["employee-validation"]["status"] == "pending"
+    assert state["phases"]["employee-validation"]["completedActions"] == []
+
+
 def test_status_returns_progress_roadmap_and_next_phase_summary(
     tmp_path: Path,
 ) -> None:
@@ -271,6 +345,37 @@ def test_scope_change_invalidates_affected_phases(tmp_path: Path) -> None:
     assert state["phases"]["preflight"]["status"] == "pending"
     assert state["phases"]["preflight"]["completedActions"] == []
     assert state["phases"]["entra"]["status"] == "pending"
+
+
+def test_regressing_completed_phase_invalidates_downstream(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for definition in model.PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+
+    state = store.set_phase_status(
+        "runtime",
+        "blocked",
+        blocker={
+            "operation": "record-topic-activation",
+            "errorType": "RuntimeVerificationFailed",
+            "message": "The live topic is not active.",
+        },
+    )
+
+    assert state["phases"]["runtime"]["status"] == "blocked"
+    assert state["phases"]["employee-validation"]["status"] == "pending"
+    assert state["phases"]["employee-validation"]["completedActions"] == []
 
 
 def _complete_phase(store, phase_id: str, actions: set[str]) -> None:

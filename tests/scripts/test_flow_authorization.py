@@ -3,8 +3,9 @@
 
 """Structural contracts for the Dataverse flow-authorization tooling."""
 
+import importlib.util
 from pathlib import Path
-
+import sys
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ALM_DIR = (
@@ -60,6 +61,48 @@ def test_token_fallback_uses_the_kit_authentication_helper() -> None:
     assert "token = auth.authenticate(" in helper
     assert 'args.environment.rstrip("/")' in helper
     assert "preferred_username=args.preferred_username" in helper
+
+
+def test_token_helper_rejects_mismatched_identity_without_emitting_token(
+    monkeypatch,
+    capsys,
+) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "get_dataverse_token_test",
+        _ALM_DIR / "get_dataverse_token.py",
+    )
+    assert spec and spec.loader
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    monkeypatch.setattr(
+        helper.auth,
+        "authenticate",
+        lambda *_args, **_kwargs: "secret-token",
+    )
+    monkeypatch.setattr(
+        helper,
+        "require_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            helper.WorkdayConnectIdentityError("different account")
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "get_dataverse_token.py",
+            "--environment",
+            "https://example.crm.dynamics.com",
+            "--preferred-username",
+            "maker@example.com",
+        ],
+    )
+
+    assert helper.main() == 1
+    captured = capsys.readouterr()
+    assert "different account" in captured.err
+    assert "secret-token" not in captured.out
+    assert "secret-token" not in captured.err
 
 
 def test_candidate_tokens_are_attached_to_dataverse_requests() -> None:

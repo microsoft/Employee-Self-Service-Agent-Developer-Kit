@@ -72,7 +72,10 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "Never alias" in schema or "must never be aliases" in schema
     assert "entra-handoff" in entra
     assert "workday-admin-packet" in tenant
-    assert '{"applications":[{...}]}' in entra
+    assert "--discovery-file" in entra
+    assert "--verification-file" in entra
+    assert "--discovery-json" not in entra
+    assert "--verification-json" not in entra
     assert "exits with code 0" in entra
     assert "partial stdout after\na nonzero exit" in entra
     assert "legacy `src/skills/setup/workday/` procedure" in entra
@@ -102,7 +105,16 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert "display name is optional support context" in tenant
-    assert "exactly one response form using one structured `ask_user` call" in tenant
+    assert (
+        "exactly one response form using one structured\n"
+        "`vscode_askQuestions` call"
+    ) in tenant
+    assert '"header": "Identity provider"' in tenant
+    assert '"header": "Authentication policy"' in tenant
+    assert '"header": "Network readiness"' in tenant
+    assert "multiline text\nbox" in tenant
+    assert "Do not add `recommended`" in tenant
+    assert "free-text request for several numbered answers" in tenant
     assert '"all good", "continue", or "proceed"' in tenant
     assert "do not move to another field" in tenant
     assert "search workspace files" in tenant

@@ -21,21 +21,23 @@ handoff and do not require the Workday administrator again. Continue at
 Connections. Show only the affected Workday remediation step if a later
 connection or employee test proves that the stored foundation has drifted.
 
-When no matching foundation can be reused, confirm that a Workday administrator
-is available, then guide them through these steps in order:
+When no matching foundation can be reused, guide the Workday administrator
+through these steps in order. Do not add a separate availability confirmation;
+if the administrator is not available, present the handoff and pause before
+showing the response form.
 
 1. **Protect the existing federation.** In Workday, run **Edit Tenant Setup -
    Security** and find **SAML Setup**. In **SAML Identity Providers**, locate
    the enabled row whose **Used for Environments** value matches the employee
-   environment being connected. Before asking the administrator to interpret
-   its **Issuer**, present `identityProviderQuestion` from the packet as one
-   choice question. The domain examples are recognition clues, not proof.
+   environment being connected. Use `identityProviderQuestion` and
+   `issuerConfirmationQuestion` from the packet to populate the corresponding
+   fields in the consolidated response form below. Do not present them as
+   separate questions. The domain examples are recognition clues, not proof.
 
    Handle the answer as follows:
 
-   - **Microsoft Entra ID** - continue. Present
-     `issuerConfirmationQuestion`, which shows the exact issuer expected from
-     the verified Entra tenant. If the administrator confirms an exact match,
+   - **Microsoft Entra ID** - continue. If the administrator confirms that the
+     displayed Issuer exactly matches the value shown in the form,
      record `identityProviderOutcome` as `verified-entra-issuer`; do not make
      them retype the value. If it differs, collect the exact displayed
      **Issuer** in the single response form. Do not infer a match from the
@@ -64,18 +66,18 @@ is available, then guide them through these steps in order:
    customer-chosen recognizable name, and save it. Return to the enabled
    Microsoft Entra row and select that key in its **X509 Certificate** field.
 
-   Present `certificateSelectionQuestion` from the packet as one choice
-   question. Never suggest, prefill, or ask the administrator to confirm a
-   guessed certificate name such as “Microsoft Azure Federated SSO
+   Use `certificateSelectionQuestion` and `certificateValidityQuestion` from
+   the packet to populate the corresponding fields in the consolidated form.
+   Do not present them separately. Never suggest, prefill, or ask the administrator to confirm
+   a guessed certificate name such as “Microsoft Azure Federated SSO
    Certificate.”
 
    Handle the answer as follows:
 
    - **The new certificate created from the Entra Base64 file** - record
      `certificateSelectionOutcome` as
-     `entra-signing-certificate-selected`, then present
-     `certificateValidityQuestion`. If both displayed dates exactly match the
-     verified Entra dates shown in that question, record
+     `entra-signing-certificate-selected`. If both displayed dates exactly
+     match the verified Entra dates shown in the form, record
      `certificateValidityOutcome` as
      `matches-verified-entra-certificate`. The customer-created certificate
      display name is optional support context, not a completion gate.
@@ -115,8 +117,10 @@ is available, then guide them through these steps in order:
    firewall change is required. Do not wait until final employee validation to
    discover a known allowlist requirement.
 
-Collect exactly one response form using one structured `ask_user` call. Do not
-ask for these values as a sequence of separate questions:
+Collect exactly one response form using one structured
+`vscode_askQuestions` call. Do not collapse these fields into a multiline text
+box, ask the administrator to edit a prose template, or ask for these values
+as a sequence of separate chat questions:
 
 - confirmation that the enabled issuer exactly matches the displayed verified
   Entra issuer, or the exact different Issuer value;
@@ -132,19 +136,148 @@ ask for these values as a sequence of separate questions:
 - authentication-policy outcome;
 - network-readiness outcome.
 
-Prefill known non-secret reference values from the packet, including the
-Service Provider ID, expected Entra issuer, and verified certificate dates.
+Use this exact form, substituting the packet's expected issuer, Service
+Provider ID, and verified certificate dates:
+
+```json
+[
+  {
+    "header": "Identity provider",
+    "question": "Which sign-in provider does the enabled Workday SAML row use?",
+    "options": [
+      { "label": "Microsoft Entra ID", "description": "Issuer commonly contains login.microsoftonline.com or sts.windows.net" },
+      { "label": "Okta", "description": "Issuer commonly contains okta.com" },
+      { "label": "Ping Identity", "description": "Issuer commonly contains pingone.com, pingidentity.com, or an organization-specific Ping host" },
+      { "label": "Another sign-in provider" },
+      { "label": "No enabled SAML row" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Issuer",
+    "question": "Does the enabled Microsoft Entra SAML row's Issuer exactly match {EXPECTED_ENTRA_ISSUER}?",
+    "options": [
+      { "label": "Yes, it matches exactly" },
+      { "label": "No, the displayed Issuer is different" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Different issuer",
+    "question": "If the Issuer is different, enter the exact displayed value. Otherwise leave this blank."
+  },
+  {
+    "header": "Service Provider ID",
+    "question": "Enter the enabled Service Provider ID. Expected value: {EXPECTED_SERVICE_PROVIDER_ID}"
+  },
+  {
+    "header": "Certificate",
+    "question": "Which certificate is selected on the enabled Microsoft Entra SAML row in Workday?",
+    "options": [
+      { "label": "The new certificate created from the Entra Base64 file" },
+      { "label": "A different existing Workday certificate" },
+      { "label": "No certificate is selected" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Certificate dates",
+    "question": "Do the selected Workday certificate dates exactly match {CERTIFICATE_VALID_FROM} through {CERTIFICATE_VALID_TO}?",
+    "options": [
+      { "label": "Yes, both dates match exactly" },
+      { "label": "No, one or both dates are different" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Certificate name",
+    "question": "Optional: enter the Workday certificate display name, or leave this blank."
+  },
+  {
+    "header": "OAuth client ID",
+    "question": "Enter the non-secret OAuth client ID shown by Workday."
+  },
+  {
+    "header": "OAuth token URL",
+    "question": "Enter the OAuth token URL shown by Workday."
+  },
+  {
+    "header": "REST base URL",
+    "question": "Enter the Workday REST base URL ending at /ccx/api."
+  },
+  {
+    "header": "SOAP base URL",
+    "question": "Enter the Workday SOAP service base URL."
+  },
+  {
+    "header": "Authentication policy",
+    "question": "What did the administrator verify for the employee authentication policy?",
+    "options": [
+      { "label": "An existing active policy allows SAML" },
+      { "label": "A reviewed policy was activated" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Network readiness",
+    "question": "What did the administrator verify for the Workday service hosts?",
+    "options": [
+      { "label": "Both Workday hosts are allowed" },
+      { "label": "No customer-managed firewall change is required" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave every field and option initially unset. Do not add `recommended`,
+`default`, suggested-answer wording, or any equivalent preselection. The
+expected values in the question text are comparison references, not answers.
+
+Map the submitted fields to the controller response object:
+
+- **Microsoft Entra ID** plus **Yes, it matches exactly** ->
+  `identityProviderOutcome: verified-entra-issuer`;
+- a different Issuer -> `activeIdentityProviderIssuer`, then stop for identity
+  administrator review instead of submitting successful evidence;
+- **The new certificate created from the Entra Base64 file** ->
+  `certificateSelectionOutcome: entra-signing-certificate-selected`;
+- matching certificate dates ->
+  `certificateValidityOutcome: matches-verified-entra-certificate`;
+- the optional display name -> `certificateName`;
+- the six entered connection/policy fields -> their corresponding controller
+  keys;
+- existing active policy -> `existing-active-policy`;
+- reviewed and activated policy -> `reviewed-policy-activated`;
+- both hosts allowed -> `confirmed-hosts-allowed`;
+- no firewall change required ->
+  `no-customer-firewall-change-required`.
+
+Any unsupported provider, mismatch, missing certificate, date mismatch, or
+**I'm not sure** answer is a remediation outcome, not successful evidence.
+Show the affected remediation step and keep the phase waiting.
+
 If the administrator omits a required value or replies only with wording such
 as "done", "all good", "continue", or "proceed", do not move to another field,
 search workspace files, inspect environment variables, or infer the missing
-evidence. Show one concise list of missing items, preserve progress, and stop
-until the same consolidated form can be completed.
+evidence. Reopen the same structured form with only the missing or invalid
+fields; never replace it with a free-text request for several numbered answers.
+Preserve progress and stop until the structured form is complete.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Pass the response once:
+key. Write the response directly to
+`.local/connect/workday-da/workday-admin-response.json` using a structured
+file-write tool; never interpolate administrator-entered values into a
+generated shell command. Pass the response once:
 
 ```powershell
-python scripts/workday_connect.py record-workday-admin --response-json '{...}'
+python scripts/workday_connect.py record-workday-admin --response-file ".local\connect\workday-da\workday-admin-response.json"
 ```
 
 Use these exact outcome values:

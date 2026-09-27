@@ -18,9 +18,11 @@ from workday_connect_contracts import (  # noqa: E402
     build_workday_admin_packet,
     validate_agent_binding_evidence,
     validate_employee_evidence,
+    validate_employee_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
+import workday_connect_contracts as contracts  # noqa: E402
 from workday_connect_model import default_state  # noqa: E402
 
 
@@ -30,6 +32,7 @@ def _state():
         {
             "entraTenantId": "00000000-0000-0000-0000-000000000000",
             "workdayTenant": "contoso_impl",
+            "packageFlavor": "runtime",
         }
     )
     state["phases"]["preflight"]["status"] = "complete"
@@ -65,10 +68,12 @@ def _entra_checks():
         "nameId": {
             "outcome": "verified",
             "provenance": "microsoft-graph",
+            "observedValue": "user.userPrincipalName",
         },
         "samlSigningOption": {
             "outcome": "confirmed",
             "provenance": "administrator-attestation",
+            "observedValue": "Sign SAML response and assertion",
         },
     }
 
@@ -200,7 +205,23 @@ def test_entra_verification_requires_all_expected_graph_evidence():
     assert result["evidence"]["checks"]["samlSigningOption"] == {
         "outcome": "confirmed",
         "provenance": "administrator-attestation",
+        "observedValue": "Sign SAML response and assertion",
     }
+
+
+def test_saml_signing_option_records_the_exact_required_value():
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="Sign SAML response and assertion",
+    ):
+        contracts._normalize_entra_check(
+            "samlSigningOption",
+            {
+                "outcome": "confirmed",
+                "provenance": "administrator-attestation",
+                "observedValue": "Sign SAML assertion only",
+            },
+        )
 
 
 def test_entra_verification_rejects_a_different_graph_tenant():
@@ -470,14 +491,19 @@ def test_workday_admin_response_rejects_certificate_date_drift():
 
     with pytest.raises(
         WorkdayConnectContractError,
-        match="do not match",
+        match="conflicts",
     ):
         validate_workday_admin_response(
             state,
             {
-                "activeIdentityProviderIssuer": "https://sts.example/",
+                "identityProviderOutcome": "verified-entra-issuer",
                 "enabledServiceProviderId": ("http://www.workday.com/contoso_impl"),
-                "certificateName": "Wrong certificate",
+                "certificateSelectionOutcome": (
+                    "entra-signing-certificate-selected"
+                ),
+                "certificateValidityOutcome": (
+                    "matches-verified-entra-certificate"
+                ),
                 "certificateValidFrom": "2026-01-01",
                 "certificateValidTo": "2028-01-01",
                 "oauthClientId": "safe-client-id",
@@ -592,6 +618,14 @@ def test_agent_binding_and_employee_evidence_are_strict():
                     "active": 21,
                     "blockingDiagnostics": [],
                 },
+                "flowAttachment": {
+                    "outcome": "maker-confirmed",
+                    "botId": "bot-id",
+                    "flowNames": ["ESS Workday Runtime REST Execution"],
+                    "parameterSharingOutcome": (
+                        "enabled-for-exposed-connections"
+                    ),
+                },
             },
         )["workdayTopics"]["active"]
         == 21
@@ -613,6 +647,14 @@ def test_agent_binding_and_employee_evidence_are_strict():
                 "active": 21,
                 "blockingDiagnostics": [{"errorCode": "NotFound"}],
             },
+            "flowAttachment": {
+                "outcome": "maker-confirmed",
+                "botId": "bot-id",
+                "flowNames": ["ESS Workday Runtime REST Execution"],
+                "parameterSharingOutcome": (
+                    "enabled-for-exposed-connections"
+                ),
+            },
         },
     )
     assert diagnostic_evidence["workdayTopics"]["blockingDiagnostics"] == [
@@ -623,7 +665,7 @@ def test_agent_binding_and_employee_evidence_are_strict():
         validate_employee_evidence(
             {
                 "scenarioName": "Read-only scenario",
-                "testUserCategory": "non-maker employee",
+                "testUserCategory": "standard employee",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "outcome": "passed",
                 "employeeName": "not allowed",
@@ -700,11 +742,14 @@ def test_workday_admin_rejects_endpoint_path_drift(
         "validTo": "2027-01-01",
     }
     response = {
-        "activeIdentityProviderIssuer": "https://sts.windows.net/tenant/",
+        "identityProviderOutcome": "verified-entra-issuer",
         "enabledServiceProviderId": ("http://www.workday.com/contoso_impl"),
-        "certificateName": "ESS Workday Entra signing certificate",
-        "certificateValidFrom": "2026-01-01",
-        "certificateValidTo": "2027-01-01",
+        "certificateSelectionOutcome": (
+            "entra-signing-certificate-selected"
+        ),
+        "certificateValidityOutcome": (
+            "matches-verified-entra-certificate"
+        ),
         "oauthClientId": "safe-client-id",
         "oauthTokenUrl": ("https://example.workday.com/ccx/oauth2/contoso_impl/token"),
         "restBaseUrl": "https://example.workday.com/ccx/api",
@@ -716,3 +761,125 @@ def test_workday_admin_rejects_endpoint_path_drift(
 
     with pytest.raises(WorkdayConnectContractError, match=message):
         validate_workday_admin_response(state, response)
+
+
+def test_workday_admin_rejects_legacy_identity_provider_evidence():
+    state = _state()
+    state["identifiers"]["signingCertificate"] = {
+        "thumbprint": "ABC123",
+        "validFrom": "2026-01-01",
+        "validTo": "2027-01-01",
+    }
+
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="identityProviderOutcome",
+    ):
+        validate_workday_admin_response(
+            state,
+            {
+                "activeIdentityProviderIssuer": "https://wrong.example/",
+                "enabledServiceProviderId": (
+                    "http://www.workday.com/contoso_impl"
+                ),
+                "certificateName": "Unrelated certificate",
+                "certificateValidFrom": "2026-01-01",
+                "certificateValidTo": "2027-01-01",
+                "oauthClientId": "safe-client-id",
+                "oauthTokenUrl": (
+                    "https://example.workday.com/ccx/oauth2/"
+                    "contoso_impl/token"
+                ),
+                "restBaseUrl": "https://example.workday.com/ccx/api",
+                "soapBaseUrl": (
+                    "https://example.workday.com/ccx/service/contoso_impl"
+                ),
+                "authenticationPolicyOutcome": "existing-active-policy",
+                "networkReadinessOutcome": "confirmed-hosts-allowed",
+            },
+        )
+
+
+def test_workday_admin_rejects_non_workday_or_mixed_endpoint_hosts():
+    state = _state()
+    state["identifiers"]["signingCertificate"] = {
+        "thumbprint": "ABC123",
+        "validFrom": "2026-01-01",
+        "validTo": "2027-01-01",
+    }
+    response = {
+        "identityProviderOutcome": "verified-entra-issuer",
+        "enabledServiceProviderId": "http://www.workday.com/contoso_impl",
+        "certificateSelectionOutcome": "entra-signing-certificate-selected",
+        "certificateValidityOutcome": "matches-verified-entra-certificate",
+        "oauthClientId": "safe-client-id",
+        "oauthTokenUrl": (
+            "https://attacker.example/ccx/oauth2/contoso_impl/token"
+        ),
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "soapBaseUrl": "https://example.workday.com/ccx/service/contoso_impl",
+        "authenticationPolicyOutcome": "existing-active-policy",
+        "networkReadinessOutcome": "confirmed-hosts-allowed",
+    }
+
+    with pytest.raises(WorkdayConnectContractError, match="Workday-owned"):
+        validate_workday_admin_response(state, response)
+
+    response["oauthTokenUrl"] = (
+        "https://other.workday.com/ccx/oauth2/contoso_impl/token"
+    )
+    with pytest.raises(WorkdayConnectContractError, match="same verified"):
+        validate_workday_admin_response(state, response)
+
+    response["oauthTokenUrl"] = (
+        "https://example.workday.com:notaport/ccx/oauth2/"
+        "contoso_impl/token"
+    )
+    with pytest.raises(WorkdayConnectContractError, match="HTTPS URL"):
+        validate_workday_admin_response(state, response)
+
+
+def test_employee_evidence_rejects_maker_and_invalid_timestamp():
+    with pytest.raises(WorkdayConnectContractError, match="non-maker"):
+        validate_employee_evidence(
+            {
+                "scenarioName": "Read-only scenario",
+                "testUserCategory": "Environment Maker",
+                "timestamp": "2026-09-25T00:00:00Z",
+                "outcome": "passed",
+            }
+        )
+
+
+def test_employee_failure_evidence_requires_safe_structured_fields():
+    assert validate_employee_failure_evidence(
+        {
+            "failureCategory": "workday-access-denied",
+            "timestamp": "2026-09-25T00:00:00+00:00",
+            "remediation": "Ask a Workday administrator to verify access.",
+        }
+    ) == {
+        "failureCategory": "workday-access-denied",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "remediation": "Ask a Workday administrator to verify access.",
+    }
+
+    with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
+        validate_employee_failure_evidence(
+            {
+                "failureCategory": "workday-access-denied",
+                "timestamp": "2026-09-25T00:00:00Z",
+                "remediation": "Investigate.",
+                "accessToken": "must-not-be-recorded",
+            }
+        )
+
+    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
+        validate_employee_evidence(
+            {
+                "scenarioName": "Read-only scenario",
+                "testUserCategory": "non-maker employee",
+                "timestamp": "not-a-time",
+                "outcome": "passed",
+            }
+        )

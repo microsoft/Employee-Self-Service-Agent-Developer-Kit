@@ -319,7 +319,7 @@ def test_preflight_skips_install_when_package_exists(tmp_path: Path) -> None:
     import workday_connect_preflight as preflight
     import workday_connect_store as store_module
 
-    _write_foundation(tmp_path)
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
     installer_calls = []
 
     def query(_url, _token, entity_set, _select, _filter):
@@ -353,7 +353,7 @@ def test_preflight_carries_verified_tenant_into_entra_handoff(
     import workday_connect_preflight as preflight
     import workday_connect_store as store_module
 
-    _write_foundation(tmp_path)
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
     store = store_module.WorkdayConnectStore(tmp_path)
     preflight.run_preflight(
         tmp_path,
@@ -400,26 +400,69 @@ def test_preflight_installs_and_reverifies_with_same_account(
     tmp_path: Path,
 ) -> None:
     import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
 
-    _write_foundation(tmp_path)
-    query_results = iter(
-        [[], [{"uniquename": "msdyn_EssWorkdayRuntime"}]]
-    )
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    installed = False
 
-    result = preflight.run_preflight(
+    def query(*_args, **_kwargs):
+        return (
+            [{"uniquename": "msdyn_EssWorkdayRuntime"}]
+            if installed
+            else []
+        )
+
+    plan_result = preflight.run_preflight(
         tmp_path,
         dataverse_url=ENV_URL,
         maker_username="maker@example.com",
+        store=store,
         token_provider=lambda *_args, **_kwargs: "token",
         identity_provider=lambda *_args, **_kwargs: {
             "username": "maker@example.com",
             "tenantId": "tenant-id",
         },
-        query=lambda *_args, **_kwargs: next(query_results),
-        installer=lambda *_args, **kwargs: {
+        query=query,
+    )
+    assert plan_result["requiresApproval"] is True
+    assert plan_result["plan"]["scope"]["agent"] == {
+        "slug": "ess-hr",
+        "botId": BOT_ID,
+        "schemaName": "gptagent_copilotforemployeeselfservicehr",
+    }
+    assert store.status()["nextPhaseId"] == "preflight"
+    _state, approved_hash = store.approve_plan(
+        "preflight",
+        plan_result["plan"],
+    )
+
+    def installer(*_args, **kwargs):
+        nonlocal installed
+        installed = True
+        return {
             "schemaName": "msdyn_EssWorkdayRuntime",
             "authenticatedAccount": kwargs["preferred_username"],
+        }
+
+    result = preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
         },
+        query=query,
+        installer=installer,
+        approved_install_hash=approved_hash,
+        plan_verifier=lambda plan, value: store.verify_plan(
+            "preflight",
+            plan,
+            value,
+        ),
     )
 
     assert result["package"]["action"] == "installed"
@@ -431,7 +474,7 @@ def test_preflight_reuses_persisted_maker_identity(tmp_path: Path) -> None:
     import workday_connect_preflight as preflight
     import workday_connect_store as store_module
 
-    _write_foundation(tmp_path)
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
     store = store_module.WorkdayConnectStore(tmp_path)
     store.initialize()
     store.merge_section(
@@ -467,12 +510,82 @@ def test_preflight_reuses_persisted_maker_identity(tmp_path: Path) -> None:
     assert observed["preferred"] == "maker@example.com"
 
 
+def test_preflight_apply_reuses_approved_plan_maker_identity(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    installed = False
+
+    def query(*_args, **_kwargs):
+        return (
+            [{"uniquename": "msdyn_EssWorkdayRuntime"}]
+            if installed
+            else []
+        )
+
+    plan_result = preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=query,
+    )
+    _state, approved_hash = store.approve_plan(
+        "preflight",
+        plan_result["plan"],
+    )
+    observed = {}
+
+    def token_provider(_url, *, preferred_username):
+        observed["preferred"] = preferred_username
+        return "token"
+
+    def installer(*_args, **kwargs):
+        nonlocal installed
+        installed = True
+        return {
+            "schemaName": "msdyn_EssWorkdayRuntime",
+            "authenticatedAccount": kwargs["preferred_username"],
+        }
+
+    preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username=None,
+        store=store,
+        token_provider=token_provider,
+        identity_provider=lambda _token, *, preferred_username: {
+            "username": preferred_username,
+            "tenantId": "tenant-id",
+        },
+        query=query,
+        installer=installer,
+        approved_install_hash=approved_hash,
+        plan_verifier=lambda plan, value: store.verify_plan(
+            "preflight",
+            plan,
+            value,
+        ),
+    )
+
+    assert observed["preferred"] == "maker@example.com"
+
+
 def test_preflight_identity_mismatch_is_structured(tmp_path: Path) -> None:
     import workday_connect_auth as auth
     import workday_connect_preflight as preflight
     import workday_connect_store as store_module
 
-    _write_foundation(tmp_path)
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
     store = store_module.WorkdayConnectStore(tmp_path)
     store.initialize()
 
@@ -500,7 +613,26 @@ def test_preflight_identity_mismatch_is_structured(tmp_path: Path) -> None:
 def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
     import workday_connect_preflight as preflight
 
-    _write_foundation(tmp_path)
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    plan_result = preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [],
+    )
+    _state, approved_hash = store.approve_plan(
+        "preflight",
+        plan_result["plan"],
+    )
 
     with pytest.raises(
         preflight.WorkdayConnectPreflightError,
@@ -510,6 +642,7 @@ def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
             tmp_path,
             dataverse_url=ENV_URL,
             maker_username="maker@example.com",
+            store=store,
             token_provider=lambda *_args, **_kwargs: "token",
             identity_provider=lambda *_args, **_kwargs: {
                 "username": "maker@example.com",
@@ -520,4 +653,113 @@ def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
                 "schemaName": "msdyn_EssWorkdayRuntime",
                 "authenticatedAccount": "other@example.com",
             },
+            approved_install_hash=approved_hash,
+            plan_verifier=lambda plan, value: store.verify_plan(
+                "preflight",
+                plan,
+                value,
+            ),
         )
+
+
+def test_preflight_rejects_supplied_url_not_proven_for_environment(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path)
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="does not match",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url="https://wrong.crm.dynamics.com",
+            state=model.default_state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            pac_runner=lambda command, **_kwargs: subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {
+                        "EnvironmentId": "agent-environment",
+                        "OrgUrl": ENV_URL,
+                    }
+                ),
+                stderr="",
+            ),
+        )
+
+
+def test_repeated_preflight_preserves_verified_pac_evidence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    installed = False
+
+    def query(*_args, **_kwargs):
+        return (
+            [{"uniquename": "msdyn_EssWorkdayRuntime"}]
+            if installed
+            else []
+        )
+
+    common_kwargs = {
+        "dataverse_url": ENV_URL,
+        "maker_username": "maker@example.com",
+        "store": store,
+        "token_provider": lambda *_args, **_kwargs: "token",
+        "identity_provider": lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        "query": query,
+    }
+    plan_result = preflight.run_preflight(tmp_path, **common_kwargs)
+    _state, approved_hash = store.approve_plan(
+        "preflight",
+        plan_result["plan"],
+    )
+
+    def installer(*_args, **kwargs):
+        nonlocal installed
+        installed = True
+        return {
+            "schemaName": "msdyn_EssWorkdayRuntime",
+            "authenticatedAccount": kwargs["preferred_username"],
+        }
+
+    preflight.run_preflight(
+        tmp_path,
+        **common_kwargs,
+        installer=installer,
+        approved_install_hash=approved_hash,
+        plan_verifier=lambda plan, value: store.verify_plan(
+            "preflight",
+            plan,
+            value,
+        ),
+    )
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+
+    result = preflight.run_preflight(
+        tmp_path,
+        **common_kwargs,
+    )
+
+    assert result["operator"]["credentialStores"]["pac"] == "verified"
+    assert store.load()["phases"]["entra"]["status"] == "complete"

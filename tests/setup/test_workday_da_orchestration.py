@@ -54,6 +54,81 @@ def test_every_controller_command_is_documented() -> None:
     assert documented == set(controller._COMMAND_HANDLERS)
 
 
+def test_workday_guides_use_file_backed_json_inputs() -> None:
+    guide_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(_WORKDAY_DA.rglob("*.md"))
+    )
+
+    for unsafe_option in (
+        "--discovery-json",
+        "--verification-json",
+        "--response-json",
+        "--plan-json",
+        "--evidence-json",
+        "--attachment-json",
+    ):
+        assert unsafe_option not in guide_text
+
+
+def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
+    guide_paths = list(_WORKDAY_DA.rglob("*.md")) + list(
+        (
+            _REPO_ROOT
+            / "solutions"
+            / "ess-maker-skills"
+            / "src"
+            / "skills"
+            / "connect"
+            / "workday"
+            / "actions"
+        ).glob("*.md")
+    )
+    form_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(guide_paths)
+    )
+
+    assert '"recommended": true' not in form_text
+    assert "(Recommended)" not in form_text
+    assert "Leave every field and option initially unset" in form_text
+    assert "do not mark the passing outcome as recommended" in form_text
+
+
+def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
+    import workday_connect as controller
+
+    payload = {
+        "value": "customer text with 'quotes'; $(not-a-command)",
+    }
+    path = tmp_path / "payload.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert controller._json_input(
+        argparse.Namespace(discovery_file=path, discovery_json=None),
+        "discovery",
+        "test discovery",
+    ) == payload
+
+
+@pytest.mark.parametrize(
+    "command,option",
+    [
+        ("preflight-approve", "--plan-json"),
+        ("record-agent-binding", "--attachment-json"),
+        ("record-validation-failure", "--evidence-json"),
+    ],
+)
+def test_new_commands_do_not_accept_inline_json(
+    command: str,
+    option: str,
+) -> None:
+    import workday_connect as controller
+
+    with pytest.raises(SystemExit):
+        controller.build_parser().parse_args([command, option, "{}"])
+
+
 def test_every_phase_dispatch_target_exists_and_schema_is_reference_only() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
     dispatch_targets = re.findall(r"-> read `([^`]+\.md)`", skill)
@@ -123,7 +198,10 @@ def test_preflight_is_one_identity_aware_operation() -> None:
     assert "workday_connect.py preflight" in text
     assert "pins and verifies the resulting PAC account" in text
     assert "verifies the exact Dataverse URL directly" in text
-    assert "detects or installs the package" in text
+    assert "requiresApproval: true" in text
+    assert "preflight-approve --plan-file" in text
+    assert "--install-plan-hash" in text
+    assert "installs it only after exact-plan approval" in text
     assert "manual-install instruction" in text
 
 
@@ -136,6 +214,7 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "record-connections" in text
     assert "record-connections --evidence-json" not in text
     assert "manual connection evidence" in text
+    assert "--confirm-workday-target" in text
     assert "Do not begin with a yes/no question" in text
     assert text.count("workday_connect.py record-connections") == 2
     assert "Power Apps maker portal" in text
@@ -150,8 +229,12 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Reuse a healthy existing connection" in text
     assert "runtime-apply" in text
     assert "record-agent-binding" in text
+    assert "--attachment-file" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
-    assert "Do not construct or pass manual\nboolean evidence" in text
+    assert "--checkpoint WD-CONN-013" not in text
+    assert "Do not run `WD-CONN-013` separately" in text
+    assert "confirmation twice" in text
+    assert "Do not substitute an unscoped" in normalized
     assert "--connect-config" in text
     assert "one Dataverse token" in normalized
     assert "delegated" in text

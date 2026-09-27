@@ -672,7 +672,7 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
         )
 
 
-def test_minimalbot_topic_push_updates_only_pushed_baseline_paths(
+def test_minimalbot_activation_rejects_local_topic_content_changes(
     tmp_path,
     monkeypatch,
 ):
@@ -687,15 +687,19 @@ def test_minimalbot_topic_push_updates_only_pushed_baseline_paths(
     _patch_client(monkeypatch, fake)
     monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
 
-    push._minimalbot_push(
-        _minimalbot_config(str(tmp_path)),
-        auto_yes=True,
-        only_globs=["*"],
-        activate_topics=True,
-        preferred_username="maker@contoso.com",
-    )
+    with pytest.raises(
+        SystemExit,
+    ):
+        push._minimalbot_push(
+            _minimalbot_config(str(tmp_path)),
+            auto_yes=True,
+            only_globs=["*"],
+            activate_topics=True,
+            preferred_username="maker@contoso.com",
+        )
 
-    assert [entry["path"] for entry in fake.topic_updates] == paths
+    assert paths
+    assert fake.topic_updates == []
     assert baseline_workflow.read_text(encoding="utf-8") == (
         '{"state":"before"}'
     )
@@ -888,6 +892,105 @@ def test_minimalbot_activation_rejects_blocking_diagnostics(monkeypatch):
                     "state": "Active",
                     "status": "Active",
                     "requireCleanDiagnostics": True,
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "components",
+    [
+        [],
+        [
+            {
+                "$kind": "DialogComponent",
+                "id": "workday-topic",
+                "schemaName": "contoso.topic.WorkdayTopic",
+            },
+            {
+                "$kind": "DialogComponent",
+                "id": "workday-topic",
+                "schemaName": "contoso.topic.WorkdayTopic",
+            },
+        ],
+    ],
+)
+def test_minimalbot_verification_rejects_missing_or_duplicate_ids(
+    monkeypatch,
+    components,
+):
+    client = _mb_client()
+    client._token = "token"
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {"$kind": "BotComponentInsert", "component": component}
+                for component in components
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="missing or duplicate component ID",
+    ):
+        client.verify_dialog_components(
+            [
+                {
+                    "componentId": "workday-topic",
+                    "schemaName": "contoso.topic.WorkdayTopic",
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        {
+            "$kind": "UnexpectedComponent",
+            "id": "workday-topic",
+            "schemaName": "contoso.topic.WorkdayTopic",
+        },
+        {
+            "$kind": "DialogComponent",
+            "id": "workday-topic",
+            "schemaName": "contoso.topic.OtherTopic",
+        },
+    ],
+)
+def test_minimalbot_verification_rejects_kind_or_schema_drift(
+    monkeypatch,
+    component,
+):
+    client = _mb_client()
+    client._token = "token"
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="verification failed",
+    ):
+        client.verify_dialog_components(
+            [
+                {
+                    "componentId": "workday-topic",
+                    "schemaName": "contoso.topic.WorkdayTopic",
                 }
             ]
         )

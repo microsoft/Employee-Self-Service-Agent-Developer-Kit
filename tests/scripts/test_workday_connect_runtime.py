@@ -220,7 +220,7 @@ def test_runtime_plan_requires_verified_physical_connections():
         )
 
 
-def test_physical_connection_verification_returns_safe_live_evidence():
+def test_physical_connection_verification_returns_selected_connection_ids():
     result = runtime.verify_physical_connections(
         _state(),
         pac_resolver=lambda: Path("pac.exe"),
@@ -229,6 +229,10 @@ def test_physical_connection_verification_returns_safe_live_evidence():
 
     assert result == {
         "makerUsername": "maker@contoso.com",
+        "connectionIds": {
+            "workday": WORKDAY_CONNECTION,
+            "dataverse": DATAVERSE_CONNECTION,
+        },
         "connections": [
             {
                 "connector": "shared_workdaysoap",
@@ -240,8 +244,95 @@ def test_physical_connection_verification_returns_safe_live_evidence():
             },
         ],
     }
-    assert WORKDAY_CONNECTION not in json.dumps(result)
-    assert DATAVERSE_CONNECTION not in json.dumps(result)
+
+
+def test_runtime_plan_reuses_recorded_connection_ids():
+    state = _state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+    duplicate_workday = "99999999-9999-9999-9999-999999999999"
+    payload = _connections()
+    payload["value"].append(
+        {
+            "name": duplicate_workday,
+            "properties": {
+                "apiId": (
+                    "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
+                ),
+                "displayName": "Workday duplicate",
+                "statuses": [{"status": "Connected"}],
+            },
+        }
+    )
+
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    result = runtime.run_runtime_operation(
+        state,
+        apply=False,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=_identity,
+        runner=runner,
+        query=_query_for(_records()),
+        pac_resolver=lambda: Path("pac.exe"),
+    )
+
+    bindings = result["plan"]["connectionBindings"].values()
+    assert next(
+        binding["connectionId"]
+        for binding in bindings
+        if binding["connector"] == "shared_workdaysoap"
+    ) == WORKDAY_CONNECTION
+
+
+def test_runtime_plan_rejects_connection_id_drift_after_verification():
+    state = _state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="differs from the connection verified",
+    ):
+        runtime.run_runtime_operation(
+            state,
+            apply=False,
+            workday_connection_id=(
+                "99999999-9999-9999-9999-999999999999"
+            ),
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            **_discovery_dependencies(_records()),
+        )
 
 
 def test_runtime_apply_verifies_all_mutations(monkeypatch):

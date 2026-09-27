@@ -234,6 +234,45 @@ def test_controller_persists_phase_blocker(
     assert status["blocker"]["operation"] == "set-workday-tenant"
 
 
+def test_controller_surfaces_blocker_persistence_failure(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    def fail_persistence(*_args, **_kwargs):
+        raise OSError("state is read-only")
+
+    monkeypatch.setattr(
+        WorkdayConnectStore,
+        "set_phase_status",
+        fail_persistence,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "set-workday-tenant",
+            "--tenant",
+            "",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    assert '"blockerPersistenceError": "state is read-only"' in error
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,
@@ -257,6 +296,10 @@ def test_record_connections_uses_live_verification(
         "verify_physical_connections",
         lambda *_args, **_kwargs: {
             "makerUsername": "maker@example.com",
+            "connectionIds": {
+                "workday": "workday-id",
+                "dataverse": "dataverse-id",
+            },
             "connections": [
                 {
                     "connector": "shared_workdaysoap",
@@ -275,6 +318,7 @@ def test_record_connections_uses_live_verification(
             evidence_json=None,
             workday_connection_id=None,
             dataverse_connection_id=None,
+            confirm_workday_target=True,
         ),
         store,
     )
@@ -283,6 +327,71 @@ def test_record_connections_uses_live_verification(
     assert result["verified"] is True
     assert connections["status"] == "complete"
     assert connections["completedActions"] == ["physical-connections-verified"]
+    assert connections["evidence"][0]["connectionIds"] == {
+        "workday": "workday-id",
+        "dataverse": "dataverse-id",
+    }
+
+
+def test_record_connections_previews_before_target_confirmation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "identifiers",
+        {
+            "workdaySamlEntityId": "http://www.workday.com/contoso",
+            "oauthClientId": "client-id",
+        },
+    )
+    store.merge_section(
+        "endpoints",
+        {"oauthTokenUrl": "https://example.workday.com/oauth/token"},
+    )
+    monkeypatch.setattr(
+        workday_connect,
+        "verify_physical_connections",
+        lambda *_args, **_kwargs: {
+            "makerUsername": "maker@example.com",
+            "connectionIds": {
+                "workday": "workday-id",
+                "dataverse": "dataverse-id",
+            },
+            "connections": [
+                {
+                    "connector": "shared_workdaysoap",
+                    "displayName": "Workday",
+                },
+                {
+                    "connector": "shared_commondataserviceforapps",
+                    "displayName": "Dataverse",
+                },
+            ],
+        },
+    )
+
+    result = workday_connect._record_connections(
+        SimpleNamespace(
+            evidence_json=None,
+            workday_connection_id=None,
+            dataverse_connection_id=None,
+            confirm_workday_target=False,
+        ),
+        store,
+    )
+
+    assert result["requiresConfirmation"] is True
+    assert result["workdayTarget"] == {
+        "resourceUrl": "http://www.workday.com/contoso",
+        "oauthTokenUrl": "https://example.workday.com/oauth/token",
+        "oauthClientId": "client-id",
+    }
+    assert store.load()["phases"]["connections"]["status"] == "pending"
 
 
 def test_record_agent_binding_completes_only_from_verifier_output(
@@ -299,6 +408,7 @@ def test_record_agent_binding_completes_only_from_verifier_output(
         "scope",
         {
             "environmentId": "environment-id",
+            "packageFlavor": "runtime",
             "agent": {
                 "slug": "ess-hr",
                 "botId": "bot-id",
@@ -353,9 +463,23 @@ def test_record_agent_binding_completes_only_from_verifier_output(
             },
         },
     )
+    attachment_file = tmp_path / "attachment.json"
+    attachment_file.write_text(
+        json.dumps(
+            {
+                "outcome": "maker-confirmed",
+                "botId": "bot-id",
+                "flowNames": ["ESS Workday Runtime REST Execution"],
+                "parameterSharingOutcome": (
+                    "enabled-for-exposed-connections"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = workday_connect._record_agent_binding(
-        SimpleNamespace(),
+        SimpleNamespace(attachment_file=attachment_file),
         store,
     )
 
@@ -437,9 +561,56 @@ def test_record_agent_binding_rejects_manual_boolean_evidence(
 
     with pytest.raises(
         WorkdayConnectStoreError,
-        match="Manual agent-binding evidence is no longer accepted",
+        match="requires a JSON input file",
     ):
         workday_connect._record_agent_binding(
-            SimpleNamespace(evidence_json='{"workdayTopicsActivated":true}'),
+            SimpleNamespace(attachment_file=None),
             WorkdayConnectStore(tmp_path),
         )
+
+
+def test_record_validation_failure_blocks_employee_phase(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    evidence_file = tmp_path / "employee-failure.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "failureCategory": "workday-access-denied",
+                "timestamp": "2026-09-25T00:00:00Z",
+                "remediation": "Verify the employee's Workday access.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = workday_connect._record_validation_failure(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+
+    assert result["recorded"] is True
+    phase = store.load()["phases"]["employee-validation"]
+    assert phase["status"] == "blocked"
+    assert phase["blocker"]["errorType"] == "workday-access-denied"
+    assert phase["blocker"]["capturedAt"] == "2026-09-25T00:00:00Z"

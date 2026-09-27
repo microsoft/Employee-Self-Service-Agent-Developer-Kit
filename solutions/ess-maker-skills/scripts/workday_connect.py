@@ -27,6 +27,7 @@ from workday_connect_contracts import (
     build_workday_admin_packet,
     validate_agent_binding_evidence,
     validate_employee_evidence,
+    validate_employee_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
@@ -60,6 +61,47 @@ def _json_object(value: str, label: str) -> dict[str, Any]:
     return document
 
 
+def _add_json_input(
+    parser: argparse.ArgumentParser,
+    name: str,
+    *,
+    allow_legacy_inline: bool = True,
+) -> None:
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        f"--{name}-file",
+        type=Path,
+        help=f"Path to the {name.replace('-', ' ')} JSON object.",
+    )
+    if allow_legacy_inline:
+        group.add_argument(
+            f"--{name}-json",
+            help=argparse.SUPPRESS,
+        )
+
+
+def _json_input(
+    args: argparse.Namespace,
+    name: str,
+    label: str,
+) -> dict[str, Any]:
+    file_path = getattr(args, f"{name.replace('-', '_')}_file", None)
+    if file_path is not None:
+        try:
+            value = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WorkdayConnectStoreError(
+                f"{label} file could not be read: {file_path}: {exc}"
+            ) from exc
+        return _json_object(value, label)
+    value = getattr(args, f"{name.replace('-', '_')}_json", None)
+    if value is None:
+        raise WorkdayConnectStoreError(
+            f"{label} requires a JSON input file."
+        )
+    return _json_object(value, label)
+
+
 def _emit(operation: str, result: dict[str, Any]) -> None:
     print(
         RESULT_MARKER
@@ -90,12 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     tenant.add_argument("--tenant", required=True)
 
     entra_handoff = subparsers.add_parser("entra-handoff")
-    entra_handoff.add_argument("--discovery-json", required=True)
+    _add_json_input(entra_handoff, "discovery")
     record_entra = subparsers.add_parser("record-entra")
-    record_entra.add_argument("--verification-json", required=True)
+    _add_json_input(record_entra, "verification")
     subparsers.add_parser("workday-admin-packet")
     record_admin = subparsers.add_parser("record-workday-admin")
-    record_admin.add_argument("--response-json", required=True)
+    _add_json_input(record_admin, "response")
 
     runtime_plan = subparsers.add_parser("runtime-plan")
     runtime_plan.add_argument("--workday-connection-id")
@@ -106,23 +148,46 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_apply.add_argument("--workday-connection-id")
     runtime_apply.add_argument("--dataverse-connection-id")
     runtime_approve = subparsers.add_parser("runtime-approve")
-    runtime_approve.add_argument("--plan-json", required=True)
+    _add_json_input(runtime_approve, "plan")
     record_connections = subparsers.add_parser("record-connections")
     record_connections.add_argument("--workday-connection-id")
     record_connections.add_argument("--dataverse-connection-id")
+    record_connections.add_argument(
+        "--confirm-workday-target",
+        action="store_true",
+    )
     record_connections.add_argument(
         "--evidence-json",
         help=argparse.SUPPRESS,
     )
     subparsers.add_parser("record-topic-activation")
     record_binding = subparsers.add_parser("record-agent-binding")
-    record_binding.add_argument("--evidence-json", help=argparse.SUPPRESS)
+    _add_json_input(
+        record_binding,
+        "attachment",
+        allow_legacy_inline=False,
+    )
     record_validation = subparsers.add_parser("record-validation")
-    record_validation.add_argument("--evidence-json", required=True)
+    _add_json_input(record_validation, "evidence")
+    record_validation_failure = subparsers.add_parser(
+        "record-validation-failure"
+    )
+    _add_json_input(
+        record_validation_failure,
+        "evidence",
+        allow_legacy_inline=False,
+    )
 
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--dataverse-url")
     preflight.add_argument("--maker-username")
+    preflight.add_argument("--install-plan-hash")
+    preflight_approve = subparsers.add_parser("preflight-approve")
+    _add_json_input(
+        preflight_approve,
+        "plan",
+        allow_legacy_inline=False,
+    )
 
     return parser
 
@@ -154,7 +219,7 @@ def _entra_handoff(
     return {
         "packet": build_entra_handoff(
             store.load(),
-            _json_object(args.discovery_json, "Entra discovery"),
+            _json_input(args, "discovery", "Entra discovery"),
         )
     }
 
@@ -165,7 +230,7 @@ def _record_entra(
 ) -> dict[str, Any]:
     result = validate_entra_verification(
         store.load(),
-        _json_object(args.verification_json, "Entra verification"),
+        _json_input(args, "verification", "Entra verification"),
     )
     store.merge_section("identifiers", result["identifiers"])
     store.complete_action(
@@ -207,10 +272,7 @@ def _record_workday_admin(
 ) -> dict[str, Any]:
     result = validate_workday_admin_response(
         store.load(),
-        _json_object(
-            args.response_json,
-            "Workday administrator response",
-        ),
+        _json_input(args, "response", "Workday administrator response"),
     )
     store.merge_section("identifiers", result["identifiers"])
     store.merge_section("endpoints", result["endpoints"])
@@ -269,7 +331,7 @@ def _runtime_approve(
 ) -> dict[str, Any]:
     _, approved_hash = store.approve_plan(
         "runtime",
-        _json_object(args.plan_json, "runtime plan"),
+        _json_input(args, "plan", "runtime plan"),
     )
     return {"planHash": approved_hash, "status": store.status()}
 
@@ -284,11 +346,25 @@ def _record_connections(
             "record-connections without --evidence-json so the controller "
             "can verify the live connections."
         )
+    state = store.load()
     evidence = verify_physical_connections(
-        store.load(),
+        state,
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
+    if not getattr(args, "confirm_workday_target", False):
+        identifiers = state.get("identifiers") or {}
+        endpoints = state.get("endpoints") or {}
+        return {
+            "requiresConfirmation": True,
+            "connections": evidence["connections"],
+            "workdayTarget": {
+                "resourceUrl": identifiers.get("workdaySamlEntityId"),
+                "oauthTokenUrl": endpoints.get("oauthTokenUrl"),
+                "oauthClientId": identifiers.get("oauthClientId"),
+            },
+            "status": store.status(),
+        }
     store.complete_action(
         "connections",
         "physical-connections-verified",
@@ -297,6 +373,8 @@ def _record_connections(
             "source": "live-power-platform-discovery",
             "makerUsername": evidence["makerUsername"],
             "connections": evidence["connections"],
+            "connectionIds": evidence["connectionIds"],
+            "workdayTargetOutcome": "maker-confirmed-against-workday-packet",
         },
     )
     store.set_phase_status("connections", "complete")
@@ -307,16 +385,17 @@ def _record_agent_binding(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    if getattr(args, "evidence_json", None) is not None:
-        raise WorkdayConnectStoreError(
-            "Manual agent-binding evidence is no longer accepted. Run "
-            "record-agent-binding without --evidence-json so the controller "
-            "can verify the live agent."
-        )
+    flow_attachment = _json_input(
+        args,
+        "attachment",
+        "Workday flow attachment confirmation",
+    )
     state = store.load()
+    live_evidence = verify_agent_binding(store.workspace_root, state)
+    live_evidence["flowAttachment"] = flow_attachment
     evidence = validate_agent_binding_evidence(
         state,
-        verify_agent_binding(store.workspace_root, state),
+        live_evidence,
     )
     store.complete_action(
         "runtime",
@@ -344,9 +423,11 @@ def _record_agent_binding(
             "environmentId": evidence["environmentId"],
             "botId": evidence["botId"],
             "makerUsername": evidence["makerUsername"],
-            "observedTopicDiagnostics": (
-                evidence["workdayTopics"]["blockingDiagnostics"]
+            "flowNames": evidence["flowAttachment"]["flowNames"],
+            "parameterSharingOutcome": (
+                evidence["flowAttachment"]["parameterSharingOutcome"]
             ),
+            "provenance": "maker-confirmed-selected-agent-settings",
         },
     )
     store.complete_action(
@@ -387,7 +468,6 @@ def _record_topic_activation(
         },
     )
     diagnostics = topics["blockingDiagnostics"]
-    store.set_phase_status("runtime", "active")
     return {
         "verified": True,
         "diagnosticsObserved": len(diagnostics),
@@ -400,10 +480,7 @@ def _record_validation(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     evidence = validate_employee_evidence(
-        _json_object(
-            args.evidence_json,
-            "employee validation evidence",
-        )
+        _json_input(args, "evidence", "employee validation evidence")
     )
     store.complete_action(
         "employee-validation",
@@ -412,6 +489,30 @@ def _record_validation(
     )
     store.set_phase_status("employee-validation", "complete")
     return {"verified": True, "status": store.status()}
+
+
+def _record_validation_failure(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = validate_employee_failure_evidence(
+        _json_input(
+            args,
+            "evidence",
+            "employee validation failure evidence",
+        )
+    )
+    store.set_phase_status(
+        "employee-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation-failure",
+            "errorType": evidence["failureCategory"],
+            "message": evidence["remediation"],
+            "capturedAt": evidence["timestamp"],
+        },
+    )
+    return {"recorded": True, "status": store.status()}
 
 
 def _preflight(
@@ -423,7 +524,24 @@ def _preflight(
         dataverse_url=args.dataverse_url,
         maker_username=args.maker_username,
         store=store,
+        approved_install_hash=args.install_plan_hash,
+        plan_verifier=lambda plan, approved_hash: store.verify_plan(
+            "preflight",
+            plan,
+            approved_hash,
+        ),
     )
+
+
+def _preflight_approve(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    _, approved_hash = store.approve_plan(
+        "preflight",
+        _json_input(args, "plan", "preflight installation plan"),
+    )
+    return {"planHash": approved_hash, "status": store.status()}
 
 
 _COMMAND_HANDLERS: dict[
@@ -443,7 +561,9 @@ _COMMAND_HANDLERS: dict[
     "record-topic-activation": _record_topic_activation,
     "record-agent-binding": _record_agent_binding,
     "record-validation": _record_validation,
+    "record-validation-failure": _record_validation_failure,
     "preflight": _preflight,
+    "preflight-approve": _preflight_approve,
 }
 
 _COMMAND_PHASES = {
@@ -460,6 +580,8 @@ _COMMAND_PHASES = {
     "record-topic-activation": "runtime",
     "record-agent-binding": "runtime",
     "record-validation": "employee-validation",
+    "record-validation-failure": "employee-validation",
+    "preflight-approve": "preflight",
 }
 
 
@@ -483,6 +605,7 @@ def main() -> None:
         WorkdayConnectStoreError,
     ) as exc:
         phase_id = _COMMAND_PHASES.get(args.command)
+        blocker_persistence_error = None
         if phase_id:
             try:
                 store.set_phase_status(
@@ -498,19 +621,19 @@ def main() -> None:
                 OSError,
                 WorkdayConnectModelError,
                 WorkdayConnectStoreError,
-            ):
-                pass
+            ) as persistence_exc:
+                blocker_persistence_error = str(persistence_exc)
+        error_payload = {
+            "contractVersion": CONTROLLER_CONTRACT_VERSION,
+            "operation": args.command,
+            "error": str(exc),
+            "errorType": type(exc).__name__,
+        }
+        if blocker_persistence_error:
+            error_payload["blockerPersistenceError"] = blocker_persistence_error
         print(
             ERROR_MARKER
-            + json.dumps(
-                {
-                    "contractVersion": CONTROLLER_CONTRACT_VERSION,
-                    "operation": args.command,
-                    "error": str(exc),
-                    "errorType": type(exc).__name__,
-                },
-                sort_keys=True,
-            ),
+            + json.dumps(error_payload, sort_keys=True),
             file=sys.stderr,
         )
         raise SystemExit(1) from exc

@@ -5,13 +5,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+import ipaddress
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from workday_connect_model import (
     PhaseStatus,
     WorkdayConnectModelError,
+    load_catalog,
     workday_saml_entity_id,
 )
 
@@ -231,7 +233,10 @@ def _normalize_entra_check(name: str, value: Any) -> dict[str, Any]:
         raise WorkdayConnectContractError(
             f"Entra verification check '{name}' must contain evidence."
         )
-    unexpected = sorted(set(value) - {"outcome", "provenance"})
+    allowed = {"outcome", "provenance"}
+    if name in {"nameId", "samlSigningOption"}:
+        allowed.add("observedValue")
+    unexpected = sorted(set(value) - allowed)
     if unexpected:
         raise WorkdayConnectContractError(
             f"Entra verification check '{name}' contains unsupported fields: "
@@ -286,10 +291,27 @@ def _normalize_entra_check(name: str, value: Any) -> dict[str, Any]:
                 "Entra verification check 'nameId' has an outcome that does "
                 "not match its provenance."
             )
-    return {
+    result = {
         "outcome": outcome,
         "provenance": provenance,
     }
+    if name in {"nameId", "samlSigningOption"}:
+        observed_value = _required_text(
+            value,
+            "observedValue",
+            f"Entra verification check '{name}' observed value",
+        )
+        if (
+            name == "samlSigningOption"
+            and observed_value.casefold()
+            != "sign saml response and assertion".casefold()
+        ):
+            raise WorkdayConnectContractError(
+                "Entra verification check 'samlSigningOption' must record "
+                "'Sign SAML response and assertion'."
+            )
+        result["observedValue"] = observed_value
+    return result
 
 
 def validate_entra_verification(
@@ -555,15 +577,36 @@ def build_workday_admin_packet(
 def _https_url(value: Any, label: str) -> str:
     text = str(value or "").strip().rstrip("/")
     parsed = urlparse(text)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise WorkdayConnectContractError(
+            f"{label} must be an HTTPS URL."
+        ) from exc
     if (
         parsed.scheme.casefold() != "https"
         or not parsed.netloc
+        or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
+        or port not in {None, 443}
     ):
         raise WorkdayConnectContractError(f"{label} must be an HTTPS URL.")
+    hostname = parsed.hostname.casefold().rstrip(".")
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        raise WorkdayConnectContractError(
+            f"{label} must use a Workday service hostname, not an IP address."
+        )
+    if not hostname.endswith((".workday.com", ".myworkday.com")):
+        raise WorkdayConnectContractError(
+            f"{label} must use a Workday-owned service hostname."
+        )
     return text
 
 
@@ -633,27 +676,20 @@ def validate_workday_admin_response(
     supplied_identity_provider_issuer = str(
         response.get("activeIdentityProviderIssuer") or ""
     ).strip()
-    if identity_provider_outcome:
-        if identity_provider_outcome != "verified-entra-issuer":
-            raise WorkdayConnectContractError(
-                "identityProviderOutcome must confirm that the enabled Workday "
-                "Issuer exactly matches the verified Microsoft Entra tenant."
-            )
-        if supplied_identity_provider_issuer and (
-            _normalized_uri(supplied_identity_provider_issuer)
-            != _normalized_uri(expected_issuer)
-        ):
-            raise WorkdayConnectContractError(
-                "The supplied Workday Issuer conflicts with the verified "
-                "Microsoft Entra issuer confirmation."
-            )
-        active_identity_provider_issuer = expected_issuer
-    else:
-        active_identity_provider_issuer = _required_text(
-            response,
-            "activeIdentityProviderIssuer",
-            "activeIdentityProviderIssuer",
+    if identity_provider_outcome != "verified-entra-issuer":
+        raise WorkdayConnectContractError(
+            "identityProviderOutcome must confirm that the enabled Workday "
+            "Issuer exactly matches the verified Microsoft Entra tenant."
         )
+    if supplied_identity_provider_issuer and (
+        _normalized_uri(supplied_identity_provider_issuer)
+        != _normalized_uri(expected_issuer)
+    ):
+        raise WorkdayConnectContractError(
+            "The supplied Workday Issuer conflicts with the verified "
+            "Microsoft Entra issuer confirmation."
+        )
+    active_identity_provider_issuer = expected_issuer
     expected_entity_id = workday_saml_entity_id(tenant)
     observed_entity_id = _required_text(
         response,
@@ -692,6 +728,15 @@ def validate_workday_admin_response(
         f"/ccx/service/{tenant}",
         "Workday SOAP base URL",
     )
+    endpoint_hosts = {
+        str(urlparse(value).hostname or "").casefold()
+        for value in (oauth_token_url, rest_base_url, soap_base_url)
+    }
+    if len(endpoint_hosts) != 1:
+        raise WorkdayConnectContractError(
+            "Workday OAuth, REST, and SOAP endpoints must use the same "
+            "verified Workday service hostname."
+        )
     required = {
         "oauthClientId",
         "authenticationPolicyOutcome",
@@ -736,90 +781,52 @@ def validate_workday_admin_response(
     certificate_selection_outcome = str(
         response.get("certificateSelectionOutcome") or ""
     ).strip()
-    if certificate_selection_outcome:
-        if certificate_selection_outcome != "entra-signing-certificate-selected":
-            raise WorkdayConnectContractError(
-                "certificateSelectionOutcome must confirm that the Workday "
-                "row uses the certificate created from the verified Entra "
-                "signing certificate."
-            )
-    elif not str(response.get("certificateName") or "").strip():
+    if certificate_selection_outcome != "entra-signing-certificate-selected":
         raise WorkdayConnectContractError(
-            "certificateSelectionOutcome is required when no optional Workday "
-            "certificate display name is supplied."
+            "certificateSelectionOutcome must confirm that the Workday row "
+            "uses the certificate created from the verified Entra signing "
+            "certificate."
         )
     certificate_validity_outcome = str(
         response.get("certificateValidityOutcome") or ""
     ).strip()
-    if certificate_validity_outcome:
-        if certificate_validity_outcome != "matches-verified-entra-certificate":
-            raise WorkdayConnectContractError(
-                "certificateValidityOutcome must confirm that both Workday "
-                "certificate dates exactly match the verified Entra certificate."
-            )
-        workday_valid_from = entra_valid_from
-        workday_valid_to = entra_valid_to
-        supplied_valid_from = str(
-            response.get("certificateValidFrom") or ""
-        ).strip()
-        supplied_valid_to = str(response.get("certificateValidTo") or "").strip()
-        if supplied_valid_from and (
-            _date_only(
-                supplied_valid_from,
-                "Workday certificate Valid From",
-            )
-            != entra_valid_from
-        ):
-            raise WorkdayConnectContractError(
-                "The supplied Workday certificate Valid From date conflicts "
-                "with the verified certificate-date confirmation."
-            )
-        if supplied_valid_to and (
-            _date_only(
-                supplied_valid_to,
-                "Workday certificate Valid To",
-            )
-            != entra_valid_to
-        ):
-            raise WorkdayConnectContractError(
-                "The supplied Workday certificate Valid To date conflicts "
-                "with the verified certificate-date confirmation."
-            )
-    else:
-        workday_valid_from = _date_only(
-            _required_text(
-                response,
-                "certificateValidFrom",
-                "certificateValidFrom",
-            ),
+    if certificate_validity_outcome != "matches-verified-entra-certificate":
+        raise WorkdayConnectContractError(
+            "certificateValidityOutcome must confirm that both Workday "
+            "certificate dates exactly match the verified Entra certificate."
+        )
+    workday_valid_from = entra_valid_from
+    workday_valid_to = entra_valid_to
+    supplied_valid_from = str(
+        response.get("certificateValidFrom") or ""
+    ).strip()
+    supplied_valid_to = str(response.get("certificateValidTo") or "").strip()
+    if supplied_valid_from and (
+        _date_only(
+            supplied_valid_from,
             "Workday certificate Valid From",
         )
-        workday_valid_to = _date_only(
-            _required_text(
-                response,
-                "certificateValidTo",
-                "certificateValidTo",
-            ),
+        != entra_valid_from
+    ):
+        raise WorkdayConnectContractError(
+            "The supplied Workday certificate Valid From date conflicts "
+            "with the verified certificate-date confirmation."
+        )
+    if supplied_valid_to and (
+        _date_only(
+            supplied_valid_to,
             "Workday certificate Valid To",
         )
-        if (
-            workday_valid_from != entra_valid_from
-            or workday_valid_to != entra_valid_to
-        ):
-            raise WorkdayConnectContractError(
-                "The Workday X.509 certificate validity dates do not match the "
-                "verified Entra signing certificate."
-            )
+        != entra_valid_to
+    ):
+        raise WorkdayConnectContractError(
+            "The supplied Workday certificate Valid To date conflicts "
+            "with the verified certificate-date confirmation."
+        )
     certificate_name = str(response.get("certificateName") or "").strip()
     certificate_evidence = {
-        "certificateSelectionOutcome": (
-            certificate_selection_outcome
-            or "legacy-certificate-name-and-dates-confirmed"
-        ),
-        "certificateValidityOutcome": (
-            certificate_validity_outcome
-            or "legacy-explicit-dates-matched"
-        ),
+        "certificateSelectionOutcome": certificate_selection_outcome,
+        "certificateValidityOutcome": certificate_validity_outcome,
         "certificateValidFrom": workday_valid_from,
         "certificateValidTo": workday_valid_to,
     }
@@ -837,9 +844,7 @@ def validate_workday_admin_response(
         },
         "evidence": {
             "activeIdentityProviderIssuer": active_identity_provider_issuer,
-            "identityProviderOutcome": (
-                identity_provider_outcome or "legacy-exact-issuer-supplied"
-            ),
+            "identityProviderOutcome": identity_provider_outcome,
             "serviceProviderId": expected_entity_id,
             **certificate_evidence,
             "authenticationPolicyOutcome": values["authenticationPolicyOutcome"],
@@ -861,6 +866,7 @@ def validate_agent_binding_evidence(
         "botId",
         "makerUsername",
         "checkpoints",
+        "flowAttachment",
         "workdayTopics",
     }
     unexpected = sorted(set(evidence) - allowed)
@@ -924,6 +930,76 @@ def validate_agent_binding_evidence(
         raise WorkdayConnectContractError(
             "Agent binding verification did not pass: " + ", ".join(failed_checkpoints)
         )
+    flow_attachment = evidence.get("flowAttachment")
+    if not isinstance(flow_attachment, Mapping):
+        raise WorkdayConnectContractError(
+            "Agent binding evidence must contain the maker-confirmed Workday "
+            "flow attachment."
+        )
+    attachment_allowed = {
+        "outcome",
+        "botId",
+        "flowNames",
+        "parameterSharingOutcome",
+    }
+    attachment_unexpected = sorted(
+        set(flow_attachment) - attachment_allowed
+    )
+    if attachment_unexpected:
+        raise WorkdayConnectContractError(
+            "Workday flow attachment evidence contains unsupported fields: "
+            + ", ".join(attachment_unexpected)
+        )
+    if flow_attachment.get("outcome") != "maker-confirmed":
+        raise WorkdayConnectContractError(
+            "Workday flow attachment must be explicitly confirmed by the maker."
+        )
+    attachment_bot = _required_text(
+        flow_attachment,
+        "botId",
+        "Workday flow attachment agent bot ID",
+    )
+    if attachment_bot.casefold() != expected_bot.casefold():
+        raise WorkdayConnectContractError(
+            "Workday flow attachment confirmation targeted a different agent."
+        )
+    if (
+        flow_attachment.get("parameterSharingOutcome")
+        != "enabled-for-exposed-connections"
+    ):
+        raise WorkdayConnectContractError(
+            "Workday flow attachment must confirm parameter sharing for every "
+            "connection exposed by the agent."
+        )
+    package_flavor = _required_text(
+        scope,
+        "packageFlavor",
+        "Workday package flavor",
+    )
+    package = (load_catalog().get("packages") or {}).get(package_flavor)
+    if not isinstance(package, Mapping):
+        raise WorkdayConnectContractError(
+            f"Unsupported Workday package flavor: {package_flavor}."
+        )
+    expected_flow_names = {
+        str(name)
+        for name in package.get("agentConnectionFlowNames") or []
+    }
+    if not expected_flow_names:
+        raise WorkdayConnectContractError(
+            "The selected Workday package does not define agent-facing flows."
+        )
+    supplied_flow_names = flow_attachment.get("flowNames")
+    if (
+        not isinstance(supplied_flow_names, list)
+        or any(not isinstance(name, str) or not name for name in supplied_flow_names)
+        or len(supplied_flow_names) != len(expected_flow_names)
+        or set(supplied_flow_names) != expected_flow_names
+    ):
+        raise WorkdayConnectContractError(
+            "Workday flow attachment confirmation must name exactly the "
+            "reviewed agent-facing Workday flows."
+        )
     topics = evidence.get("workdayTopics")
     if not isinstance(topics, Mapping):
         raise WorkdayConnectContractError(
@@ -957,6 +1033,12 @@ def validate_agent_binding_evidence(
         "checkpoints": {
             checkpoint: "Passed" for checkpoint in sorted(required_checkpoints)
         },
+        "flowAttachment": {
+            "outcome": "maker-confirmed",
+            "botId": attachment_bot,
+            "flowNames": sorted(expected_flow_names),
+            "parameterSharingOutcome": "enabled-for-exposed-connections",
+        },
         "workdayTopics": {
             "expected": expected_count,
             "verified": verified_count,
@@ -987,4 +1069,60 @@ def validate_employee_evidence(
         raise WorkdayConnectContractError(
             "Employee validation outcome must be passed or verified."
         )
+    category = result["testUserCategory"].casefold()
+    explicitly_non_maker = (
+        "non-maker" in category or "non maker" in category
+    )
+    if (
+        "employee" not in category
+        or "admin" in category
+        or ("maker" in category and not explicitly_non_maker)
+    ):
+        raise WorkdayConnectContractError(
+            "Employee validation must use a signed-in non-maker employee."
+        )
+    result["timestamp"] = _normalized_timestamp(
+        result["timestamp"],
+        "Employee validation timestamp",
+    )
+    return result
+
+
+def _normalized_timestamp(value: str, label: str) -> str:
+    normalized = value.replace("Z", "+00:00")
+    try:
+        observed_at = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise WorkdayConnectContractError(
+            f"{label} must be ISO-8601."
+        ) from exc
+    if observed_at.tzinfo is None:
+        raise WorkdayConnectContractError(
+            f"{label} must include a timezone."
+        )
+    return observed_at.astimezone(timezone.utc).isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+
+
+def validate_employee_failure_evidence(
+    evidence: Mapping[str, Any],
+) -> dict[str, str]:
+    if not isinstance(evidence, Mapping):
+        raise WorkdayConnectContractError(
+            "Employee validation failure must contain a JSON object."
+        )
+    allowed = {"failureCategory", "timestamp", "remediation"}
+    unexpected = sorted(set(evidence) - allowed)
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Employee validation failure contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+    result = {key: _required_text(evidence, key, key) for key in allowed}
+    result["timestamp"] = _normalized_timestamp(
+        result["timestamp"],
+        "Employee validation failure timestamp",
+    )
     return result

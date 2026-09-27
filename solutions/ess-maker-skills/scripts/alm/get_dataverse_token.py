@@ -13,6 +13,10 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import auth  # noqa: E402
+from workday_connect_auth import (  # noqa: E402
+    WorkdayConnectIdentityError,
+    require_identity,
+)
 
 
 def main() -> int:
@@ -25,6 +29,14 @@ def main() -> int:
         args.environment.rstrip("/"),
         preferred_username=args.preferred_username,
     )
+    try:
+        require_identity(
+            token,
+            preferred_username=args.preferred_username,
+        )
+    except WorkdayConnectIdentityError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     print(f"ESS_DATAVERSE_TOKEN={token}")
     return 0
 

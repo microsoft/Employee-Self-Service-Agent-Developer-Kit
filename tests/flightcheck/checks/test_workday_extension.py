@@ -547,8 +547,9 @@ class TestUserContextRedirect:
             tmp_path,
             "acme",
             "kind: AdaptiveDialog\n"
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -562,13 +563,40 @@ class TestUserContextRedirect:
         assert "WorkdaySystemGetUserContextV3" in r.result
         assert "acme" in r.result
 
+    def test_comment_or_unrelated_field_does_not_count_as_redirect(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n"
+            "# kind: BeginDialog\n"
+            "# dialog: cr123_WorkdaySystemGetUserContextV3\n"
+            "description: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+
     def test_selected_agent_ignores_wired_sibling(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_topic(
             tmp_path,
             "wired",
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_topic(tmp_path, "broken", "kind: AdaptiveDialog\n")
         _write_installed_topic(
@@ -595,8 +623,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "wired",
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -617,7 +647,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "active",
-            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -640,7 +673,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "other",
-            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
         )
         _write_installed_topic(
             tmp_path,

@@ -20,6 +20,9 @@
         "ESS Workday Runtime References",
         "ESS Workday Runtime REST Execution",
         "ESS Workday Runtime"
+      ],
+      "agentConnectionFlowNames": [
+        "ESS Workday Runtime REST Execution"
       ]
     },
     "legacy-da": {

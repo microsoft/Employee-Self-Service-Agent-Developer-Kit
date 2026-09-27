@@ -447,6 +447,37 @@ def _invalidate_from_phase(
             _reset_phase(state["phases"][definition.identifier.value])
 
 
+def _invalidate_after_phase(
+    state: dict[str, Any],
+    phase_id: str,
+) -> None:
+    matched = False
+    for definition in PHASE_DEFINITIONS:
+        if matched:
+            _reset_phase(state["phases"][definition.identifier.value])
+        if definition.identifier.value == phase_id:
+            matched = True
+
+
+def _upgrade_or_migrate_state(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_version = document.get("schemaVersion")
+    if source_version == 4:
+        return upgrade_v4_state(document)
+    if source_version == 3:
+        return upgrade_v3_state(document)
+    if source_version == 2:
+        return upgrade_v2_state(document)
+    if "schemaVersion" in document:
+        raise WorkdayConnectStoreError(
+            "Unsupported Workday connect state schema version: "
+            f"{source_version!r}. Use the kit version that created this state "
+            "or restore a compatible backup."
+        )
+    return migrate_legacy_state(document)
+
+
 def _scope_invalidation_phase(changed_keys: set[str]) -> str:
     if changed_keys & _PREFLIGHT_SCOPE_KEYS:
         return "preflight"
@@ -574,15 +605,7 @@ class WorkdayConnectStore:
             if not self.backup_path.exists():
                 self.backup_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.config_path, self.backup_path)
-            source_version = existing.get("schemaVersion")
-            if source_version == 4:
-                state = upgrade_v4_state(existing)
-            elif source_version == 3:
-                state = upgrade_v3_state(existing)
-            elif source_version == 2:
-                state = upgrade_v2_state(existing)
-            else:
-                state = migrate_legacy_state(existing)
+            state = _upgrade_or_migrate_state(existing)
             _atomic_write_json(self.config_path, state)
             return state
 
@@ -602,15 +625,7 @@ class WorkdayConnectStore:
             elif current.get("schemaVersion") != STATE_SCHEMA_VERSION:
                 if not self.backup_path.exists():
                     shutil.copy2(self.config_path, self.backup_path)
-                source_version = current.get("schemaVersion")
-                if source_version == 4:
-                    current = upgrade_v4_state(current)
-                elif source_version == 3:
-                    current = upgrade_v3_state(current)
-                elif source_version == 2:
-                    current = upgrade_v2_state(current)
-                else:
-                    current = migrate_legacy_state(current)
+                current = _upgrade_or_migrate_state(current)
             state = copy.deepcopy(validate_state(current))
             mutation(state)
             state["status"] = (
@@ -740,6 +755,11 @@ class WorkdayConnectStore:
                         f"Complete '{prerequisite.value}' before '{phase_id}'."
                     )
             phase = state["phases"][phase_id]
+            if (
+                phase["status"] == PhaseStatus.COMPLETE.value
+                and status != PhaseStatus.COMPLETE.value
+            ):
+                _invalidate_after_phase(state, phase_id)
             if status == PhaseStatus.COMPLETE.value:
                 required = PHASE_REQUIRED_ACTIONS[phase_id]
                 completed = set(phase["completedActions"])
@@ -814,10 +834,10 @@ class WorkdayConnectStore:
         phase_id: str,
         plan: Mapping[str, Any],
     ) -> tuple[dict[str, Any], str]:
-        if phase_id != "runtime":
+        if phase_id not in {"preflight", "runtime"}:
             raise WorkdayConnectStoreError(
-                "Exact apply-plan approval is supported only for the "
-                "controller-owned runtime phase."
+                "Exact apply-plan approval is supported only for preflight "
+                "installation and controller-owned runtime changes."
             )
         if plan.get("phase") != phase_id:
             raise WorkdayConnectStoreError(
@@ -836,6 +856,8 @@ class WorkdayConnectStore:
                     f"Complete '{prerequisite.value}' before approving '{phase_id}'."
                 )
             phase = state["phases"][phase_id]
+            if phase["status"] == PhaseStatus.COMPLETE.value:
+                _invalidate_after_phase(state, phase_id)
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
             phase["status"] = PhaseStatus.ACTIVE.value

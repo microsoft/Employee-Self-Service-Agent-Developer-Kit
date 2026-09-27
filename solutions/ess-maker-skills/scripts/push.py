@@ -1271,11 +1271,17 @@ def _minimalbot_topic_update_plan(
                 + "; ".join(details)
                 + "."
             )
-        selected_changed = [
-            path
-            for path in selected_changed
-            if path in workday_by_path
-        ]
+        changed_workday = sorted(
+            path for path in selected_changed if path in workday_by_path
+        )
+        if changed_workday:
+            raise MinimalBotEvaluationError(
+                "Workday activation cannot publish pending topic content "
+                "changes. Push or discard these changes separately before "
+                "activation: "
+                + ", ".join(changed_workday)
+            )
+        selected_changed = []
     selected_paths = sorted(
         set(selected_changed) | set(selected_activation)
     )
