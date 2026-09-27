@@ -40,12 +40,15 @@ Build discovery JSON with `displayName`, application `appId`, application
 run:
 
 ```powershell
-python scripts/workday_connect.py entra-handoff --discovery-json '{...}'
+python scripts/workday_connect.py entra-handoff --discovery-json '{"applications":[{...}]}'
 ```
 
 If no exact app exists, include `"allowCreate": true` only after the user
 chooses to create the Workday gallery app. If multiple apps have the exact
 Service Provider ID, stop for administrator remediation.
+
+Use this current phase guide and the controller contract only. Do not inspect
+or reuse the legacy `src/skills/setup/workday/` procedure to fill gaps.
 
 Show the returned target, Service Provider ID, Entra Application ID URI,
 permissions, and administrator actions once as one handoff. Do not add a
@@ -100,8 +103,19 @@ application by display name alone.
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
 
-After each change, reread the setting where Microsoft Graph exposes it. Do not
-ask for a broad “everything is done” confirmation.
+After each change, reread the setting where Microsoft Graph exposes it. A
+Graph or Azure CLI command is evidence only when it exits with code 0 and
+returns valid JSON. Never record a check as verified from partial stdout after
+a nonzero exit. Avoid multi-parameter Graph URLs that Windows command wrappers
+can split; request the resource with one query parameter and filter the
+returned JSON locally when necessary.
+
+Do not ask for or use a broad "everything is done" confirmation as evidence.
+After the Graph reread, use one structured form for only the settings Graph
+cannot prove. Ask for the exact selected SAML signing option and the exact
+NameID source attribute. A reply such as "done", "all good", "continue", or
+"proceed" is not evidence for either field and must not be converted into
+administrator attestation.
 
 The administrator performs those changes in the Microsoft Entra admin center.
 After the administrator confirms completion, reread the application and

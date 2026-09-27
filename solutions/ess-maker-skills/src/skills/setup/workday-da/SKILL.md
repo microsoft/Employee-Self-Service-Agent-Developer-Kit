@@ -45,10 +45,16 @@ Customer-facing messages must describe only:
 
 Translate internal outcomes into plain language. For example, say **all
 Workday topics are enabled**, not that component `state` and `status` are
-`Active`; say **the installed Workday agent is missing required flow
-registrations**, not `CloudFlow NotFound`, `MinimalBot`, component-map, or
-native-definition terminology. Never paste raw command output or internal
-identifiers into a customer message.
+`Active`. Topic metadata diagnostics are support context and must not be
+translated into a missing-package, missing-flow, or runtime-failure claim by
+themselves. Never show `CloudFlow NotFound`, `MinimalBot`, component-map,
+native-definition terminology, raw command output, tracebacks, encoding
+errors, or internal identifiers in a customer message.
+
+Read `WORKDAY_CONNECT_RESULT_JSON` directly. Do not create an ad hoc Python or
+PowerShell formatter merely to render controller status. If an internal
+formatting command fails, correct or retry it internally and show only the
+validated customer-facing result.
 
 ## Capability contract
 

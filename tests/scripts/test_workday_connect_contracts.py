@@ -345,6 +345,11 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
         {
             "workdaySamlEntityId": "http://www.workday.com/contoso_impl",
             "entraAppIdUri": ("api://44444444-4444-4444-4444-444444444444"),
+            "signingCertificate": {
+                "thumbprint": "AA11",
+                "validFrom": "2026-01-01T00:00:00Z",
+                "validTo": "2027-01-01T00:00:00Z",
+            },
         }
     )
     packet = build_workday_admin_packet(state)
@@ -353,6 +358,11 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
         "http://www.workday.com/contoso_impl"
     )
     assert packet["referenceValues"]["entraApplicationIdUri"].startswith("api://")
+    assert packet["referenceValues"]["expectedIdentityProviderIssuer"] == (
+        "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
+    )
+    assert packet["referenceValues"]["certificateValidFrom"] == "2026-01-01"
+    assert packet["referenceValues"]["certificateValidTo"] == "2027-01-01"
     provider_question = packet["identityProviderQuestion"]
     assert "sign-in provider" in provider_question["question"]
     assert any("Microsoft Entra ID" in option for option in provider_question["options"])
@@ -373,6 +383,11 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     )
     assert "No certificate is selected" in certificate_question["options"]
     assert "I'm not sure" in certificate_question["options"]
+    assert "exactly match" in packet["issuerConfirmationQuestion"]["question"]
+    assert "both dates match exactly" in (
+        packet["certificateValidityQuestion"]["options"][0]
+    )
+    assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
 
 
@@ -382,6 +397,10 @@ def test_workday_packet_rejects_identifier_aliasing():
         {
             "workdaySamlEntityId": "http://www.workday.com/contoso_impl",
             "entraAppIdUri": "http://www.workday.com/contoso_impl",
+            "signingCertificate": {
+                "validFrom": "2026-01-01",
+                "validTo": "2027-01-01",
+            },
         }
     )
 
@@ -395,6 +414,10 @@ def test_workday_packet_rejects_tenant_drift():
         {
             "workdaySamlEntityId": "http://www.workday.com/other",
             "entraAppIdUri": ("api://44444444-4444-4444-4444-444444444444"),
+            "signingCertificate": {
+                "validFrom": "2026-01-01",
+                "validTo": "2027-01-01",
+            },
         }
     )
 
@@ -412,13 +435,12 @@ def test_workday_admin_response_validates_exact_endpoints():
     result = validate_workday_admin_response(
         state,
         {
-            "activeIdentityProviderIssuer": (
-                "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
-            ),
+            "identityProviderOutcome": "verified-entra-issuer",
             "enabledServiceProviderId": ("http://www.workday.com/contoso_impl"),
-            "certificateName": "ESS Workday Entra signing certificate",
-            "certificateValidFrom": "2026-01-01",
-            "certificateValidTo": "2027-01-01",
+            "certificateSelectionOutcome": "entra-signing-certificate-selected",
+            "certificateValidityOutcome": (
+                "matches-verified-entra-certificate"
+            ),
             "oauthClientId": "safe-client-id",
             "oauthTokenUrl": (
                 "https://example.workday.com/ccx/oauth2/contoso_impl/token"
@@ -431,6 +453,10 @@ def test_workday_admin_response_validates_exact_endpoints():
     )
 
     assert result["endpoints"]["restBaseUrl"].endswith("/ccx/api")
+    assert result["evidence"]["activeIdentityProviderIssuer"] == (
+        "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
+    )
+    assert "certificateName" not in result["evidence"]
     assert result["evidence"]["networkReadinessOutcome"] == ("confirmed-hosts-allowed")
 
 
@@ -462,6 +488,47 @@ def test_workday_admin_response_rejects_certificate_date_drift():
                 "soapBaseUrl": ("https://example.workday.com/ccx/service/contoso_impl"),
                 "authenticationPolicyOutcome": "existing-active-policy",
                 "networkReadinessOutcome": "confirmed-hosts-allowed",
+            },
+        )
+
+
+def test_workday_admin_response_rejects_conflicting_confirmed_defaults():
+    state = _state()
+    state["identifiers"]["signingCertificate"] = {
+        "thumbprint": "AA11",
+        "validFrom": "2026-01-01T00:00:00Z",
+        "validTo": "2027-01-01T00:00:00Z",
+    }
+    response = {
+        "identityProviderOutcome": "verified-entra-issuer",
+        "enabledServiceProviderId": "http://www.workday.com/contoso_impl",
+        "certificateSelectionOutcome": "entra-signing-certificate-selected",
+        "certificateValidityOutcome": "matches-verified-entra-certificate",
+        "oauthClientId": "safe-client-id",
+        "oauthTokenUrl": (
+            "https://example.workday.com/ccx/oauth2/contoso_impl/token"
+        ),
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "soapBaseUrl": "https://example.workday.com/ccx/service/contoso_impl",
+        "authenticationPolicyOutcome": "existing-active-policy",
+        "networkReadinessOutcome": "confirmed-hosts-allowed",
+    }
+
+    with pytest.raises(WorkdayConnectContractError, match="Issuer conflicts"):
+        validate_workday_admin_response(
+            state,
+            {
+                **response,
+                "activeIdentityProviderIssuer": "https://sts.windows.net/other/",
+            },
+        )
+
+    with pytest.raises(WorkdayConnectContractError, match="Valid To date conflicts"):
+        validate_workday_admin_response(
+            state,
+            {
+                **response,
+                "certificateValidTo": "2028-01-01",
             },
         )
 

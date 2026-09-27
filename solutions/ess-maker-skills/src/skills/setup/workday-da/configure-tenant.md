@@ -33,9 +33,13 @@ is available, then guide them through these steps in order:
 
    Handle the answer as follows:
 
-   - **Microsoft Entra ID** - continue. Ask the administrator to copy the
-     exact **Issuer** value shown in that Workday row. Do not save the option
-     label as the issuer.
+   - **Microsoft Entra ID** - continue. Present
+     `issuerConfirmationQuestion`, which shows the exact issuer expected from
+     the verified Entra tenant. If the administrator confirms an exact match,
+     record `identityProviderOutcome` as `verified-entra-issuer`; do not make
+     them retype the value. If it differs, collect the exact displayed
+     **Issuer** in the single response form. Do not infer a match from the
+     provider choice alone.
    - **Okta**, **Ping Identity**, or **Another sign-in provider** - stop before
      changing the row. Explain that the current row belongs to an existing
      sign-in configuration and must not be replaced. Ask the Workday and
@@ -51,9 +55,8 @@ is available, then guide them through these steps in order:
      is still unclear, stop and ask the identity administrator rather than
      guessing.
 
-   After the supported Microsoft Entra row is identified or created, record
-   its exact Issuer, Service Provider ID, X.509 certificate name, and
-   certificate validity dates.
+   After the supported Microsoft Entra row is identified or created, verify
+   its Issuer and Service Provider ID.
 2. **Install the Entra signing certificate.** In Entra, open **Enterprise
    applications -> the exact Workday application -> Single sign-on -> SAML
    Signing Certificate** and download **Certificate (Base64)**. In Workday, run
@@ -68,9 +71,14 @@ is available, then guide them through these steps in order:
 
    Handle the answer as follows:
 
-   - **The new certificate created from the Entra Base64 file** - continue.
-     Ask the administrator to copy the exact certificate name displayed by
-     Workday and its **Valid From** and **Valid To** dates.
+   - **The new certificate created from the Entra Base64 file** - record
+     `certificateSelectionOutcome` as
+     `entra-signing-certificate-selected`, then present
+     `certificateValidityQuestion`. If both displayed dates exactly match the
+     verified Entra dates shown in that question, record
+     `certificateValidityOutcome` as
+     `matches-verified-entra-certificate`. The customer-created certificate
+     display name is optional support context, not a completion gate.
    - **A different existing Workday certificate** - stop. Do not replace or
      reuse it until the Workday and identity administrators confirm it is the
      same active Entra signing certificate.
@@ -81,8 +89,7 @@ is available, then guide them through these steps in order:
      SAML row's **X509 Certificate** field. If they still cannot identify the
      selected key, stop rather than guessing.
 
-   Compare the copied Workday **Valid From** and **Valid To** values with the
-   active Entra certificate. Never collect the certificate body in chat.
+   Never collect the certificate body in chat.
 3. **Configure tenant security.** Return to **Edit Tenant Setup - Security**.
    Enable **OAuth 2.0 Clients Enabled** and **SAML**. In SAML Setup, set the
    exact Service Provider ID to
@@ -108,19 +115,30 @@ is available, then guide them through these steps in order:
    firewall change is required. Do not wait until final employee validation to
    discover a known allowlist requirement.
 
-Collect one response form containing only:
+Collect exactly one response form using one structured `ask_user` call. Do not
+ask for these values as a sequence of separate questions:
 
-- exact Issuer value copied from the enabled Microsoft Entra SAML row;
+- confirmation that the enabled issuer exactly matches the displayed verified
+  Entra issuer, or the exact different Issuer value;
 - enabled Service Provider ID;
-- exact certificate name copied from the enabled row's **X509 Certificate**
-  field;
-- certificate Valid From and Valid To dates;
+- confirmation that the Entra-derived certificate is selected;
+- confirmation that its displayed validity dates exactly match the verified
+  Entra dates;
+- optional Workday certificate display name;
 - Workday OAuth client ID;
 - OAuth token URL;
 - REST base URL ending at `/ccx/api`;
 - SOAP base URL;
 - authentication-policy outcome;
 - network-readiness outcome.
+
+Prefill known non-secret reference values from the packet, including the
+Service Provider ID, expected Entra issuer, and verified certificate dates.
+If the administrator omits a required value or replies only with wording such
+as "done", "all good", "continue", or "proceed", do not move to another field,
+search workspace files, inspect environment variables, or infer the missing
+evidence. Show one concise list of missing items, preserve progress, and stop
+until the same consolidated form can be completed.
 
 Never collect a secret, password, token, cookie, certificate body, or private
 key. Pass the response once:
@@ -140,11 +158,10 @@ For example:
 
 ```json
 {
-  "activeIdentityProviderIssuer": "{exact Issuer value copied from Workday}",
+  "identityProviderOutcome": "verified-entra-issuer",
   "enabledServiceProviderId": "http://www.workday.com/{workdayTenant}",
-  "certificateName": "{exact certificate name copied from Workday}",
-  "certificateValidFrom": "{ISO-8601 date}",
-  "certificateValidTo": "{ISO-8601 date}",
+  "certificateSelectionOutcome": "entra-signing-certificate-selected",
+  "certificateValidityOutcome": "matches-verified-entra-certificate",
   "oauthClientId": "{non-secret Workday OAuth client ID}",
   "oauthTokenUrl": "https://{workday-host}/ccx/oauth2/{tenant}/token",
   "restBaseUrl": "https://{workday-host}/ccx/api",
@@ -154,11 +171,10 @@ For example:
 }
 ```
 
-The controller validates the Service Provider ID, HTTPS endpoints, and exact
-REST base suffix. It also requires the Workday certificate validity dates to
-match the verified Entra signing certificate before recording the non-secret
-identifiers, endpoints, and evidence atomically. It captures the completed
-Entra and Workday phases as a tenant foundation that can be reused for another
-environment or ESS HR agent. If the administrator is not available, stop here;
-rerun
+The controller validates the verified Entra issuer, Service Provider ID, HTTPS
+endpoints, exact REST base suffix, certificate selection, and certificate-date
+match before recording the non-secret identifiers, endpoints, and evidence
+atomically. It captures the completed Entra and Workday phases as a tenant
+foundation that can be reused for another environment or ESS HR agent. If the
+administrator is not available, stop here; rerun
 `workday-admin-packet` later without losing deployment progress.

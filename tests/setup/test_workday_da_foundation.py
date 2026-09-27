@@ -72,6 +72,12 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "Never alias" in schema or "must never be aliases" in schema
     assert "entra-handoff" in entra
     assert "workday-admin-packet" in tenant
+    assert '{"applications":[{...}]}' in entra
+    assert "exits with code 0" in entra
+    assert "partial stdout after\na nonzero exit" in entra
+    assert "legacy `src/skills/setup/workday/` procedure" in entra
+    assert 'broad "everything is done" confirmation' in entra
+    assert '"all good", "continue", or\n"proceed"' in entra
 
 
 def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
@@ -89,12 +95,16 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Another sign-in provider" in tenant
     assert "No enabled SAML row" in tenant
     assert "I'm not sure" in tenant
-    assert "Do not save the option\n     label as the issuer" in tenant
+    assert "Do not infer a match from the\n     provider choice alone" in tenant
     assert "certificateSelectionQuestion" in tenant
     assert "The new certificate created from the Entra Base64 file" in tenant
     assert "A different existing Workday certificate" in tenant
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
-    assert "exact certificate name displayed by\n     Workday" in tenant
+    assert "display name is optional support context" in tenant
+    assert "exactly one response form using one structured `ask_user` call" in tenant
+    assert '"all good", "continue", or "proceed"' in tenant
+    assert "do not move to another field" in tenant
+    assert "search workspace files" in tenant
     assert "CHECKPOINT_RESULT" not in tenant
     assert "ACK=true" not in tenant

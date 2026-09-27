@@ -412,6 +412,34 @@ def build_workday_admin_packet(
         "entraAppIdUri",
         "Entra application ID URI",
     )
+    entra_tenant_id = _required_text(
+        scope,
+        "entraTenantId",
+        "Microsoft Entra tenant ID",
+    )
+    expected_issuer = f"https://sts.windows.net/{entra_tenant_id}/"
+    signing_certificate = identifiers.get("signingCertificate")
+    if not isinstance(signing_certificate, Mapping):
+        raise WorkdayConnectContractError(
+            "Verified Entra signing certificate metadata is required before "
+            "building the Workday administrator packet."
+        )
+    certificate_valid_from = _date_only(
+        _required_text(
+            signing_certificate,
+            "validFrom",
+            "Entra signing certificate Valid From",
+        ),
+        "Entra signing certificate Valid From",
+    )
+    certificate_valid_to = _date_only(
+        _required_text(
+            signing_certificate,
+            "validTo",
+            "Entra signing certificate Valid To",
+        ),
+        "Entra signing certificate Valid To",
+    )
     if _normalized_uri(entity_id) == _normalized_uri(entra_app_id_uri):
         raise WorkdayConnectContractError(
             "The Workday SAML Service Provider ID and Entra application ID URI "
@@ -427,6 +455,9 @@ def build_workday_admin_packet(
         "referenceValues": {
             "serviceProviderId": entity_id,
             "entraApplicationIdUri": entra_app_id_uri,
+            "expectedIdentityProviderIssuer": expected_issuer,
+            "certificateValidFrom": certificate_valid_from,
+            "certificateValidTo": certificate_valid_to,
         },
         "identityProviderQuestion": {
             "question": (
@@ -460,6 +491,28 @@ def build_workday_admin_packet(
                 "I'm not sure",
             ],
         },
+        "issuerConfirmationQuestion": {
+            "question": (
+                "Does the Issuer in the enabled Microsoft Entra SAML row "
+                f"exactly match {expected_issuer}?"
+            ),
+            "options": [
+                "Yes, it matches exactly",
+                "No, the displayed Issuer is different",
+                "I'm not sure",
+            ],
+        },
+        "certificateValidityQuestion": {
+            "question": (
+                "Do the selected Workday certificate dates exactly match "
+                f"{certificate_valid_from} through {certificate_valid_to}?"
+            ),
+            "options": [
+                "Yes, both dates match exactly",
+                "No, one or both dates are different",
+                "I'm not sure",
+            ],
+        },
         "actions": [
             "Identify which sign-in provider the enabled Workday SAML row "
             "uses before changing it",
@@ -478,11 +531,10 @@ def build_workday_admin_packet(
         ],
         "responseForm": {
             "required": [
-                "activeIdentityProviderIssuer",
+                "identityProviderOutcome",
                 "enabledServiceProviderId",
-                "certificateName",
-                "certificateValidFrom",
-                "certificateValidTo",
+                "certificateSelectionOutcome",
+                "certificateValidityOutcome",
                 "oauthClientId",
                 "oauthTokenUrl",
                 "restBaseUrl",
@@ -492,7 +544,8 @@ def build_workday_admin_packet(
             ],
             "note": (
                 "Return configuration evidence only. Do not paste passwords, "
-                "client secrets, tokens, cookies, or certificate private keys."
+                "client secrets, tokens, cookies, or certificate private keys. "
+                "The Workday certificate display name is optional."
             ),
         },
     }
@@ -546,8 +599,11 @@ def validate_workday_admin_response(
         )
     allowed = {
         "activeIdentityProviderIssuer",
+        "identityProviderOutcome",
         "enabledServiceProviderId",
         "certificateName",
+        "certificateSelectionOutcome",
+        "certificateValidityOutcome",
         "certificateValidFrom",
         "certificateValidTo",
         "oauthClientId",
@@ -565,6 +621,39 @@ def validate_workday_admin_response(
         )
     scope = state.get("scope") or {}
     tenant = _required_text(scope, "workdayTenant", "Workday tenant")
+    entra_tenant_id = _required_text(
+        scope,
+        "entraTenantId",
+        "Microsoft Entra tenant ID",
+    )
+    expected_issuer = f"https://sts.windows.net/{entra_tenant_id}/"
+    identity_provider_outcome = str(
+        response.get("identityProviderOutcome") or ""
+    ).strip()
+    supplied_identity_provider_issuer = str(
+        response.get("activeIdentityProviderIssuer") or ""
+    ).strip()
+    if identity_provider_outcome:
+        if identity_provider_outcome != "verified-entra-issuer":
+            raise WorkdayConnectContractError(
+                "identityProviderOutcome must confirm that the enabled Workday "
+                "Issuer exactly matches the verified Microsoft Entra tenant."
+            )
+        if supplied_identity_provider_issuer and (
+            _normalized_uri(supplied_identity_provider_issuer)
+            != _normalized_uri(expected_issuer)
+        ):
+            raise WorkdayConnectContractError(
+                "The supplied Workday Issuer conflicts with the verified "
+                "Microsoft Entra issuer confirmation."
+            )
+        active_identity_provider_issuer = expected_issuer
+    else:
+        active_identity_provider_issuer = _required_text(
+            response,
+            "activeIdentityProviderIssuer",
+            "activeIdentityProviderIssuer",
+        )
     expected_entity_id = workday_saml_entity_id(tenant)
     observed_entity_id = _required_text(
         response,
@@ -604,10 +693,6 @@ def validate_workday_admin_response(
         "Workday SOAP base URL",
     )
     required = {
-        "activeIdentityProviderIssuer",
-        "certificateName",
-        "certificateValidFrom",
-        "certificateValidTo",
         "oauthClientId",
         "authenticationPolicyOutcome",
         "networkReadinessOutcome",
@@ -632,14 +717,6 @@ def validate_workday_admin_response(
             "Verified Entra signing certificate metadata is required before "
             "recording Workday administrator evidence."
         )
-    workday_valid_from = _date_only(
-        values["certificateValidFrom"],
-        "Workday certificate Valid From",
-    )
-    workday_valid_to = _date_only(
-        values["certificateValidTo"],
-        "Workday certificate Valid To",
-    )
     entra_valid_from = _date_only(
         _required_text(
             signing_certificate,
@@ -656,11 +733,98 @@ def validate_workday_admin_response(
         ),
         "Entra signing certificate Valid To",
     )
-    if workday_valid_from != entra_valid_from or workday_valid_to != entra_valid_to:
+    certificate_selection_outcome = str(
+        response.get("certificateSelectionOutcome") or ""
+    ).strip()
+    if certificate_selection_outcome:
+        if certificate_selection_outcome != "entra-signing-certificate-selected":
+            raise WorkdayConnectContractError(
+                "certificateSelectionOutcome must confirm that the Workday "
+                "row uses the certificate created from the verified Entra "
+                "signing certificate."
+            )
+    elif not str(response.get("certificateName") or "").strip():
         raise WorkdayConnectContractError(
-            "The Workday X.509 certificate validity dates do not match the "
-            "verified Entra signing certificate."
+            "certificateSelectionOutcome is required when no optional Workday "
+            "certificate display name is supplied."
         )
+    certificate_validity_outcome = str(
+        response.get("certificateValidityOutcome") or ""
+    ).strip()
+    if certificate_validity_outcome:
+        if certificate_validity_outcome != "matches-verified-entra-certificate":
+            raise WorkdayConnectContractError(
+                "certificateValidityOutcome must confirm that both Workday "
+                "certificate dates exactly match the verified Entra certificate."
+            )
+        workday_valid_from = entra_valid_from
+        workday_valid_to = entra_valid_to
+        supplied_valid_from = str(
+            response.get("certificateValidFrom") or ""
+        ).strip()
+        supplied_valid_to = str(response.get("certificateValidTo") or "").strip()
+        if supplied_valid_from and (
+            _date_only(
+                supplied_valid_from,
+                "Workday certificate Valid From",
+            )
+            != entra_valid_from
+        ):
+            raise WorkdayConnectContractError(
+                "The supplied Workday certificate Valid From date conflicts "
+                "with the verified certificate-date confirmation."
+            )
+        if supplied_valid_to and (
+            _date_only(
+                supplied_valid_to,
+                "Workday certificate Valid To",
+            )
+            != entra_valid_to
+        ):
+            raise WorkdayConnectContractError(
+                "The supplied Workday certificate Valid To date conflicts "
+                "with the verified certificate-date confirmation."
+            )
+    else:
+        workday_valid_from = _date_only(
+            _required_text(
+                response,
+                "certificateValidFrom",
+                "certificateValidFrom",
+            ),
+            "Workday certificate Valid From",
+        )
+        workday_valid_to = _date_only(
+            _required_text(
+                response,
+                "certificateValidTo",
+                "certificateValidTo",
+            ),
+            "Workday certificate Valid To",
+        )
+        if (
+            workday_valid_from != entra_valid_from
+            or workday_valid_to != entra_valid_to
+        ):
+            raise WorkdayConnectContractError(
+                "The Workday X.509 certificate validity dates do not match the "
+                "verified Entra signing certificate."
+            )
+    certificate_name = str(response.get("certificateName") or "").strip()
+    certificate_evidence = {
+        "certificateSelectionOutcome": (
+            certificate_selection_outcome
+            or "legacy-certificate-name-and-dates-confirmed"
+        ),
+        "certificateValidityOutcome": (
+            certificate_validity_outcome
+            or "legacy-explicit-dates-matched"
+        ),
+        "certificateValidFrom": workday_valid_from,
+        "certificateValidTo": workday_valid_to,
+    }
+    if certificate_name:
+        certificate_evidence["certificateName"] = certificate_name
     return {
         "identifiers": {
             "workdaySamlEntityId": expected_entity_id,
@@ -672,11 +836,12 @@ def validate_workday_admin_response(
             "soapBaseUrl": soap_base_url,
         },
         "evidence": {
-            "activeIdentityProviderIssuer": values["activeIdentityProviderIssuer"],
+            "activeIdentityProviderIssuer": active_identity_provider_issuer,
+            "identityProviderOutcome": (
+                identity_provider_outcome or "legacy-exact-issuer-supplied"
+            ),
             "serviceProviderId": expected_entity_id,
-            "certificateName": values["certificateName"],
-            "certificateValidFrom": workday_valid_from,
-            "certificateValidTo": workday_valid_to,
+            **certificate_evidence,
             "authenticationPolicyOutcome": values["authenticationPolicyOutcome"],
             "networkReadinessOutcome": values["networkReadinessOutcome"],
         },
