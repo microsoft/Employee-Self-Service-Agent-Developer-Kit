@@ -71,21 +71,23 @@ def _write_foundation(
     )
 
 
-def test_resolve_target_prefers_canonical_dataverse_url(tmp_path: Path) -> None:
+def test_resolve_target_rejects_url_that_differs_from_setup(
+    tmp_path: Path,
+) -> None:
     import workday_connect_model as model
     import workday_connect_preflight as preflight
 
     _write_foundation(tmp_path, dataverse_url=ENV_URL)
 
-    target = preflight.resolve_target(
-        tmp_path,
-        dataverse_url="https://other.crm.dynamics.com",
-        state=model.default_state(),
-    )
-
-    assert target.dataverse_url == ENV_URL
-    assert target.environment_id == "agent-environment"
-    assert target.package_flavor == "runtime"
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="does not match",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url="https://other.crm.dynamics.com",
+            state=model.default_state(),
+        )
 
 
 def test_resolve_target_accepts_exact_url_without_inventory_lookup(
@@ -100,8 +102,61 @@ def test_resolve_target_accepts_exact_url_without_inventory_lookup(
         tmp_path,
         dataverse_url=ENV_URL,
         state=model.default_state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        pac_runner=lambda command, **_kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "EnvironmentId": "agent-environment",
+                    "OrgUrl": ENV_URL,
+                }
+            ),
+            stderr="",
+        ),
     )
 
+    assert target.dataverse_url == ENV_URL
+
+
+def test_resolve_target_ignores_stale_url_from_different_environment(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path)
+    state = model.default_state()
+    state["scope"].update(
+        {
+            "environmentId": "old-environment",
+            "dataverseUrl": "https://old.crm.dynamics.com",
+        }
+    )
+    inventory = (
+        tmp_path / ".local" / "setup" / "environment-list-prod.json"
+    )
+    inventory.write_text(
+        json.dumps(
+            {
+                "environments": [
+                    {
+                        "id": "agent-environment",
+                        "url": ENV_URL,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target = preflight.resolve_target(
+        tmp_path,
+        dataverse_url=None,
+        state=state,
+    )
+
+    assert target.environment_id == "agent-environment"
     assert target.dataverse_url == ENV_URL
 
 
@@ -137,6 +192,41 @@ def test_resolve_target_reuses_setup_environment_inventory(
     )
 
     assert target.dataverse_url == ENV_URL
+
+
+def test_resolve_target_rejects_conflicting_setup_urls(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    inventory = (
+        tmp_path / ".local" / "setup" / "environment-list-prod.json"
+    )
+    inventory.write_text(
+        json.dumps(
+            {
+                "environments": [
+                    {
+                        "id": "agent-environment",
+                        "url": "https://different.crm.dynamics.com",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="disagree",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url=None,
+            state=model.default_state(),
+        )
 
 
 def test_resolve_target_reuses_exact_pac_environment(tmp_path: Path) -> None:

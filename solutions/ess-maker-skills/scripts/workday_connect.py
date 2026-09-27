@@ -11,6 +11,11 @@ from pathlib import Path
 import sys
 from typing import Any, Callable
 
+from workday_connect_agent import (
+    WorkdayConnectAgentError,
+    verify_agent_binding,
+    verify_topic_activation,
+)
 from workday_connect_model import (
     CONTROLLER_CONTRACT_VERSION,
     WorkdayConnectModelError,
@@ -21,7 +26,6 @@ from workday_connect_contracts import (
     build_entra_handoff,
     build_workday_admin_packet,
     validate_agent_binding_evidence,
-    validate_connections_evidence,
     validate_employee_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
@@ -33,6 +37,7 @@ from workday_connect_preflight import (
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
     run_runtime_operation,
+    verify_physical_connections,
 )
 from workday_connect_store import (
     WorkdayConnectPlanChangedError,
@@ -49,9 +54,7 @@ def _json_object(value: str, label: str) -> dict[str, Any]:
     try:
         document = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise WorkdayConnectStoreError(
-            f"{label} must be valid JSON: {exc}"
-        ) from exc
+        raise WorkdayConnectStoreError(f"{label} must be valid JSON: {exc}") from exc
     if not isinstance(document, dict):
         raise WorkdayConnectStoreError(f"{label} must be a JSON object.")
     return document
@@ -105,9 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_approve = subparsers.add_parser("runtime-approve")
     runtime_approve.add_argument("--plan-json", required=True)
     record_connections = subparsers.add_parser("record-connections")
-    record_connections.add_argument("--evidence-json", required=True)
+    record_connections.add_argument("--workday-connection-id")
+    record_connections.add_argument("--dataverse-connection-id")
+    record_connections.add_argument(
+        "--evidence-json",
+        help=argparse.SUPPRESS,
+    )
+    subparsers.add_parser("record-topic-activation")
     record_binding = subparsers.add_parser("record-agent-binding")
-    record_binding.add_argument("--evidence-json", required=True)
+    record_binding.add_argument("--evidence-json", help=argparse.SUPPRESS)
     record_validation = subparsers.add_parser("record-validation")
     record_validation.add_argument("--evidence-json", required=True)
 
@@ -164,9 +173,8 @@ def _record_entra(
         "exact-application-discovered",
         evidence={
             "outcome": "verified",
-            "applicationDisplayName": result["evidence"][
-                "applicationDisplayName"
-            ],
+            "tenantId": result["evidence"]["tenantId"],
+            "applicationDisplayName": result["evidence"]["applicationDisplayName"],
         },
     )
     store.complete_action(
@@ -178,7 +186,12 @@ def _record_entra(
         },
     )
     store.set_phase_status("entra", "complete")
-    return {"verified": True, "status": store.status()}
+    _, reused = store.restore_workday_foundation()
+    return {
+        "verified": True,
+        "tenantFoundationReused": reused,
+        "status": store.status(),
+    }
 
 
 def _workday_admin_packet(
@@ -207,7 +220,11 @@ def _record_workday_admin(
         evidence={"outcome": "verified", **result["evidence"]},
     )
     store.set_phase_status("workday-admin", "complete")
-    return {"verified": True, "status": store.status()}
+    store.capture_tenant_foundation()
+    return {
+        "verified": True,
+        "status": store.status(),
+    }
 
 
 def _runtime_plan(
@@ -261,18 +278,25 @@ def _record_connections(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    evidence = validate_connections_evidence(
-        _json_object(args.evidence_json, "connection evidence")
+    if getattr(args, "evidence_json", None) is not None:
+        raise WorkdayConnectStoreError(
+            "Manual connection evidence is no longer accepted. Run "
+            "record-connections without --evidence-json so the controller "
+            "can verify the live connections."
+        )
+    evidence = verify_physical_connections(
+        store.load(),
+        workday_connection_id=args.workday_connection_id,
+        dataverse_connection_id=args.dataverse_connection_id,
     )
     store.complete_action(
         "connections",
         "physical-connections-verified",
         evidence={
             "outcome": "verified",
-            "workdayConnected": evidence["workdayConnectionConnected"],
-            "dataverseConnected": evidence[
-                "dataverseConnectionConnected"
-            ],
+            "source": "live-power-platform-discovery",
+            "makerUsername": evidence["makerUsername"],
+            "connections": evidence["connections"],
         },
     )
     store.set_phase_status("connections", "complete")
@@ -283,8 +307,16 @@ def _record_agent_binding(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    if getattr(args, "evidence_json", None) is not None:
+        raise WorkdayConnectStoreError(
+            "Manual agent-binding evidence is no longer accepted. Run "
+            "record-agent-binding without --evidence-json so the controller "
+            "can verify the live agent."
+        )
+    state = store.load()
     evidence = validate_agent_binding_evidence(
-        _json_object(args.evidence_json, "agent binding evidence")
+        state,
+        verify_agent_binding(store.workspace_root, state),
     )
     store.complete_action(
         "runtime",
@@ -292,6 +324,7 @@ def _record_agent_binding(
         evidence={
             "outcome": "verified",
             "checkpoint": "WD-REST-002",
+            "result": evidence["checkpoints"]["WD-REST-002"],
         },
     )
     store.complete_action(
@@ -300,6 +333,7 @@ def _record_agent_binding(
         evidence={
             "outcome": "verified",
             "checkpoint": "WD-CONN-013",
+            "result": evidence["checkpoints"]["WD-CONN-013"],
         },
     )
     store.complete_action(
@@ -307,12 +341,90 @@ def _record_agent_binding(
         "flow-attachment-confirmed",
         evidence={
             "outcome": "verified",
-            "makerConfirmed": evidence["flowAttachmentConfirmed"],
-            "workdayTopicsActivated": evidence["workdayTopicsActivated"],
+            "environmentId": evidence["environmentId"],
+            "botId": evidence["botId"],
+            "makerUsername": evidence["makerUsername"],
+            "blockingDiagnostics": evidence["workdayTopics"]["blockingDiagnostics"],
+        },
+    )
+    store.complete_action(
+        "runtime",
+        "workday-topics-activated",
+        evidence={
+            "outcome": "verified",
+            "expected": evidence["workdayTopics"]["expected"],
+            "verified": evidence["workdayTopics"]["verified"],
+            "active": evidence["workdayTopics"]["active"],
         },
     )
     store.set_phase_status("runtime", "complete")
     return {"verified": True, "status": store.status()}
+
+
+def _record_topic_activation(
+    _args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = verify_topic_activation(
+        store.workspace_root,
+        store.load(),
+    )
+    topics = evidence["workdayTopics"]
+    store.complete_action(
+        "runtime",
+        "workday-topics-activated",
+        evidence={
+            "outcome": "verified",
+            "environmentId": evidence["environmentId"],
+            "botId": evidence["botId"],
+            "makerUsername": evidence["makerUsername"],
+            "expected": topics["expected"],
+            "verified": topics["verified"],
+            "active": topics["active"],
+            "blockingDiagnostics": topics["blockingDiagnostics"],
+        },
+    )
+    diagnostics = topics["blockingDiagnostics"]
+    if diagnostics:
+        missing_flows = [
+            diagnostic
+            for diagnostic in diagnostics
+            if diagnostic.get("referenceType") == "CloudFlow"
+            and diagnostic.get("errorCode") == "NotFound"
+        ]
+        if missing_flows:
+            error_type = "NativeFlowRegistrationBlocked"
+            message = (
+                "The installed Workday agent is missing "
+                f"{len(missing_flows)} required flow registration(s). All "
+                "Workday topics are enabled, but final connection verification "
+                "cannot complete until those registrations are available. "
+                f"{len(diagnostics)} related diagnostic(s) were reported."
+            )
+        else:
+            error_type = "NativeTopicDiagnosticBlocked"
+            message = (
+                "All Workday topics are enabled, but "
+                f"{len(diagnostics)} topic configuration error(s) remain. "
+                "Resolve those errors before final connection verification."
+            )
+        store.set_phase_status(
+            "runtime",
+            "blocked",
+            blocker={
+                "operation": "record-agent-binding",
+                "errorType": error_type,
+                "message": message,
+            },
+        )
+    else:
+        store.set_phase_status("runtime", "active")
+    return {
+        "verified": True,
+        "flowHealth": "blocked" if diagnostics else "ready",
+        "blockingDiagnostics": diagnostics,
+        "status": store.status(),
+    }
 
 
 def _record_validation(
@@ -360,9 +472,26 @@ _COMMAND_HANDLERS: dict[
     "runtime-apply": _runtime_apply,
     "runtime-approve": _runtime_approve,
     "record-connections": _record_connections,
+    "record-topic-activation": _record_topic_activation,
     "record-agent-binding": _record_agent_binding,
     "record-validation": _record_validation,
     "preflight": _preflight,
+}
+
+_COMMAND_PHASES = {
+    "preflight": "preflight",
+    "set-workday-tenant": "entra",
+    "entra-handoff": "entra",
+    "record-entra": "entra",
+    "workday-admin-packet": "workday-admin",
+    "record-workday-admin": "workday-admin",
+    "record-connections": "connections",
+    "runtime-plan": "runtime",
+    "runtime-approve": "runtime",
+    "runtime-apply": "runtime",
+    "record-topic-activation": "runtime",
+    "record-agent-binding": "runtime",
+    "record-validation": "employee-validation",
 }
 
 
@@ -378,12 +507,31 @@ def main() -> None:
     except (
         OSError,
         WorkdayConnectModelError,
+        WorkdayConnectAgentError,
         WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
         WorkdayConnectRuntimeError,
         WorkdayConnectStoreError,
     ) as exc:
+        phase_id = _COMMAND_PHASES.get(args.command)
+        if phase_id:
+            try:
+                store.set_phase_status(
+                    phase_id,
+                    "blocked",
+                    blocker={
+                        "operation": args.command,
+                        "errorType": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+            except (
+                OSError,
+                WorkdayConnectModelError,
+                WorkdayConnectStoreError,
+            ):
+                pass
         print(
             ERROR_MARKER
             + json.dumps(

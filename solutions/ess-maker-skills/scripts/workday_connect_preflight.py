@@ -236,6 +236,10 @@ def _pac_dataverse_url(
     return str(identity.get("OrgUrl") or "").strip()
 
 
+def _normalize_dataverse_url(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/").casefold()
+
+
 def resolve_target(
     workspace_root: Path,
     *,
@@ -265,26 +269,78 @@ def resolve_target(
     _require_materialized_workspace(setup_state, agent)
 
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
-    environment_id = str(
-        foundation.get("environmentId")
-        or (setup_state.get("environment") or {}).get("id")
-        or ""
+    foundation_environment_id = str(
+        foundation.get("environmentId") or ""
     ).strip()
-    exact_url = (
-        str(foundation.get("dataverseEndpoint") or "").strip()
-        or str(state.get("scope", {}).get("dataverseUrl") or "").strip()
-        or str(dataverse_url or "").strip()
-        or _cached_dataverse_url(
-            workspace_root,
-            environment_id=environment_id,
-            ring=foundation_ring,
+    setup_environment_id = str(
+        (setup_state.get("environment") or {}).get("id") or ""
+    ).strip()
+    if (
+        foundation_environment_id
+        and setup_environment_id
+        and foundation_environment_id.casefold()
+        != setup_environment_id.casefold()
+    ):
+        raise WorkdayConnectPreflightError(
+            "Foundation and setup state record different Power Platform "
+            "environment IDs. Refresh setup before continuing."
         )
-        or _pac_dataverse_url(
+    environment_id = foundation_environment_id or setup_environment_id
+    if not environment_id:
+        raise WorkdayConnectPreflightError(
+            "The setup state does not contain an exact Power Platform "
+            "environment ID."
+        )
+
+    foundation_url = str(
+        foundation.get("dataverseEndpoint") or ""
+    ).strip()
+    inventory_url = _cached_dataverse_url(
+        workspace_root,
+        environment_id=environment_id,
+        ring=foundation_ring,
+    )
+    state_scope = state.get("scope") or {}
+    stored_environment_id = str(
+        state_scope.get("environmentId") or ""
+    ).strip()
+    stored_url = (
+        str(state_scope.get("dataverseUrl") or "").strip()
+        if stored_environment_id.casefold() == environment_id.casefold()
+        else ""
+    )
+    supplied_url = str(dataverse_url or "").strip()
+
+    authoritative_urls = [
+        value for value in (foundation_url, inventory_url) if value
+    ]
+    if len(
+        {_normalize_dataverse_url(value) for value in authoritative_urls}
+    ) > 1:
+        raise WorkdayConnectPreflightError(
+            "Foundation setup and environment inventory disagree on the "
+            "Dataverse URL for the recorded environment ID. Refresh setup "
+            "before continuing."
+        )
+    exact_url = foundation_url or inventory_url or stored_url
+    if supplied_url:
+        if exact_url and (
+            _normalize_dataverse_url(supplied_url)
+            != _normalize_dataverse_url(exact_url)
+        ):
+            raise WorkdayConnectPreflightError(
+                "The supplied Dataverse URL does not match the URL recorded "
+                "for the setup environment ID."
+            )
+        if not exact_url:
+            exact_url = supplied_url
+    if not exact_url:
+        exact_url = _pac_dataverse_url(
             environment_id,
             pac_resolver=pac_resolver,
             runner=pac_runner,
         )
-    ).rstrip("/")
+    exact_url = exact_url.rstrip("/")
     if not exact_url:
         raise WorkdayConnectPreflightError(
             "The setup environment does not have a resolved Dataverse URL. "

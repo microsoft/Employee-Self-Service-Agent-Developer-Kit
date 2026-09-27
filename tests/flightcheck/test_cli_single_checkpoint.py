@@ -246,14 +246,15 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
-    def test_connect_config_flattens_v2_workday_state(
-        self, tmp_path: Path
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5])
+    def test_connect_config_flattens_workday_state(
+        self, tmp_path: Path, schema_version: int
     ) -> None:
         overlay = tmp_path / "provider.json"
         overlay.write_text(
             json.dumps(
                 {
-                    "schemaVersion": 2,
+                    "schemaVersion": schema_version,
                     "scope": {
                         "workdayTenant": "acme_impl",
                         "entraTenantId": "tenant-id",

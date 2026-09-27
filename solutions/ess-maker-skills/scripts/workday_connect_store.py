@@ -20,9 +20,13 @@ from workday_connect_model import (
     PHASE_BY_ID,
     PHASE_DEFINITIONS,
     PHASE_REQUIRED_ACTIONS,
+    STATE_SCHEMA_VERSION,
+    TENANT_FOUNDATION_REQUIRED_ENDPOINT_KEYS,
+    TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS,
     PhaseStatus,
     WorkdayConnectModelError,
     default_state,
+    next_phase_summary,
     plan_hash,
     progress_text,
     utc_now,
@@ -43,6 +47,31 @@ _PREFLIGHT_SCOPE_KEYS = {
     "vertical",
 }
 _ENTRA_SCOPE_KEYS = {"entraTenantId", "workdayTenant"}
+_ENTRA_IDENTIFIER_KEYS = {
+    "entraAppId",
+    "entraAppObjectId",
+    "entraServicePrincipalId",
+    "entraAppIdUri",
+    "workdaySamlEntityId",
+    "scopeGuid",
+    "signingCertificate",
+}
+_WORKDAY_IDENTIFIER_KEYS = {"oauthClientId"}
+_FOUNDATION_SCOPE_KEYS = ("entraTenantId", "workdayTenant")
+_FOUNDATION_ENTRA_IDENTIFIER_KEYS = (
+    "entraAppId",
+    "entraAppObjectId",
+    "entraServicePrincipalId",
+    "entraAppIdUri",
+    "workdaySamlEntityId",
+    "scopeGuid",
+    "signingCertificate",
+)
+_OPERATOR_PHASES = {
+    "powerPlatformMaker": "preflight",
+    "entraAdmin": "entra",
+    "workdayAdmin": "workday-admin",
+}
 
 
 class WorkdayConnectStoreError(RuntimeError):
@@ -141,9 +170,7 @@ def _legacy_phase_status(
     rows: tuple[str, ...],
 ) -> str:
     values = [
-        setup_status.get(row)
-        for row in rows
-        if isinstance(setup_status.get(row), dict)
+        setup_status.get(row) for row in rows if isinstance(setup_status.get(row), dict)
     ]
     statuses = {str(value.get("state") or "pending") for value in values}
     if values and len(values) == len(rows) and statuses == {"done"}:
@@ -260,6 +287,8 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
         phase_state["evidence"] = _legacy_evidence(setup_status, rows)
         if phase_state["status"] == PhaseStatus.COMPLETE.value:
             for action in PHASE_REQUIRED_ACTIONS[phase.value]:
+                if phase.value == "runtime" and action == "workday-topics-activated":
+                    continue
                 if action not in phase_state["completedActions"]:
                     phase_state["completedActions"].append(action)
                 phase_state["evidence"].append(
@@ -273,11 +302,21 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
         if phase_state["status"] != PhaseStatus.PENDING.value:
             phase_state["updatedAt"] = utc_now()
 
+    runtime = state["phases"]["runtime"]
+    if (
+        runtime["status"] == PhaseStatus.COMPLETE.value
+        and "workday-topics-activated" not in runtime["completedActions"]
+    ):
+        runtime["status"] = PhaseStatus.ACTIVE.value
+        runtime["updatedAt"] = utc_now()
+        _reset_phase(state["phases"]["employee-validation"])
+
     if all(
         phase["status"] == PhaseStatus.COMPLETE.value
         for phase in state["phases"].values()
     ):
         state["status"] = "ready"
+    state["tenantFoundation"] = _tenant_foundation_from_state(state)
     state["migration"] = {
         "source": (
             "workday-da-state-v1"
@@ -304,6 +343,98 @@ def _reset_phase(phase: dict[str, Any]) -> None:
     )
 
 
+def _tenant_foundation_from_state(
+    state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    phases = state.get("phases") or {}
+    entra = phases.get("entra") or {}
+    workday = phases.get("workday-admin") or {}
+    if (
+        entra.get("status") != PhaseStatus.COMPLETE.value
+        or workday.get("status") != PhaseStatus.COMPLETE.value
+    ):
+        return None
+    scope = state.get("scope") or {}
+    if any(not str(scope.get(key) or "").strip() for key in _FOUNDATION_SCOPE_KEYS):
+        return None
+    identifiers = state.get("identifiers") or {}
+    endpoints = state.get("endpoints") or {}
+    if any(
+        identifiers.get(key) is None or identifiers.get(key) == ""
+        for key in TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS
+    ):
+        return None
+    if any(
+        not str(endpoints.get(key) or "").strip()
+        for key in TENANT_FOUNDATION_REQUIRED_ENDPOINT_KEYS
+    ):
+        return None
+    return {
+        "scope": {key: copy.deepcopy(scope[key]) for key in _FOUNDATION_SCOPE_KEYS},
+        "identifiers": copy.deepcopy(dict(identifiers)),
+        "endpoints": copy.deepcopy(dict(endpoints)),
+        "phases": {
+            phase_id: {
+                "completedActions": copy.deepcopy(phases[phase_id]["completedActions"]),
+                "evidence": copy.deepcopy(phases[phase_id]["evidence"]),
+            }
+            for phase_id in ("entra", "workday-admin")
+        },
+        "capturedAt": utc_now(),
+    }
+
+
+def _normalized_foundation_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip().casefold()
+    if isinstance(value, Mapping):
+        return {
+            str(key): _normalized_foundation_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, list):
+        return [_normalized_foundation_value(item) for item in value]
+    return value
+
+
+def _certificate_identity(value: Any) -> tuple[str, str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    thumbprint = str(value.get("thumbprint") or "").replace(" ", "").strip().casefold()
+    valid_from = str(value.get("validFrom") or "").strip()[:10]
+    valid_to = str(value.get("validTo") or "").strip()[:10]
+    if not thumbprint or not valid_from or not valid_to:
+        return None
+    return thumbprint, valid_from, valid_to
+
+
+def _foundation_matches_current_entra(
+    state: Mapping[str, Any],
+    foundation: Mapping[str, Any],
+) -> bool:
+    scope = state.get("scope") or {}
+    foundation_scope = foundation.get("scope") or {}
+    for key in _FOUNDATION_SCOPE_KEYS:
+        if _normalized_foundation_value(scope.get(key)) != (
+            _normalized_foundation_value(foundation_scope.get(key))
+        ):
+            return False
+    identifiers = state.get("identifiers") or {}
+    foundation_identifiers = foundation.get("identifiers") or {}
+    for key in _FOUNDATION_ENTRA_IDENTIFIER_KEYS:
+        if key == "signingCertificate":
+            if _certificate_identity(identifiers.get(key)) != (
+                _certificate_identity(foundation_identifiers.get(key))
+            ):
+                return False
+            continue
+        if _normalized_foundation_value(identifiers.get(key)) != (
+            _normalized_foundation_value(foundation_identifiers.get(key))
+        ):
+            return False
+    return True
+
+
 def _invalidate_from_phase(
     state: dict[str, Any],
     phase_id: str,
@@ -324,9 +455,44 @@ def _scope_invalidation_phase(changed_keys: set[str]) -> str:
     return "preflight"
 
 
-def upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
+def _section_invalidation_phase(
+    section: str,
+    changed_keys: set[str],
+) -> str | None:
+    if not changed_keys:
+        return None
+    if section == "scope":
+        return _scope_invalidation_phase(changed_keys)
+    if section == "identifiers":
+        if changed_keys & _ENTRA_IDENTIFIER_KEYS:
+            return "entra"
+        if changed_keys <= _WORKDAY_IDENTIFIER_KEYS:
+            return "workday-admin"
+        return "entra"
+    if section == "endpoints":
+        return "workday-admin"
+    if section == "operators":
+        phases = {_OPERATOR_PHASES.get(key, "preflight") for key in changed_keys}
+        return min(
+            phases,
+            key=lambda phase_id: next(
+                index
+                for index, definition in enumerate(PHASE_DEFINITIONS)
+                if definition.identifier.value == phase_id
+            ),
+        )
+    return None
+
+
+def _upgrade_structured_state(
+    document: Mapping[str, Any],
+    *,
+    source_version: int,
+) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
-    state["schemaVersion"] = 3
+    state["schemaVersion"] = STATE_SCHEMA_VERSION
+    if "tenantFoundation" not in state:
+        state["tenantFoundation"] = _tenant_foundation_from_state(state)
     first_incomplete: str | None = None
     for definition in PHASE_DEFINITIONS:
         phase_id = definition.identifier.value
@@ -362,11 +528,23 @@ def upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
         else "in-progress"
     )
     state["migration"] = {
-        "source": "workday-connect-state-v2",
+        "source": f"workday-connect-state-v{source_version}",
         "migratedAt": utc_now(),
     }
     state["updatedAt"] = utc_now()
     return validate_state(state)
+
+
+def upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_structured_state(document, source_version=2)
+
+
+def upgrade_v3_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_structured_state(document, source_version=3)
+
+
+def upgrade_v4_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_structured_state(document, source_version=4)
 
 
 class WorkdayConnectStore:
@@ -381,7 +559,7 @@ class WorkdayConnectStore:
         self.workspace_root = workspace_root.resolve()
         self.config_path = self.workspace_root / CONFIG_PATH
         self.lock_path = self.config_path.with_name("state.lock")
-        self.backup_path = self.config_path.with_name("config.pre-v3.json")
+        self.backup_path = self.config_path.with_name("config.pre-v5.json")
         self.lock_timeout = lock_timeout
 
     def initialize(self) -> dict[str, Any]:
@@ -391,37 +569,48 @@ class WorkdayConnectStore:
                 state = default_state()
                 _atomic_write_json(self.config_path, state)
                 return state
-            if existing.get("schemaVersion") == 3:
+            if existing.get("schemaVersion") == STATE_SCHEMA_VERSION:
                 return validate_state(existing)
             if not self.backup_path.exists():
                 self.backup_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.config_path, self.backup_path)
-            state = (
-                upgrade_v2_state(existing)
-                if existing.get("schemaVersion") == 2
-                else migrate_legacy_state(existing)
-            )
+            source_version = existing.get("schemaVersion")
+            if source_version == 4:
+                state = upgrade_v4_state(existing)
+            elif source_version == 3:
+                state = upgrade_v3_state(existing)
+            elif source_version == 2:
+                state = upgrade_v2_state(existing)
+            else:
+                state = migrate_legacy_state(existing)
             _atomic_write_json(self.config_path, state)
             return state
 
     def load(self) -> dict[str, Any]:
         if not self.config_path.exists():
             return self.initialize()
-        return validate_state(_read_json(self.config_path))
+        current = _read_json(self.config_path)
+        if current.get("schemaVersion") != STATE_SCHEMA_VERSION:
+            return self.initialize()
+        return validate_state(current)
 
     def _mutate(self, mutation) -> dict[str, Any]:
         with _file_lock(self.lock_path, self.lock_timeout):
             current = _read_json(self.config_path)
             if not current:
                 current = default_state()
-            elif current.get("schemaVersion") != 3:
+            elif current.get("schemaVersion") != STATE_SCHEMA_VERSION:
                 if not self.backup_path.exists():
                     shutil.copy2(self.config_path, self.backup_path)
-                current = (
-                    upgrade_v2_state(current)
-                    if current.get("schemaVersion") == 2
-                    else migrate_legacy_state(current)
-                )
+                source_version = current.get("schemaVersion")
+                if source_version == 4:
+                    current = upgrade_v4_state(current)
+                elif source_version == 3:
+                    current = upgrade_v3_state(current)
+                elif source_version == 2:
+                    current = upgrade_v2_state(current)
+                else:
+                    current = migrate_legacy_state(current)
             state = copy.deepcopy(validate_state(current))
             mutation(state)
             state["status"] = (
@@ -453,18 +642,81 @@ class WorkdayConnectStore:
 
         def mutation(state: dict[str, Any]) -> None:
             changed_keys = {
-                key
-                for key, value in values.items()
-                if state[section].get(key) != value
+                key for key, value in values.items() if state[section].get(key) != value
             }
-            if section == "scope" and changed_keys:
-                _invalidate_from_phase(
-                    state,
-                    _scope_invalidation_phase(changed_keys),
-                )
+            invalidation_phase = _section_invalidation_phase(
+                section,
+                changed_keys,
+            )
+            if invalidation_phase:
+                _invalidate_from_phase(state, invalidation_phase)
             state[section].update(dict(values))
 
         return self._mutate(mutation)
+
+    def capture_tenant_foundation(self) -> dict[str, Any]:
+        """Persist reusable Entra and Workday tenant configuration evidence."""
+
+        def mutation(state: dict[str, Any]) -> None:
+            foundation = _tenant_foundation_from_state(state)
+            if foundation is None:
+                raise WorkdayConnectStoreError(
+                    "Complete Entra and Workday administrator verification "
+                    "before capturing reusable tenant configuration."
+                )
+            state["tenantFoundation"] = foundation
+
+        return self._mutate(mutation)
+
+    def restore_workday_foundation(self) -> tuple[dict[str, Any], bool]:
+        """Reuse Workday administrator evidence after a fresh Entra reread."""
+        reused = False
+
+        def mutation(state: dict[str, Any]) -> None:
+            nonlocal reused
+            foundation = state.get("tenantFoundation")
+            if not isinstance(foundation, Mapping):
+                return
+            if (
+                state["phases"]["preflight"]["status"] != PhaseStatus.COMPLETE.value
+                or state["phases"]["entra"]["status"] != PhaseStatus.COMPLETE.value
+            ):
+                return
+            if not _foundation_matches_current_entra(state, foundation):
+                return
+            foundation_identifiers = foundation.get("identifiers") or {}
+            for key in _WORKDAY_IDENTIFIER_KEYS:
+                if foundation_identifiers.get(key) is not None:
+                    state["identifiers"][key] = copy.deepcopy(
+                        foundation_identifiers[key]
+                    )
+            state["endpoints"].update(
+                copy.deepcopy(dict(foundation.get("endpoints") or {}))
+            )
+            snapshot = (foundation.get("phases") or {}).get("workday-admin")
+            if not isinstance(snapshot, Mapping):
+                return
+            phase = state["phases"]["workday-admin"]
+            _reset_phase(phase)
+            phase["status"] = PhaseStatus.COMPLETE.value
+            phase["completedActions"] = copy.deepcopy(
+                list(snapshot.get("completedActions") or [])
+            )
+            phase["evidence"] = copy.deepcopy(list(snapshot.get("evidence") or []))
+            phase["evidence"].append(
+                {
+                    "action": "tenant-foundation-reused",
+                    "outcome": "verified",
+                    "provenance": "stored-tenant-foundation",
+                    "foundationCapturedAt": foundation["capturedAt"],
+                    "capturedAt": utc_now(),
+                }
+            )
+            phase["updatedAt"] = utc_now()
+            reused = True
+
+        state = self._mutate(mutation)
+        return state, reused
 
     def set_phase_status(
         self,
@@ -476,9 +728,7 @@ class WorkdayConnectStore:
         if phase_id not in PHASE_BY_ID:
             raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
         if status not in {value.value for value in PhaseStatus}:
-            raise WorkdayConnectStoreError(
-                f"Unknown Workday phase status: {status}."
-            )
+            raise WorkdayConnectStoreError(f"Unknown Workday phase status: {status}.")
 
         def mutation(state: dict[str, Any]) -> None:
             definition = PHASE_BY_ID[phase_id]
@@ -494,12 +744,9 @@ class WorkdayConnectStore:
                 required = PHASE_REQUIRED_ACTIONS[phase_id]
                 completed = set(phase["completedActions"])
                 evidence_actions = {
-                    str(record.get("action") or "")
-                    for record in phase["evidence"]
+                    str(record.get("action") or "") for record in phase["evidence"]
                 }
-                missing = sorted(
-                    (required - completed) | (required - evidence_actions)
-                )
+                missing = sorted((required - completed) | (required - evidence_actions))
                 if missing:
                     raise WorkdayConnectStoreError(
                         f"Phase '{phase_id}' is missing required verified "
@@ -526,6 +773,16 @@ class WorkdayConnectStore:
             )
 
         def mutation(state: dict[str, Any]) -> None:
+            prerequisite = PHASE_BY_ID[phase_id].prerequisite
+            if (
+                prerequisite is not None
+                and state["phases"][prerequisite.value]["status"]
+                != PhaseStatus.COMPLETE.value
+            ):
+                raise WorkdayConnectStoreError(
+                    f"Complete '{prerequisite.value}' before recording "
+                    f"'{phase_id}' evidence."
+                )
             phase = state["phases"][phase_id]
             if action not in phase["completedActions"]:
                 phase["completedActions"].append(action)
@@ -542,7 +799,10 @@ class WorkdayConnectStore:
                         "capturedAt": utc_now(),
                     }
                 )
-            if phase["status"] == PhaseStatus.PENDING.value:
+            if phase["status"] in {
+                PhaseStatus.PENDING.value,
+                PhaseStatus.BLOCKED.value,
+            }:
                 phase["status"] = PhaseStatus.ACTIVE.value
             phase["blocker"] = None
             phase["updatedAt"] = utc_now()
@@ -566,6 +826,15 @@ class WorkdayConnectStore:
         approved_hash = plan_hash(plan)
 
         def mutation(state: dict[str, Any]) -> None:
+            prerequisite = PHASE_BY_ID[phase_id].prerequisite
+            if (
+                prerequisite is not None
+                and state["phases"][prerequisite.value]["status"]
+                != PhaseStatus.COMPLETE.value
+            ):
+                raise WorkdayConnectStoreError(
+                    f"Complete '{prerequisite.value}' before approving '{phase_id}'."
+                )
             phase = state["phases"][phase_id]
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
@@ -607,10 +876,7 @@ class WorkdayConnectStore:
                     "status": phase["status"],
                 }
             )
-            if (
-                next_phase is None
-                and phase["status"] != PhaseStatus.COMPLETE.value
-            ):
+            if next_phase is None and phase["status"] != PhaseStatus.COMPLETE.value:
                 next_phase = definition.identifier.value
         return {
             "schemaVersion": 1,
@@ -618,6 +884,7 @@ class WorkdayConnectStore:
             "status": state["status"],
             "phases": phases,
             "nextPhaseId": next_phase,
+            "nextPhaseSummary": next_phase_summary(state),
             "progressText": progress_text(state),
             "blocker": (
                 state["phases"][next_phase]["blocker"]

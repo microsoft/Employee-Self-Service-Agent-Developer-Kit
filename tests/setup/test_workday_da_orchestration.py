@@ -6,6 +6,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -28,11 +29,92 @@ def test_orchestrator_resumes_from_controller_status() -> None:
 
     assert "python scripts/workday_connect.py status" in text
     assert "nextPhaseId" in text
-    assert "Do not create, copy, update, or infer status from a Markdown" in (
+    assert "nextPhaseSummary" in text
+    assert "What happens in this phase:" in text
+    assert "must not be collapsed into a one-line phase list" in text
+    assert "Do not\nreplace the phase explanation with only" in text
+    assert "do not create, copy, update, or infer status from a Markdown" in (
         normalized
     )
     assert "resume the same blocker" in text
     assert "controller status is `ready`" in text
+
+
+def test_every_controller_command_is_documented() -> None:
+    import workday_connect as controller
+
+    guide_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(_WORKDAY_DA.rglob("*.md"))
+    )
+    documented = set(
+        re.findall(r"workday_connect\.py\s+([a-z][a-z-]*)", guide_text)
+    )
+
+    assert documented == set(controller._COMMAND_HANDLERS)
+
+
+def test_every_phase_dispatch_target_exists_and_schema_is_reference_only() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    dispatch_targets = re.findall(r"-> read `([^`]+\.md)`", skill)
+
+    assert dispatch_targets
+    assert all((_WORKDAY_DA / target).is_file() for target in dispatch_targets)
+    assert "Use `shared/config-schema.md` as the internal state" in skill
+    assert "not a customer-executed phase" in skill
+
+
+def test_customer_messages_exclude_internal_implementation_terms() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    activation = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "activate-workday-topics.md"
+    ).read_text(encoding="utf-8")
+    redirect = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "wire-user-context-redirect.md"
+    ).read_text(encoding="utf-8")
+    readiness = skill.split("> Here's who may be needed", 1)[1].split(
+        "\nRun:",
+        1,
+    )[0]
+    activation_message = activation.split("**Message:**", 1)[1].split(
+        "**End message.**",
+        1,
+    )[0]
+    redirect_message = redirect.split("**Message:**", 1)[1].split(
+        "**End message.**",
+        1,
+    )[0]
+    customer_text = readiness + activation_message + redirect_message
+
+    for internal_term in (
+        "controller",
+        "component-map",
+        "MinimalBot",
+        "plan hash",
+        "schema",
+        "checkpoint",
+        "CloudFlow",
+        "delegatedauthorization",
+    ):
+        assert internal_term.casefold() not in customer_text.casefold()
+    assert "Customer-facing language contract" in skill
+    assert "Never show or narrate them" in skill
 
 
 def test_preflight_is_one_identity_aware_operation() -> None:
@@ -46,26 +128,36 @@ def test_preflight_is_one_identity_aware_operation() -> None:
 
 
 def test_connections_are_proven_before_runtime_apply() -> None:
-    text = (_WORKDAY_DA / "configure-power-platform.md").read_text(
-        encoding="utf-8"
-    )
+    text = (_WORKDAY_DA / "configure-power-platform.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert text.index("## Connections") < text.index(
-        "## Runtime approval and apply"
-    )
+    assert text.index("## Connections") < text.index("## Runtime approval and apply")
     assert "runtime-plan" in text
     assert "record-connections" in text
+    assert "record-connections --evidence-json" not in text
+    assert "manual connection evidence" in text
+    assert "Do not begin with a yes/no question" in text
+    assert text.count("workday_connect.py record-connections") == 2
+    assert "Power Apps maker portal" in text
+    assert "Microsoft Entra ID Integrated" in text
+    assert "**Microsoft Entra resource URL:**" in text
+    assert "Do not use the Entra application\n  ID URI beginning with `api://`" in text
+    assert "**Workday OAuth token URL:**" in text
+    assert "**Client ID:**" in text
+    assert "not the Microsoft Entra application ID" in text
+    assert "Do not ask the maker or administrator to provide them again" in normalized
+    assert "Do not request or collect a Workday password" in text
+    assert "Reuse a healthy existing connection" in text
     assert "runtime-apply" in text
     assert "record-agent-binding" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
-    assert "one shared Dataverse session" in normalized
+    assert "Do not construct or pass manual\nboolean evidence" in text
+    assert "--connect-config" in text
+    assert "one Dataverse token" in normalized
     assert "delegated" in text
     assert "User Context V2" in text
     assert "activate-workday-topics.md" in text
-    assert text.index("Allow permission") < text.index(
-        "activate-workday-topics.md"
-    )
+    assert text.index("Allow permission") < text.index("activate-workday-topics.md")
 
 
 def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
@@ -94,10 +186,12 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
 
     assert ".component-map.json" in action
     assert "{AGENT_SCHEMA}.topic.Workday" in action
-    assert "all 21 Workday dialog topics" in action
+    assert "all 21 Workday dialog topics" in " ".join(action.split())
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
+    assert "record-topic-activation" in action
+    assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
 
     agent_dir = (
@@ -116,9 +210,7 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
         for path, entry in component_map.items()
         if isinstance(entry, dict)
         and entry.get("componentKind") == "DialogComponent"
-        and str(entry.get("schemaName") or "").split(".")[-1].startswith(
-            "Workday"
-        )
+        and str(entry.get("schemaName") or "").split(".")[-1].startswith("Workday")
         and str(entry.get("displayName") or "").startswith("Workday")
     ]
     assert len(workday_topics) == 21
@@ -138,18 +230,12 @@ def test_readiness_requires_real_employee_runtime_evidence() -> None:
 
 def test_capability_claims_match_controller_surface() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
-    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    power_platform = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"
     )
-    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(
-        encoding="utf-8"
-    )
-    power_platform = (
-        _WORKDAY_DA / "configure-power-platform.md"
-    ).read_text(encoding="utf-8")
-    employee = (_WORKDAY_DA / "verify-connection.md").read_text(
-        encoding="utf-8"
-    )
+    employee = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
 
     normalized = {
         "skill": " ".join(skill.split()),
@@ -160,21 +246,43 @@ def test_capability_claims_match_controller_surface() -> None:
     }
 
     assert "## Capability contract" in skill
+    assert "## Tenant foundation and deployment scope" in skill
+    assert (
+        "must not by itself require the Entra or Workday administrators"
+        in (normalized["skill"])
+    )
+    assert "show this readiness briefing on every invocation" in normalized["skill"]
+    for required_role in (
+        "Power Platform Environment Maker",
+        "Application Administrator or Cloud Application Administrator",
+        "Workday Administrator",
+        "Dataverse System Administrator",
+        "Workday test employee",
+    ):
+        assert required_role in skill
+    assert (
+        "isn't ready until the signed-in Workday scenario succeeds"
+        in (normalized["skill"])
+    )
     assert "Claim an automated change only after" in normalized["skill"]
-    assert "does not create or modify the Entra application" in (
-        normalized["entra"]
-    )
+    assert "does not create or modify the Entra application" in (normalized["entra"])
     assert "record-entra" in normalized["entra"]
+    assert "foundationReuse.eligible" in entra
+    assert "Expose an API" in entra
+    assert "Sign SAML response and assertion" in entra
+    assert "administrator-attestation" in entra
     assert "This phase never modifies Workday" in normalized["tenant"]
-    assert "does not create physical connector connections" in (
-        normalized["power_platform"]
+    assert "Create x509 Public Key" in tenant
+    assert "Client Grant Type" in tenant
+    assert "Include Workday Owned Scope" in tenant
+    assert "Confirm network readiness" in tenant
+    assert (
+        "does not create physical connector connections"
+        in (normalized["power_platform"])
     )
-    assert "do not describe it as automatically verified" in (
-        normalized["power_platform"]
-    )
-    assert "These are real automated changes" in (
-        normalized["power_platform"]
-    )
+    assert "reruns `WD-REST-002` and `WD-CONN-013`" in (normalized["power_platform"])
+    assert "no topic contains an error diagnostic" in (normalized["power_platform"])
+    assert "These are real automated changes" in (normalized["power_platform"])
     assert "The skill cannot publish the agent" in normalized["employee"]
 
 
@@ -183,9 +291,18 @@ def test_runtime_apply_persists_verified_stages_before_later_failure(
     tmp_path: Path,
 ) -> None:
     import workday_connect as controller
+    import workday_connect_model as model
 
     store = controller.WorkdayConnectStore(tmp_path)
     store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
 
     def fail_after_two_stages(_state, **kwargs):
         recorder = kwargs["stage_recorder"]
@@ -222,6 +339,6 @@ def test_runtime_apply_persists_verified_stages_before_later_failure(
         "connection-references-bound",
         "runtime-flows-active",
     ]
-    assert {
-        record["action"] for record in phase["evidence"]
-    } == set(phase["completedActions"])
+    assert {record["action"] for record in phase["evidence"]} == set(
+        phase["completedActions"]
+    )

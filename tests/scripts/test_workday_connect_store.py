@@ -21,7 +21,7 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 3
+    assert state["schemaVersion"] == 5
     assert _config_path(tmp_path).exists()
     assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
     assert not (tmp_path / ".local/setup/workday-da/tasks.md").exists()
@@ -61,7 +61,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v3.json").exists()
+    assert path.with_name("config.pre-v5.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -79,9 +79,34 @@ def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
     store_module.WorkdayConnectStore(tmp_path).initialize()
 
     assert tasks.read_text(encoding="utf-8") == "legacy setup checklist"
-    assert connect_tasks.read_text(encoding="utf-8") == (
-        "legacy connect checklist"
+    assert connect_tasks.read_text(encoding="utf-8") == ("legacy connect checklist")
+
+
+def test_legacy_ready_state_reopens_runtime_for_live_topic_proof(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    rows = {
+        row: {"state": "done", "verifiedBy": "legacy"}
+        for phase_rows in store_module.LEGACY_PHASE_ROWS.values()
+        for row in phase_rows
+    }
+    path.write_text(
+        json.dumps({"setupStatus": rows}),
+        encoding="utf-8",
     )
+
+    state = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert state["status"] == "in-progress"
+    assert state["phases"]["runtime"]["status"] == "active"
+    assert (
+        "workday-topics-activated" not in state["phases"]["runtime"]["completedActions"]
+    )
+    assert state["phases"]["employee-validation"]["status"] == "pending"
 
 
 def test_phase_completion_requires_prerequisite(tmp_path: Path) -> None:
@@ -113,10 +138,51 @@ def test_complete_action_is_idempotent(tmp_path: Path) -> None:
         evidence={"outcome": "passed"},
     )
 
-    assert state["phases"]["preflight"]["completedActions"] == [
-        "verify-target"
-    ]
+    assert state["phases"]["preflight"]["completedActions"] == ["verify-target"]
     assert len(state["phases"]["preflight"]["evidence"]) == 1
+
+
+def test_complete_action_reactivates_a_blocked_phase(tmp_path: Path) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.set_phase_status(
+        "preflight",
+        "blocked",
+        blocker={
+            "operation": "preflight",
+            "errorType": "TestBlocker",
+            "message": "Resolve the test blocker.",
+        },
+    )
+
+    state = store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+
+    phase = state["phases"]["preflight"]
+    assert phase["status"] == "active"
+    assert phase["blocker"] is None
+
+
+def test_complete_action_requires_completed_prerequisite(tmp_path: Path) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    with pytest.raises(
+        store_module.WorkdayConnectStoreError,
+        match="Complete 'preflight'",
+    ):
+        store.complete_action(
+            "entra",
+            "exact-application-discovered",
+            evidence={"outcome": "verified"},
+        )
 
 
 def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
@@ -124,6 +190,12 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
 
     store = store_module.WorkdayConnectStore(tmp_path)
     store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(
+            store,
+            phase_id,
+            store_module.PHASE_REQUIRED_ACTIONS[phase_id],
+        )
     plan = {
         "phase": "runtime",
         "scope": {"tenantId": "tenant-a", "applicationId": "app-a"},
@@ -140,7 +212,9 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
         store.verify_plan("runtime", changed, approved_hash)
 
 
-def test_status_returns_one_progress_line_and_next_phase(tmp_path: Path) -> None:
+def test_status_returns_progress_roadmap_and_next_phase_summary(
+    tmp_path: Path,
+) -> None:
     import workday_connect_store as store_module
 
     store = store_module.WorkdayConnectStore(tmp_path)
@@ -156,7 +230,10 @@ def test_status_returns_one_progress_line_and_next_phase(tmp_path: Path) -> None
     status = store.status()
 
     assert status["nextPhaseId"] == "entra"
-    assert status["progressText"].startswith("Progress: Preflight ✓ · Entra")
+    assert "| 1 | Preflight | Complete |" in status["progressText"]
+    assert "| 2 | Microsoft Entra | Next |" in status["progressText"]
+    assert status["nextPhaseSummary"]["title"] == "Microsoft Entra"
+    assert len(status["nextPhaseSummary"]["whatHappens"]) == 3
     assert len(status["phases"]) == 6
 
 
@@ -196,6 +273,129 @@ def test_scope_change_invalidates_affected_phases(tmp_path: Path) -> None:
     assert state["phases"]["entra"]["status"] == "pending"
 
 
+def _complete_phase(store, phase_id: str, actions: set[str]) -> None:
+    for action in actions:
+        store.complete_action(
+            phase_id,
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status(phase_id, "complete")
+
+
+def _set_foundation_data(store, *, workday_tenant: str = "contoso") -> None:
+    store.merge_section(
+        "identifiers",
+        {
+            "entraAppId": "app-id",
+            "entraAppObjectId": "app-object-id",
+            "entraServicePrincipalId": "service-principal-id",
+            "entraAppIdUri": "api://app-id",
+            "workdaySamlEntityId": (f"http://www.workday.com/{workday_tenant}"),
+            "scopeGuid": "scope-id",
+            "signingCertificate": {
+                "thumbprint": "thumbprint",
+                "validFrom": "2026-01-01",
+                "validTo": "2027-01-01",
+            },
+            "oauthClientId": "oauth-client-id",
+        },
+    )
+    store.merge_section(
+        "endpoints",
+        {
+            "oauthTokenUrl": "https://example.workday.com/oauth/token",
+            "restBaseUrl": "https://example.workday.com/ccx/api",
+            "soapBaseUrl": (
+                f"https://example.workday.com/ccx/service/{workday_tenant}"
+            ),
+        },
+    )
+
+
+def test_endpoint_change_invalidates_workday_and_downstream_phases(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+
+    state = store.merge_section(
+        "endpoints",
+        {"restBaseUrl": "https://example.workday.com/ccx/api"},
+    )
+
+    assert state["status"] == "in-progress"
+    assert state["phases"]["preflight"]["status"] == "complete"
+    assert state["phases"]["entra"]["status"] == "complete"
+    assert state["phases"]["workday-admin"]["status"] == "pending"
+    assert state["phases"]["connections"]["status"] == "pending"
+    assert state["phases"]["runtime"]["status"] == "pending"
+    assert state["phases"]["employee-validation"]["status"] == "pending"
+
+
+def test_maker_change_preserves_reusable_tenant_foundation(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    _set_foundation_data(store)
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.capture_tenant_foundation()
+
+    state = store.merge_section(
+        "operators",
+        {"powerPlatformMaker": {"username": "new@example.com"}},
+    )
+
+    assert state["status"] == "in-progress"
+    assert all(phase["status"] == "pending" for phase in state["phases"].values())
+    assert state["tenantFoundation"] is not None
+
+
 def test_v2_state_is_downgraded_when_completion_has_no_evidence(
     tmp_path: Path,
 ) -> None:
@@ -211,6 +411,203 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 3
+    assert upgraded["schemaVersion"] == 5
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
+
+
+def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 3
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        actions = set(model.PHASE_REQUIRED_ACTIONS[phase_id])
+        actions.discard("workday-topics-activated")
+        phase = state["phases"][phase_id]
+        phase["status"] = "complete"
+        phase["completedActions"] = sorted(actions)
+        phase["evidence"] = [
+            {"action": action, "outcome": "verified"} for action in sorted(actions)
+        ]
+    state["status"] = "ready"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 5
+    assert upgraded["status"] == "in-progress"
+    assert upgraded["phases"]["runtime"]["status"] == "active"
+    assert upgraded["phases"]["employee-validation"]["status"] == "pending"
+    assert upgraded["migration"]["source"] == "workday-connect-state-v3"
+
+
+def test_v4_migration_captures_complete_tenant_foundation(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 4
+    state.pop("tenantFoundation")
+    state["scope"].update(
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        }
+    )
+    state["identifiers"].update(
+        {
+            "entraAppId": "app-id",
+            "entraAppObjectId": "app-object-id",
+            "entraServicePrincipalId": "service-principal-id",
+            "entraAppIdUri": "api://app-id",
+            "workdaySamlEntityId": "http://www.workday.com/contoso",
+            "scopeGuid": "scope-id",
+            "signingCertificate": {
+                "thumbprint": "thumbprint",
+                "validFrom": "2026-01-01",
+                "validTo": "2027-01-01",
+            },
+            "oauthClientId": "oauth-client-id",
+        }
+    )
+    state["endpoints"].update(
+        {
+            "oauthTokenUrl": "https://example.workday.com/oauth/token",
+            "restBaseUrl": "https://example.workday.com/ccx/api",
+            "soapBaseUrl": "https://example.workday.com/ccx/service/contoso",
+        }
+    )
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        actions = sorted(model.PHASE_REQUIRED_ACTIONS[phase_id])
+        phase = state["phases"][phase_id]
+        phase["status"] = "complete"
+        phase["completedActions"] = actions
+        phase["evidence"] = [
+            {"action": action, "outcome": "verified"} for action in actions
+        ]
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 5
+    assert upgraded["migration"]["source"] == "workday-connect-state-v4"
+    assert upgraded["tenantFoundation"]["scope"] == {
+        "entraTenantId": "tenant-id",
+        "workdayTenant": "contoso",
+    }
+    assert path.with_name("config.pre-v5.json").exists()
+
+
+def test_matching_foundation_restores_workday_after_entra_reread(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "agent": {"slug": "agent-a"},
+            "environmentId": "environment-a",
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    _set_foundation_data(store)
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.capture_tenant_foundation()
+
+    changed = store.merge_section(
+        "scope",
+        {
+            "agent": {"slug": "agent-b"},
+            "environmentId": "environment-b",
+        },
+    )
+    assert changed["phases"]["workday-admin"]["status"] == "pending"
+    assert changed["tenantFoundation"] is not None
+
+    store.merge_section(
+        "identifiers",
+        {
+            "signingCertificate": {
+                "thumbprint": "TH UM BP RI NT",
+                "validFrom": "2026-01-01T12:00:00+00:00",
+                "validTo": "2027-01-01T12:00:00+00:00",
+            }
+        },
+    )
+    _complete_phase(
+        store,
+        "preflight",
+        set(model.PHASE_REQUIRED_ACTIONS["preflight"]),
+    )
+    _complete_phase(
+        store,
+        "entra",
+        set(model.PHASE_REQUIRED_ACTIONS["entra"]),
+    )
+    restored, reused = store.restore_workday_foundation()
+
+    assert reused is True
+    assert restored["phases"]["workday-admin"]["status"] == "complete"
+    assert restored["phases"]["connections"]["status"] == "pending"
+    assert any(
+        evidence["action"] == "tenant-foundation-reused"
+        for evidence in restored["phases"]["workday-admin"]["evidence"]
+    )
+
+
+def test_foundation_is_not_reused_for_a_different_workday_tenant(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    _set_foundation_data(store)
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.capture_tenant_foundation()
+
+    store.merge_section("scope", {"workdayTenant": "fabrikam"})
+    restored, reused = store.restore_workday_foundation()
+
+    assert reused is False
+    assert restored["phases"]["workday-admin"]["status"] == "pending"

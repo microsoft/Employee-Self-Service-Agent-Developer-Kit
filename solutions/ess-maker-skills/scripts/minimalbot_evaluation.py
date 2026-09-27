@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 import fnmatch
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 import uuid
@@ -71,6 +71,9 @@ MAKEREVAL_API_VERSION = "2024-10-01"
 MCS_CONNECTOR = "shared_microsoftcopilotstudio"
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
+_EXPECTED_WORKDAY_TOPIC_COUNTS = {
+    "gptagent_copilotforemployeeselfservicehr": 21,
+}
 
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
@@ -230,6 +233,142 @@ def _without_diagnostics(value: Any) -> Any:
     if isinstance(value, list):
         return [_without_diagnostics(child) for child in value]
     return value
+
+
+def blocking_diagnostics(
+    value: Any,
+    *,
+    path: str = "$",
+) -> list[dict[str, str]]:
+    """Return only error diagnostics from a component Object Model tree."""
+    findings: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        diagnostics = value.get("diagnostics")
+        if isinstance(diagnostics, list):
+            for index, diagnostic in enumerate(diagnostics):
+                if not isinstance(diagnostic, dict):
+                    continue
+                kind = str(diagnostic.get("$kind") or "")
+                code = str(diagnostic.get("errorCode") or "")
+                if not code and not kind.casefold().endswith("error"):
+                    continue
+                findings.append(
+                    {
+                        "path": f"{path}.diagnostics[{index}]",
+                        "kind": kind,
+                        "errorCode": code,
+                        "message": str(
+                            diagnostic.get("errorMessage") or ""
+                        ),
+                        "referenceType": str(
+                            diagnostic.get("referenceType") or ""
+                        ),
+                        "referenceId": str(
+                            diagnostic.get("referenceId") or ""
+                        ),
+                    }
+                )
+        for key, child in value.items():
+            if key != "diagnostics":
+                findings.extend(
+                    blocking_diagnostics(child, path=f"{path}.{key}")
+                )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            findings.extend(
+                blocking_diagnostics(child, path=f"{path}[{index}]")
+            )
+    return findings
+
+
+def resolve_workday_dialogs(
+    agent_folder: str | Path,
+    agent_schema: str,
+) -> list[dict[str, str]]:
+    """Resolve the complete mapped Workday dialog set for one agent."""
+    root = Path(agent_folder).resolve()
+    schema = str(agent_schema or "").strip()
+    if not schema:
+        raise MinimalBotEvaluationError(
+            "The active agent schema name is required for Workday activation."
+        )
+    map_path = root / ".component-map.json"
+    try:
+        component_map = json.loads(map_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MinimalBotEvaluationError(
+            f"Could not read the active agent component map: {map_path}: {exc}"
+        ) from exc
+    if not isinstance(component_map, dict):
+        raise MinimalBotEvaluationError(
+            "The active agent component map must contain a JSON object."
+        )
+
+    schema_prefix = f"{schema}.topic.Workday".casefold()
+    entries: list[dict[str, str]] = []
+    component_ids: set[str] = set()
+    schema_names: set[str] = set()
+    for raw_path, raw_entry in component_map.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_entry, dict):
+            continue
+        component_schema = str(raw_entry.get("schemaName") or "").strip()
+        display_name = str(raw_entry.get("displayName") or "").strip()
+        if (
+            raw_entry.get("componentKind") != "DialogComponent"
+            or not component_schema.casefold().startswith(schema_prefix)
+            or not display_name.startswith("Workday")
+        ):
+            continue
+        relative_path = raw_path.replace("\\", "/")
+        safe_path = PurePosixPath(relative_path)
+        if (
+            safe_path.is_absolute()
+            or ".." in safe_path.parts
+            or not safe_path.parts
+            or safe_path.parts[0] != "topics"
+            or not relative_path.endswith(".mcs.yml")
+        ):
+            raise MinimalBotEvaluationError(
+                f"Unsafe Workday topic path in component map: {raw_path}"
+            )
+        local_path = root.joinpath(*safe_path.parts)
+        if not local_path.is_file():
+            raise MinimalBotEvaluationError(
+                f"Mapped Workday topic is missing: {relative_path}"
+            )
+        component_id = str(raw_entry.get("componentId") or "").strip()
+        if not component_id or not component_schema:
+            raise MinimalBotEvaluationError(
+                f"Mapped Workday topic has incomplete identity: {relative_path}"
+            )
+        normalized_id = component_id.casefold()
+        normalized_schema = component_schema.casefold()
+        if normalized_id in component_ids or normalized_schema in schema_names:
+            raise MinimalBotEvaluationError(
+                "The Workday topic map contains duplicate component identity."
+            )
+        component_ids.add(normalized_id)
+        schema_names.add(normalized_schema)
+        entries.append(
+            {
+                "path": relative_path,
+                "componentId": component_id,
+                "schemaName": component_schema,
+                "displayName": display_name,
+            }
+        )
+    if not entries:
+        raise MinimalBotEvaluationError(
+            "No mapped Workday dialog topics were found for the active agent."
+        )
+    expected_count = _EXPECTED_WORKDAY_TOPIC_COUNTS.get(schema.casefold())
+    if expected_count is not None and len(entries) != expected_count:
+        raise MinimalBotEvaluationError(
+            "The active ESS HR component map contains "
+            f"{len(entries)} Workday topics; expected {expected_count}. "
+            "Refresh the workspace before activation."
+        )
+    return sorted(entries, key=lambda entry: entry["path"])
 
 
 def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bool:
@@ -630,6 +769,34 @@ class MinimalBotEvaluationClient:
                 )
 
         verified = self.read_components()
+        verification = self._verify_dialog_components_payload(
+            updates,
+            verified,
+        )
+        return {
+            "updatedComponents": len(changes),
+            **verification,
+        }
+
+    def verify_dialog_components(
+        self,
+        expectations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Reread and verify existing dialog identity, state, and diagnostics."""
+        if not expectations:
+            raise MinimalBotEvaluationError(
+                "No MinimalBot dialog verification was requested."
+            )
+        return self._verify_dialog_components_payload(
+            expectations,
+            self.read_components(),
+        )
+
+    @staticmethod
+    def _verify_dialog_components_payload(
+        updates: list[dict[str, Any]],
+        verified: dict[str, Any],
+    ) -> dict[str, Any]:
         verified_changes = verified.get("botComponentChanges")
         if not isinstance(verified_changes, list):
             raise MinimalBotEvaluationError(
@@ -641,6 +808,7 @@ class MinimalBotEvaluationClient:
             if isinstance(change, dict)
             and isinstance((component := change.get("component")), dict)
         }
+        all_diagnostics: list[dict[str, str]] = []
         for update in updates:
             component_id = str(update["componentId"])
             component = verified_by_id.get(component_id.casefold())
@@ -657,14 +825,43 @@ class MinimalBotEvaluationClient:
                 verified_update = (
                     component.get("status") == update["status"]
                 )
+            diagnostics = (
+                blocking_diagnostics(component)
+                if component is not None
+                else []
+            )
+            for diagnostic in diagnostics:
+                all_diagnostics.append(
+                    {
+                        **diagnostic,
+                        "componentId": component_id,
+                        "schemaName": str(update.get("schemaName") or ""),
+                    }
+                )
+            if (
+                diagnostics
+                and update.get("requireCleanDiagnostics") is True
+            ):
+                first = diagnostics[0]
+                detail = first["errorCode"] or first["kind"] or "error"
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog has blocking diagnostics after "
+                    f"verification ({update.get('schemaName')}): {detail}."
+                )
             if not verified_update:
                 raise MinimalBotEvaluationError(
                     "MinimalBot dialog verification failed for component "
                     f"{component_id}."
                 )
         return {
-            "updatedComponents": len(changes),
             "verifiedComponents": len(updates),
+            "activeComponents": sum(
+                1
+                for update in updates
+                if update.get("state") == "Active"
+                and update.get("status") == "Active"
+            ),
+            "blockingDiagnostics": all_diagnostics,
         }
 
     # -- push ---------------------------------------------------------------

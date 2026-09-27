@@ -9,10 +9,7 @@ import pytest
 
 
 SCRIPTS = (
-    Path(__file__).resolve().parents[2]
-    / "solutions"
-    / "ess-maker-skills"
-    / "scripts"
+    Path(__file__).resolve().parents[2] / "solutions" / "ess-maker-skills" / "scripts"
 )
 sys.path.insert(0, str(SCRIPTS))
 
@@ -35,9 +32,7 @@ def _state():
             "agent": {"botId": BOT_ID},
         }
     )
-    state["operators"]["powerPlatformMaker"] = {
-        "username": "maker@contoso.com"
-    }
+    state["operators"]["powerPlatformMaker"] = {"username": "maker@contoso.com"}
     state["phases"]["connections"]["status"] = "complete"
     return state
 
@@ -115,9 +110,7 @@ def _records():
             },
             "agent-workday": {
                 "connectionreferencelogicalname": (
-                    "contoso."
-                    "55555555-5555-5555-5555-555555555555."
-                    "shared_workdaysoap"
+                    "contoso.55555555-5555-5555-5555-555555555555.shared_workdaysoap"
                 ),
                 "connectionreferencedisplayname": "ESS HR Workday",
                 "connectionid": "agent-workday-connection",
@@ -182,21 +175,19 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
     result = runtime.run_runtime_operation(
         _state(),
         apply=False,
-        token_provider=lambda url, preferred_username: token_calls.append(
-            (url, preferred_username)
-        )
-        or "token",
+        token_provider=lambda url, preferred_username: (
+            token_calls.append((url, preferred_username)) or "token"
+        ),
         identity_provider=_identity,
         **_discovery_dependencies(records),
     )
 
-    assert token_calls == [
-        ("https://org.crm.dynamics.com", "maker@contoso.com")
-    ]
+    assert token_calls == [("https://org.crm.dynamics.com", "maker@contoso.com")]
     bindings = result["plan"]["connectionBindings"]
-    assert {
-        value["connectionId"] for value in bindings.values()
-    } == {WORKDAY_CONNECTION, DATAVERSE_CONNECTION}
+    assert {value["connectionId"] for value in bindings.values()} == {
+        WORKDAY_CONNECTION,
+        DATAVERSE_CONNECTION,
+    }
     assert result["approvalSummary"]["connections"] == [
         "Workday",
         "Dataverse",
@@ -210,6 +201,47 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
     assert len(result["plan"]["flows"]) == 3
     assert "userContext" not in result["plan"]
     assert "token" not in json.dumps(result).casefold()
+
+
+def test_runtime_plan_requires_verified_physical_connections():
+    state = _state()
+    state["phases"]["connections"]["status"] = "pending"
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="connection sign-ins",
+    ):
+        runtime.run_runtime_operation(
+            state,
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            **_discovery_dependencies(_records()),
+        )
+
+
+def test_physical_connection_verification_returns_safe_live_evidence():
+    result = runtime.verify_physical_connections(
+        _state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        runner=_pac_runner,
+    )
+
+    assert result == {
+        "makerUsername": "maker@contoso.com",
+        "connections": [
+            {
+                "connector": "shared_workdaysoap",
+                "displayName": "Workday",
+            },
+            {
+                "connector": "shared_commondataserviceforapps",
+                "displayName": "Dataverse",
+            },
+        ],
+    }
+    assert WORKDAY_CONNECTION not in json.dumps(result)
+    assert DATAVERSE_CONNECTION not in json.dumps(result)
 
 
 def test_runtime_apply_verifies_all_mutations(monkeypatch):
@@ -233,9 +265,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
 
     def authorization_runner(command, **_kwargs):
-        assert command[command.index("-PreferredUsername") + 1] == (
-            "maker@contoso.com"
-        )
+        assert command[command.index("-PreferredUsername") + 1] == ("maker@contoso.com")
         assert command[-2] == "-WorkflowId"
         return SimpleNamespace(
             returncode=0,
@@ -270,10 +300,7 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         ("runtime-flows-active", "verified"),
         ("delegated-authorization-configured", "verified"),
     ]
-    assert all(
-        value["connectionid"]
-        for value in records["references"].values()
-    )
+    assert all(value["connectionid"] for value in records["references"].values())
     assert all(
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
@@ -320,9 +347,7 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
                 stdout="[FAIL] denied",
                 stderr="",
             ),
-            stage_recorder=lambda action, _evidence: recorded_stages.append(
-                action
-            ),
+            stage_recorder=lambda action, _evidence: recorded_stages.append(action),
             **_discovery_dependencies(records),
         )
 
@@ -330,9 +355,7 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
         "connection-references-bound",
         "runtime-flows-active",
     ]
-    assert all(
-        value["connectionid"] for value in records["references"].values()
-    )
+    assert all(value["connectionid"] for value in records["references"].values())
     assert all(
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
@@ -424,9 +447,7 @@ def test_runtime_ambiguity_reports_only_safe_display_names():
         {
             "name": WORKDAY_CONNECTION,
             "properties": {
-                "apiId": (
-                    "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
-                ),
+                "apiId": ("/providers/Microsoft.PowerApps/apis/shared_workdaysoap"),
                 "displayName": "Workday Primary",
                 "statuses": [{"status": "Connected"}],
             },
@@ -434,9 +455,7 @@ def test_runtime_ambiguity_reports_only_safe_display_names():
         {
             "name": "raw-connection-id-that-must-not-appear",
             "properties": {
-                "apiId": (
-                    "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
-                ),
+                "apiId": ("/providers/Microsoft.PowerApps/apis/shared_workdaysoap"),
                 "displayName": "Workday Secondary",
                 "statuses": [{"status": "Connected"}],
             },

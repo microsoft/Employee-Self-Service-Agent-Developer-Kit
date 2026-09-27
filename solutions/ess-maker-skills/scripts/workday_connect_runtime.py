@@ -75,16 +75,14 @@ def _select_connection(
         and _connected(value)
         and (
             not explicit_id
-            or str(value.get("name") or "").casefold()
-            == explicit_id.casefold()
+            or str(value.get("name") or "").casefold() == explicit_id.casefold()
         )
     ]
     if len(matches) != 1:
         safe = sorted(
             {
                 str(
-                    (value.get("properties") or {}).get("displayName")
-                    or connector_name
+                    (value.get("properties") or {}).get("displayName") or connector_name
                 )
                 for value in matches
             }
@@ -122,8 +120,7 @@ def _list_connections(
         )
     except subprocess.TimeoutExpired as exc:
         raise WorkdayConnectRuntimeError(
-            "PAC did not finish listing environment connections within "
-            "2 minutes."
+            "PAC did not finish listing environment connections within 2 minutes."
         ) from exc
     if result.returncode != 0:
         raise WorkdayConnectRuntimeError(
@@ -156,9 +153,7 @@ def _single_rows(
             if observed == name.casefold():
                 grouped[name].append(row)
     invalid = {
-        name: len(matches)
-        for name, matches in grouped.items()
-        if len(matches) != 1
+        name: len(matches) for name, matches in grouped.items() if len(matches) != 1
     }
     if invalid:
         raise WorkdayConnectRuntimeError(
@@ -176,8 +171,7 @@ def _runtime_references(
     query: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, dict[str, Any]]:
     filters = " or ".join(
-        "connectionreferencelogicalname eq "
-        f"'{_odata_literal(name)}'"
+        f"connectionreferencelogicalname eq '{_odata_literal(name)}'"
         for name in logical_names
     )
     rows = query(
@@ -204,9 +198,7 @@ def _runtime_flows(
     *,
     query: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, dict[str, Any]]:
-    filters = " or ".join(
-        f"name eq '{_odata_literal(name)}'" for name in flow_names
-    )
+    filters = " or ".join(f"name eq '{_odata_literal(name)}'" for name in flow_names)
     rows = query(
         environment_url,
         token,
@@ -218,8 +210,7 @@ def _runtime_flows(
     outside_package = [
         name
         for name, row in flows.items()
-        if str(row.get("workflowid") or "").casefold()
-        not in allowed_workflow_ids
+        if str(row.get("workflowid") or "").casefold() not in allowed_workflow_ids
     ]
     if outside_package:
         raise WorkdayConnectRuntimeError(
@@ -297,9 +288,7 @@ def _runtime_discovery_context(
     scope = state.get("scope") or {}
     operators = state.get("operators") or {}
     agent = scope.get("agent") or {}
-    package_flavor = _required_text(
-        scope, "packageFlavor", "Workday package flavor"
-    )
+    package_flavor = _required_text(scope, "packageFlavor", "Workday package flavor")
     active_catalog = catalog or load_catalog()
     package = (active_catalog.get("packages") or {}).get(package_flavor)
     if not isinstance(package, Mapping):
@@ -349,8 +338,7 @@ def _build_runtime_discovery(
         logical_names[0]: {
             "connectionId": str(workday.get("name") or ""),
             "displayName": str(
-                (workday.get("properties") or {}).get("displayName")
-                or "Workday"
+                (workday.get("properties") or {}).get("displayName") or "Workday"
             ),
             "connector": references_catalog["workday"]["connectorName"],
         },
@@ -417,9 +405,7 @@ def _build_runtime_discovery(
         "plan": {**plan, "planHash": plan_hash(plan)},
         "approvalSummary": {
             "environmentUrl": context["environmentUrl"],
-            "agentName": str(
-                context["agent"].get("name") or "ESS HR agent"
-            ),
+            "agentName": str(context["agent"].get("name") or "ESS HR agent"),
             "connections": [
                 value["displayName"] for value in target_connections.values()
             ],
@@ -444,35 +430,20 @@ def discover_runtime_plan(
 ) -> dict[str, Any]:
     """Discover exact runtime targets and return a stable approval plan."""
     context = _runtime_discovery_context(state, catalog)
-    pac = pac_resolver()
-    pac_auth(
-        pac,
-        ring=context["pacRing"],
-        environment_url=context["environmentUrl"],
-        preferred_username=context["maker"],
+    workday, dataverse = _discover_physical_connections(
+        context,
+        workday_connection_id=workday_connection_id,
+        dataverse_connection_id=dataverse_connection_id,
+        pac_resolver=pac_resolver,
+        pac_auth=pac_auth,
         runner=runner,
-    )
-    connections = _list_connections(
-        pac,
-        context["environmentUrl"],
-        runner=runner,
-    )
-    references_catalog = context["referencesCatalog"]
-    workday = _select_connection(
-        connections,
-        references_catalog["workday"]["connectorName"],
-        explicit_id=workday_connection_id,
-    )
-    dataverse = _select_connection(
-        connections,
-        references_catalog["dataverse"]["connectorName"],
-        explicit_id=dataverse_connection_id,
     )
 
     active_token = token or token_provider(
         context["environmentUrl"],
         preferred_username=context["maker"],
     )
+    references_catalog = context["referencesCatalog"]
     logical_names = [
         references_catalog["workday"]["logicalName"],
         references_catalog["dataverse"]["logicalName"],
@@ -509,6 +480,82 @@ def discover_runtime_plan(
     )
 
 
+def _discover_physical_connections(
+    context: Mapping[str, Any],
+    *,
+    workday_connection_id: str | None,
+    dataverse_connection_id: str | None,
+    pac_resolver: Callable[[], Path],
+    pac_auth: Callable[..., Any],
+    runner: Callable[..., subprocess.CompletedProcess],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    pac = pac_resolver()
+    pac_auth(
+        pac,
+        ring=context["pacRing"],
+        environment_url=context["environmentUrl"],
+        preferred_username=context["maker"],
+        runner=runner,
+    )
+    connections = _list_connections(
+        pac,
+        context["environmentUrl"],
+        runner=runner,
+    )
+    references_catalog = context["referencesCatalog"]
+    workday = _select_connection(
+        connections,
+        references_catalog["workday"]["connectorName"],
+        explicit_id=workday_connection_id,
+    )
+    dataverse = _select_connection(
+        connections,
+        references_catalog["dataverse"]["connectorName"],
+        explicit_id=dataverse_connection_id,
+    )
+    return workday, dataverse
+
+
+def verify_physical_connections(
+    state: Mapping[str, Any],
+    *,
+    workday_connection_id: str | None = None,
+    dataverse_connection_id: str | None = None,
+    catalog: Mapping[str, Any] | None = None,
+    pac_resolver: Callable[[], Path] = resolve_pac_executable,
+    pac_auth: Callable[..., Any] = ensure_pac_auth,
+    runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
+) -> dict[str, Any]:
+    """Verify selected Workday and Dataverse connections from live state."""
+    context = _runtime_discovery_context(state, catalog)
+    workday, dataverse = _discover_physical_connections(
+        context,
+        workday_connection_id=workday_connection_id,
+        dataverse_connection_id=dataverse_connection_id,
+        pac_resolver=pac_resolver,
+        pac_auth=pac_auth,
+        runner=runner,
+    )
+    return {
+        "makerUsername": context["maker"],
+        "connections": [
+            {
+                "connector": context["referencesCatalog"]["workday"]["connectorName"],
+                "displayName": str(
+                    (workday.get("properties") or {}).get("displayName") or "Workday"
+                ),
+            },
+            {
+                "connector": context["referencesCatalog"]["dataverse"]["connectorName"],
+                "displayName": str(
+                    (dataverse.get("properties") or {}).get("displayName")
+                    or "Microsoft Dataverse"
+                ),
+            },
+        ],
+    }
+
+
 def run_runtime_operation(
     state: Mapping[str, Any],
     *,
@@ -521,15 +568,13 @@ def run_runtime_operation(
     identity_provider: Callable[..., dict[str, str]] = require_identity,
     query: Callable[..., list[dict[str, Any]]] = query_all,
     updater: Callable[..., bool] = update_record,
-    authorization_runner: Callable[
-        ..., subprocess.CompletedProcess
-    ] = _default_runner,
+    authorization_runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
     stage_recorder: Callable[[str, Mapping[str, Any]], Any] | None = None,
     **discovery_dependencies: Any,
 ) -> dict[str, Any]:
     """Run runtime preview or apply while reusing one Dataverse token."""
     phases = state.get("phases") or {}
-    if apply and (phases.get("connections") or {}).get("status") != "complete":
+    if (phases.get("connections") or {}).get("status") != "complete":
         raise WorkdayConnectRuntimeError(
             "Complete the Workday connection sign-ins before runtime wiring."
         )
@@ -643,10 +688,7 @@ def _run_authorization(
                     "authorization records."
                 )
             elif "[fail]" in normalized:
-                evidence = (
-                    "The authorization script emitted an explicit [FAIL] "
-                    "result."
-                )
+                evidence = "The authorization script emitted an explicit [FAIL] result."
             else:
                 evidence = (
                     f"The authorization script exited with code "
@@ -696,8 +738,7 @@ def _apply_connection_binding_stage(
     environment_url = plan["scope"]["dataverseUrl"]
     targets = plan["connectionBindings"]
     bindings = {
-        logical_name: target["connectionId"]
-        for logical_name, target in targets.items()
+        logical_name: target["connectionId"] for logical_name, target in targets.items()
     }
     references = _runtime_references(
         environment_url,
@@ -736,12 +777,10 @@ def _apply_connection_binding_stage(
     ]
     if wrong:
         raise WorkdayConnectRuntimeError(
-            "Connection-reference verification failed: "
-            + ", ".join(sorted(wrong))
+            "Connection-reference verification failed: " + ", ".join(sorted(wrong))
         )
     return {
-        logical_name: target["displayName"]
-        for logical_name, target in targets.items()
+        logical_name: target["displayName"] for logical_name, target in targets.items()
     }
 
 
@@ -797,8 +836,7 @@ def _apply_flow_activation_stage(
     ]
     if inactive:
         raise WorkdayConnectRuntimeError(
-            "Runtime flow verification failed: "
-            + ", ".join(sorted(inactive))
+            "Runtime flow verification failed: " + ", ".join(sorted(inactive))
         )
     return flow_names
 
@@ -809,9 +847,7 @@ def apply_runtime_plan(
     token: str,
     query: Callable[..., list[dict[str, Any]]] = query_all,
     updater: Callable[..., bool] = update_record,
-    authorization_runner: Callable[
-        ..., subprocess.CompletedProcess
-    ] = _default_runner,
+    authorization_runner: Callable[..., subprocess.CompletedProcess] = _default_runner,
     stage_recorder: Callable[[str, Mapping[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Apply and verify ordered idempotent stages with one Dataverse token."""

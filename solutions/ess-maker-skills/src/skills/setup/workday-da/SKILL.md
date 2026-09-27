@@ -1,10 +1,12 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Connect Workday to the ESS HR agent
 
-This skill is a thin conversational client for
-`scripts/workday_connect.py`. The controller and
-`.local/connect/workday-da/config.json` own lifecycle state. Do not create,
-copy, update, or infer status from a Markdown checklist.
+Guide the customer through one resumable Workday connection lifecycle. Use
+`scripts/workday_connect.py` and
+`.local/connect/workday-da/config.json` internally; do not create, copy,
+update, or infer status from a Markdown checklist.
+Use `shared/config-schema.md` as the internal state and migration reference;
+it is not a customer-executed phase and must not be shown as an extra step.
 
 ## Safety contract
 
@@ -26,17 +28,39 @@ copy, update, or infer status from a Markdown checklist.
 - Never diagnose a permission problem from a guess. Show the API, CLI, or
   checked-in script evidence that produced the diagnosis.
 
+## Customer-facing language contract
+
+Commands, file paths, JSON payloads, state keys, plan hashes, checkpoint IDs,
+schema names, component maps, API names, and implementation terms in this skill
+are internal execution instructions. Never show or narrate them unless the
+customer explicitly asks for technical diagnostics.
+
+Customer-facing messages must describe only:
+
+- the customer-visible target and current phase;
+- who needs to perform a portal or Workday action;
+- the exact portal navigation and field value needed for that action;
+- whether a supported change or verification succeeded;
+- the concise remediation needed when it did not.
+
+Translate internal outcomes into plain language. For example, say **all
+Workday topics are enabled**, not that component `state` and `status` are
+`Active`; say **the installed Workday agent is missing required flow
+registrations**, not `CloudFlow NotFound`, `MinimalBot`, component-map, or
+native-definition terminology. Never paste raw command output or internal
+identifiers into a customer message.
+
 ## Capability contract
 
 Describe each action according to who actually performs it:
 
 | Phase | What the skill can do | What remains a user or administrator action |
 | --- | --- | --- |
-| Preflight | Verify the selected agent, environment, account, and package; install the reviewed package through PAC when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
+| Preflight | Verify the selected agent, environment, account, and supported Workday package; install the package when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
 | Microsoft Entra | Discover exact applications, validate roles, generate one administrator handoff, reread Graph, and record verified evidence | Create or change the Entra application in the portal |
 | Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
-| Connections | Discover connected physical connections, verify agent parameter sharing, and record the maker's flow-attachment confirmation | Create connector connections, complete connector OAuth, connect flows to the agent, and enable parameter sharing in Copilot Studio |
-| Runtime | After approval, bind reviewed solution connection references, activate reviewed package flows, configure delegated authorization, redirect an empty User Context scaffold, and activate the complete mapped Workday topic set after connection sharing | Resolve custom topic content or a package without a reviewed runtime catalog |
+| Connections | Record the reviewed physical-connection readiness evidence | Create connector connections and complete connector OAuth |
+| Runtime | After approval, bind the Workday connections, activate the package flows, configure required runtime permissions, connect employee context routing, enable every Workday topic included with the agent, and verify the result | Connect flows to the agent and enable parameter sharing in Copilot Studio when those settings require maker interaction |
 | Employee validation | Record safe validation evidence and retain the current blocker | Publish the agent, sign in as an employee, and run the real employee scenario |
 
 Never say "I changed," "I configured," "I enabled," or "I updated" for a
@@ -44,7 +68,49 @@ manual action. Say what the administrator or maker must do, then say what the
 skill can verify or record afterward. Claim an automated change only after its
 command succeeded and the target was reread.
 
+## Tenant foundation and deployment scope
+
+Treat the Entra and Workday configuration as a reusable tenant foundation.
+Treat package installation, physical connections, runtime flow wiring, native
+topics, publishing, and employee validation as environment-and-agent-specific
+deployment work.
+
+- A different Power Platform environment, ESS HR agent, or maker account must
+  not by itself require the Entra or Workday administrators to repeat setup.
+- When the Entra tenant, Workday tenant, and exact Entra application still
+  match stored foundation evidence, reread the Entra configuration. If it is
+  healthy, reuse the stored Workday administrator evidence and continue at
+  Connections.
+- Involve an administrator only when foundation evidence is absent, the
+  tenant/application identity changed, the Entra reread finds drift, the
+  signing certificate changed or is unhealthy, or a later connection/runtime
+  test proves the stored Workday configuration no longer works.
+- Never reuse foundation evidence across a different Entra tenant, Workday
+  tenant, SAML Service Provider ID, Entra application, or signing certificate.
+- Preserve the full administrator guide even on the reuse path, but show only
+  the affected remediation step instead of making the user repeat healthy
+  configuration.
+
 ## Start or resume
+
+Before running status, show this readiness briefing on every invocation. A
+resumed setup must still make its remaining administrator dependencies clear.
+
+> Here's who may be needed to connect Workday to your ESS HR agent:
+>
+> | Phase | Responsibility | Who is needed |
+> | --- | --- | --- |
+> | Preflight | Verify the ESS HR agent and environment, and install or verify the supported Workday package | Power Platform Environment Maker with package installation access |
+> | Microsoft Entra | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required |
+> | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy | Workday Administrator |
+> | Connections | Create the Workday OAuthUser and Dataverse connections and complete connector sign-in | Power Platform Environment Maker |
+> | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization |
+> | Employee validation | Publish the agent and validate a real signed-in employee scenario | Environment Maker and Workday test employee; Workday Administrator or network administrator if remediation is needed |
+>
+> I'll automate checks and supported changes where reliable APIs are available.
+> For Workday or portal-only settings, I'll provide the responsible
+> administrator with the exact steps and wait for verified evidence. The
+> environment isn't ready until the signed-in Workday scenario succeeds.
 
 Run:
 
@@ -52,17 +118,26 @@ Run:
 python scripts/workday_connect.py status
 ```
 
-Show only the returned `progressText`, current blocker when present, and the
-next phase. Do not render internal action IDs, hashes, or the full JSON state.
+After the readiness briefing:
 
-The six customer-facing phases are:
+1. Render the returned `progressText` as Markdown. It is the visible six-row
+   roadmap and must not be collapsed into a one-line phase list.
+2. Render the returned `nextPhaseSummary` in this form:
 
-1. Preflight
-2. Microsoft Entra
-3. Workday administrator
-4. Connections
-5. Runtime configuration
-6. Employee validation
+   ```markdown
+   ### Next phase: {title}
+
+   What happens in this phase:
+
+   - {whatHappens item 1}
+   - {whatHappens item 2}
+   - {whatHappens item 3}
+   ```
+
+3. Show the current blocker afterward when one is present.
+
+Do not render internal action IDs, hashes, or the full JSON state. Do not
+replace the phase explanation with only `Next phase: {title}`.
 
 Dispatch from `nextPhaseId`:
 

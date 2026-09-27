@@ -27,7 +27,8 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 3' in schema
+    assert '"schemaVersion": 5' in schema
+    assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
     assert not (_WORKDAY_DA / "shared" / "checklist-updater.md").exists()
@@ -81,5 +82,19 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "one administrator handoff" in tenant
     assert "one response form" in tenant
     assert "repeated confirmations" in tenant
+    assert "identityProviderQuestion" in tenant
+    assert "Microsoft Entra ID" in tenant
+    assert "Okta" in tenant
+    assert "Ping Identity" in tenant
+    assert "Another sign-in provider" in tenant
+    assert "No enabled SAML row" in tenant
+    assert "I'm not sure" in tenant
+    assert "Do not save the option\n     label as the issuer" in tenant
+    assert "certificateSelectionQuestion" in tenant
+    assert "The new certificate created from the Entra Base64 file" in tenant
+    assert "A different existing Workday certificate" in tenant
+    assert "No certificate is selected" in tenant
+    assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
+    assert "exact certificate name displayed by\n     Workday" in tenant
     assert "CHECKPOINT_RESULT" not in tenant
     assert "ACK=true" not in tenant

@@ -57,7 +57,9 @@ def test_token_fallback_uses_the_kit_authentication_helper() -> None:
     assert "get_dataverse_token.py" in script
     assert script.count("Test-DataverseToken -Resource $Resource -Token $tok") == 2
     assert "returned a token that was rejected" in script
-    assert "auth.authenticate(args.environment.rstrip(\"/\"))" in helper
+    assert "token = auth.authenticate(" in helper
+    assert 'args.environment.rstrip("/")' in helper
+    assert "preferred_username=args.preferred_username" in helper
 
 
 def test_candidate_tokens_are_attached_to_dataverse_requests() -> None:

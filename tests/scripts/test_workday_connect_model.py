@@ -23,7 +23,8 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 3
+    assert state["schemaVersion"] == 5
+    assert state["tenantFoundation"] is None
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:
@@ -54,9 +55,7 @@ def test_plan_hash_is_stable_and_ignores_embedded_hash() -> None:
     observed = model.plan_hash(plan)
 
     assert observed == model.plan_hash({**plan, "planHash": observed})
-    assert observed != model.plan_hash(
-        {**plan, "actions": ["configure-saml"]}
-    )
+    assert observed != model.plan_hash({**plan, "actions": ["configure-saml"]})
 
 
 def test_sensitive_fields_are_rejected() -> None:
@@ -66,7 +65,7 @@ def test_sensitive_fields_are_rejected() -> None:
         model.reject_sensitive_data({"nested": {"access_token": "secret"}})
 
 
-def test_progress_text_is_compact() -> None:
+def test_progress_text_is_a_visible_phase_roadmap() -> None:
     import workday_connect_model as model
 
     state = model.default_state()
@@ -74,6 +73,50 @@ def test_progress_text_is_compact() -> None:
     state["phases"]["entra"]["status"] = "active"
 
     assert model.progress_text(state) == (
-        "Progress: Preflight ✓ · Entra → · Workday · Connections · "
-        "Runtime · Validate"
+        "### Workday connection progress\n"
+        "\n"
+        "| # | Phase | Status |\n"
+        "|---:|---|---|\n"
+        "| 1 | Preflight | Complete |\n"
+        "| 2 | Microsoft Entra | In progress |\n"
+        "| 3 | Workday administrator | Pending |\n"
+        "| 4 | Connections | Pending |\n"
+        "| 5 | Runtime configuration | Pending |\n"
+        "| 6 | Employee validation | Pending |"
     )
+    assert model.next_phase_summary(state) == {
+        "id": "entra",
+        "title": "Microsoft Entra",
+        "whatHappens": [
+            (
+                "Find the exact Workday enterprise application in the selected "
+                "Microsoft Entra tenant."
+            ),
+            (
+                "Guide an Entra administrator through the required SAML, "
+                "permission, consent, assignment, and employee sign-in settings."
+            ),
+            "Verify the application and signing-certificate configuration.",
+        ],
+    }
+
+
+def test_pending_current_phase_is_marked_next() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+
+    assert "| 1 | Preflight | Next |" in model.progress_text(state)
+
+
+def test_blocked_phase_requires_complete_blocker_evidence() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["phases"]["preflight"]["status"] = "blocked"
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="complete blocker",
+    ):
+        model.validate_state(state)

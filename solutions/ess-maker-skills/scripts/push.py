@@ -59,6 +59,7 @@ from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
     is_minimalbot,
+    resolve_workday_dialogs,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
@@ -1123,6 +1124,34 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
+def update_baseline_paths(agent_dir, relative_paths):
+    """Refresh exact successfully pushed files in the local baseline."""
+    import shutil
+
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    working = collect_files(agent_dir)
+    selected = {
+        str(path).replace("\\", "/")
+        for path in relative_paths
+        if isinstance(path, str) and path
+    }
+    for rel in list(selected):
+        if rel.startswith("template-configs/") and rel.endswith(".xml"):
+            meta = rel[:-4] + ".meta.json"
+            if meta in working:
+                selected.add(meta)
+
+    for rel in selected:
+        if rel not in working:
+            raise OSError(
+                f"Successfully pushed baseline path is missing locally: {rel}"
+            )
+        src = os.path.join(agent_dir, *rel.split("/"))
+        dst = os.path.join(baseline_dir, *rel.split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 def _warn_minimalbot_non_eval_changes(agent_dir):
     """Report pending non-evaluation changes the MinimalBot push cannot deploy.
 
@@ -1160,6 +1189,7 @@ def _minimalbot_topic_update_plan(
     only_globs,
     *,
     activate_topics=False,
+    agent_schema=None,
 ):
     """Build guarded updates for scoped, existing MinimalBot topics."""
     if not only_globs:
@@ -1189,22 +1219,63 @@ def _minimalbot_topic_update_plan(
             "only; create/delete is not allowed: "
             + ", ".join(selected_new_or_deleted)
         )
-    component_map = load_component_map(agent_dir)
-    selected_activation = sorted(
-        path
-        for path, entry in component_map.items()
-        if activate_topics
-        and matches_only(path, only_globs)
-        and path.replace("\\", "/").startswith("topics/")
-        and path.endswith(".mcs.yml")
-        and isinstance(entry, dict)
-        and entry.get("componentKind") == "DialogComponent"
-        and path in working
-    )
-    if activate_topics and not selected_activation:
-        raise MinimalBotEvaluationError(
-            "No existing dialog topics matched the requested activation scope."
+    raw_component_map = load_component_map(agent_dir)
+    component_map = {}
+    for raw_path, entry in raw_component_map.items():
+        normalized_path = str(raw_path).replace("\\", "/")
+        if normalized_path in component_map:
+            raise MinimalBotEvaluationError(
+                "The component map contains duplicate normalized paths."
+            )
+        component_map[normalized_path] = entry
+
+    selected_activation = []
+    if activate_topics:
+        workday_entries = resolve_workday_dialogs(
+            agent_dir,
+            agent_schema or "",
         )
+        workday_by_path = {
+            entry["path"]: entry
+            for entry in workday_entries
+        }
+        selected_activation = sorted(
+            path
+            for path in workday_by_path
+            if matches_only(path, only_globs)
+        )
+        missing = sorted(set(workday_by_path) - set(selected_activation))
+        selected_dialogs = {
+            str(path).replace("\\", "/")
+            for path, entry in component_map.items()
+            if isinstance(path, str)
+            and isinstance(entry, dict)
+            and entry.get("componentKind") == "DialogComponent"
+            and matches_only(path, only_globs)
+        }
+        non_workday = sorted(selected_dialogs - set(workday_by_path))
+        if missing or non_workday:
+            details = []
+            if missing:
+                details.append(
+                    f"{len(missing)} mapped Workday topic(s) were omitted"
+                )
+            if non_workday:
+                details.append(
+                    "the activation scope also matched non-Workday topics: "
+                    + ", ".join(non_workday)
+                )
+            raise MinimalBotEvaluationError(
+                "Workday activation must target exactly the complete mapped "
+                "Workday topic set; "
+                + "; ".join(details)
+                + "."
+            )
+        selected_changed = [
+            path
+            for path in selected_changed
+            if path in workday_by_path
+        ]
     selected_paths = sorted(
         set(selected_changed) | set(selected_activation)
     )
@@ -1336,6 +1407,7 @@ def _minimalbot_push(
             agent_dir,
             only_globs,
             activate_topics=activate_topics,
+            agent_schema=(config.get("agent") or {}).get("schemaName"),
         )
     except MinimalBotEvaluationError as exc:
         print(f"ERROR: {exc}")
@@ -1361,13 +1433,26 @@ def _minimalbot_push(
         except MinimalBotEvaluationError as exc:
             print(f"ERROR: {exc}")
             sys.exit(1)
-        update_baseline_scoped(agent_dir, only_globs)
+        pushed_content_paths = [
+            entry["path"]
+            for entry in topic_updates
+            if "dialog" in entry
+        ]
+        if pushed_content_paths:
+            update_baseline_paths(agent_dir, pushed_content_paths)
         if client.signed_in_username:
             print(f"Signed in as: {client.signed_in_username}")
         print(
             f"\n✅ Updated and verified "
             f"{result['verifiedComponents']} topic component(s)."
         )
+        diagnostics = result.get("blockingDiagnostics") or []
+        if diagnostics:
+            print(
+                "WARNING: The topics are enabled, but "
+                f"{len(diagnostics)} dependency diagnostic(s) remain. "
+                "Continue with Workday connection verification."
+            )
         return
 
     _warn_minimalbot_non_eval_changes(agent_dir)

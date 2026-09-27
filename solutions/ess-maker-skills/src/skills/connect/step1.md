@@ -11,11 +11,15 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected only if
-  `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
-  its `agentSlug` exactly matches the active agent, and every phase is `done`.
-  Shared provider setup state is not agent connection state and must not make
-  a sibling or newly selected agent appear connected.
+- **Workday** — connected if either:
+  - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
+    its `agentSlug` exactly matches the active agent, and every phase is
+    `done`; or
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 5`,
+    `status: "ready"`, and `scope.agent.slug` and `scope.agent.botId` exactly
+    match the active native agent.
+  Shared provider state without an exact active-agent match must not make a
+  sibling or newly selected agent appear connected.
 
 ---
 

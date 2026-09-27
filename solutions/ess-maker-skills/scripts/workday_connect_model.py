@@ -15,7 +15,7 @@ import re
 from typing import Any, Mapping
 
 
-STATE_SCHEMA_VERSION = 3
+STATE_SCHEMA_VERSION = 5
 CONTROLLER_CONTRACT_VERSION = 1
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 
@@ -44,46 +44,85 @@ class PhaseStatus(str, Enum):
 class PhaseDefinition:
     identifier: Phase
     title: str
-    short_title: str
+    what_happens: tuple[str, ...]
     prerequisite: Phase | None
 
 
 PHASE_DEFINITIONS = (
-    PhaseDefinition(Phase.PREFLIGHT, "Preflight", "Preflight", None),
     PhaseDefinition(
-        Phase.ENTRA,
-        "Microsoft Entra",
-        "Entra",
-        Phase.PREFLIGHT,
+        identifier=Phase.PREFLIGHT,
+        title="Preflight",
+        what_happens=(
+            "Confirm the selected ESS HR agent, Power Platform environment, "
+            "and maker account.",
+            "Verify Dataverse is available in the selected environment.",
+            "Install or verify the supported Workday package.",
+        ),
+        prerequisite=None,
     ),
     PhaseDefinition(
-        Phase.WORKDAY_ADMIN,
-        "Workday administrator",
-        "Workday",
-        Phase.ENTRA,
+        identifier=Phase.ENTRA,
+        title="Microsoft Entra",
+        what_happens=(
+            "Find the exact Workday enterprise application in the selected "
+            "Microsoft Entra tenant.",
+            "Guide an Entra administrator through the required SAML, "
+            "permission, consent, assignment, and employee sign-in settings.",
+            "Verify the application and signing-certificate configuration.",
+        ),
+        prerequisite=Phase.PREFLIGHT,
     ),
     PhaseDefinition(
-        Phase.CONNECTIONS,
-        "Connections",
-        "Connections",
-        Phase.WORKDAY_ADMIN,
+        identifier=Phase.WORKDAY_ADMIN,
+        title="Workday administrator",
+        what_happens=(
+            "Identify the existing Workday sign-in provider without replacing "
+            "another federation.",
+            "Configure certificate trust, OAuth, the employee API client, and "
+            "the employee authentication policy.",
+            "Validate the non-secret connection values needed by Power "
+            "Platform.",
+        ),
+        prerequisite=Phase.ENTRA,
     ),
     PhaseDefinition(
-        Phase.RUNTIME,
-        "Runtime configuration",
-        "Runtime",
-        Phase.CONNECTIONS,
+        identifier=Phase.CONNECTIONS,
+        title="Connections",
+        what_happens=(
+            "Find or guide creation of the Workday and Microsoft Dataverse "
+            "connections in the selected environment.",
+            "Use the verified Workday resource URL, token URL, and OAuth "
+            "client ID.",
+            "Verify both connections are live before runtime configuration.",
+        ),
+        prerequisite=Phase.WORKDAY_ADMIN,
     ),
     PhaseDefinition(
-        Phase.EMPLOYEE_VALIDATION,
-        "Employee validation",
-        "Validate",
-        Phase.RUNTIME,
+        identifier=Phase.RUNTIME,
+        title="Runtime configuration",
+        what_happens=(
+            "Preview and approve the exact Workday runtime changes.",
+            "Bind connections, activate required flows, configure permissions "
+            "and employee context, and enable the Workday topics.",
+            "Reread the agent and preserve any remaining blocker for safe "
+            "resume.",
+        ),
+        prerequisite=Phase.CONNECTIONS,
+    ),
+    PhaseDefinition(
+        identifier=Phase.EMPLOYEE_VALIDATION,
+        title="Employee validation",
+        what_happens=(
+            "Publish the configured agent.",
+            "Run a real Workday scenario as a signed-in non-maker employee.",
+            "Confirm employee context and Workday data work without an "
+            "unexpected repeated sign-in.",
+        ),
+        prerequisite=Phase.RUNTIME,
     ),
 )
 PHASE_BY_ID = {
-    definition.identifier.value: definition
-    for definition in PHASE_DEFINITIONS
+    definition.identifier.value: definition for definition in PHASE_DEFINITIONS
 }
 
 PHASE_REQUIRED_ACTIONS = {
@@ -94,9 +133,7 @@ PHASE_REQUIRED_ACTIONS = {
             "administrator-configuration-verified",
         }
     ),
-    Phase.WORKDAY_ADMIN.value: frozenset(
-        {"administrator-response-validated"}
-    ),
+    Phase.WORKDAY_ADMIN.value: frozenset({"administrator-response-validated"}),
     Phase.CONNECTIONS.value: frozenset({"physical-connections-verified"}),
     Phase.RUNTIME.value: frozenset(
         {
@@ -106,10 +143,30 @@ PHASE_REQUIRED_ACTIONS = {
             "user-context-v2-configured",
             "agent-parameter-sharing-verified",
             "flow-attachment-confirmed",
+            "workday-topics-activated",
         }
     ),
     Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
 }
+TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS = frozenset(
+    {
+        "entraAppId",
+        "entraAppObjectId",
+        "entraServicePrincipalId",
+        "entraAppIdUri",
+        "workdaySamlEntityId",
+        "scopeGuid",
+        "signingCertificate",
+        "oauthClientId",
+    }
+)
+TENANT_FOUNDATION_REQUIRED_ENDPOINT_KEYS = frozenset(
+    {
+        "oauthTokenUrl",
+        "restBaseUrl",
+        "soapBaseUrl",
+    }
+)
 
 LEGACY_PHASE_ROWS = {
     Phase.PREFLIGHT: ("DA1.1",),
@@ -265,6 +322,7 @@ def default_state() -> dict[str, Any]:
         "identifiers": {},
         "endpoints": {},
         "operators": {},
+        "tenantFoundation": None,
         "phases": {
             definition.identifier.value: default_phase_state()
             for definition in PHASE_DEFINITIONS
@@ -276,9 +334,7 @@ def default_state() -> dict[str, Any]:
 
 def _validate_phase_state(phase_id: str, value: Any) -> None:
     if not isinstance(value, dict):
-        raise WorkdayConnectModelError(
-            f"Phase '{phase_id}' state must be an object."
-        )
+        raise WorkdayConnectModelError(f"Phase '{phase_id}' state must be an object.")
     required = {
         "status",
         "completedActions",
@@ -296,6 +352,19 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
     if value["status"] not in {status.value for status in PhaseStatus}:
         raise WorkdayConnectModelError(
             f"Phase '{phase_id}' has invalid status '{value['status']}'."
+        )
+    blocker = value["blocker"]
+    if value["status"] == PhaseStatus.BLOCKED.value:
+        if not isinstance(blocker, dict) or any(
+            not str(blocker.get(key) or "").strip()
+            for key in ("operation", "errorType", "message")
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' must include a complete blocker."
+            )
+    elif blocker is not None:
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' can contain a blocker only while blocked."
         )
     if not isinstance(value["completedActions"], list) or any(
         not isinstance(action, str) or not action
@@ -336,18 +405,118 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         if missing_actions or missing_evidence:
             details = []
             if missing_actions:
-                details.append(
-                    "actions=" + ", ".join(missing_actions)
-                )
+                details.append("actions=" + ", ".join(missing_actions))
             if missing_evidence:
-                details.append(
-                    "evidence=" + ", ".join(missing_evidence)
-                )
+                details.append("evidence=" + ", ".join(missing_evidence))
             raise WorkdayConnectModelError(
                 f"Phase '{phase_id}' cannot be complete without required "
                 + " and ".join(details)
                 + "."
             )
+
+
+def _validate_tenant_foundation(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation must be an object or null."
+        )
+    required = {
+        "scope",
+        "identifiers",
+        "endpoints",
+        "phases",
+        "capturedAt",
+    }
+    missing = sorted(required - value.keys())
+    if missing:
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation is missing: " + ", ".join(missing)
+        )
+    for field in ("scope", "identifiers", "endpoints", "phases"):
+        if not isinstance(value[field], dict):
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation.{field} must be an object."
+            )
+    for key in ("entraTenantId", "workdayTenant"):
+        if not str(value["scope"].get(key) or "").strip():
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation.scope.{key} is required."
+            )
+    missing_identifiers = sorted(
+        key
+        for key in TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS
+        if value["identifiers"].get(key) is None or value["identifiers"].get(key) == ""
+    )
+    if missing_identifiers:
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation identifiers are missing: "
+            + ", ".join(missing_identifiers)
+        )
+    certificate = value["identifiers"].get("signingCertificate")
+    if not isinstance(certificate, dict) or any(
+        not str(certificate.get(key) or "").strip()
+        for key in ("thumbprint", "validFrom", "validTo")
+    ):
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation signingCertificate must contain "
+            "thumbprint, validFrom, and validTo."
+        )
+    missing_endpoints = sorted(
+        key
+        for key in TENANT_FOUNDATION_REQUIRED_ENDPOINT_KEYS
+        if not str(value["endpoints"].get(key) or "").strip()
+    )
+    if missing_endpoints:
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation endpoints are missing: "
+            + ", ".join(missing_endpoints)
+        )
+    if set(value["phases"]) != {
+        Phase.ENTRA.value,
+        Phase.WORKDAY_ADMIN.value,
+    }:
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation phases must contain exactly Entra and "
+            "Workday administrator evidence."
+        )
+    for phase_id, snapshot in value["phases"].items():
+        if not isinstance(snapshot, dict):
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation phase '{phase_id}' must be an object."
+            )
+        actions = snapshot.get("completedActions")
+        evidence = snapshot.get("evidence")
+        if not isinstance(actions, list) or any(
+            not isinstance(action, str) or not action for action in actions
+        ):
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation phase '{phase_id}' actions are invalid."
+            )
+        if not isinstance(evidence, list) or any(
+            not isinstance(record, dict)
+            or not isinstance(record.get("action"), str)
+            or not record.get("action")
+            for record in evidence
+        ):
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation phase '{phase_id}' evidence is invalid."
+            )
+        required_actions = PHASE_REQUIRED_ACTIONS[phase_id]
+        if not required_actions <= set(actions):
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation phase '{phase_id}' is incomplete."
+            )
+        evidence_actions = {str(record.get("action") or "") for record in evidence}
+        if not required_actions <= evidence_actions:
+            raise WorkdayConnectModelError(
+                f"Workday tenantFoundation phase '{phase_id}' lacks evidence."
+            )
+    if not isinstance(value["capturedAt"], str) or not value["capturedAt"]:
+        raise WorkdayConnectModelError(
+            "Workday tenantFoundation.capturedAt is required."
+        )
 
 
 def validate_state(state: Any) -> dict[str, Any]:
@@ -370,6 +539,7 @@ def validate_state(state: Any) -> dict[str, Any]:
             raise WorkdayConnectModelError(
                 f"Workday connect state '{field}' must be an object."
             )
+    _validate_tenant_foundation(state.get("tenantFoundation"))
     phases = state["phases"]
     if set(phases) != set(PHASE_BY_ID):
         raise WorkdayConnectModelError(
@@ -393,8 +563,7 @@ def validate_state(state: Any) -> dict[str, Any]:
     expected_status = (
         "ready"
         if all(
-            phase["status"] == PhaseStatus.COMPLETE.value
-            for phase in phases.values()
+            phase["status"] == PhaseStatus.COMPLETE.value for phase in phases.values()
         )
         else "in-progress"
     )
@@ -408,26 +577,43 @@ def validate_state(state: Any) -> dict[str, Any]:
 def next_phase_id(state: Mapping[str, Any]) -> str | None:
     phases = state["phases"]
     for definition in PHASE_DEFINITIONS:
-        if (
-            phases[definition.identifier.value]["status"]
-            != PhaseStatus.COMPLETE.value
-        ):
+        if phases[definition.identifier.value]["status"] != PhaseStatus.COMPLETE.value:
             return definition.identifier.value
     return None
 
 
 def progress_text(state: Mapping[str, Any]) -> str:
-    markers = {
-        PhaseStatus.PENDING.value: "",
-        PhaseStatus.ACTIVE.value: "→",
-        PhaseStatus.BLOCKED.value: "!",
-        PhaseStatus.COMPLETE.value: "✓",
+    labels = {
+        PhaseStatus.PENDING.value: "Pending",
+        PhaseStatus.ACTIVE.value: "In progress",
+        PhaseStatus.BLOCKED.value: "Needs attention",
+        PhaseStatus.COMPLETE.value: "Complete",
     }
-    parts = []
-    for definition in PHASE_DEFINITIONS:
+    next_phase = next_phase_id(state)
+    rows = [
+        "### Workday connection progress",
+        "",
+        "| # | Phase | Status |",
+        "|---:|---|---|",
+    ]
+    for index, definition in enumerate(PHASE_DEFINITIONS, start=1):
         status = state["phases"][definition.identifier.value]["status"]
-        marker = markers[status]
-        parts.append(
-            f"{definition.short_title}{f' {marker}' if marker else ''}"
-        )
-    return "Progress: " + " · ".join(parts)
+        label = labels[status]
+        if status == PhaseStatus.PENDING.value and (
+            definition.identifier.value == next_phase
+        ):
+            label = "Next"
+        rows.append(f"| {index} | {definition.title} | {label} |")
+    return "\n".join(rows)
+
+
+def next_phase_summary(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    phase_id = next_phase_id(state)
+    if phase_id is None:
+        return None
+    definition = PHASE_BY_ID[phase_id]
+    return {
+        "id": phase_id,
+        "title": definition.title,
+        "whatHappens": list(definition.what_happens),
+    }

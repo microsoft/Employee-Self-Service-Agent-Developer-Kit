@@ -51,22 +51,57 @@ Show the returned target, Service Provider ID, Entra Application ID URI,
 permissions, and administrator actions once as one handoff. Do not add a
 separate apply approval: the controller does not perform these portal changes.
 
-## Administrator apply, then skill verify
+## Reuse an existing tenant foundation
 
-Present only these administrator actions:
+If `foundationReuse.eligible` is `true`, do not ask an administrator to repeat
+the setup. Reread the exact application and service principal through Microsoft
+Graph and verify the settings listed below. If every check passes, call
+`record-entra`; it restores the matching Workday administrator phase from
+tenant-scoped evidence and the lifecycle continues at Connections.
 
-- reuse the exact app or instantiate the Workday gallery app;
-- configure SAML mode and the signing certificate;
-- retain both distinct identifier URIs:
-  - Workday SAML Service Provider ID:
-    `http://www.workday.com/{workdayTenant}`
-  - Entra Application ID URI: `api://{entraAppId}`
-- expose `user_impersonation`;
-- pre-authorize Workday connector app
-  `4e4707ca-5f53-46a6-a819-f7765446e6ff`;
-- add `openid`, `profile`, and `User.Read`;
-- grant administrator consent;
-- configure user assignment, NameID, and SAML signing as required.
+If a check fails, show only the affected remediation step from the
+administrator guide. Do not present the entire guide as mandatory merely
+because the user selected another environment, agent, or maker account.
+
+If `requiresRediscovery` is `true`, ask an Entra administrator to open
+**Microsoft Entra admin center -> Enterprise applications -> New application**,
+find the official **Workday** gallery application, and create it in the selected
+tenant. Stop after creation and repeat exact application discovery. Entra must
+assign the application and service-principal IDs before later settings can be
+planned safely.
+
+## Administrator guide for missing or changed settings
+
+Use the exact application returned by discovery. Never select another
+application by display name alone.
+
+1. **Configure SAML.** Open **Enterprise applications -> the exact Workday
+   application -> Single sign-on -> SAML**. Set **Identifier (Entity ID)** to
+   `http://www.workday.com/{workdayTenant}`. Create or activate the signing
+   certificate required by the tenant. Under **SAML Signing Certificate ->
+   Edit**, set **Signing Option** to **Sign SAML response and assertion**.
+2. **Keep the two identifiers distinct.** The Workday SAML Service Provider ID
+   is `http://www.workday.com/{workdayTenant}`. The Entra application ID URI is
+   `api://{entraAppId}`. Never copy one into the other field.
+3. **Expose the connector scope.** Open **App registrations -> the exact
+   Workday application -> Expose an API**. Set the Application ID URI to
+   `api://{entraAppId}`, add the `user_impersonation` scope, then add authorized
+   client application `4e4707ca-5f53-46a6-a819-f7765446e6ff` for that scope.
+4. **Add delegated permissions.** Open **App registrations -> the exact
+   Workday application -> API permissions -> Add a permission -> Microsoft
+   Graph -> Delegated permissions**. Add `openid`, `profile`, and `User.Read`,
+   then select **Grant admin consent** using a consent-capable administrator.
+5. **Configure assignment.** Open **Enterprise applications -> the exact
+   Workday application -> Users and groups**. If assignment is required,
+   assign the intended ESS employee security group; prefer a maintained group
+   over individual users.
+6. **Configure NameID.** Open **Enterprise applications -> the exact Workday
+   application -> Single sign-on -> Attributes & Claims**. Edit **Unique User
+   Identifier (Name ID)** so the source attribute equals the Workday User Name
+   used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
+
+After each change, reread the setting where Microsoft Graph exposes it. Do not
+ask for a broad “everything is done” confirmation.
 
 The administrator performs those changes in the Microsoft Entra admin center.
 After the administrator confirms completion, reread the application and
@@ -87,11 +122,50 @@ Pass the Graph reread as:
 python scripts/workday_connect.py record-entra --verification-json '{...}'
 ```
 
-The JSON must contain the exact application and service-principal identity,
-both identifier URIs, the `user_impersonation` scope GUID, safe certificate
-metadata, and true verification flags for SAML mode, signing certificate,
-connector preauthorization, delegated permissions, administrator consent, and
-user assignment/NameID. The command validates and completes the phase
-atomically. If evidence is incomplete, record one handoff and leave the phase
-waiting. Resume by rereading available settings, not by repeating all
-instructions.
+The JSON must contain the Graph-authenticated `tenantId`, exact application and
+service-principal identity, both identifier URIs, the `user_impersonation`
+scope GUID, safe certificate metadata, and one evidence object for each check:
+
+```json
+{
+  "checks": {
+    "samlMode": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "signingCertificate": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "connectorPreauthorized": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "graphDelegatedPermissions": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "adminConsent": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "userAssignment": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "nameId": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph"
+    },
+    "samlSigningOption": {
+      "outcome": "confirmed",
+      "provenance": "administrator-attestation"
+    }
+  }
+}
+```
+
+Use administrator attestation only for a portal-only setting that Graph cannot
+read. The command rejects a different tenant and incomplete or provenance-free
+evidence. Resume by rereading available settings and showing only failed
+remediation, not by repeating the full guide.

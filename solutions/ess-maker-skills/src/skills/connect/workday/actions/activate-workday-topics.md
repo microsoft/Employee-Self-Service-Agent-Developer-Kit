@@ -21,9 +21,12 @@ Select every entry that satisfies all of these conditions:
 - the mapped file exists beneath the selected agent directory.
 
 Reject unsafe paths, duplicate component IDs, missing schema names, or an empty
-result. Do not use a handwritten filename list. For the current reviewed ESS
-HR template this resolves all 21 Workday dialog topics from `agent.yml`,
-including business topics and supporting system topics.
+result. `push.py --activate` independently enforces the same exact mapped set
+and rejects omitted Workday topics or any selected non-Workday dialog; these
+instructions are not the only safety boundary. Do not use a handwritten
+filename list. For the current reviewed ESS HR template this resolves all 21
+Workday dialog topics from `agent.yml`, including business topics and
+supporting system topics.
 
 Sort the mapped paths and build `{WORKDAY_TOPIC_ARGS}` as one exact
 `--only "{path}"` argument per selected topic.
@@ -45,8 +48,8 @@ differs or any non-Workday topic appears.
 **Message:**
 
 The Workday connections and shared parameters are ready. I found
-**{WORKDAY_TOPIC_COUNT}** Workday topics from the installed agent definition.
-I can now enable that exact set without changing their dialog content.
+**{WORKDAY_TOPIC_COUNT}** Workday topics included with this agent. I can now
+enable all of them without changing their configured behavior.
 
 **End message.**
 
@@ -81,8 +84,23 @@ python scripts/push.py {WORKDAY_TOPIC_ARGS} --activate --yes --preferred-usernam
 
 `push.py` sends a full `BotComponentUpdate` for each selected topic through the
 native MinimalBot components endpoint, preserves the dialog body, sets both
-`state` and `status` to `Active`, and rereads every component. Continue only
-when the command reports that all `{WORKDAY_TOPIC_COUNT}` topics were verified.
+`state` and `status` to `Active`, and rereads every component. Continue when the
+command reports that all `{WORKDAY_TOPIC_COUNT}` topics were verified Active.
+The command may also report dependency diagnostics such as
+`CloudFlow NotFound`; preserve those diagnostics for the separate native-flow
+registration check, but do not treat them as an activation failure.
+
+Record the live activation evidence:
+
+```powershell
+python scripts/workday_connect.py record-topic-activation
+```
+
+This controller command resolves the same complete mapped Workday topic set,
+authenticates as the recorded maker, and rereads `state` and `status` for every
+topic. It accepts no manual boolean evidence. If dependency diagnostics remain,
+the command records activation as complete and leaves the runtime phase blocked
+on native flow registration.
 
 Set `ACTION_RESULT = "applied"` and
 `WORKDAY_TOPICS_ACTIVATED = true`. On any error or count mismatch, stop and

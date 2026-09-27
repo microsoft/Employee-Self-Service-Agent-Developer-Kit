@@ -12,19 +12,16 @@ Every **Message** block is the exact text to show the user. Copy it verbatim.
 ## A.0 — Role gate (Environment Maker)
 
 The lifecycle runner already applied `permission-gate.md` before reading this
-file — see `src/skills/connect/shared/lifecycle-runner.md` section L.4a, which
-uses `GATE_MODE = "programmatic"` with the same Dataverse security-role query
-`src/skills/setup/workday/install-workday-extension-pack.md` section P5.0
-uses for this exact role. This file starts from a passed gate; it does not
-re-check it.
+file using the exact programmatic Dataverse security-role query and accepted
+role names declared for this phase in `contract.json`. This file starts from a
+passed gate; it does not re-check it.
 
 ## A.1 — Explain what's about to change
 
 **Message:**
 
-I'll wire your agent's **User Context** topic to call Workday on every
-conversation. Without this, Workday topics respond with "This feature isn't
-available yet."
+I'll connect your agent's **User Context** setup to Workday so it can identify
+the signed-in employee when a Workday request begins.
 
 **End message.**
 
@@ -122,7 +119,9 @@ If it fails, stop and report the failure; do not return an applied result.
 
 ## A.5 — Return
 
-Return `ACTION_RESULT` to the lifecycle runner. It re-runs `WD-REST-002` for
-`AGENT_SLUG` only after an `"applied"` result and decides whether to advance
-or use the named restore point — this file does not re-run the checkpoint
-itself.
+Return `ACTION_RESULT` to the lifecycle runner. With an `"applied"` result,
+also return the exact `{USER_CONTEXT_TOPIC_PATH}` as
+`ACTION_ROLLBACK_PUSH_GLOB`. Do not return a wildcard or directory. The runner
+re-runs `WD-REST-002` for `AGENT_SLUG` only after an `"applied"` result and
+decides whether to advance or use the named restore point — this file does not
+re-run the checkpoint itself.
