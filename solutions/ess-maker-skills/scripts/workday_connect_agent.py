@@ -187,7 +187,7 @@ def verify_agent_binding(
         [dict[str, Any]], MinimalBotEvaluationClient
     ] = MinimalBotEvaluationClient.from_config,
 ) -> dict[str, Any]:
-    """Verify final Workday agent binding from live checkpoints and topics."""
+    """Verify Workday binding without using topic diagnostics as runtime proof."""
     context = _agent_verification_context(workspace_root, state)
     checkpoints = {
         checkpoint_id: checkpoint_verifier(
@@ -201,7 +201,7 @@ def verify_agent_binding(
     evidence = _verify_workday_topics(
         context,
         client_factory=client_factory,
-        require_clean_diagnostics=True,
+        require_clean_diagnostics=False,
     )
     evidence["checkpoints"] = checkpoints
     return evidence

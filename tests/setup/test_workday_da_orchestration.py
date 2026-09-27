@@ -281,7 +281,14 @@ def test_capability_claims_match_controller_surface() -> None:
         in (normalized["power_platform"])
     )
     assert "reruns `WD-REST-002` and `WD-CONN-013`" in (normalized["power_platform"])
-    assert "no topic contains an error diagnostic" in (normalized["power_platform"])
+    assert (
+        "do not treat them alone as proof of a broken package"
+        in (normalized["power_platform"])
+    )
+    assert (
+        "signed-in employee scenario remains the functional confirmation"
+        in (normalized["power_platform"])
+    )
     assert "These are real automated changes" in (normalized["power_platform"])
     assert "The skill cannot publish the agent" in normalized["employee"]
 

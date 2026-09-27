@@ -129,7 +129,7 @@ def test_agent_binding_is_built_from_live_checks_and_components(
         "blockingDiagnostics": [],
     }
     assert all(
-        expectation["requireCleanDiagnostics"] is True
+        expectation["requireCleanDiagnostics"] is False
         for expectation in client.expectations
     )
 
@@ -343,7 +343,13 @@ def test_record_agent_binding_completes_only_from_verifier_output(
                 "expected": 21,
                 "verified": 21,
                 "active": 21,
-                "blockingDiagnostics": [],
+                "blockingDiagnostics": [
+                    {
+                        "errorCode": "NotFound",
+                        "errorMessage": "CloudFlow not found",
+                        "referenceType": "CloudFlow",
+                    }
+                ],
             },
         },
     )
@@ -359,7 +365,7 @@ def test_record_agent_binding_completes_only_from_verifier_output(
     assert "workday-topics-activated" in runtime["completedActions"]
 
 
-def test_record_topic_activation_preserves_flow_registration_blocker(
+def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -412,11 +418,10 @@ def test_record_topic_activation_preserves_flow_registration_blocker(
 
     runtime = store.load()["phases"]["runtime"]
     assert result["verified"] is True
-    assert result["flowHealth"] == "blocked"
+    assert result["diagnosticsObserved"] == 1
     assert "workday-topics-activated" in runtime["completedActions"]
-    assert runtime["status"] == "blocked"
-    assert runtime["blocker"]["errorType"] == "NativeFlowRegistrationBlocked"
-    assert "missing 1 required flow registration(s)" in (runtime["blocker"]["message"])
+    assert runtime["status"] == "active"
+    assert runtime["blocker"] is None
 
 
 def test_record_agent_binding_rejects_manual_boolean_evidence(

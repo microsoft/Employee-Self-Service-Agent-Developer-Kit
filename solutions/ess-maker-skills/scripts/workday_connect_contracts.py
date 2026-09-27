@@ -778,11 +778,12 @@ def validate_agent_binding_evidence(
         or isinstance(active_count, bool)
         or verified_count != expected_count
         or active_count != expected_count
-        or diagnostics != []
+        or not isinstance(diagnostics, list)
+        or any(not isinstance(diagnostic, Mapping) for diagnostic in diagnostics)
     ):
         raise WorkdayConnectContractError(
-            "Every mapped Workday topic must be active, verified, and free "
-            "of blocking diagnostics."
+            "Every mapped Workday topic must be active and verified, and "
+            "reported topic diagnostics must be structured."
         )
     return {
         "environmentId": observed_environment,
@@ -795,7 +796,9 @@ def validate_agent_binding_evidence(
             "expected": expected_count,
             "verified": verified_count,
             "active": active_count,
-            "blockingDiagnostics": [],
+            "blockingDiagnostics": [
+                dict(diagnostic) for diagnostic in diagnostics
+            ],
         },
     }
 

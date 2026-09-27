@@ -87,8 +87,8 @@ native MinimalBot components endpoint, preserves the dialog body, sets both
 `state` and `status` to `Active`, and rereads every component. Continue when the
 command reports that all `{WORKDAY_TOPIC_COUNT}` topics were verified Active.
 The command may also report dependency diagnostics such as
-`CloudFlow NotFound`; preserve those diagnostics for the separate native-flow
-registration check, but do not treat them as an activation failure.
+`CloudFlow NotFound`; preserve those diagnostics for support correlation, but
+do not treat them as an activation failure or proof of a broken package.
 
 Record the live activation evidence:
 
@@ -98,9 +98,9 @@ python scripts/workday_connect.py record-topic-activation
 
 This controller command resolves the same complete mapped Workday topic set,
 authenticates as the recorded maker, and rereads `state` and `status` for every
-topic. It accepts no manual boolean evidence. If dependency diagnostics remain,
-the command records activation as complete and leaves the runtime phase blocked
-on native flow registration.
+topic. It accepts no manual boolean evidence. The command records activation as
+complete when all mapped topics are Active; topic metadata diagnostics do not
+create a runtime blocker by themselves.
 
 Set `ACTION_RESULT = "applied"` and
 `WORKDAY_TOPICS_ACTIVATED = true`. On any error or count mismatch, stop and

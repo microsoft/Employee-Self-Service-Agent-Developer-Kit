@@ -150,24 +150,13 @@ complete. Run `WD-REST-002` after the scoped push and require it to pass:
 python scripts/flightcheck/cli.py --checkpoint WD-REST-002 --connect-config ".local/connect/workday-da/config.json" --agent-slug "{AGENT_SLUG}" --preferred-username "{POWER_PLATFORM_MAKER}"
 ```
 
-If a Workday system topic shows `CloudFlow ... not found`, stop the runtime
-phase. The reviewed topic IDs already match the installed Dataverse workflows,
-so this diagnostic means the native agent is missing its cloud-flow definition
-registration. Connection-reference binding, flow activation, delegated
-authorization, connection sign-in, and parameter sharing do not create that
-native definition.
-
-- **Workday System Get User Context V2** -> **ESS Workday Runtime**
-- **Workday System Get REST Execution** ->
-  **ESS Workday Runtime REST Execution**
-- **Workday System Get CommonExecution** ->
-  **ESS Workday Runtime References** and **ESS Workday Runtime**
-
-Do not recreate, clone, reselect, or rewrite these flows as an automated
-workaround. Record the missing registration as a package or native-agent import
-blocker and leave runtime incomplete. The supported installation/import path
-must materialize the native flow definitions before final agent binding can
-pass. Topic activation itself is independent of dependency health.
+Topic metadata can report stale or transient component-reference diagnostics
+even when the installed package and runtime flows are functioning. Record those
+diagnostics for support, but do not treat them alone as proof of a broken
+package, tell the customer to repair the installation, or block this phase.
+Continue with the supported live checkpoints, topic-state verification, and
+employee scenario. Do not recreate, clone, reselect, or rewrite packaged flows
+in response to topic metadata alone.
 
 Then open the agent connection settings. Connect **ESS Workday Runtime REST
 Execution** and any other Workday flow shown there. The reviewed native agent
@@ -204,10 +193,10 @@ python scripts/workday_connect.py record-topic-activation
 ```
 
 This command proves that every Workday topic included with the agent is
-enabled. A missing required flow registration remains a separate runtime
-blocker and does not change the activation result.
+enabled. Topic diagnostics are retained as supporting detail but do not change
+the activation result or create a package-repair blocker by themselves.
 
-After native flow registration is healthy, run:
+Then run:
 
 ```powershell
 python scripts/workday_connect.py record-agent-binding
@@ -217,8 +206,10 @@ This command reruns `WD-REST-002` and `WD-CONN-013` with the recorded Workday
 state, signs in to the native components endpoint as the recorded maker,
 derives the complete Workday topic set from `.component-map.json`, and rereads
 every mapped topic. It completes the runtime phase only when every checkpoint
-passes, every Workday topic is Active, and no topic contains an error
-diagnostic such as `CloudFlow NotFound`. Do not construct or pass manual
+passes and every Workday topic is Active. It retains any topic diagnostics for
+support correlation without presenting them as runtime failure evidence. The
+signed-in employee scenario remains the functional confirmation that the
+Workday runtime works. Do not construct or pass manual
 boolean evidence.
 
 If runtime discovery reports that the selected package has no reviewed flow

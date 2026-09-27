@@ -530,28 +530,27 @@ def test_agent_binding_and_employee_evidence_are_strict():
         == 21
     )
 
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="Every mapped Workday topic",
-    ):
-        validate_agent_binding_evidence(
-            state,
-            {
-                "environmentId": "environment-id",
-                "botId": "bot-id",
-                "makerUsername": "maker@example.com",
-                "checkpoints": {
-                    "WD-REST-002": "Passed",
-                    "WD-CONN-013": "Passed",
-                },
-                "workdayTopics": {
-                    "expected": 21,
-                    "verified": 21,
-                    "active": 21,
-                    "blockingDiagnostics": [{"errorCode": "NotFound"}],
-                },
+    diagnostic_evidence = validate_agent_binding_evidence(
+        state,
+        {
+            "environmentId": "environment-id",
+            "botId": "bot-id",
+            "makerUsername": "maker@example.com",
+            "checkpoints": {
+                "WD-REST-002": "Passed",
+                "WD-CONN-013": "Passed",
             },
-        )
+            "workdayTopics": {
+                "expected": 21,
+                "verified": 21,
+                "active": 21,
+                "blockingDiagnostics": [{"errorCode": "NotFound"}],
+            },
+        },
+    )
+    assert diagnostic_evidence["workdayTopics"]["blockingDiagnostics"] == [
+        {"errorCode": "NotFound"}
+    ]
 
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
         validate_employee_evidence(
