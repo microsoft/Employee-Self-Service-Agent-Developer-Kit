@@ -108,17 +108,20 @@
         {
           "id": "essMaker.actionsView",
           "name": "Quick start",
-          "contextualTitle": "Agent Developer Kit"
+          "contextualTitle": "Agent Developer Kit",
+          "size": 20
         },
         {
           "id": "essMaker.customizationView",
           "name": "Customization",
-          "contextualTitle": "Agent Developer Kit"
+          "contextualTitle": "Agent Developer Kit",
+          "size": 70
         },
         {
           "id": "essMaker.helpView",
           "name": "Help",
-          "contextualTitle": "Agent Developer Kit"
+          "contextualTitle": "Agent Developer Kit",
+          "size": 10
         }
       ]
     },
@@ -147,9 +150,8 @@
           {
             "id": "getting-started",
             "title": "Getting started",
-            "description": "Not sure where to begin? Just tell Copilot Chat what you want.\nTo set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. To check readiness before you deploy, ask **\"Help me run a flightcheck\"**.\n[Open Copilot Chat](command:workbench.action.chat.open)",
-            "media": { "markdown": "walkthrough/getting-started.md" },
-            "completionEvents": ["onCommand:workbench.action.chat.open"]
+            "description": "Not sure where to begin? Just tell Copilot Chat what you want. For example, to set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. And to check readiness before you deploy, ask **\"Help me run a flightcheck\"**.",
+            "media": { "markdown": "walkthrough/getting-started.md" }
           }
         ]
       }

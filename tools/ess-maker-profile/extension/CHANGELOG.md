@@ -3,13 +3,15 @@
 ## 0.4.29 (POC)
 
 - **Rail + walkthrough UX overhaul.** The **Quick start** panel is now a simple
-  tree (matching Customization and Help) with just **Start setup** and
-  **Tutorial**. **Customization** now lists Customize landing page, Create a
-  topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests,
-  and Push to Copilot Studio (Set up moved out; topic create/update split;
-  Flight check/Push renamed). **Help** is trimmed to **Documentation** only.
-  The getting-started walkthrough is reduced to two steps — **What ADK does**
-  and **Getting started** — with clearer onboarding copy and prompt guidance.
+  tree (matching Customization and Help) with **Tutorial** then **Start setup**;
+  once setup completes, **Start setup** turns green and shows the connected
+  account. **Customization** lists Customize landing page, Create a topic,
+  Update a topic, Scan for issues, Run a flightcheck, Generate tests, and Push
+  to Copilot Studio — all always clickable, with a one-line "complete setup
+  first" nudge shown above them until setup is done. **Help** is trimmed to
+  **Documentation** only. The three panels open at ~20% / 70% / 10% height. The
+  getting-started walkthrough is reduced to two steps — **What ADK does** and
+  **Getting started** — with clearer onboarding copy and prompt guidance.
 - **Developer mode no longer auto-runs `/setup`.** `/setup` is now user-driven
   in both modes. The installer opens the workspace (no `code chat "/setup"`),
   and the extension no longer re-injects `/setup` on Developer-mode reopens —

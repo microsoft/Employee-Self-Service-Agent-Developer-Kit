@@ -3,7 +3,7 @@
 Not sure where to begin? You don't have to memorize any commands — just tell
 Copilot Chat what you want to do and it will guide you the rest of the way.
 
-Here are a few prompts to try:
+For example, here are a few prompts to try:
 
 - **Set up ESS** — ask *"Help me set up ESS"* to sign in and connect your agent.
 - **Customize the landing page** — ask *"Help me customize the landing page"* to
@@ -14,7 +14,3 @@ Here are a few prompts to try:
 There are many more things you can ask for — creating and updating topics,
 scanning for issues, generating tests, and pushing to Copilot Studio. Describe
 what you want in plain English and Copilot takes it from there.
-
-If you don't already have Copilot Chat open, click the button below.
-
-[Open Copilot Chat](command:workbench.action.chat.open)

@@ -222,6 +222,7 @@ function startPrereqWatcher(context) {
         if (changed) {
             if (_actionsViewProvider) _actionsViewProvider.refresh();
             if (_customizationProvider) _customizationProvider.refresh();
+            if (_quickStartProvider) _quickStartProvider.refresh();
         }
     };
 
@@ -944,21 +945,59 @@ async function openChatWithQuery(query) {
 }
 
 // Webview view provider — renders the button rail.
-class QuickStartTreeProvider {
-    getTreeItem(item) { return item; }
-    getChildren(element) {
-        if (element) return [];
-        const setup = new vscode.TreeItem('Start setup', vscode.TreeItemCollapsibleState.None);
-        setup.iconPath = new vscode.ThemeIcon('account');
-        setup.tooltip = new vscode.MarkdownString('**Start setup**\n\nSign in to your Power Platform environment and connect your agent.');
-        setup.command = { command: 'essMaker.runSetup', title: 'Start setup' };
+// Read the connected environment/agent from .local/config.json so the
+// "Start setup" item can show what the workspace is currently pointed at.
+// Returns { label } or null when the file is missing or unreadable.
+async function getConnectedInfo() {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return null;
+    try {
+        const uri = vscode.Uri.joinPath(folders[0].uri, '.local', 'config.json');
+        const buf = await vscode.workspace.fs.readFile(uri);
+        const cfg = JSON.parse(Buffer.from(buf).toString('utf8'));
+        const name = (cfg.agent && (cfg.agent.name || cfg.agent.displayName)) || cfg.activeAgent;
+        let env = '';
+        try { env = new URL(cfg.dataverseEndpoint).host; } catch {}
+        const label = name || env || 'Connected';
+        return { label, detail: env };
+    } catch {
+        return null;
+    }
+}
 
+class QuickStartTreeProvider {
+    constructor(context) {
+        this._context = context;
+        this._emitter = new vscode.EventEmitter();
+        this.onDidChangeTreeData = this._emitter.event;
+    }
+    refresh() { this._emitter.fire(); }
+    getTreeItem(item) { return item; }
+    async getChildren(element) {
+        if (element) return [];
         const tutorial = new vscode.TreeItem('Tutorial', vscode.TreeItemCollapsibleState.None);
         tutorial.iconPath = new vscode.ThemeIcon('book');
         tutorial.tooltip = 'Open the guided walkthrough.';
         tutorial.command = { command: 'essMaker.openWalkthrough', title: 'Tutorial' };
 
-        return [setup, tutorial];
+        const setup = new vscode.TreeItem('Start setup', vscode.TreeItemCollapsibleState.None);
+        setup.command = { command: 'essMaker.runSetup', title: 'Start setup' };
+        const isSetupDone = getCompleted(this._context).has('setup');
+        const info = isSetupDone ? await getConnectedInfo() : null;
+        if (isSetupDone) {
+            setup.iconPath = new vscode.ThemeIcon('pass-filled', new vscode.ThemeColor('charts.green'));
+            setup.description = (info && info.label) || 'Connected';
+            setup.tooltip = new vscode.MarkdownString(
+                info && info.detail
+                    ? `**Setup complete**\n\nConnected to ${info.detail}. Run setup again to switch environments.`
+                    : '**Setup complete**\n\nRun setup again to switch environments.'
+            );
+        } else {
+            setup.iconPath = new vscode.ThemeIcon('account');
+            setup.tooltip = new vscode.MarkdownString('**Start setup**\n\nSign in to your Power Platform environment and connect your agent.');
+        }
+
+        return [tutorial, setup];
     }
 }
 
@@ -1021,24 +1060,27 @@ class CustomizationTreeProvider {
     getTreeItem(item) { return item; }
     async getChildren(element) {
         if (element) return [];
-        const completed = getCompleted(this._context);
-        return CUSTOMIZATION_ITEMS.map((meta) => {
-            const unlocked = meta.requires.every((r) => completed.has(r));
+        const items = [];
+        // Until setup is complete, show a one-line nudge above the options.
+        // It disappears once "Start setup" turns green (setup connected).
+        if (!getCompleted(this._context).has('setup')) {
+            const note = new vscode.TreeItem('To customize your ESS agent, make sure to complete setup first.', vscode.TreeItemCollapsibleState.None);
+            note.iconPath = new vscode.ThemeIcon('info');
+            note.tooltip = 'Run "Start setup" in the Quick start panel to unlock these options.';
+            note.contextValue = 'adkNote';
+            items.push(note);
+        }
+        for (const meta of CUSTOMIZATION_ITEMS) {
             const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
             item._adkId = meta.id;
             item._adkInfo = `${meta.label}: ${meta.desc}`;
             item.contextValue = 'adkInfo:' + meta.id;
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
-            if (unlocked) {
-                item.iconPath = new vscode.ThemeIcon(meta.icon);
-                item.command = { command: meta.run, title: meta.label };
-            } else {
-                item.iconPath = new vscode.ThemeIcon('lock');
-                item.description = 'Complete setup first';
-                item.command = { command: 'essMaker.itemLocked', title: meta.label };
-            }
-            return item;
-        });
+            item.iconPath = new vscode.ThemeIcon(meta.icon);
+            item.command = { command: meta.run, title: meta.label };
+            items.push(item);
+        }
+        return items;
     }
 }
 
@@ -1057,6 +1099,7 @@ class HelpTreeProvider {
 
 let _customizationProvider = null;
 let _helpProvider = null;
+let _quickStartProvider = null;
 
 // Standard mode ships no guided layout; instead it shows a rendered preview of
 // the workspace README (the "static README preview") alongside the Copilot Chat
@@ -1545,7 +1588,7 @@ function activate(context) {
     // createTreeView so we can react to the user revealing the rail and, in
     // developer mode, transition into the guided welcome walkthrough.
     const quickStartView = vscode.window.createTreeView('essMaker.actionsView', {
-        treeDataProvider: new QuickStartTreeProvider()
+        treeDataProvider: (_quickStartProvider = new QuickStartTreeProvider(context))
     });
     quickStartView.onDidChangeVisibility((e) => {
         if (e.visible) maybeShowWelcomeOnReveal();
