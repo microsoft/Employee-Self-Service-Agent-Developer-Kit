@@ -793,8 +793,8 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 # ``overall``: it splits the NOT_READY verdict into "a check couldn't even run"
 # (``errored`` — an unhandled exception inside a check, runner.py:135) vs.
 # "checks ran and reported failures" (``failed``). Precedence is errored ->
-# failed -> warnings -> ready so the donut surfaces checks that could not be
-# evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
+# failed -> blocked -> warnings -> ready so the donut surfaces checks that
+# could not be evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
 # attribute WHY a check errored (auth vs runtime vs network) — the exception
 # text is never emitted (EUII risk) — so the bucket is deliberately just
 # "errored", not "runtime error". Aria renders the raw value as the slice
@@ -803,17 +803,33 @@ RUN_OUTCOME_READY = "Ready"
 RUN_OUTCOME_WARNINGS = "Ready with warnings"
 RUN_OUTCOME_FAILED = "Failed"
 RUN_OUTCOME_ERRORED = "Blocked (check errored)"
+# BLOCKED is a distinct hard gate: an essential platform capability was
+# unavailable (release-blocking), not a check that failed its assertion or
+# crashed. Without this slice a blocked-only run fell through to
+# RUN_OUTCOME_READY, so the donut said "Ready" for a run the runner scored
+# NOT_READY with exit code 1 (ADO 7943641 carry-over).
+RUN_OUTCOME_BLOCKED = "Blocked (gate)"
 
 
 def derive_run_outcome(run_result: Any) -> str:
-    """Bucket a run into a single verdict slice (errored > failed > warnings > ready)."""
+    """Bucket a run into a single verdict slice.
+
+    Precedence: errored > failed > blocked > warnings > ready. ``errored`` and
+    ``failed`` rank above ``blocked`` only to keep the pre-existing slice
+    ordering stable; all three are NOT_READY. ``blocked`` stays above
+    ``warnings`` because a blocked essential capability is a release gate while
+    warnings are advisory.
+    """
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
+    blocked = getattr(run_result, "blocked", 0) or 0
     warnings = getattr(run_result, "warnings", 0) or 0
     if errors > 0:
         return RUN_OUTCOME_ERRORED
     if failed > 0:
         return RUN_OUTCOME_FAILED
+    if blocked > 0:
+        return RUN_OUTCOME_BLOCKED
     if warnings > 0:
         return RUN_OUTCOME_WARNINGS
     return RUN_OUTCOME_READY
@@ -843,6 +859,14 @@ _WORKDAY_SCOPES = frozenset({
 })
 _SERVICENOW_SCOPES = frozenset({"servicenow"})
 
+# Leading connector tokens for the wrapped run scopes ("profile:<name>" and
+# "checkpoint:<id>") and for connector-led profile names / checkpoint IDs.
+# Profile runs pass scope="profile:workday-da:final" and checkpoint runs pass
+# scope="checkpoint:WD-CONN-012"; without unwrapping, every DA profile run and
+# every single-checkpoint run emitted connector="" (ADO 7943641 carry-over).
+_WORKDAY_LEAD_TOKENS = frozenset({"workday", "wd"})
+_SERVICENOW_LEAD_TOKENS = frozenset({"servicenow", "sn"})
+
 # Check categories from checks/*.py. Category strings are set at CheckResult
 # construction time (e.g. category="Workday", "Workday Tenant", "ServiceNow").
 # Match on the leading token so future subcategories ("Workday Workflows",
@@ -861,9 +885,24 @@ def derive_connector_from_scope(scope: str) -> str:
     if not scope:
         return ""
     s = str(scope).strip().lower()
+    # Unwrap the single-purpose run prefixes so a "profile:" / "checkpoint:"
+    # run attributes the same as a bare "--scope <connector>" run.
+    if s.startswith("profile:"):
+        s = s[len("profile:"):]
+    elif s.startswith("checkpoint:"):
+        s = s[len("checkpoint:"):]
     if s in _WORKDAY_SCOPES:
         return "workday"
     if s in _SERVICENOW_SCOPES:
+        return "servicenow"
+    # Connector-led profile names ("workday-da:final") and checkpoint IDs
+    # ("wd-conn-012") carry the connector in their leading token. Cross-connector
+    # or non-connector scopes ("full", "dv-conn-001", "env-001") fall through
+    # to "" and drill down via the per-check connector dimension.
+    lead = re.split(r"[-:]", s, 1)[0]
+    if lead in _WORKDAY_LEAD_TOKENS:
+        return "workday"
+    if lead in _SERVICENOW_LEAD_TOKENS:
         return "servicenow"
     return ""
 

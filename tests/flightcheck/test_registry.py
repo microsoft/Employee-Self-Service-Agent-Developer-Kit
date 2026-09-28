@@ -418,3 +418,38 @@ class TestTopicCheckpoints:
         keys = {spec.key for spec in registry.list_checkpoints()}
         for key in self._FAMILIES:
             assert key in keys
+
+
+class TestDaProfilesExcludeCeaSolutionGate:
+    """DA readiness profiles must gate on the DA package check, not the
+    classic (CEA) base-solution check.
+
+    ``ESS-SOLN-001`` only recognizes the CEA solution family, so a GA DA
+    environment (which installs the DA parent + Workday child packages,
+    not the CEA base) would be wrongly marked not-ready. ``WD-DA-PKG-001``
+    is the DA-native solution gate and must be the one every DA profile
+    carries. Regression guard for the PR #327 carry-over finding.
+    """
+
+    _DA_PROFILES = (
+        "workday-da:setup-readiness",
+        "workday-da:dataverse-ready",
+        "workday-da:final",
+    )
+
+    def test_da_profiles_do_not_carry_ess_soln_001(self):
+        for name in self._DA_PROFILES:
+            profile = registry.resolve_profile(name)
+            assert profile is not None, name
+            assert "ESS-SOLN-001" not in profile.checkpoint_ids, name
+
+    def test_da_profiles_carry_the_da_package_gate(self):
+        for name in self._DA_PROFILES:
+            profile = registry.resolve_profile(name)
+            assert profile is not None, name
+            assert "WD-DA-PKG-001" in profile.checkpoint_ids, name
+
+    def test_ess_soln_001_still_registered_for_cea_flows(self):
+        # Removing it from the DA profiles must not deregister the check;
+        # the CEA/legacy paths still resolve and target it.
+        assert registry.resolve("ESS-SOLN-001") is not None
