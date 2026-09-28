@@ -1185,6 +1185,7 @@ def _run_single_checkpoint(args):
     runner.azure_arm = None
     runner.agentbuilder = agentbuilder
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -1572,6 +1573,18 @@ def main():
             "--no-runtime-reachability forces it off. Omit both to be asked "
             "interactively during a normal run; non-interactive runs stay "
             "read-only and report INFRA-003 as MANUAL guidance."
+        ),
+    )
+    parser.add_argument(
+        "--alm-import-probe",
+        action="store_true",
+        help=(
+            "Enable the PUB-002 AgentBuilder ALM import write-probe. This is a "
+            "MUTATING action: it exports the configured agent's ALM package and "
+            "imports it, creating a throwaway agent in the target environment. "
+            "Omitted by default, so PUB-002 stays read-only and reports SKIPPED. "
+            "Only pass this when pointing FlightCheck at a disposable test "
+            "environment where creating an agent is safe."
         ),
     )
     parser.add_argument(
@@ -2015,6 +2028,7 @@ def main():
     runner.azure_arm = azure_arm
     runner.agentbuilder = agentbuilder
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
         args.scope
     )

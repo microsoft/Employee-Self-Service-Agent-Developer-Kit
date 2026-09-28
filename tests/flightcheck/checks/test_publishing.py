@@ -373,7 +373,28 @@ def test_pub_001_warns_on_export_http_error():
     assert "re-run PUB-001" in row.remediation
 
 
-def test_pub_001_skips_without_bot_id():
+def test_pub_001_warning_prefixes_exception_type():
+    """Regression for the cross-cutting exc-sweep: a non-HTTP export
+    failure must render as ``{type(exc).__name__}: {exc}`` (e.g.
+    ``RuntimeError: boom``), not a bare ``{exc}``. Pins the file-wide
+    convention so an unbounded exception can't leak an unprefixed,
+    unstructured string into a verdict row.
+    TODO: when a stronger structured-error contract lands, update this
+    to assert the structured fields instead of the type prefix.
+    """
+    from flightcheck.runner import Status
+
+    by_id = _results_by_id(
+        _runner(
+            agentbuilder=_FakeAgentBuilder(
+                export_error=RuntimeError("boom"),
+            )
+        )
+    )
+
+    row = by_id["PUB-001"]
+    assert row.status == Status.WARNING.value
+    assert "RuntimeError: boom" in row.result
     from flightcheck.runner import Status
 
     by_id = _results_by_id(

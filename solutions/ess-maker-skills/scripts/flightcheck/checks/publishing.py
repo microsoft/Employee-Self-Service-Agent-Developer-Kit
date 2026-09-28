@@ -205,7 +205,7 @@ def _check_pub_001_export(runner, row: dict) -> CheckResult:
                 status=Status.WARNING,
                 result=(
                     f"AgentBuilder ALM export failed for configured agent {bot_id}: "
-                    f"{exc}"
+                    f"{type(exc).__name__}: {exc}"
                 ),
                 remediation=(
                     "Confirm the signed-in maker can export this agent through "
@@ -314,7 +314,7 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
                 status=Status.WARNING,
                 result=(
                     f"AgentBuilder ALM export failed before import for {bot_id}: "
-                    f"{exc}"
+                    f"{type(exc).__name__}: {exc}"
                 ),
                 remediation=(
                     "Fix PUB-001 first. PUB-002 needs the source agent's exported "
@@ -376,7 +376,7 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
                 checkpoint_id="PUB-002",
                 row=row,
                 status=Status.WARNING,
-                result=f"AgentBuilder ALM import failed: {exc}",
+                result=f"AgentBuilder ALM import failed: {type(exc).__name__}: {exc}",
                 remediation=(
                     "Confirm the maker has import permission and the target "
                     "throwaway environment has AgentBuilder ALM enabled."
