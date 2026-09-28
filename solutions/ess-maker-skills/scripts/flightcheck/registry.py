@@ -650,7 +650,7 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DA-AGENT-001",
             "DA-CONTENT-001",
             "ESS-SOLN-001",
-            "WD-PKG-001",
+            "WD-DA-PKG-001",
         ),
     ),
     ProfileSpec(
@@ -661,7 +661,7 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "ENV-002",
             "ENV-009",
             "ESS-SOLN-001",
-            "WD-PKG-001",
+            "WD-DA-PKG-001",
             "WD-FLOW",
             "DV-CONN-001",
         ),
@@ -689,7 +689,7 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
         name="workday-da:post-connection",
         description="Connection-reference and Workday endpoint validation.",
         checkpoint_ids=(
-            "WD-PKG-001",
+            "WD-DA-PKG-001",
             "WD-CONN-012",
             "WD-CONN-AUTH-001",
             "WD-CONN-013",
@@ -718,7 +718,7 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DA-CONTENT-001",
             "DA-CONN",
             "ESS-SOLN-001",
-            "WD-PKG-001",
+            "WD-DA-PKG-001",
             "WD-ENTRA-SCOPE-001",
             "WD-ENTRA-CONSENT-001",
             "WD-ASSIGN-001",
@@ -1049,7 +1049,12 @@ def validate_registry() -> None:
                     f"checkpoint or family."
                 )
 
-    if frozenset(REGISTRY) == _SHIPPED_REGISTRY_KEYS:
+    # Profile-integrity self-check. Runs whenever REGISTRY contains at least
+    # the shipped keys (superset-safe): an extended REGISTRY must not skip the
+    # check, or a broken profile would fail open. The guard exists only so a
+    # deliberately stubbed/narrowed REGISTRY in a unit test doesn't trip on
+    # profiles referencing checkpoints it left out.
+    if _SHIPPED_REGISTRY_KEYS <= frozenset(REGISTRY):
         for profile in PROFILES.values():
             for checkpoint_id in profile.checkpoint_ids:
                 if resolve(checkpoint_id) is None:

@@ -820,6 +820,116 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     return merged
 
 
+def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
+    """Emit anonymous outcome telemetry for a completed run (best-effort).
+
+    Shared by the --checkpoint and --profile paths so both single-purpose
+    "connect" runs surface on the Aria dashboards the same way a --scope run
+    does. Never raises: telemetry must not change the run's exit code. The
+    caller passes the run ``scope`` (e.g. ``checkpoint:<id>`` or
+    ``profile:<name>``); everything else is derived from the shared run state.
+    """
+    if getattr(args, "no_telemetry", False):
+        return
+    # Explicit --invocation-source wins; otherwise these single-purpose runs
+    # attribute to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
+    _inv_source = getattr(args, "invocation_source", None) or "connect"
+    _tele_debug = os.environ.get(
+        "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+    ).strip().lower() in ("1", "on", "true", "yes")
+    # Resolve the active agent from config (may be empty for Entra-only
+    # checkpoints run before /setup writes a full config).
+    _agents = config.get("agents", [])
+    if not _agents:
+        _agent_entry = config.get("agent", {})
+        if _agent_entry:
+            _agents = [_agent_entry]
+    _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
+    _active_agent = next(
+        (a for a in _agents if a.get("slug") == _active),
+        _agents[0] if _agents else {},
+    )
+    # Best-effort tenant display name (OII; privacy-approved). Reuses the
+    # already-authenticated Graph client when one was needed; never re-auths.
+    # Falls back to the persisted ``.local/.tenant_name`` cache when the
+    # live lookup is unavailable (e.g. infra-only scope where ``graph`` is
+    # None, or Graph auth failed for lack of ``Organization.Read.All``
+    # consent) so previously-resolved tenants keep their name on the event
+    # instead of emitting blank. Same-tenant guard is enforced inside the
+    # cache helper.
+    tenant_name = ""
+    try:
+        if graph is not None:
+            tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
+    except Exception:  # noqa: BLE001 — telemetry name is best-effort
+        tenant_name = ""
+    try:
+        from flightcheck import telemetry
+
+        if not tenant_name and (tenant_id or ""):
+            tenant_name = telemetry.get_cached_tenant_name(tenant_id or "")
+        elif tenant_name and (tenant_id or ""):
+            telemetry.cache_tenant_name(tenant_id or "", tenant_name)
+
+        _tele = telemetry.emit_flightcheck_telemetry(
+            result,
+            tenant_id=tenant_id or "",
+            tenant_name=tenant_name,
+            agent_id=_active_agent.get("botId", ""),
+            scope=scope,
+            agent_count=len(_agents),
+            invocation_source=_inv_source,
+        )
+        if _tele_debug:
+            print(
+                f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                f"events={_tele.get('events')} status={_tele.get('status')} "
+                f"reason={_tele.get('reason')}"
+            )
+    except Exception as _tele_err:  # never break the run
+        if _tele_debug:
+            print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+    # Additive adk.* event family (spec Feature #7403772), mirroring the
+    # --scope emit so these runs also count toward the adk.* cubes.
+    try:
+        import adk_telemetry as _adk
+        from flightcheck.telemetry import derive_connector_from_category
+
+        _agent_id = _active_agent.get("botId", "")
+        if tenant_id or tenant_name:
+            _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
+        _ridx = _adk.next_run_index(_agent_id)
+        # The first result row's category is the run's connector (or "" for
+        # cross-cutting checkpoints like Environment / Authentication).
+        # Derived here rather than passed by the caller so the CLI runtime
+        # path matches the same connector attribution as the legacy
+        # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
+        _connector = ""
+        if result.results:
+            _connector = derive_connector_from_category(
+                getattr(result.results[0], "category", "") or ""
+            )
+        _adk.emit_flightcheck_run(
+            agent_id=_agent_id, run_index=_ridx, connector=_connector
+        )
+        _result_map = {
+            "READY": "pass",
+            "READY_WITH_WARNINGS": "partial",
+            "NOT_READY": "fail",
+        }
+        _adk.emit_flightcheck_result(
+            agent_id=_agent_id,
+            run_index=_ridx,
+            result=_result_map.get(result.overall, "fail"),
+            duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            connector=_connector,
+        )
+        _adk.flush(timeout=3)
+    except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+        pass
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -1091,105 +1201,9 @@ def _run_single_checkpoint(args):
     # FlightChecks that gate individual setup/connect steps (ADO 7587431).
     # Without this, checkpoint runs were invisible to the Aria dashboards even
     # though they exercise the same checks a full run does.
-    if not getattr(args, "no_telemetry", False):
-        # Explicit --invocation-source wins; otherwise checkpoint mode attributes
-        # the run to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
-        _inv_source = getattr(args, "invocation_source", None) or "connect"
-        _tele_debug = os.environ.get(
-            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
-        ).strip().lower() in ("1", "on", "true", "yes")
-        # Resolve the active agent from config (may be empty for Entra-only
-        # checkpoints run before /setup writes a full config).
-        _agents = config.get("agents", [])
-        if not _agents:
-            _agent_entry = config.get("agent", {})
-            if _agent_entry:
-                _agents = [_agent_entry]
-        _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
-        _active_agent = next(
-            (a for a in _agents if a.get("slug") == _active),
-            _agents[0] if _agents else {},
-        )
-        # Best-effort tenant display name (OII; privacy-approved). Reuses the
-        # already-authenticated Graph client when one was needed; never re-auths.
-        # Falls back to the persisted ``.local/.tenant_name`` cache when the
-        # live lookup is unavailable (e.g. infra-only scope where ``graph`` is
-        # None, or Graph auth failed for lack of ``Organization.Read.All``
-        # consent) so previously-resolved tenants keep their name on the event
-        # instead of emitting blank. Same-tenant guard is enforced inside the
-        # cache helper.
-        tenant_name = ""
-        try:
-            if graph is not None:
-                tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
-        except Exception:  # noqa: BLE001 — telemetry name is best-effort
-            tenant_name = ""
-        try:
-            from flightcheck import telemetry
-
-            if not tenant_name and (tenant_id or ""):
-                tenant_name = telemetry.get_cached_tenant_name(tenant_id or "")
-            elif tenant_name and (tenant_id or ""):
-                telemetry.cache_tenant_name(tenant_id or "", tenant_name)
-
-            _tele = telemetry.emit_flightcheck_telemetry(
-                result,
-                tenant_id=tenant_id or "",
-                tenant_name=tenant_name,
-                agent_id=_active_agent.get("botId", ""),
-                scope=f"checkpoint:{target}",
-                agent_count=len(_agents),
-                invocation_source=_inv_source,
-            )
-            if _tele_debug:
-                print(
-                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
-                    f"events={_tele.get('events')} status={_tele.get('status')} "
-                    f"reason={_tele.get('reason')}"
-                )
-        except Exception as _tele_err:  # never break the run
-            if _tele_debug:
-                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
-
-        # Additive adk.* event family (spec Feature #7403772), mirroring the
-        # --scope emit so checkpoint runs also count toward the adk.* cubes.
-        try:
-            import adk_telemetry as _adk
-            from flightcheck.telemetry import derive_connector_from_category
-
-            _agent_id = _active_agent.get("botId", "")
-            if tenant_id or tenant_name:
-                _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
-            _ridx = _adk.next_run_index(_agent_id)
-            # Single-checkpoint runs execute exactly one owning check, so the
-            # first result row's category is the run's connector (or "" for
-            # cross-cutting checkpoints like Environment / Authentication).
-            # Derived here rather than passed by the caller so the CLI runtime
-            # path matches the same connector attribution as the legacy
-            # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
-            _connector = ""
-            if result.results:
-                _connector = derive_connector_from_category(
-                    getattr(result.results[0], "category", "") or ""
-                )
-            _adk.emit_flightcheck_run(
-                agent_id=_agent_id, run_index=_ridx, connector=_connector
-            )
-            _result_map = {
-                "READY": "pass",
-                "READY_WITH_WARNINGS": "partial",
-                "NOT_READY": "fail",
-            }
-            _adk.emit_flightcheck_result(
-                agent_id=_agent_id,
-                run_index=_ridx,
-                result=_result_map.get(result.overall, "fail"),
-                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
-                connector=_connector,
-            )
-            _adk.flush(timeout=3)
-        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
-            pass
+    _emit_run_telemetry(
+        result, args, config, graph, tenant_id, scope=f"checkpoint:{target}"
+    )
 
     sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
 
@@ -1217,6 +1231,12 @@ def _run_profile(args):
             config = json.load(f)
     elif plan.requires_config:
         print("ERROR: .local/config.json not found. Run /setup first.")
+        sys.exit(1)
+
+    try:
+        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
 
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
@@ -1415,6 +1435,13 @@ def _run_profile(args):
     if not result.results:
         print(f"\nNOTE: profile {profile_name} produced no result rows.")
         sys.exit(1)
+
+    # Profile runs are a "connect" invocation source too; emit outcome
+    # telemetry so they surface on the Aria dashboards alongside --scope and
+    # --checkpoint runs (best-effort; never affects exit).
+    _emit_run_telemetry(
+        result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
+    )
 
     sys.exit(1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0)
 

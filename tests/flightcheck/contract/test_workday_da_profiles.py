@@ -65,6 +65,7 @@ def _result(status: str = Status.PASSED.value) -> CheckResult:
         status=status,
         description="Contract result",
         result="Observed non-secret test evidence.",
+        evidence={"summary": "Observed non-secret test evidence."},
         remediation="Fix the profile contract.",
         roles=[Role.ESS_MAKER.value],
     )

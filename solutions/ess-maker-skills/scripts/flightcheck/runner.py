@@ -97,8 +97,6 @@ class CheckResult:
             )
         if not self.remediation_id:
             self.remediation_id = self.checkpoint_id
-        if not self.evidence and self.result:
-            self.evidence = {"summary": self.result}
 
 
 @dataclass
@@ -137,6 +135,9 @@ class RunResult:
     validation_context: dict[str, Any] = field(default_factory=dict)
 
 
+_VALIDATION_REALMS = frozenset({"dev", "test", "prod"})
+
+
 @dataclass(frozen=True)
 class ValidationContext:
     """Non-secret context Connect passes to profile runs.
@@ -156,6 +157,17 @@ class ValidationContext:
     def __post_init__(self) -> None:
         if not isinstance(self.realm, str) or not self.realm.strip():
             raise ValueError("ValidationContext.realm is required.")
+        # Enforce the same allow-list argparse applies to --validation-realm.
+        # The realm can also arrive from .local/config.json ("realm"), which
+        # bypasses argparse choices, so validate every construction path here
+        # to keep a typo'd realm from silently mislabelling readiness.
+        normalized = self.realm.strip().casefold()
+        if normalized not in _VALIDATION_REALMS:
+            raise ValueError(
+                "ValidationContext.realm must be one of "
+                f"{', '.join(sorted(_VALIDATION_REALMS))} (got {self.realm!r})."
+            )
+        object.__setattr__(self, "realm", normalized)
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -1140,6 +1152,7 @@ _STATUS_STYLE = {
     Status.PASSED.value: ("pass", "Pass", "pass"),
     Status.FAILED.value: ("fail", "Fail", "fail"),
     Status.ERROR.value: ("fail", "Error", "fail"),
+    Status.BLOCKED.value: ("fail", "Blocked", "fail"),
     Status.WARNING.value: ("warn", "Warning", "warn"),
     Status.MANUAL.value: ("manual", "Manual", "manual"),
     Status.NOT_CONFIGURED.value: ("na", "Not configured", "na"),
