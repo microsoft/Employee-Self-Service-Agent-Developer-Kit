@@ -39,6 +39,14 @@ const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 // Guards against stacking notifications: true while a nudge (or the resulting
 // update) is already being shown, so the periodic timer doesn't open a second.
 let _updateNudgeActive = false;
+// Guards the one-time "reveal rail → open welcome walkthrough" transition.
+// Set true whenever the guided layout is applied programmatically (maker mode)
+// so the rail-reveal handler only fires for an on-demand reveal in developer mode.
+let _guidedWelcomeShown = false;
+// While true (briefly, during activation), a passive rail auto-restore must not
+// hijack the launch layout (e.g. developer mode's README preview). A genuine
+// user reveal after activation still triggers the welcome.
+let _activationGrace = false;
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -851,6 +859,9 @@ async function restoreStandardLayout() {
 // on later launches we just make sure the rail is reachable (settings persist,
 // so there is nothing aggressive to re-apply).
 async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
+    // The guided layout owns the welcome experience; suppress the rail-reveal
+    // handler's on-demand welcome so it does not race or double-open.
+    _guidedWelcomeShown = true;
     // Back up affected settings once so restoreStandardLayout can revert them.
     if (_extensionContext && !_extensionContext.globalState.get(SETTINGS_BACKUP_KEY)) {
         const cfg = vscode.workspace.getConfiguration();
@@ -940,10 +951,28 @@ class ActionsViewProvider {
         this._view = null;
     }
 
+    // One-time transition when the user reveals the rail in developer mode:
+    // close the static README preview and open the welcome walkthrough. In
+    // maker mode applyGuidedLayout has already set the guard, so this no-ops.
+    _maybeShowWelcome() {
+        if (_guidedWelcomeShown || _activationGrace) return;
+        _guidedWelcomeShown = true;
+        closeReadmePreview()
+            .then(() => openGettingStarted())
+            .catch(() => {});
+    }
+
     async resolveWebviewView(webviewView) {
         this._view = webviewView;
         webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._extensionUri] };
         webviewView.webview.html = this._html(webviewView.webview);
+
+        // onDidChangeVisibility does not fire for this initial resolve, so run
+        // the transition here when the view resolves already visible.
+        if (webviewView.visible) this._maybeShowWelcome();
+        webviewView.onDidChangeVisibility(() => {
+            if (webviewView.visible) this._maybeShowWelcome();
+        });
 
         webviewView.webview.onDidReceiveMessage(async (msg) => {
             if (msg?.type === 'action') {
@@ -1244,6 +1273,24 @@ async function openReadmePreview() {
         await vscode.commands.executeCommand('markdown.showPreview', readme);
     } catch (err) {
         try { _log(`openReadmePreview error: ${err && err.message}`); } catch {}
+    }
+}
+
+// Close the developer-mode README markdown preview (labeled "Preview <file>").
+// Used when the user reveals the guided rail so the static preview does not
+// linger behind the welcome walkthrough.
+async function closeReadmePreview() {
+    try {
+        const toClose = [];
+        for (const group of vscode.window.tabGroups.all || []) {
+            for (const tab of group.tabs || []) {
+                const label = tab.label || '';
+                if (/^Preview /.test(label) && /readme/i.test(label)) toClose.push(tab);
+            }
+        }
+        if (toClose.length) await vscode.window.tabGroups.close(toClose, true);
+    } catch (err) {
+        try { _log(`closeReadmePreview error: ${err && err.message}`); } catch {}
     }
 }
 
@@ -1633,6 +1680,10 @@ async function firstInstallDispatch(context, installerMode) {
 
 function activate(context) {
     _extensionContext = context;
+    // Ignore passive rail auto-restore during the launch window so it does not
+    // clobber the mode-specific launch layout; cleared shortly after activation.
+    _activationGrace = true;
+    setTimeout(() => { _activationGrace = false; }, 2500);
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
     // Register slash-command bridges (also available from the command palette).
     for (const a of ACTIONS) {

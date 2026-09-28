@@ -2,6 +2,12 @@
 
 ## 0.4.29 (POC)
 
+- **Reveal the rail → guided welcome (Developer mode).** Clicking the "Agent
+  Developer Kit" activity-bar icon in Developer mode now closes the static
+  README preview and opens the getting-started walkthrough (the welcome
+  panel), transitioning into the guided experience on demand. Fires once per
+  session and only for a genuine user reveal — Maker mode's first-run layout
+  and passive launch-time restores are unaffected.
 - **Guided layout for Maker mode.** Maker mode now opens the "Agent
   Developer Kit" activity-bar rail — a **Quick start** panel, a
   **Customization** list of every skill, and a **Help** view — alongside a
