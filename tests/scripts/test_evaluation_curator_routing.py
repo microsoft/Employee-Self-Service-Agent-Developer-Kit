@@ -77,7 +77,10 @@ def test_curator_wrapper_defines_host_parameters_and_local_v1_boundary():
     assert "hostOutputRoot" in wrapper
     assert "workspace/evaluations" in wrapper
     assert "hostLifecycleHandoff" in wrapper
-    assert "Maker Kit validation/review/promotion/scoped push/run" in normalized
+    assert (
+        "Maker Kit validation, maker review choice, promotion, scoped push, "
+        "and post-success run/results lifecycle"
+    ) in normalized
     assert "local-file mode only for v1" in normalized_lower
     assert "knowledge source" in wrapper.lower()
     assert "agent instructions" in wrapper.lower()
@@ -97,6 +100,45 @@ def test_curator_wrapper_hands_off_to_maker_kit_lifecycle():
     assert "explicitly preselected" in normalized_lower
     assert "one authoritative flow" in normalized_lower
     assert "do not duplicate" in normalized_lower
+
+
+def test_curator_wrapper_requires_maker_choice_before_step_7_handoff():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split())
+
+    gate = normalized.index("What would you like to do with these test sets?")
+    step_7_handoff = normalized.index("update **Step 7 onward**")
+
+    assert gate < step_7_handoff
+    assert "**Edit the test sets myself**" in wrapper
+    assert "**Send them to a judge or SME for feedback**" in wrapper
+    assert "**Keep them unchanged**" in wrapper
+    assert "Wait for the maker's response" in normalized
+    assert "Steps 2 through 6" in normalized
+    assert "return to this maker review gate" in normalized
+    assert "update **Flow R1**" in normalized
+    assert "without implementing any mutation" in normalized
+
+
+def test_run_skill_is_referenced_only_after_successful_push():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    update = _read("src/skills/evaluations/update/SKILL.md")
+    normalized = " ".join(update.split())
+
+    assert "src/skills/evaluations/run/SKILL.md" not in wrapper
+    success_gate = normalized.index(
+        "Only after `push.py --yes` completes successfully"
+    )
+    run_reference = normalized.index("src/skills/evaluations/run/SKILL.md")
+
+    assert success_gate < run_reference
+    assert "**Run an evaluation**" in update
+    assert "**View results**" in update
+    assert "**Finish**" in update
+    assert "Wait for the user's response" in normalized
+    assert "choosing a next action does not select a test set or run" in normalized
+    assert "discovery and selection must remain separate user turns" in normalized
+    assert "Do not offer **Run an evaluation** as immediately available" in update
 
 
 def test_update_step_7_accepts_only_prevalidated_curator_handoff():

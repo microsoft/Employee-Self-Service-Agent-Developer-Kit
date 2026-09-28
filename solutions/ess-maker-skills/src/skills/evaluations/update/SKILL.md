@@ -671,3 +671,27 @@ SMEs. Instead state:
 
 > ✅ Review completed and pushed successfully. You can now run this test set or
 > view its evaluation run history.
+
+Only after `push.py --yes` completes successfully, use the structured choice
+control to ask:
+
+> What would you like to do next?
+
+Offer:
+
+1. **Run an evaluation**
+2. **View results**
+3. **Finish**
+
+Wait for the user's response.
+
+For **Run an evaluation**, read `src/skills/evaluations/run/SKILL.md` and enter
+Flow A. For **View results**, read the same skill and enter Flow B. Preserve
+all mandatory selection gates in that skill: choosing a next action does not
+select a test set or run, and discovery and selection must remain separate
+user turns.
+
+Do not offer **Run an evaluation** as immediately available when the set was
+kept local, setup is incomplete, only a dry run completed, or the push failed
+or was cancelled. Preserve the local-only reminder and resume-push guidance
+above instead.

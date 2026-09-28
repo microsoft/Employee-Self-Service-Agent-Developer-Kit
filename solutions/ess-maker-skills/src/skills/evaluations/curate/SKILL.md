@@ -56,7 +56,7 @@ Follow the returned curator skill completely with these host parameters:
 
 ```text
 hostOutputRoot=workspace/evaluations
-hostLifecycleHandoff=Maker Kit validation/review/promotion/scoped push/run
+hostLifecycleHandoff=Maker Kit validation, maker review choice, promotion, scoped push, and post-success run/results lifecycle
 ```
 
 Keep version 1 in local-file mode only. The active GitHub Copilot session must
@@ -69,7 +69,7 @@ curator's generation rules. After receiving its structured hosted handoff, skip
 the curator local-only wrap-up because the Maker Kit owns the remaining
 lifecycle.
 
-## Step 4: Validate, then hand off to one authoritative lifecycle
+## Step 4: Validate, then ask for maker review
 
 For each generated set in the curator handoff:
 
@@ -78,14 +78,40 @@ For each generated set in the curator handoff:
 2. Follow `src/skills/evaluations/quality-fix-flow.md` for any required or
    user-selected fixes.
 3. After validation passes for all generated sets, read
-   `src/skills/evaluations/update/SKILL.md` and hand the exact generated
-   workspace set folders to **Step 7 onward** as explicitly preselected sets.
+   `src/skills/evaluations/update/SKILL.md`.
+
+Use the available structured choice control to ask:
+
+> What would you like to do with these test sets?
+
+Offer exactly:
+
+1. **Edit the test sets myself**
+2. **Send them to a judge or SME for feedback**
+3. **Keep them unchanged**
+
+Wait for the maker's response. Do not enter update Step 7 before this choice.
+
+Route the response through the update skill without implementing any mutation,
+synchronization, review metadata, or push behavior in this wrapper:
+
+- **Edit the test sets myself** — hand the exact generated workspace set
+  folders to the update skill as explicitly preselected sets. Enter its
+  edit, YAML/CSV synchronization, and validation path in Steps 2 through 6,
+  without rediscovery or reselection. When that path completes, return to this
+  maker review gate and wait for another choice.
+- **Send them to a judge or SME for feedback** — hand the exact generated
+  workspace set folders to update **Flow R1** as explicitly preselected sets.
+  After Flow R1 records the local review request, continue through update
+  **Step 7 onward**.
+- **Keep them unchanged** — hand the exact generated workspace set folders to
+  update **Step 7 onward** as explicitly preselected sets.
 
 The update skill is the one authoritative flow for all post-validation
-review/keep-local/push behavior. It owns decline/keep-local, optional review
-tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
-status. Do not duplicate any of those commands, questions, or behaviors in
-this wrapper.
+edit/synchronization/validation, review metadata, keep-local, setup check,
+promotion, scoped dry-run and push, cleanup, final status, and successful-push
+next actions. Do not duplicate any of those commands, questions, or behaviors
+in this wrapper.
 
 Failed or partial validation stays local and blocks lifecycle handoff,
 promotion, push, and run. A missing or incompatible curator submodule also
