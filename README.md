@@ -28,7 +28,7 @@ The installer opens VS Code for you. If this is your first time in VS Code, use 
 
 ![The rocket icon in the VS Code activity bar](docs/images/adk-extension.jpg)
 
-That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab. To begin, open the **Help** tab and click **Tutorial** for a step-by-step walkthrough.
+That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab.
 
 Prefer to drive everything from chat? You can ignore the rocket view entirely and just type commands like `/setup` into Copilot Chat.
 
