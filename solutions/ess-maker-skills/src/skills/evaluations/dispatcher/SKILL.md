@@ -30,7 +30,8 @@ Route immediately to `src/skills/evaluations/curate/SKILL.md` when the user
 expresses that explicit curation intent, even when neither required path was
 supplied. The curator wrapper owns collecting the missing local knowledge
 source and agent-instructions file one at a time; do not fall through to the
-scenario question.
+scenario question. The agent-instructions file remains required; the curator
+wrapper enforces that requirement before invoking the vendored skill.
 
 Also route immediately when the request explicitly combines a supplied local
 knowledge source (one or more files or a folder) with document-grounded

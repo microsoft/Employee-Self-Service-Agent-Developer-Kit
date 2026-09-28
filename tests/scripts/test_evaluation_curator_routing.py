@@ -180,6 +180,8 @@ def test_curator_edit_path_returns_to_mandatory_maker_gate():
     assert "show the current csv preview and cases" in curator_handoffs
     assert "skip step 2's generic continuation question" in curator_handoffs
     assert "proceed directly to selecting and editing cases" in curator_handoffs
+    assert "curator edit handoff is the exception" in update.lower()
+    assert "already selected **Edit the test sets myself**" in update
     assert (
         step_2.index("regenerate its CSV")
         < step_2.index("curator gate already selected")
@@ -196,6 +198,13 @@ def test_curator_edit_path_returns_to_mandatory_maker_gate():
         in update
     )
     assert "Do not fall through to Step 6a or Step 7" in update
+
+
+def test_dispatcher_delegates_required_agent_instructions_collection():
+    dispatcher = _normalized("src/skills/evaluations/dispatcher/SKILL.md")
+
+    assert "agent-instructions file remains required" in dispatcher
+    assert "curator wrapper enforces that requirement" in dispatcher
 
 
 def test_flow_r1_accepts_curator_preselected_sets_without_reselection():

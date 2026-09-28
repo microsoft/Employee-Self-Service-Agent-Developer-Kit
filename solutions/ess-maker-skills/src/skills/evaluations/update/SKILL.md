@@ -49,9 +49,11 @@ available in this workspace.
   the choices are already known.
 - Never finish immediately after displaying test cases. Makers must receive an
   explicit choice to edit the set themselves, send it to a judge or SME for
-  feedback, or keep it unchanged. Reviewers must receive an explicit choice to
-  provide feedback, suggestions, or recommendations, or complete review
-  without feedback.
+  feedback, or keep it unchanged. The curator edit handoff is the exception to
+  asking this choice inside the update skill because the maker already selected
+  **Edit the test sets myself** at the curator gate; follow the preselected-set
+  handoff below. Reviewers must receive an explicit choice to provide feedback,
+  suggestions, or recommendations, or complete review without feedback.
 
 ## Review-intent routing
 
