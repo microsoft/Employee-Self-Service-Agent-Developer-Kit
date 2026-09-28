@@ -137,22 +137,10 @@ def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
     return "GeneralQuality", None
 
 
-def evaluation_csv_table(
-    set_folder: str | Path,
+def _single_turn_csv_table(
+    parent: dict[str, Any],
+    single_turn_docs: list[tuple[dict[str, Any], Path]],
 ) -> tuple[list[str], list[dict[str, str]]]:
-    """Return the exact single-turn table emitted for an EvaluationSet."""
-    folder = Path(set_folder)
-    parent, case_documents = _set_documents(folder)
-    single_turn_docs = [
-        (document, path)
-        for document, path in case_documents
-        if document.get("kind") == "EvaluationData"
-    ]
-    if len(single_turn_docs) != len(case_documents):
-        raise EvaluationCSVError(
-            f"Evaluation set is not exclusively single-turn: {folder}"
-        )
-
     source_rows: list[dict[str, Any]] = []
     for document, _ in single_turn_docs:
         document_rows = document.get("rows")
@@ -177,6 +165,24 @@ def evaluation_csv_table(
             export_row["Passing Score"] = passing_score
         export_rows.append(export_row)
     return headers, export_rows
+
+
+def evaluation_csv_table(
+    set_folder: str | Path,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Return the exact table for an exclusively single-turn EvaluationSet."""
+    folder = Path(set_folder)
+    parent, case_documents = _set_documents(folder)
+    single_turn_docs = [
+        (document, path)
+        for document, path in case_documents
+        if document.get("kind") == "EvaluationData"
+    ]
+    if len(single_turn_docs) != len(case_documents):
+        raise EvaluationCSVError(
+            f"Evaluation set is not exclusively single-turn: {folder}"
+        )
+    return _single_turn_csv_table(parent, single_turn_docs)
 
 
 def _activity_role(activity: dict[str, Any]) -> str | None:
@@ -297,7 +303,7 @@ def generate_set_csv(
                     ])
         return output
 
-    headers, rows = evaluation_csv_table(folder)
+    headers, rows = _single_turn_csv_table(parent, single_turn_docs)
 
     with output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)
