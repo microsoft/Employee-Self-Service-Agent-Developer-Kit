@@ -17,6 +17,4 @@ what you want in plain English and Copilot takes it from there.
 
 ## Customizing your agent
 
-Complete setup first — then open the **Customization** panel in the activity bar
-to customize the landing page, create or update topics, scan for issues, run a
-flightcheck, generate tests, and push to Copilot Studio.
+Make sure setup is completed before customizing your ESS agent.

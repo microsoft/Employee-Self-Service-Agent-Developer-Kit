@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.31",
+  "version": "0.4.32",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -138,7 +138,7 @@
           {
             "id": "getting-started",
             "title": "Getting started",
-            "description": "Not sure where to begin? Just tell Copilot Chat what you want. For example, to set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. And to check readiness before you deploy, ask **\"Help me run a flightcheck\"**.\nOnce setup is complete, open the **Customization** panel in the activity bar to customize the landing page, create or update topics, scan for issues, generate tests, and push to Copilot Studio.",
+            "description": "Not sure where to begin? Just tell Copilot Chat what you want. For example, to set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. And to check readiness before you deploy, ask **\"Help me run a flightcheck\"**.\nMake sure setup is completed before customizing your ESS agent.",
             "media": { "markdown": "walkthrough/getting-started.md" }
           }
         ]
