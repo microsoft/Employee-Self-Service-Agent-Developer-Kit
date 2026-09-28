@@ -79,6 +79,24 @@ generated set entries and all paths required by the curator contract,
 `passed`. A missing set, missing field, unexpected validation value, or
 incomplete curator run is a malformed, failed, or partial handoff.
 
+Before invoking Maker Kit validation or handing any set to the update skill,
+serialize the exact structured handoff to JSON and pipe it to this deterministic
+check from `solutions/ess-maker-skills/`:
+
+```powershell
+$handoffJson | py -3.12 scripts/eval_curator_handoff.py validate --repo-root ../..
+```
+
+Use `python` instead of `py -3.12` only when required by the host's portable
+Python convention. Parse exactly one JSON result. Continue only when the
+command exits successfully and `valid` is exactly `true`; then use only its
+normalized `sets[].folder` and `sets[].csv` paths for every later validation
+and lifecycle handoff. Stop before Maker Kit validation if any path contains
+traversal, resolves outside `workspace/evaluations`, crosses a symlink or
+junction escape, is missing, uses `exports/` as a set folder, places a CSV
+outside `workspace/evaluations/exports/`, or otherwise has malformed
+structure. Never repair, reinterpret, or substitute a rejected path.
+
 For every entry in `sets`, always run the Maker Kit validator in the next step,
 even when the curator reports `qualityValidation: passed`. Every generated set
 must then have successful Maker Kit quality validation before any lifecycle

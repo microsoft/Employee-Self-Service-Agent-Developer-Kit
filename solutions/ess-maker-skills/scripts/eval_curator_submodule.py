@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
+import subprocess
 from typing import Any
 
 
@@ -44,6 +46,178 @@ def resolve_submodule(repo_root: Path) -> Path:
 
 def _invalid_contract(message: str) -> CuratorSubmoduleError:
     return CuratorSubmoduleError("invalid_contract", message)
+
+
+def _run_git(cwd: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise CuratorSubmoduleError(
+            "git_metadata_unavailable",
+            "Unable to execute git for curator submodule verification.",
+        ) from exc
+    if result.returncode not in (0, 1):
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise CuratorSubmoduleError(
+            "git_metadata_unavailable",
+            "Unable to read curator submodule git metadata"
+            + (f": {detail}" if detail else "."),
+        )
+    return result.stdout.strip()
+
+
+def _parse_gitlink(
+    output: str,
+    *,
+    source: str,
+) -> str:
+    pattern = (
+        r"^160000 ([0-9a-f]{40}) 0\t.+$"
+        if source == "index"
+        else r"^160000 commit ([0-9a-f]{40})\t.+$"
+    )
+    match = re.fullmatch(pattern, output)
+    if not match:
+        raise CuratorSubmoduleError(
+            "invalid_parent_gitlink",
+            f"The parent repository {source} does not contain a valid "
+            "gitlink for the curator vendor path.",
+        )
+    return match.group(1)
+
+
+def validate_submodule_integrity(
+    repo_root: Path,
+    submodule_root: Path,
+) -> dict[str, Any]:
+    """Verify the configured gitlink, submodule HEAD, and clean worktree."""
+    repo_root = repo_root.resolve()
+    submodule_root = submodule_root.resolve()
+    relative_path = "solutions/ess-maker-skills/vendor/evals-curator"
+
+    if not submodule_root.is_dir():
+        raise CuratorSubmoduleError(
+            "submodule_not_initialized",
+            "Initialize dependencies with: git submodule update --init "
+            "--recursive",
+        )
+    if not (submodule_root / ".git").exists():
+        raise CuratorSubmoduleError(
+            "not_configured_submodule",
+            "The curator vendor path is an ordinary directory, not the "
+            "configured git submodule.",
+        )
+
+    parent_top = Path(_run_git(repo_root, "rev-parse", "--show-toplevel"))
+    if parent_top.resolve() != repo_root:
+        raise CuratorSubmoduleError(
+            "git_metadata_unavailable",
+            "The supplied repository root is not the parent git worktree.",
+        )
+
+    gitmodules_path = repo_root / ".gitmodules"
+    configured = _run_git(
+        repo_root,
+        "config",
+        "-f",
+        str(gitmodules_path),
+        "--get-regexp",
+        r"^submodule\..*\.path$",
+    )
+    configured_paths = {
+        line.split(None, 1)[1].replace("\\", "/")
+        for line in configured.splitlines()
+        if len(line.split(None, 1)) == 2
+    }
+    if relative_path not in configured_paths:
+        raise CuratorSubmoduleError(
+            "not_configured_submodule",
+            "The curator vendor path is not the configured git submodule.",
+        )
+
+    index_gitlink = _parse_gitlink(
+        _run_git(
+            repo_root,
+            "ls-files",
+            "--stage",
+            "--",
+            relative_path,
+        ),
+        source="index",
+    )
+    head_gitlink = _parse_gitlink(
+        _run_git(
+            repo_root,
+            "ls-tree",
+            "HEAD",
+            "--",
+            relative_path,
+        ),
+        source="HEAD",
+    )
+    parent_gitlink_staged = index_gitlink != head_gitlink
+    expected_gitlink = index_gitlink
+    gitlink_source = "index" if parent_gitlink_staged else "HEAD"
+
+    if _run_git(
+        submodule_root,
+        "rev-parse",
+        "--is-inside-work-tree",
+    ) != "true":
+        raise CuratorSubmoduleError(
+            "not_configured_submodule",
+            "The curator vendor path is not a git worktree.",
+        )
+    superproject = _run_git(
+        submodule_root,
+        "rev-parse",
+        "--show-superproject-working-tree",
+    )
+    if not superproject or Path(superproject).resolve() != repo_root:
+        raise CuratorSubmoduleError(
+            "not_configured_submodule",
+            "The curator vendor path is not attached to this parent repository "
+            "as its configured submodule.",
+        )
+
+    submodule_head = _run_git(submodule_root, "rev-parse", "HEAD")
+    if not re.fullmatch(r"[0-9a-f]{40}", submodule_head):
+        raise CuratorSubmoduleError(
+            "git_metadata_unavailable",
+            "The curator submodule HEAD is unavailable.",
+        )
+    if submodule_head != expected_gitlink:
+        raise CuratorSubmoduleError(
+            "submodule_commit_mismatch",
+            "The curator submodule HEAD does not match the parent repository "
+            f"{gitlink_source} gitlink.",
+        )
+
+    dirty = _run_git(
+        submodule_root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    )
+    if dirty:
+        raise CuratorSubmoduleError(
+            "submodule_dirty",
+            "The curator submodule worktree has modified or untracked files.",
+        )
+
+    return {
+        "parentGitlink": expected_gitlink,
+        "headGitlink": head_gitlink,
+        "gitlinkSource": gitlink_source,
+        "parentGitlinkStaged": parent_gitlink_staged,
+        "submoduleHead": submodule_head,
+        "submoduleClean": True,
+    }
 
 
 def _resolve_contract_path(
@@ -151,6 +325,7 @@ def load_contract(submodule_root: Path) -> dict[str, Any]:
 def build_status(repo_root: Path) -> dict[str, Any]:
     """Build the validated curator availability payload."""
     submodule_root = resolve_submodule(repo_root).resolve()
+    integrity = validate_submodule_integrity(repo_root, submodule_root)
     contract = load_contract(submodule_root)
     return {
         "available": True,
@@ -163,6 +338,7 @@ def build_status(repo_root: Path) -> dict[str, Any]:
         "supportsHostLifecycleHandoff": contract[
             "supportsHostLifecycleHandoff"
         ],
+        **integrity,
     }
 
 

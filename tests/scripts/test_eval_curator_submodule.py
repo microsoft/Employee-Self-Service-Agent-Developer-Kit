@@ -30,6 +30,11 @@ def _submodule_root(repo_root: Path) -> Path:
 
 def _write_contract(repo_root: Path, **overrides: object) -> Path:
     submodule_root = _submodule_root(repo_root)
+    submodule_root.mkdir(parents=True, exist_ok=True)
+    (submodule_root / ".git").write_text(
+        "gitdir: mocked-submodule-metadata\n",
+        encoding="utf-8",
+    )
     contract = CONTRACT | overrides
     contract_path = submodule_root / "integration" / "host-contract.json"
     contract_path.parent.mkdir(parents=True)
@@ -59,6 +64,24 @@ def _run_status(repo_root: Path, capsys) -> tuple[int, dict[str, object]]:
     return exit_code, json.loads(captured.out)
 
 
+@pytest.fixture(autouse=True)
+def _mock_valid_submodule_integrity(monkeypatch, request):
+    if request.node.name.startswith("test_integrity_"):
+        return
+    monkeypatch.setattr(
+        eval_curator_submodule,
+        "validate_submodule_integrity",
+        lambda repo_root, submodule_root: {
+            "parentGitlink": "a" * 40,
+            "headGitlink": "a" * 40,
+            "gitlinkSource": "HEAD",
+            "parentGitlinkStaged": False,
+            "submoduleHead": "a" * 40,
+            "submoduleClean": True,
+        },
+    )
+
+
 def test_resolve_submodule_returns_expected_path(tmp_path):
     assert eval_curator_submodule.resolve_submodule(tmp_path) == _submodule_root(
         tmp_path
@@ -84,7 +107,264 @@ def test_status_returns_resolved_contract_paths(tmp_path, capsys):
         "defaultOutputRoot": "workspace/evaluations",
         "supportsHostOutputOverride": True,
         "supportsHostLifecycleHandoff": True,
+        "parentGitlink": "a" * 40,
+        "headGitlink": "a" * 40,
+        "gitlinkSource": "HEAD",
+        "parentGitlinkStaged": False,
+        "submoduleHead": "a" * 40,
+        "submoduleClean": True,
     }
+
+
+def test_integrity_accepts_clean_configured_submodule(tmp_path, monkeypatch):
+    submodule_root = _write_contract(tmp_path)
+    responses = {
+        ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
+        (
+            "config",
+            "-f",
+            str(tmp_path / ".gitmodules"),
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ): (
+            "submodule.solutions/ess-maker-skills/vendor/evals-curator.path "
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-files",
+            "--stage",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 " + "a" * 40 + " 0\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-tree",
+            "HEAD",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 commit " + "a" * 40 + "\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        ("rev-parse", "--is-inside-work-tree"): "true",
+        ("rev-parse", "--show-superproject-working-tree"): str(
+            tmp_path.resolve()
+        ),
+        ("rev-parse", "HEAD"): "a" * 40,
+        ("status", "--porcelain=v1", "--untracked-files=all"): "",
+    }
+
+    def fake_run_git(cwd, *args):
+        return responses[args]
+
+    monkeypatch.setattr(eval_curator_submodule, "_run_git", fake_run_git)
+
+    result = eval_curator_submodule.validate_submodule_integrity(
+        tmp_path,
+        submodule_root,
+    )
+
+    assert result["parentGitlink"] == "a" * 40
+    assert result["headGitlink"] == "a" * 40
+    assert result["gitlinkSource"] == "HEAD"
+    assert result["parentGitlinkStaged"] is False
+    assert result["submoduleHead"] == "a" * 40
+    assert result["submoduleClean"] is True
+
+
+def test_integrity_rejects_non_submodule_directory(tmp_path, monkeypatch):
+    submodule_root = _write_contract(tmp_path)
+    (submodule_root / ".git").unlink()
+    monkeypatch.setattr(
+        eval_curator_submodule,
+        "_run_git",
+        lambda cwd, *args: {
+            ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
+            (
+                "config",
+                "-f",
+                str(tmp_path / ".gitmodules"),
+                "--get-regexp",
+                r"^submodule\..*\.path$",
+            ): "",
+        }[args],
+    )
+
+    with pytest.raises(eval_curator_submodule.CuratorSubmoduleError) as exc:
+        eval_curator_submodule.validate_submodule_integrity(
+            tmp_path,
+            submodule_root,
+        )
+
+    assert exc.value.error_code == "not_configured_submodule"
+
+
+def test_integrity_rejects_gitlink_head_mismatch(tmp_path, monkeypatch):
+    submodule_root = _write_contract(tmp_path)
+    responses = {
+        ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
+        (
+            "config",
+            "-f",
+            str(tmp_path / ".gitmodules"),
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ): (
+            "submodule.evals.path "
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-files",
+            "--stage",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 " + "a" * 40 + " 0\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-tree",
+            "HEAD",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 commit " + "a" * 40 + "\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        ("rev-parse", "--is-inside-work-tree"): "true",
+        ("rev-parse", "--show-superproject-working-tree"): str(
+            tmp_path.resolve()
+        ),
+        ("rev-parse", "HEAD"): "b" * 40,
+        ("status", "--porcelain=v1", "--untracked-files=all"): "",
+    }
+    monkeypatch.setattr(
+        eval_curator_submodule,
+        "_run_git",
+        lambda cwd, *args: responses[args],
+    )
+
+    with pytest.raises(eval_curator_submodule.CuratorSubmoduleError) as exc:
+        eval_curator_submodule.validate_submodule_integrity(
+            tmp_path,
+            submodule_root,
+        )
+
+    assert exc.value.error_code == "submodule_commit_mismatch"
+
+
+def test_integrity_rejects_dirty_submodule(tmp_path, monkeypatch):
+    submodule_root = _write_contract(tmp_path)
+    responses = {
+        ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
+        (
+            "config",
+            "-f",
+            str(tmp_path / ".gitmodules"),
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ): (
+            "submodule.evals.path "
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-files",
+            "--stage",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 " + "a" * 40 + " 0\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-tree",
+            "HEAD",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 commit " + "a" * 40 + "\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        ("rev-parse", "--is-inside-work-tree"): "true",
+        ("rev-parse", "--show-superproject-working-tree"): str(
+            tmp_path.resolve()
+        ),
+        ("rev-parse", "HEAD"): "a" * 40,
+        ("status", "--porcelain=v1", "--untracked-files=all"): (
+            " M skills/curate-evals/SKILL.md"
+        ),
+    }
+    monkeypatch.setattr(
+        eval_curator_submodule,
+        "_run_git",
+        lambda cwd, *args: responses[args],
+    )
+
+    with pytest.raises(eval_curator_submodule.CuratorSubmoduleError) as exc:
+        eval_curator_submodule.validate_submodule_integrity(
+            tmp_path,
+            submodule_root,
+        )
+
+    assert exc.value.error_code == "submodule_dirty"
+
+
+def test_integrity_uses_staged_index_gitlink(tmp_path, monkeypatch):
+    submodule_root = _write_contract(tmp_path)
+    responses = {
+        ("rev-parse", "--show-toplevel"): str(tmp_path.resolve()),
+        (
+            "config",
+            "-f",
+            str(tmp_path / ".gitmodules"),
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ): (
+            "submodule.evals.path "
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-files",
+            "--stage",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 " + "b" * 40 + " 0\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        (
+            "ls-tree",
+            "HEAD",
+            "--",
+            "solutions/ess-maker-skills/vendor/evals-curator",
+        ): (
+            "160000 commit " + "a" * 40 + "\t"
+            "solutions/ess-maker-skills/vendor/evals-curator"
+        ),
+        ("rev-parse", "--is-inside-work-tree"): "true",
+        ("rev-parse", "--show-superproject-working-tree"): str(
+            tmp_path.resolve()
+        ),
+        ("rev-parse", "HEAD"): "b" * 40,
+        ("status", "--porcelain=v1", "--untracked-files=all"): "",
+    }
+    monkeypatch.setattr(
+        eval_curator_submodule,
+        "_run_git",
+        lambda cwd, *args: responses[args],
+    )
+
+    result = eval_curator_submodule.validate_submodule_integrity(
+        tmp_path,
+        submodule_root,
+    )
+
+    assert result["parentGitlink"] == "b" * 40
+    assert result["headGitlink"] == "a" * 40
+    assert result["gitlinkSource"] == "index"
+    assert result["parentGitlinkStaged"] is True
 
 
 @pytest.mark.parametrize("create_directory", [False, True])

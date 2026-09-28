@@ -560,6 +560,13 @@ set:
 Ask this even for workspace-level sets and even when no agent is currently
 configured. Do not inspect or report agent configuration until the user answers.
 
+Record each answer independently. After all Step 7 answers, create a distinct
+`push-approved sets` collection. Add only that set when the user explicitly
+chooses push for it. Never add a set that was declined or kept local. If there
+are two selected sets with mixed answers — one is approved and one is declined
+— only the approved set enters `push-approved sets`; the declined set finishes
+locally and must not appear in any later command or mutation lifecycle.
+
 ### If the user declines
 
 Confirm the local locations and finish without checking setup:
@@ -567,9 +574,15 @@ Confirm the local locations and finish without checking setup:
 - `.mcs.yml`: the selected set folder.
 - CSV: that source's `evaluations/exports/` folder.
 
+Declined or keep-local sets must never appear in promotion, review tagging,
+dry-run, `--yes` push, cleanup, or successful-push actions. If
+`push-approved sets` is empty after all answers, skip Steps 8 and 9 and proceed
+to the local-only final summary.
+
 ### If the user chooses push
 
-Only now read `.local/config.json` and check that:
+Only when `push-approved sets` is non-empty, read `.local/config.json` and
+check that:
 
 1. `setup` is `"complete"`;
 2. `agent.folder` exists;
@@ -588,12 +601,16 @@ Before preparing the push, ask:
 
 > Would you like to tag any selected test sets for review?
 
-If yes, run the Flow R1 metadata command for each selected set before the dry
-run. If the current request already followed Flow R1 or the selected set is
-already `review_requested`, do not ask again. Preserve its existing status and
-continue the push.
+This question and all review tagging apply only to `push-approved sets`. If
+yes, run the Flow R1 metadata command for each set in `push-approved sets`
+before the dry run. If the current request already followed Flow R1 or an
+approved set is already `review_requested`, do not ask again. Preserve its
+existing status and continue the push.
 
 ## Step 8: Prepare the selected set for push
+
+Operate only on `push-approved sets`. Promotion must never read, copy,
+overwrite, or otherwise mutate a declined or keep-local set.
 
 ### Set already owned by the configured agent
 
@@ -636,7 +653,7 @@ unchanged until cleanup completes successfully after a full push success.
 
 ## Step 9: Dry run and push
 
-Build one scope argument for every selected set:
+Build one scope argument for every set in `push-approved sets`:
 
 ```text
 --only "evaluations/{set}/*"
@@ -648,9 +665,11 @@ Run the scoped preview:
 python scripts/push.py --only "evaluations/{set}/*" --dry-run
 ```
 
-For multiple selected sets, repeat `--only` once per set. Never use an unscoped
-`push.py` command from the evaluation update, tagging, review, or promotion
-flow. Unscoped push can include unrelated pending topic or workflow changes.
+For multiple `push-approved sets`, repeat `--only` once per approved set.
+Declined or keep-local sets must never appear in the scoped dry-run.
+Never use an unscoped `push.py` command from the evaluation update, tagging,
+review, or promotion flow. Unscoped push can include unrelated pending topic
+or workflow changes.
 
 Show the output and get confirmation. Clearly identify any deletions within
 the selected evaluation set as replacement of deployed cases.
@@ -675,16 +694,18 @@ If the scoped preview has no deletions, omit `--force-delete`:
 python scripts/push.py --only "evaluations/{set}/*" --yes
 ```
 
-Use `--yes` only after the user explicitly confirms the push in Step 7. Use
-`--force-delete` only after the exact selected-set deletions have been shown
-and approved. The scope ensures unrelated local topic or workflow deletions
-remain untouched for a later push.
+Use `--yes` only after the user explicitly confirms the push in Step 7, and
+only for members of `push-approved sets`. Declined or keep-local sets must
+never appear in a `--yes` push. Use `--force-delete` only after the exact
+approved-set deletions have been shown and approved. The scope ensures
+unrelated local topic or workflow deletions remain untouched for a later push.
 
 If the push fails, show the error and offer retry or checkpoint revert.
 
 ### Successful workspace promotion cleanup
 
-   Only when `push.py --yes` exits successfully:
+   Only when `push.py --yes` exits successfully for a member of
+   `push-approved sets`:
 
    Run:
 
@@ -700,6 +721,9 @@ If the push fails, show the error and offer retry or checkpoint revert.
 If the push fails, is cancelled, or only the dry run completes, do not perform
 cleanup. The workspace source remains available for retry.
 
+Cleanup is scoped only to successfully pushed members of `push-approved sets`.
+Declined or keep-local sets must never appear in cleanup.
+
 ## Step 10: Final summary
 
 Report each updated set, its source, changed-case count, CSV location, and
@@ -709,6 +733,10 @@ whether it was:
 - Waiting for `/setup`.
 - Promoted from the workspace, pushed, and removed from workspace staging.
 - Updated and pushed from the configured agent folder.
+
+Successful-push status and next actions are derived only from successfully
+pushed members of `push-approved sets`. Declined or keep-local sets must never
+appear in successful-push actions.
 
 For every set that was kept local, is waiting for `/setup`, had only a dry run,
 or whose push failed/cancelled, end with this mandatory reminder:

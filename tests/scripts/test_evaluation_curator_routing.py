@@ -371,6 +371,11 @@ def test_curator_wrapper_accepts_only_complete_successful_handoffs():
     assert "remain local" in wrapper
     assert "must not enter the update skill" in wrapper
     assert "promotion, push, cleanup, or run" in wrapper
+    assert "scripts/eval_curator_handoff.py validate" in wrapper
+    assert "Before invoking Maker Kit validation" in wrapper
+    assert "traversal" in wrapper
+    assert "symlink or junction escape" in wrapper
+    assert "`exports/` as a set folder" in wrapper
 
 
 def test_curator_wrapper_delegates_push_contract_without_commands():
@@ -448,6 +453,46 @@ def test_update_owns_concrete_workspace_push_and_cleanup_gates():
     assert "do not perform cleanup" in step_9
     assert "workspace source remains available for retry" in step_9
     assert "must not duplicate these questions, commands, or behaviors" in update
+
+
+def test_mixed_push_approval_scopes_every_mutation_to_approved_sets():
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    step_7 = _section(update_text, "## Step 7:", "## Step 8:")
+    step_8 = _section(update_text, "## Step 8:", "## Step 9:")
+    step_9 = _section(update_text, "## Step 9:", "## Step 10:")
+    step_10 = update_text[update_text.index("## Step 10:") :]
+    normalized_step_7 = " ".join(step_7.split())
+    normalized_step_8 = " ".join(step_8.split())
+    normalized_step_9 = " ".join(step_9.split())
+    normalized_step_10 = " ".join(step_10.split())
+    assert "`push-approved sets`" in normalized_step_7
+    assert "add only that set" in normalized_step_7.lower()
+    assert "declined or kept local" in normalized_step_7.lower()
+    assert "never add" in normalized_step_7.lower()
+    assert "two selected sets" in normalized_step_7.lower()
+    assert "one is approved" in normalized_step_7.lower()
+    assert "one is declined" in normalized_step_7.lower()
+    assert "only the approved set" in normalized_step_7.lower()
+    assert (
+        "review tagging apply only to `push-approved sets`"
+        in normalized_step_7
+    )
+    assert "Operate only on `push-approved sets`" in normalized_step_8
+    assert "Promotion must never" in normalized_step_8
+    assert "every set in `push-approved sets`" in normalized_step_9
+    assert "never appear in the scoped dry-run" in normalized_step_9
+    assert "only for members of `push-approved sets`" in normalized_step_9
+    assert "never appear in a `--yes` push" in normalized_step_9
+    assert (
+        "successfully pushed members of `push-approved sets`"
+        in normalized_step_9
+    )
+    assert "must never appear in cleanup" in normalized_step_9
+    assert (
+        "successfully pushed members of `push-approved sets`"
+        in normalized_step_10
+    )
+    assert "must never appear in successful-push actions" in normalized_step_10
 
 
 def test_maker_readme_documents_all_evaluation_generation_sources():
