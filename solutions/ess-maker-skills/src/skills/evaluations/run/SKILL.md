@@ -15,9 +15,10 @@ Commands run from the `solutions/ess-maker-skills/` directory.
 
 ### Eligible-set handoff from the update skill
 
-When `src/skills/evaluations/update/SKILL.md` enters Flow A or Flow B after a
-mixed-outcome push, accept its exact successfully pushed test-set names and IDs
-as the eligible-set scope for this interaction.
+Whenever `src/skills/evaluations/update/SKILL.md` enters Flow A or Flow B from
+its post-push next actions, accept its exact successfully pushed test-set names
+and IDs as the eligible-set scope for this interaction, whether every selected
+set succeeded or only some did.
 
 - In Flow A, still run the normal `list-sets` discovery command, but display and
   allow selection only for returned sets whose name or ID is in that scope.

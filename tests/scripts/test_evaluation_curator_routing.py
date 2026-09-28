@@ -275,7 +275,9 @@ def test_run_skill_is_referenced_only_after_successful_push():
     assert "choosing a next action does not select a test set or run" in normalized
     assert "discovery and selection must remain separate user turns" in normalized
     assert "Do not offer **Run an evaluation** as immediately available" in update
-    assert "mixed-outcome push" in run_handoff
+    assert "Whenever `src/skills/evaluations/update/SKILL.md` enters" in run_handoff
+    assert "from its post-push next actions" in run_handoff
+    assert "whether every selected set succeeded or only some did" in run_handoff
     assert "only for returned sets whose name or ID is in that scope" in run_handoff
     assert (
         "only for runs whose test-set name or `testSetId` is in that scope"
