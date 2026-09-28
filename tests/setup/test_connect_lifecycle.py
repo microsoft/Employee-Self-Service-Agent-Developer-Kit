@@ -27,6 +27,7 @@ def test_workday_contract_uses_generic_lifecycle() -> None:
     assert wiring["mutates"] is True
     assert wiring["requiredRole"] == "Environment Maker"
     assert wiring["rollbackPushGlob"] == "topics/user-context-setup.mcs.yml"
+    assert "attestedRoleScope" not in contract
 
     entry = (_CONNECT / "workday" / "SKILL.md").read_text(encoding="utf-8")
     assert "connect/shared/lifecycle-runner.md" in entry
@@ -52,6 +53,13 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "clear `actionApplied`/`lastActionAt`" in runner
     assert "fresh gate and fresh rollback" in runner
     assert "must never be reused after drift" in runner
+    assert "attestedRoleScope: \"lifecycle\"" in runner
+    assert "roleAttestations.{requiredRole}" in runner
+    assert "Accepting the plan does not claim a\nrole" in runner
+    assert "Never reuse `roleAttestations` for this mode" in runner
+    assert "different provider or agent slug" in runner
+    assert "missing `roleAttestations` object" in runner
+    assert "Do not infer an attestation from `attested`" in runner
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
 
@@ -64,6 +72,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     )
 
     assert contract["provider"] == "servicenow-da-hrsd"
+    assert contract["attestedRoleScope"] == "lifecycle"
     assert [phase["id"] for phase in contract["phases"]] == [
         "topics",
         "credential",
@@ -82,6 +91,37 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")
     )
     assert all("actionExecution" not in phase for phase in workday["phases"])
+    assert "attestedRoleScope" not in workday
+
+
+def test_hrsd_lifecycle_reuses_one_attested_role_per_agent() -> None:
+    runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
+        encoding="utf-8"
+    )
+    contract = json.loads(
+        (_CONNECT / "servicenow-da-hrsd" / "contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    mutating = [phase for phase in contract["phases"] if phase["mutates"]]
+    assert {phase["gateMode"] for phase in mutating} == {"attested"}
+    assert {phase["requiredRole"] for phase in mutating} == {
+        "ESS Maker / Agent Developer"
+    }
+    assert runner.count("roleAttestations.{requiredRole}") >= 2
+    assert "without asking again" in runner
+    assert '`provider` exactly equals `PROVIDER`' in runner
+    assert '`agentSlug` exactly equals `AGENT_SLUG`' in runner
+
+    schema = (_CONNECT / "shared" / "lifecycle-contract-schema.md").read_text(
+        encoding="utf-8"
+    )
+    assert "first mutating phase" in schema
+    assert "Later mutating phases" in schema
+    assert "later resumes" in schema
+    assert "Explicit lifecycle reset/reinitialization" in schema
+    assert "`gateMode: \"programmatic\"` always executes its role query" in schema
 
 
 def test_cea_workday_routing_is_package_gated() -> None:

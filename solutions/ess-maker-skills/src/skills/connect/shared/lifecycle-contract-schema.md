@@ -24,6 +24,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `displayName` | string | yes | Human name shown to the user (e.g. `"Workday"`). |
 | `detect` | object | yes | How the runner's caller decides this lifecycle applies at all — see "Detect block" below. |
 | `connectConfig` | string | no | Provider-specific config JSON to pass to FlightCheck as `--connect-config`. Use this when provider state intentionally lives outside `.local/config.json`; the explicit file prevents architecture-specific state from being guessed or merged. |
+| `attestedRoleScope` | string | no (default `"phase"`) | Controls reuse of successful `gateMode: "attested"` role gates. `"phase"` preserves the historical behavior: each mutating phase asks separately. `"lifecycle"` persists one attestation per required role for this exact provider + agent lifecycle and reuses it across later mutating phases and resumes. Programmatic gates are never reused through this field. |
 | `phases` | array | yes | Ordered list of phase objects — see "Phase fields" below. Executed strictly in array order; a phase never starts until every phase before it is `done` (or `skipped`, see below). |
 
 ### Detect block
@@ -107,6 +108,7 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   "agentSlug": "employee-self-service-hr",
   "attested": true,
   "attestedAt": "2026-09-15T14:02:00Z",
+  "roleAttestations": {},
   "currentPhase": "agent-wiring",
   "phases": {
     "discovery": {
@@ -127,6 +129,13 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 
 - `attested` — `true` once the user has seen the up-front plan (phase labels +
   required roles) and agreed to proceed. Set once; never reset by a resume.
+  This plan attestation is not itself a role attestation.
+- `roleAttestations.{requiredRole}` — used only when the contract opts into
+  `attestedRoleScope: "lifecycle"`. A valid entry records
+  `{verifiedBy: "attested", provider, agentSlug, attestedAt, note}`. It is
+  reusable only when `provider`, `agentSlug`, and `requiredRole` still match
+  the current lifecycle. A different provider or agent uses a different state
+  path and cannot inherit it.
 - `phases.{id}.status` ∈ `pending` \| `in-progress` \| `done` \| `blocked`.
 - `phases.{id}.lastVerifiedAt` — timestamp of the most recent **live**
   checkpoint run that produced the current `status`. The runner never trusts
@@ -146,6 +155,29 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 The `agentSlug` and state-file path are mandatory isolation boundaries. A
 provider may be connected to multiple agents in one workspace; no agent may
 reuse another agent's progress or checkpoint results.
+
+### Lifecycle-scoped attested roles
+
+`attestedRoleScope: "lifecycle"` is an explicit provider opt-in for UX role
+confirmation only:
+
+- The first mutating phase requiring a role runs the normal attested
+  `permission-gate.md` flow.
+- On pass, the runner persists the returned evidence under
+  `roleAttestations.{requiredRole}` with the exact provider and agent slug.
+- Later mutating phases requiring the same role, and later resumes of the same
+  lifecycle state, reuse that evidence without asking again.
+- A missing, malformed, non-attested, wrong-provider, wrong-agent, or
+  wrong-role entry is invalid and the gate must ask again.
+- Explicit lifecycle reset/reinitialization must remove `roleAttestations`
+  together with the lifecycle state. Plan reset alone must not leave a role
+  attestation behind.
+- `gateMode: "programmatic"` always executes its role query. A stored attested
+  role never bypasses a programmatic gate or its fallback behavior.
+
+This reuse does not authorize a mutation by itself, complete a phase, replace
+the phase's explicit mutation confirmation, or replace maker evidence and
+checkpoint acknowledgement.
 
 ### Action result vocabulary
 

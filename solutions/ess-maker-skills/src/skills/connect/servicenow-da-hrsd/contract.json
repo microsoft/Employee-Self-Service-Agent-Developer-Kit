@@ -2,6 +2,7 @@
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
+  "attestedRoleScope": "lifecycle",
   "detect": {
     "checkpoint": "SN-DA-HRSD-PKG-001",
     "meansInstalled": "Passed",

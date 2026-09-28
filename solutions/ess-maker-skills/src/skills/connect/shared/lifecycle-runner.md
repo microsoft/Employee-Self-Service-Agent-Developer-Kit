@@ -42,9 +42,18 @@ mutation and validation must never fall back to scanning every local agent.
 
 Read `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json`. If it
 does not exist, this is a first run: initialize it in memory with
-`agentSlug: AGENT_SLUG`, `attested: false`, and every phase from the contract
-at `status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
+`provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: false`,
+`roleAttestations: {}`, and every phase from the contract at
+`status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
 (write only after the plan is shown, in L.1).
+
+If existing state identifies a different provider or agent slug, stop instead
+of reusing it. Never copy plan or role attestation across provider/agent
+identity.
+
+For backward compatibility, treat a missing `roleAttestations` object in an
+older state file as `{}`. Do not infer an attestation from `attested`,
+`attestedAt`, a completed phase, or a prior action.
 
 Initialize an invocation-local empty set named `executedActionPhases`. Add a
 phase ID after its action returns `applied` or `recorded`; this prevents an
@@ -97,8 +106,10 @@ invocation should show this same plan again.
 
 **If "Yes, let's go":** Write
 `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` now with
-`agentSlug: AGENT_SLUG`, `attested: true`, `attestedAt` = current UTC
-timestamp, and every phase at `status: "pending"`. Continue to L.2.
+`provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: true`,
+`attestedAt` = current UTC timestamp, `roleAttestations: {}`, and every phase
+at `status: "pending"`. Continue to L.2. Accepting the plan does not claim a
+role; the first required role gate remains explicit.
 
 ---
 
@@ -174,13 +185,41 @@ If the current phase has an `actionDoc`, execute it when:
   run during this invocation; or
 - `actionExecution` is omitted/`"once"` and `actionApplied` is not yet `true`.
 
-For a phase with `mutates: true`, apply `permission-gate.md` (from
-`src/skills/setup/shared/permission-gate.md`) with `REQUIRED_ROLE` = the
-phase's `requiredRole`. Use the phase's `gateMode` (default `"attested"` if the
-contract omits it); if `gateMode` is `"programmatic"`, pass the phase's
-`roleQuery` as `ROLE_QUERY` verbatim, and treat the query as a pass only if it
-returns one of `roleQueryPassNames`. Non-mutating actions do not run a role
-gate.
+For a phase with `mutates: true`, resolve its `gateMode` (default
+`"attested"`).
+
+**Programmatic mode:** always apply `permission-gate.md` with
+`REQUIRED_ROLE` = the phase's `requiredRole`, `GATE_MODE = "programmatic"`,
+and the phase's `roleQuery`. Treat the query as a pass only if it returns one
+of `roleQueryPassNames`. Never reuse `roleAttestations` for this mode,
+including after resume.
+
+**Attested mode with historical/default phase scope:** apply
+`permission-gate.md` for this phase as before.
+
+**Attested mode with `attestedRoleScope: "lifecycle"`:** inspect
+`roleAttestations.{requiredRole}`. Reuse it only when all are true:
+
+- `verifiedBy` is `"attested"`;
+- `provider` exactly equals `PROVIDER`;
+- `agentSlug` exactly equals `AGENT_SLUG`;
+- the map key exactly equals the phase's `requiredRole`.
+
+When valid, set `GATE_RESULT = "pass"` without asking again. When absent or
+invalid, apply the normal attested `permission-gate.md`. On pass, persist:
+
+```json
+{
+  "verifiedBy": "attested",
+  "provider": "{PROVIDER}",
+  "agentSlug": "{AGENT_SLUG}",
+  "attestedAt": "<current UTC timestamp>",
+  "note": "<GATE_EVIDENCE.note>"
+}
+```
+
+under `roleAttestations.{requiredRole}` and write the lifecycle state before
+executing the action. Non-mutating actions do not run a role gate.
 
 **If the gate returns `"stop"`:** stop here. Leave the phase `in-progress` in
 the state file (write it now) so the next invocation resumes at this same
