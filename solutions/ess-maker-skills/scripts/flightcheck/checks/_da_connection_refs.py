@@ -4,7 +4,8 @@
 """Canonical reader for Declarative Agent connection references (minimalBots
 components API), shared so the DA connection checks cannot drift apart.
 
-Consumers:
+Intended consumers (this reader ships ahead of them; the wiring lands in the
+stacked DA re-point PRs, so nothing in this branch imports it yet):
   * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
     Workday SOAP reference, via ``read_active_agent_connection_references``.
   * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
@@ -19,8 +20,10 @@ Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
 
 Fail-loudly contract:
   * a missing ``connectionReferenceChanges`` key means genuine absence -> ``[]``;
-  * a present-but-malformed shape raises ``ValueError`` so the owning check
-    degrades to a WARNING rather than reporting a confident but wrong verdict;
+  * a present-but-malformed shape raises ``ValueError``; the consuming check is
+    expected to catch it and surface a WARNING rather than reporting a confident
+    but wrong verdict (an uncaught raise the runner turns into ERROR is also
+    acceptable failure-loud behavior — the contract is "do not swallow it");
   * a read that cannot be attempted at all (no AgentBuilder client, or no
     configured agent botId) returns ``None`` so the caller SKIPs.
 """
@@ -114,9 +117,9 @@ def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | No
     ``agent.botId``), or ``None`` when the AgentBuilder client or the
     active-agent botId is unavailable.
 
-    Used by ``DV-CONN-001`` (checks/workday_extension.py), which validates the
-    Workday SOAP connection reference on the agent under check. Scoping this to
-    the active agent — not every configured agent — keeps the check from
+    Intended for ``DV-CONN-001`` (checks/workday_extension.py), which validates
+    the Workday SOAP connection reference on the agent under check. Scoping this
+    to the active agent — not every configured agent — keeps the check from
     reporting on a Workday reference that belongs to a different agent.
     Raises ``ValueError`` for malformed components payloads.
     """
@@ -133,7 +136,7 @@ def _all_agents_connection_references(runner) -> list[dict[str, Any]] | None:
     single-agent config), preserving per-agent rows, or ``None`` when the
     AgentBuilder client is unavailable or no agent botId is configured.
 
-    Used by the Workday shared-parameter sweep, which must inspect each
+    Intended for the Workday shared-parameter sweep, which must inspect each
     configured agent's own Workday reference rather than only the active one.
     Raises ``ValueError`` for malformed components payloads.
     """
@@ -156,7 +159,7 @@ def read_all_agents_connection_references(
     logical name (first occurrence wins, order preserved), or ``None`` when the
     AgentBuilder client is unavailable or no agent botId is configured.
 
-    Used by ``ENV-004`` (checks/environment.py), which is environment-wide
+    Intended for ``ENV-004`` (checks/environment.py), which is environment-wide
     across every agent under check and reports one row per distinct logical
     name. The per-agent (non-de-duped) view is ``_all_agents_connection_references``,
     which the Workday shared-parameter sweep uses instead.
