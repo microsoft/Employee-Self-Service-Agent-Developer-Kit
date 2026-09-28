@@ -473,7 +473,9 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
     # Maker is now the fall-through `else` branch of the launch block (prompt
     # is resolved to maker|developer before any launch code runs), so we
     # assert the maker log copy is present instead of the explicit == check.
-    if ($macInstaller -notmatch 'ESS Maker Profile will run /setup') { throw 'maker launch branch (fall-through else) missing' }
+    # In the guided-rail UX maker mode does not auto-run /setup; it opens the
+    # guided view and the user clicks "Start set up", so we assert that copy.
+    if ($macInstaller -notmatch 'guided Agent Developer Kit view') { throw 'maker launch branch (fall-through else) missing' }
 }
 
 Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {
