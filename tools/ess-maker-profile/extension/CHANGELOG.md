@@ -2,11 +2,19 @@
 
 ## 0.4.29 (POC)
 
+- **Rail + walkthrough UX overhaul.** The **Quick start** panel is now a simple
+  tree (matching Customization and Help) with just **Start setup** and
+  **Tutorial**. **Customization** now lists Customize landing page, Create a
+  topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests,
+  and Push to Copilot Studio (Set up moved out; topic create/update split;
+  Flight check/Push renamed). **Help** is trimmed to **Documentation** only.
+  The getting-started walkthrough is reduced to two steps — **What ADK does**
+  and **Getting started** — with clearer onboarding copy and prompt guidance.
 - **Developer mode no longer auto-runs `/setup`.** `/setup` is now user-driven
   in both modes. The installer opens the workspace (no `code chat "/setup"`),
   and the extension no longer re-injects `/setup` on Developer-mode reopens —
   it just re-shows the rendered README preview. Run `/setup` yourself in
-  Copilot Chat (or via the guided rail's **Start set up**) when ready.
+  Copilot Chat (or via the guided rail's **Start setup**) when ready.
 - **Reveal the rail → guided welcome (Developer mode).** Clicking the "Agent
   Developer Kit" activity-bar icon in Developer mode now closes the static
   README preview and opens the getting-started walkthrough (the welcome

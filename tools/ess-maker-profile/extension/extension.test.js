@@ -183,9 +183,9 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('view is webview type', () => {
+test('quick start view is a tree (no webview type)', () => {
     const view = pkg.contributes.views.essMakerActions[0];
-    assert.strictEqual(view.type, 'webview');
+    assert.strictEqual(view.type, undefined);
     assert.strictEqual(view.id, 'essMaker.actionsView');
 });
 

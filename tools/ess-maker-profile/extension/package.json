@@ -106,7 +106,6 @@
     "views": {
       "essMakerActions": [
         {
-          "type": "webview",
           "id": "essMaker.actionsView",
           "name": "Quick start",
           "contextualTitle": "Agent Developer Kit"
@@ -136,49 +135,21 @@
       {
         "id": "essMaker.gettingStarted",
         "title": "Welcome to the Agent Developer Kit!",
-        "description": "Build, update, and publish your Employee Self-Service agent with plain English. No code required.",
+        "description": "GitHub Copilot walks you through setting up your Employee Self-Service agent and more — all in plain English. Read on to get started.",
         "steps": [
           {
-            "id": "introduction",
-            "title": "Introduction",
-            "description": "**Actions (left):** quick actions, customization, and help — everything you need to drive the build from one rail.\n**Preview (center):** follow the steps in the same workspace as your agent.\n**Copilot chat (right):** describe what you want your ESS agent to do; Copilot turns your intent into set-up steps, topics, and configuration.\n[Open Copilot Chat](command:workbench.action.chat.open)",
-            "media": { "markdown": "walkthrough/introduction.md" },
+            "id": "overview",
+            "title": "What ADK does",
+            "description": "The Agent Developer Kit lets you build, update, and publish your Employee Self-Service agent in plain English — Copilot turns your intent into set-up steps, topics, and configuration, so you don't have to write code.\nIf you don't already have Copilot Chat open, click the button below.\n[Open Copilot Chat](command:workbench.action.chat.open)",
+            "media": { "markdown": "walkthrough/overview.md" },
             "completionEvents": ["onCommand:workbench.action.chat.open"]
           },
           {
-            "id": "setup",
-            "title": "Set up your environment",
-            "description": "Sign in to your Power Platform environment.\n[Start set up](command:essMaker.runSetup)",
-            "media": { "markdown": "walkthrough/connect.md" },
-            "completionEvents": ["onCommand:essMaker.runSetup"]
-          },
-          {
-            "id": "create",
-            "title": "Create a topic",
-            "description": "Describe a new conversation in plain English.\n[Create a topic](command:essMaker.runCreate)",
-            "media": { "markdown": "walkthrough/create-topic.md" },
-            "completionEvents": ["onCommand:essMaker.runCreate"]
-          },
-          {
-            "id": "modify",
-            "title": "Modify a topic",
-            "description": "Change how an existing topic behaves.\n[Modify a topic](command:essMaker.runUpdate)",
-            "media": { "markdown": "walkthrough/modify-topic.md" },
-            "completionEvents": ["onCommand:essMaker.runUpdate"]
-          },
-          {
-            "id": "flightcheck",
-            "title": "Run a flightcheck",
-            "description": "Run 41+ readiness checks before you deploy.\n[Run a flightcheck](command:essMaker.runFlightcheck)",
-            "media": { "markdown": "walkthrough/flightcheck.md" },
-            "completionEvents": ["onCommand:essMaker.runFlightcheck"]
-          },
-          {
-            "id": "push",
-            "title": "Push to Copilot",
-            "description": "Safely deploy your changes to Copilot Studio.\n[Push to Copilot Studio](command:essMaker.runPush)",
-            "media": { "markdown": "walkthrough/push.md" },
-            "completionEvents": ["onCommand:essMaker.runPush"]
+            "id": "getting-started",
+            "title": "Getting started",
+            "description": "Not sure where to begin? Just tell Copilot Chat what you want.\nTo set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. To check readiness before you deploy, ask **\"Help me run a flightcheck\"**.\n[Open Copilot Chat](command:workbench.action.chat.open)",
+            "media": { "markdown": "walkthrough/getting-started.md" },
+            "completionEvents": ["onCommand:workbench.action.chat.open"]
           }
         ]
       }
@@ -190,7 +161,7 @@
           "type": "string",
           "enum": ["maker", "developer", "lite", "standard", ""],
           "default": "",
-          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the chat-first guided layout; 'developer' (was 'standard') uses the default VS Code layout with /setup injection; empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and normalized to 'maker'/'developer' so existing users keep their choice after the rename."
+          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the chat-first guided layout; 'developer' (was 'standard') uses the default VS Code layout with a rendered README preview. In both modes /setup is user-driven — the extension never auto-runs it. Empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and normalized to 'maker'/'developer' so existing users keep their choice after the rename."
         },
         "essMaker.autoUpdateCheck": {
           "type": "boolean",

@@ -944,191 +944,35 @@ async function openChatWithQuery(query) {
 }
 
 // Webview view provider — renders the button rail.
-class ActionsViewProvider {
-    constructor(extensionUri, context) {
-        this._extensionUri = extensionUri;
-        this._context = context;
-        this._view = null;
-    }
+class QuickStartTreeProvider {
+    getTreeItem(item) { return item; }
+    getChildren(element) {
+        if (element) return [];
+        const setup = new vscode.TreeItem('Start setup', vscode.TreeItemCollapsibleState.None);
+        setup.iconPath = new vscode.ThemeIcon('account');
+        setup.tooltip = new vscode.MarkdownString('**Start setup**\n\nSign in to your Power Platform environment and connect your agent.');
+        setup.command = { command: 'essMaker.runSetup', title: 'Start setup' };
 
-    // One-time transition when the user reveals the rail in developer mode:
-    // close the static README preview and open the welcome walkthrough. In
-    // maker mode applyGuidedLayout has already set the guard, so this no-ops.
-    _maybeShowWelcome() {
-        if (_guidedWelcomeShown || _activationGrace) return;
-        _guidedWelcomeShown = true;
-        closeReadmePreview()
-            .then(() => openGettingStarted())
-            .catch(() => {});
-    }
+        const tutorial = new vscode.TreeItem('Tutorial', vscode.TreeItemCollapsibleState.None);
+        tutorial.iconPath = new vscode.ThemeIcon('book');
+        tutorial.tooltip = 'Open the guided walkthrough.';
+        tutorial.command = { command: 'essMaker.openWalkthrough', title: 'Tutorial' };
 
-    async resolveWebviewView(webviewView) {
-        this._view = webviewView;
-        webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._extensionUri] };
-        webviewView.webview.html = this._html(webviewView.webview);
+        return [setup, tutorial];
+    }
+}
 
-        // onDidChangeVisibility does not fire for this initial resolve, so run
-        // the transition here when the view resolves already visible.
-        if (webviewView.visible) this._maybeShowWelcome();
-        webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) this._maybeShowWelcome();
-        });
-
-        webviewView.webview.onDidReceiveMessage(async (msg) => {
-            if (msg?.type === 'action') {
-                const action = ACTIONS.find(a => a.id === msg.id);
-                if (!action) return;
-                // Quick start buttons are always actionable; the skill itself
-                // guides the user if a prerequisite (e.g. setup) is missing.
-                // Gating/locks are surfaced in the Customization view instead.
-                await openChatWithQuery(action.query);
-            } else if (msg?.type === 'openWalkthrough') {
-                await openGettingStarted();
-            } else if (msg?.type === 'restoreLayout') {
-                await this._context.globalState.update(LITE_MODE_KEY, false);
-                await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
-                await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Workspace);
-                // Expand the workspace folder in the explorer
-                await tryRun('workbench.view.explorer');
-                await new Promise((r) => setTimeout(r, 150));
-                await tryRun('workbench.files.action.expandRecursively');
-                await this.refresh();
-                const sel = await vscode.window.showInformationMessage(
-                    'Developer layout restored. Reload the window for full effect.',
-                    'Reload Window'
-                );
-                if (sel === 'Reload Window') {
-                    await vscode.commands.executeCommand('workbench.action.reloadWindow');
-                }
-            } else if (msg?.type === 'reapplyLayout') {
-                await this._context.globalState.update(LITE_MODE_KEY, true);
-                await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
-                await this.refresh();
-                const sel = await vscode.window.showInformationMessage(
-                    'Maker mode applied. Reload the window for full effect.',
-                    'Reload Window'
-                );
-                if (sel === 'Reload Window') {
-                    await vscode.commands.executeCommand('workbench.action.reloadWindow');
-                }
-            } else if (msg?.type === 'resetProgress') {
-                const sel = await vscode.window.showWarningMessage(
-                    'Reset Quick Actions progress? All buttons will be re-locked except Setup.',
-                    'Reset', 'Cancel'
-                );
-                if (sel === 'Reset') {
-                    await resetCompleted(this._context);
-                    await this.refresh();
-                }
-            } else if (msg?.type === 'ready') {
-                await this.refresh();
-            }
-        });
-
-        await this.refresh();
-    }
-
-    async refresh() {
-        if (!this._view) return;
-        const completed = getCompleted(this._context);
-        const states = {};
-        for (const a of ACTIONS) {
-            states[a.id] = actionState(a, completed);
-        }
-        const makerLayout = isMakerLayout();
-        try {
-            await this._view.webview.postMessage({ type: 'state', states, makerLayout });
-        } catch {}
-    }
-
-    _html(webview) {
-        const nonce = Array.from({length: 32}, () =>
-            'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.charAt(Math.floor(Math.random() * 62))
-        ).join('');
-
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';" />
-<style>
-    body {
-        font-family: var(--vscode-font-family);
-        font-size: var(--vscode-font-size);
-        color: var(--vscode-foreground);
-        padding: 14px 12px 18px;
-        margin: 0;
-    }
-    .intro {
-        font-size: 12px;
-        line-height: 1.5;
-        color: var(--vscode-descriptionForeground);
-        margin: 0 2px 16px;
-    }
-    .action {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        width: 100%;
-        margin: 0 0 8px;
-        padding: 10px 12px;
-        background: var(--vscode-button-background);
-        color: var(--vscode-button-foreground);
-        border: 1px solid transparent;
-        border-radius: 4px;
-        cursor: pointer;
-        text-align: left;
-        transition: background-color 100ms ease;
-        font-family: inherit;
-    }
-    .action:hover { background: var(--vscode-button-hoverBackground); }
-    .action:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-    .action.secondary {
-        background: var(--vscode-button-secondaryBackground, transparent);
-        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-        border-color: var(--vscode-panel-border, rgba(128,128,128,0.3));
-    }
-    .action.secondary:hover {
-        background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
-    }
-    .icon { font-size: 18px; line-height: 1; flex: 0 0 22px; text-align: center; }
-    .label { font-size: 13px; font-weight: 600; }
-</style>
-</head>
-<body>
-    <p class="intro">
-        Build, update, and publish your Employee Self-Service agent in plain English &mdash; no code required.
-        Start with the tutorial, or jump straight in below.
-    </p>
-    <button class="action secondary" data-action="openWalkthrough">
-        <div class="icon">📖</div>
-        <div class="label">Tutorial</div>
-    </button>
-    <button class="action" data-id="setup">
-        <div class="icon">🔌</div>
-        <div class="label">Start set up</div>
-    </button>
-    <button class="action" data-id="update">
-        <div class="icon">✏️</div>
-        <div class="label">Modify a topic</div>
-    </button>
-    <button class="action" data-id="flightcheck">
-        <div class="icon">✈️</div>
-        <div class="label">Run a flight check</div>
-    </button>
-<script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
-    document.querySelectorAll('button[data-id]').forEach(btn => {
-        btn.addEventListener('click', () => vscode.postMessage({ type: 'action', id: btn.dataset.id }));
-    });
-    document.querySelectorAll('button[data-action]').forEach(btn => {
-        btn.addEventListener('click', () => vscode.postMessage({ type: btn.dataset.action }));
-    });
-    vscode.postMessage({ type: 'ready' });
-</script>
-</body>
-</html>`;
-    }
+// One-time transition when the user reveals the Agent Developer Kit rail in
+// developer mode: close the static README preview and open the welcome
+// walkthrough. In maker mode applyGuidedLayout has already set the guard, so
+// this no-ops. The activation grace ignores a passive rail auto-restore at
+// launch so developer mode's README preview is not clobbered.
+function maybeShowWelcomeOnReveal() {
+    if (_guidedWelcomeShown || _activationGrace) return;
+    _guidedWelcomeShown = true;
+    closeReadmePreview()
+        .then(() => openGettingStarted())
+        .catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1158,31 +1002,14 @@ async function openGettingStarted(stepId) {
 // The Customization rail mirrors the guided journey. `requires` gates an item
 // behind Setup; locked items show a lock icon and a "complete setup" nudge.
 const CUSTOMIZATION_ITEMS = [
-    { id: 'setup',       label: 'Set up',                 run: 'essMaker.runSetup',       icon: 'account',   requires: [],        desc: 'Sign in to your Power Platform environment and connect your agent.' },
-    { id: 'create',      label: 'Create or modify topic', run: 'essMaker.runCreate',      icon: 'edit',      requires: ['setup'], desc: 'Create a new topic or change an existing one, described in plain English.' },
-    { id: 'flightcheck', label: 'Flight check',           run: 'essMaker.runFlightcheck', icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
-    { id: 'push',        label: 'Push',                   run: 'essMaker.runPush',        icon: 'rocket',    requires: ['setup'], desc: 'Push your Employee Self-Service agent changes to your audience.' },
+    { id: 'landingPage', label: 'Customize landing page', run: 'essMaker.run_landingPage', icon: 'browser',   requires: ['setup'], desc: 'Tailor the landing page your audience sees when they open the agent.' },
+    { id: 'create',      label: 'Create a topic',         run: 'essMaker.runCreate',       icon: 'add',       requires: ['setup'], desc: 'Create a new topic, described in plain English.' },
+    { id: 'update',      label: 'Update a topic',         run: 'essMaker.runUpdate',       icon: 'edit',      requires: ['setup'], desc: 'Change an existing topic, described in plain English.' },
+    { id: 'scan',        label: 'Scan for issues',        run: 'essMaker.runScan',         icon: 'search',    requires: ['setup'], desc: 'Scan your agent for errors and common configuration problems.' },
+    { id: 'flightcheck', label: 'Run a flightcheck',      run: 'essMaker.runFlightcheck',  icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
+    { id: 'evaluate',    label: 'Generate tests',         run: 'essMaker.run_evaluate',    icon: 'beaker',    requires: ['setup'], desc: 'Generate evaluation tests to validate your agent behaves as expected.' },
+    { id: 'push',        label: 'Push to Copilot Studio', run: 'essMaker.runPush',         icon: 'rocket',    requires: ['setup'], desc: 'Push your Employee Self-Service agent changes to Copilot Studio.' },
 ];
-
-// Read the connected environment/agent from .local/config.json so the Set up
-// item can show what the workspace is currently pointed at (with a green
-// check). Returns null when setup is not complete or the file is unreadable.
-async function getConnectedInfo() {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || !folders.length) return null;
-    try {
-        const uri = vscode.Uri.joinPath(folders[0].uri, '.local', 'config.json');
-        const buf = await vscode.workspace.fs.readFile(uri);
-        const cfg = JSON.parse(Buffer.from(buf).toString('utf8'));
-        if (cfg.setup !== 'complete') return null;
-        const name = (cfg.agent && (cfg.agent.name || cfg.agent.displayName)) || cfg.activeAgent;
-        let env = '';
-        try { env = new URL(cfg.dataverseEndpoint).host; } catch {}
-        return { label: name || env || 'Connected', detail: env };
-    } catch {
-        return null;
-    }
-}
 
 class CustomizationTreeProvider {
     constructor(context) {
@@ -1193,35 +1020,21 @@ class CustomizationTreeProvider {
     refresh() { this._emitter.fire(); }
     getTreeItem(item) { return item; }
     async getChildren(element) {
-        if (element && element._adkId === 'setup') {
-            const info = await getConnectedInfo();
-            if (!info) return [];
-            const child = new vscode.TreeItem(info.label, vscode.TreeItemCollapsibleState.None);
-            child.iconPath = new vscode.ThemeIcon('pass-filled', new vscode.ThemeColor('charts.green'));
-            child.tooltip = info.detail ? `Connected: ${info.detail}` : 'Connected';
-            child.contextValue = 'adkAccount';
-            return [child];
-        }
         if (element) return [];
         const completed = getCompleted(this._context);
-        const info = await getConnectedInfo();
         return CUSTOMIZATION_ITEMS.map((meta) => {
-            const isSetup = meta.id === 'setup';
             const unlocked = meta.requires.every((r) => completed.has(r));
-            const collapsible = (isSetup && info)
-                ? vscode.TreeItemCollapsibleState.Expanded
-                : vscode.TreeItemCollapsibleState.None;
-            const item = new vscode.TreeItem(meta.label, collapsible);
+            const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
             item._adkId = meta.id;
             item._adkInfo = `${meta.label}: ${meta.desc}`;
             item.contextValue = 'adkInfo:' + meta.id;
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
-            if (isSetup || unlocked) {
+            if (unlocked) {
                 item.iconPath = new vscode.ThemeIcon(meta.icon);
                 item.command = { command: meta.run, title: meta.label };
             } else {
                 item.iconPath = new vscode.ThemeIcon('lock');
-                item.description = 'Complete Set up first';
+                item.description = 'Complete setup first';
                 item.command = { command: 'essMaker.itemLocked', title: meta.label };
             }
             return item;
@@ -1233,22 +1046,12 @@ class HelpTreeProvider {
     getTreeItem(item) { return item; }
     getChildren(element) {
         if (element) return [];
-        const intro = new vscode.TreeItem('Introduction', vscode.TreeItemCollapsibleState.None);
-        intro.iconPath = new vscode.ThemeIcon('info');
-        intro.tooltip = 'What the Agent Developer Kit does and how the panels fit together.';
-        intro.command = { command: 'essMaker.openIntroduction', title: 'Introduction' };
-
-        const tutorial = new vscode.TreeItem('Tutorial', vscode.TreeItemCollapsibleState.None);
-        tutorial.iconPath = new vscode.ThemeIcon('book');
-        tutorial.tooltip = 'Step-by-step walkthrough of building an ESS agent.';
-        tutorial.command = { command: 'essMaker.openWalkthrough', title: 'Tutorial' };
-
         const docs = new vscode.TreeItem('Documentation', vscode.TreeItemCollapsibleState.None);
         docs.iconPath = new vscode.ThemeIcon('link-external');
         docs.tooltip = 'Open the Employee Self-Service Agent Developer Kit documentation.';
         docs.command = { command: 'essMaker.openDocs', title: 'Documentation' };
 
-        return [intro, tutorial, docs];
+        return [docs];
     }
 }
 
@@ -1723,7 +1526,7 @@ function activate(context) {
             applyGuidedLayout({ silent: false, firstRun: true })
         ),
         vscode.commands.registerCommand('essMaker.openIntroduction', () =>
-            openGettingStarted('introduction')
+            openGettingStarted('overview')
         ),
         vscode.commands.registerCommand('essMaker.showItemInfo', (item) =>
             vscode.window.showInformationMessage(item && item._adkInfo ? item._adkInfo : 'Agent Developer Kit')
@@ -1734,14 +1537,20 @@ function activate(context) {
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
         ),
-        vscode.window.registerWebviewViewProvider(
-            'essMaker.actionsView',
-            _actionsViewProvider = new ActionsViewProvider(context.extensionUri, context),
-            { webviewOptions: { retainContextWhenHidden: true } }
-        ),
         vscode.window.registerTreeDataProvider('essMaker.customizationView', _customizationProvider),
         vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
+
+    // Quick start is a tree view (like Customization and Help). Use
+    // createTreeView so we can react to the user revealing the rail and, in
+    // developer mode, transition into the guided welcome walkthrough.
+    const quickStartView = vscode.window.createTreeView('essMaker.actionsView', {
+        treeDataProvider: new QuickStartTreeProvider()
+    });
+    quickStartView.onDidChangeVisibility((e) => {
+        if (e.visible) maybeShowWelcomeOnReveal();
+    });
+    context.subscriptions.push(quickStartView);
 
     // Start watching workspace files for prerequisite artifacts.
     // This enables/disables buttons based on actual file existence
