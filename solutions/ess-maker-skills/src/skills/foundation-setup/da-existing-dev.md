@@ -29,7 +29,10 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Continue only when the current invocation has a
 service result reporting `realm: dev`. Do not infer the realm from the URL,
 agent name, environment metadata, canonical setup state, or conversation
-history. If the service reports another realm, explain that this setup path
+history. When `almEnrollment` is `not-enrolled`, preserve that the native agent
+exists, explain that it is not enrolled for ALM-based local authoring, and use
+the parent's alternate-agent, alternate-environment, and **Go back** recovery
+routes. If the service reports another realm, explain that this setup path
 requires an editable Dev agent and stop.
 
 After a Dev result, show:
@@ -86,13 +89,13 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-When candidates are returned, show their display names and ask the maker to choose one. For an identity returned by this native list, run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or attachment. Validate only the selected candidate through `validate-agent` or `attach`.
+When candidates are returned, show their display names and ask the maker to choose one. For an identity returned by this native list, run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or attachment. Validate only the selected candidate through `validate-agent` or `attach`.
 
 When the list is empty, say:
 
 > No visible editable Dev agents were listed in this environment. A directly addressable agent may still be available.
 
-Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run the full selected-agent product-line reconciliation without `--native-da-ga` before validating it directly.
+Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
 
 ## Maintain native FlightCheck evidence
 

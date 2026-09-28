@@ -5,20 +5,12 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
-If canonical state does not have `schema_version: 4` and an `agents` entry
-matching the active workspace slug with `connect_ready: true`, check whether
-local config has `flightCheckOnly: true`. If so, proceed without canonical setup
-state. Otherwise, show:
+**Setup-state check.** Follow the **FlightCheck entry contract** in
+`.github/copilot-instructions.md`. Continue here only for its **Standalone
+FlightCheck** and **Canonical setup ready** states.
 
-> Welcome to the ESS Maker Kit. Before running this command, type `/setup` 
-> to set up your environment.
-
-and STOP. Otherwise proceed.
-
-This DA-only release supports only the local-files FlightCheck scope. Follow
-the skill with scope fixed to `local`. Do not offer or run Dataverse,
-integration, prerequisite, or publishing checks.
+For an accepted entry state, use the scope selection supported by the active
+configuration in `src/skills/flightcheck/SKILL.md`.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.
