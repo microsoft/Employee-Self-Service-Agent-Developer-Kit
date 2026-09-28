@@ -3579,7 +3579,12 @@ def _workday_probe_config(runner) -> tuple[str | None, dict[str, Any], str | Non
 
 
 def _with_wd_run_passive_context(
-    results: list[CheckResult], *, reason: str, probe_reached: bool = False
+    results: list[CheckResult],
+    *,
+    reason: str,
+    probe_reached: bool = False,
+    inconclusive_hypotheses: str = "",
+    inconclusive_checks: str = "",
 ) -> list[CheckResult]:
     # The passive fallback only truly assessed run history when it reached a
     # PASSED/FAILED verdict. When it came back SKIPPED / NOT_CONFIGURED it could
@@ -3628,6 +3633,15 @@ def _with_wd_run_passive_context(
             )
         if suffix not in row.result:
             row.result += suffix
+        if probe_reached and inconclusive_hypotheses:
+            # Passed rows intentionally have no remediation, so keep neutral
+            # hypotheses in result and reserve remediation for actionable rows.
+            if row.status == Status.PASSED.value:
+                row.result += f"\n\n{inconclusive_hypotheses}"
+            elif inconclusive_checks:
+                row.remediation = (
+                    f"{row.remediation}\n\n{inconclusive_checks}".strip()
+                )
     return results
 
 
@@ -3844,6 +3858,34 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             status_text = (
                 f"HTTP {res.status_code}" if res.status_code else "HTTP 400"
             )
+            # This guidance describes the user-context contract specifically;
+            # custom read operations retain the generic indeterminate fallback.
+            get_worker_me_probe = (
+                (operation_id or _WD_DEFAULT_READ_OPERATION).lower()
+                == _WD_DEFAULT_READ_OPERATION.lower()
+            )
+            hypotheses = ""
+            checks = ""
+            if get_worker_me_probe:
+                hypotheses = (
+                    "For this inconclusive GetWorkerMe HTTP 400, missing "
+                    "Workday resource permissions are one possible hypothesis, "
+                    "not a confirmed cause. Other possible causes include a "
+                    "malformed request, wrong endpoint or operation, invalid "
+                    "identifiers or missing worker context, authentication or "
+                    "connector configuration, Workday business validation, "
+                    "and other Workday rejections."
+                )
+                checks = (
+                    "Troubleshooting checks for the inconclusive GetWorkerMe "
+                    "HTTP 400: verify the Workday resource permissions granted "
+                    "to the calling identity, and inspect the transient probe "
+                    "run for a malformed request, wrong endpoint or operation, "
+                    "invalid identifiers or missing worker context, "
+                    "authentication or connector configuration, Workday "
+                    "business validation, or another rejection. HTTP 400 alone "
+                    "does not confirm any of these causes."
+                )
             return _with_wd_run_passive_context(
                 _check_workday_run_health_passive(runner),
                 reason=(
@@ -3855,6 +3897,8 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
                     "transient probe run in Power Automate for the exact message"
                 ),
                 probe_reached=True,
+                inconclusive_hypotheses=hypotheses,
+                inconclusive_checks=checks,
             )
         return _workday_probe_failure_result(res, connection_label)
     return _with_wd_run_passive_context(

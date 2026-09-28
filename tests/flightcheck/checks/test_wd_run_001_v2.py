@@ -231,6 +231,14 @@ class TestWorkdayActiveProbeMatrix:
         assert "inconclusive" in row.result
         assert "HTTP 400" in row.result
         assert "cannot prove the connection is unhealthy" in row.result
+        assert (
+            "missing Workday resource permissions are one possible hypothesis, "
+            "not a confirmed cause"
+        ) in row.result
+        assert "malformed request" in row.result
+        assert "invalid identifiers or missing worker context" in row.result
+        assert "Workday business validation" in row.result
+        assert row.remediation == ""
         # A Workday call WAS made, so the copy must not claim otherwise.
         assert "No new Workday call was made" not in row.result
 
@@ -247,8 +255,35 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner(pp_client=_PP(runs=[])))
 
         assert row.status != Status.FAILED.value
+        assert row.status == Status.NOT_CONFIGURED.value
         assert "inconclusive" in row.result
         assert "could not be assessed either" in row.result
+        assert "Workday resource permissions" in row.remediation
+        assert "malformed request" in row.remediation
+        assert "invalid identifiers or missing worker context" in row.remediation
+        assert "authentication or connector configuration" in row.remediation
+        assert "HTTP 400 alone does not confirm any of these causes" in (
+            row.remediation
+        )
+
+    @responses.activate
+    def test_generic_http_400_does_not_confirm_permissions(self) -> None:
+        _register_connector_lifecycle(
+            action_status="Failed",
+            status_code=400,
+            error_code="ValidationError",
+        )
+
+        row = _run_single(_runner())
+
+        assert row.status == Status.PASSED.value
+        assert "inconclusive" in row.result
+        assert (
+            "missing Workday resource permissions are one possible hypothesis, "
+            "not a confirmed cause"
+        ) in row.result
+        assert "permissions are confirmed" not in row.result.lower()
+        assert row.remediation == ""
 
     @responses.activate
     def test_server_error_names_connector_runtime_backend_layer(self) -> None:
