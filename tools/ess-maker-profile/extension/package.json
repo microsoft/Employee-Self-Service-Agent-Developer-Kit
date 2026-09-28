@@ -78,6 +78,12 @@
         "category": "Agent Developer Kit"
       },
       {
+        "command": "essMaker.showItemInfo",
+        "title": "Agent Developer Kit: About this option",
+        "category": "Agent Developer Kit",
+        "icon": "$(info)"
+      },
+      {
         "command": "essMaker.openDocs",
         "title": "Agent Developer Kit: Open documentation",
         "category": "Agent Developer Kit"
@@ -120,7 +126,13 @@
       ]
     },
     "menus": {
-      "view/item/context": []
+      "view/item/context": [
+        {
+          "command": "essMaker.showItemInfo",
+          "when": "view == essMaker.customizationView && viewItem =~ /adkInfo/",
+          "group": "inline"
+        }
+      ]
     },
     "walkthroughs": [
       {

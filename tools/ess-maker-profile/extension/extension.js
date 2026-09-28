@@ -1063,7 +1063,11 @@ class CustomizationTreeProvider {
         if (element) return [];
         return CUSTOMIZATION_ITEMS.map((meta) => {
             const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
-            // Hovering the row reveals the option's description (no click needed).
+            item._adkId = meta.id;
+            item._adkInfo = `${meta.label}: ${meta.desc}`;
+            // Trailing info icon on the row; hovering it (or the row) shows the
+            // option description via the rich tooltip below.
+            item.contextValue = 'adkInfo:' + meta.id;
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
             item.iconPath = new vscode.ThemeIcon(meta.icon);
             item.command = { command: meta.run, title: meta.label };
@@ -1073,8 +1077,10 @@ class CustomizationTreeProvider {
 }
 
 // The "complete setup first" nudge is a free-standing tree message (muted,
-// wrapped text above the items), not a fake option. Cleared once setup is done.
-const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
+// wrapped text above the items), not a fake option. The trailing newlines add
+// breathing room between the message and the first option. Cleared once setup
+// is done.
+const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.\n\u00A0';
 function customizationMessageFor(context) {
     return getCompleted(context).has('setup') ? undefined : CUSTOMIZATION_NUDGE;
 }
@@ -1566,6 +1572,9 @@ function activate(context) {
         ),
         vscode.commands.registerCommand('essMaker.openIntroduction', () =>
             openGettingStarted('overview')
+        ),
+        vscode.commands.registerCommand('essMaker.showItemInfo', (item) =>
+            vscode.window.showInformationMessage(item && item._adkInfo ? item._adkInfo : 'Agent Developer Kit')
         ),
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
