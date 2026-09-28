@@ -112,6 +112,22 @@ def test_status_rejects_unsupported_contract_version(tmp_path, capsys):
     assert payload["errorCode"] == "unsupported_contract_version"
 
 
+def test_status_rejects_minimal_unsupported_contract_version(tmp_path, capsys):
+    contract_path = (
+        _submodule_root(tmp_path) / "integration" / "host-contract.json"
+    )
+    contract_path.parent.mkdir(parents=True)
+    contract_path.write_text(
+        json.dumps({"schemaVersion": 2}),
+        encoding="utf-8",
+    )
+
+    exit_code, payload = _run_status(tmp_path, capsys)
+
+    assert exit_code == 2
+    assert payload["errorCode"] == "unsupported_contract_version"
+
+
 def test_status_rejects_paths_outside_submodule(tmp_path, capsys):
     _write_contract(tmp_path, skillPath="../../../../../../outside.md")
 
@@ -146,6 +162,32 @@ def test_status_rejects_missing_referenced_path(tmp_path, capsys):
 
 def test_status_rejects_malformed_contract_path(tmp_path, capsys):
     _write_contract(tmp_path, skillPath="skills/\0/SKILL.md")
+
+    exit_code, payload = _run_status(tmp_path, capsys)
+
+    assert exit_code == 2
+    assert payload["errorCode"] == "invalid_contract_path"
+
+
+def test_status_rejects_contract_path_with_symlink_loop(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    submodule_root = _write_contract(tmp_path, skillPath="skills/loop")
+    loop_path = submodule_root / "skills" / "loop"
+
+    try:
+        loop_path.symlink_to(loop_path.name)
+    except (NotImplementedError, OSError):
+        original_resolve = Path.resolve
+
+        def resolve_with_loop_error(self, *args, **kwargs):
+            if self == loop_path:
+                raise RuntimeError("Symlink loop from test")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve_with_loop_error)
 
     exit_code, payload = _run_status(tmp_path, capsys)
 

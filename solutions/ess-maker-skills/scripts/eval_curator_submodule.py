@@ -51,14 +51,23 @@ def _resolve_contract_path(
     field_name: str,
     relative_path: str,
 ) -> Path:
+    contract_path = Path(relative_path)
+    if contract_path.is_absolute():
+        raise CuratorSubmoduleError(
+            "invalid_contract_path",
+            f"{field_name} must be relative to the submodule root.",
+        )
+
     try:
-        contract_path = Path(relative_path)
-        if contract_path.is_absolute():
-            raise CuratorSubmoduleError(
-                "invalid_contract_path",
-                f"{field_name} must be relative to the submodule root.",
-            )
         resolved = (submodule_root / contract_path).resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CuratorSubmoduleError(
+            "invalid_contract_path",
+            f"{field_name} contains an invalid filesystem path; "
+            "use a relative path inside the submodule.",
+        ) from exc
+
+    try:
         is_valid = resolved.is_relative_to(submodule_root) and resolved.is_file()
     except (OSError, ValueError) as exc:
         raise CuratorSubmoduleError(
@@ -95,7 +104,23 @@ def load_contract(submodule_root: Path) -> dict[str, Any]:
     if not isinstance(contract, dict):
         raise _invalid_contract("The curator host contract must be a JSON object.")
 
+    if "schemaVersion" not in contract:
+        raise _invalid_contract(
+            "The curator host contract is missing required field schemaVersion."
+        )
+    if type(contract["schemaVersion"]) is not int:
+        raise _invalid_contract(
+            "The curator host contract field schemaVersion has an invalid type."
+        )
+    if contract["schemaVersion"] != SUPPORTED_SCHEMA_VERSION:
+        raise CuratorSubmoduleError(
+            "unsupported_contract_version",
+            "The curator host contract schema version is not supported.",
+        )
+
     for field_name, expected_type in _CONTRACT_FIELDS.items():
+        if field_name == "schemaVersion":
+            continue
         if field_name not in contract:
             raise _invalid_contract(
                 f"The curator host contract is missing required field {field_name}."
@@ -109,12 +134,6 @@ def load_contract(submodule_root: Path) -> dict[str, Any]:
             raise _invalid_contract(
                 f"The curator host contract field {field_name} must not be empty."
             )
-
-    if contract["schemaVersion"] != SUPPORTED_SCHEMA_VERSION:
-        raise CuratorSubmoduleError(
-            "unsupported_contract_version",
-            "The curator host contract schema version is not supported.",
-        )
 
     contract["skillPath"] = _resolve_contract_path(
         submodule_root,
