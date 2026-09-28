@@ -20,9 +20,9 @@ entry's `releaseLine` is `da` and the selected integration is ServiceNow,
 record anonymous usage telemetry attributed to ServiceNow (best-effort,
 non-blocking, and with no user-facing message):
 `python scripts/emit_capability.py connect --connector servicenow`.
-Then read `src/skills/connect/servicenow-da/SKILL.md` and follow it. This is
-the DA-GA HR prototype and it must not route through the retained Preview-era
-ServiceNow steps.
+Then read `src/skills/connect/servicenow-da-hrsd/SKILL.md` and follow it. This
+is the DA-GA HRSD lifecycle and it must not route through the retained
+Preview-era ServiceNow steps.
 
 Otherwise read `src/skills/connect/step1.md` and follow it. That file records
 anonymous usage telemetry after routing knows which integration was chosen, so
@@ -41,10 +41,10 @@ already-installed lifecycle or the existing unsupported-install boundary.)
 Each integration routes differently — ServiceNow has its own step files;
 Workday routes by architecture before package detection:
 
-- **ServiceNow DA-GA HR prototype**:
-  `src/skills/connect/servicenow-da/SKILL.md`
+- **ServiceNow DA-GA HRSD lifecycle**:
+  `src/skills/connect/servicenow-da-hrsd/SKILL.md`
   - State:
-    `.local/connect/servicenow/agents/<agent-id>/state.json`
+    `.local/connect/servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json`
   - Uses MinimalBot Components and Power Platform Connectivity APIs.
   - Does not use Dataverse connection-reference or workflow operations.
 

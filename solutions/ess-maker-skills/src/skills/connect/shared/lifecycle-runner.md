@@ -5,7 +5,8 @@ connect lifecycle from its contract file. A provider (Workday, ServiceNow, any
 future ISV) supplies a contract (`lifecycle-contract-schema.md`) plus its own
 action fragments for mutating phases; this file contains zero
 integration-specific logic. Adding a new provider never requires changing this
-file — only authoring a new contract + action fragments.
+file when its needs fit the documented contract; shared backward-compatible
+contract evolution belongs here rather than in provider-specific branches.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling
@@ -44,6 +45,11 @@ does not exist, this is a first run: initialize it in memory with
 `agentSlug: AGENT_SLUG`, `attested: false`, and every phase from the contract
 at `status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
 (write only after the plan is shown, in L.1).
+
+Initialize an invocation-local empty set named `executedActionPhases`. Add a
+phase ID after its action returns `applied` or `recorded`; this prevents an
+`every-invocation` action from running twice during L.2 and L.4 of the same
+invocation.
 
 ---
 
@@ -109,17 +115,22 @@ this family of skills once; do not reintroduce it.
 For every phase the state file marks `done`, in contract order, before doing
 anything else:
 
-1. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
+1. If the phase has `actionExecution: "every-invocation"`, execute its
+   `actionDoc` first using L.4a without re-showing the plan. Run each such
+   action at most once per invocation. `cancelled` leaves the phase
+   `in-progress` and stops; `applied` or `recorded` updates `actionApplied`
+   and `lastActionAt` but does not complete the phase.
+2. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
    steps — reuse that exact mechanism here, silently, without re-showing the
    up-front plan).
-2. If every checkpoint still resolves to a status allowed by that phase's
+3. If every checkpoint still resolves to a status allowed by that phase's
    `completionStatuses`, and every `Manual`/`Warning` result has a matching
    persisted `checkpointAcknowledgements` entry for that checkpoint and
    status, update `lastVerifiedAt` and leave the phase `done`. Do **not**
    re-render the U.0 table for a phase that was already `done` and stays
    `done` on resume — only surface output for phases that change state or that
    are not yet done.
-3. If any checkpoint resolves to a status **outside** that phase's
+4. If any checkpoint resolves to a status **outside** that phase's
    `completionStatuses`, **or** an allowed `Manual`/`Warning` result lacks a
    persisted acknowledgement matching the checkpoint and current status, the
    cached completion has regressed. This includes `Warning`, `Skipped`,
@@ -128,7 +139,7 @@ anything else:
    set it to `in-progress`, and set **every phase after it** back to `pending`
    (later phases may have depended on this one still holding). Persist the
    current checkpoint results, render the result using L.4b, and stop. Do not
-   re-run L.4a's mutating action merely because a live re-check regressed;
+   re-run a `"once"` action merely because a live re-check regressed;
    mutation requires a fresh gate and rollback checkpoint.
 
 Once every previously-`done` phase is confirmed (or the loop stopped early on
@@ -148,24 +159,28 @@ whose `status` is not `done`.
 
 ## L.4 — Run the current phase
 
-### L.4a — Mutating phases: gate, then act
+### L.4a — Run the provider action
 
-If the current phase has `mutates: true` and `actionApplied` is not yet
-`true` in its state entry:
+If the current phase has an `actionDoc`, execute it when:
 
-Apply `permission-gate.md` (from `src/skills/setup/shared/permission-gate.md`)
-with `REQUIRED_ROLE` = the phase's `requiredRole`. Use the phase's `gateMode`
-(default `"attested"` if the contract omits it); if `gateMode` is
-`"programmatic"`, pass the phase's `roleQuery` as `ROLE_QUERY` verbatim, and
-treat the query as a pass only if it returns one of `roleQueryPassNames` — the
-runner never invents its own role query or pass condition.
+- `actionExecution` is `"every-invocation"` and this phase's action has not
+  run during this invocation; or
+- `actionExecution` is omitted/`"once"` and `actionApplied` is not yet `true`.
+
+For a phase with `mutates: true`, apply `permission-gate.md` (from
+`src/skills/setup/shared/permission-gate.md`) with `REQUIRED_ROLE` = the
+phase's `requiredRole`. Use the phase's `gateMode` (default `"attested"` if the
+contract omits it); if `gateMode` is `"programmatic"`, pass the phase's
+`roleQuery` as `ROLE_QUERY` verbatim, and treat the query as a pass only if it
+returns one of `roleQueryPassNames`. Non-mutating actions do not run a role
+gate.
 
 **If the gate returns `"stop"`:** stop here. Leave the phase `in-progress` in
 the state file (write it now) so the next invocation resumes at this same
 gate rather than re-showing the whole plan.
 
-**If the gate returns `"pass"`:** if the phase names a `rollbackLabel`, save a
-checkpoint first:
+**If the gate returns `"pass"` (or the action is non-mutating):** if the phase
+names a `rollbackLabel`, save a checkpoint first:
 
 ```
 python scripts/checkpoint.py "{rollbackLabel}"
@@ -175,8 +190,13 @@ Then read the phase's `actionDoc` file and follow it completely — it contains
 its own Message blocks and tool calls and must return an explicit
 `ACTION_RESULT`:
 
-- **`"applied"`** — the mutation was observed to complete successfully. Set
-  `phases.{id}.actionApplied = true` and write the state file immediately.
+- **`"applied"`** — the mutation or verified no-op completed successfully.
+- **`"recorded"`** — a non-mutating evidence action completed successfully.
+
+  For either successful result, set `phases.{id}.actionApplied = true`,
+  `phases.{id}.lastActionAt` = now, mark the phase action as executed in the
+  invocation-local set, and write the state file immediately. This does not
+  complete the phase; continue to its checkpoints.
 - **`"cancelled"`** — the user declined before mutation. Keep
   `actionApplied = false`, leave the phase `in-progress`, write the state
   file, and stop. Do not run the phase checkpoints.

@@ -1,0 +1,213 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
+from flightcheck.runner import Status
+
+import connect_servicenow_da as snow
+
+
+ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
+AGENT_ID = "00000000-0000-4000-8000-000000002222"
+CONNECTION_ID = "00000000000040008000000000003333"
+AGENT_SLUG = "employee-self-service-hr"
+
+
+def _components() -> dict:
+    return {
+        "changeToken": "token",
+        "botComponentChanges": [
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": "00000000-0000-4000-8000-000000005555",
+                    "version": 1,
+                    "displayName": "ServiceNow HRSD Get Cases",
+                    "schemaName": (
+                        f"{snow.HR_SCHEMA_NAME}.topic.ServiceNowHRSDGetCases"
+                    ),
+                    "state": "Active",
+                    "status": "Active",
+                    "dialog": {"$kind": "TaskDialog"},
+                },
+            }
+        ],
+        "connectionReferenceChanges": [
+            {
+                "connectionReference": {
+                    "id": "00000000-0000-4000-8000-000000004444",
+                    "connectorId": snow.CONNECTOR_ID,
+                    "connectionReferenceLogicalName": "servicenow-ref",
+                    "displayName": "ServiceNow",
+                    "connectionId": CONNECTION_ID,
+                    "sharedConnectionParameters": json.dumps(
+                        {"name": "entraIDUserLogin", "values": {}}
+                    ),
+                }
+            }
+        ],
+        "connectorDefinitionChanges": [],
+    }
+
+
+def _connection() -> dict:
+    return {
+        "name": CONNECTION_ID,
+        "properties": {
+            "apiId": snow.CONNECTOR_ID,
+            "displayName": "ServiceNow",
+            "statuses": [{"target": "token", "status": "Connected"}],
+            "connectionParametersSet": {"name": "entraIDUserLogin"},
+        },
+    }
+
+
+def _runner(components: dict):
+    return SimpleNamespace(
+        config={
+            "activeAgent": AGENT_SLUG,
+            "agents": [
+                {
+                    "slug": AGENT_SLUG,
+                    "botId": AGENT_ID,
+                    "schemaName": snow.HR_SCHEMA_NAME,
+                }
+            ],
+        },
+        agentbuilder=SimpleNamespace(
+            fetch_components=lambda _agent_id: components
+        ),
+        connectivity=SimpleNamespace(
+            list_connections=lambda _environment_id: [_connection()]
+        ),
+        env_id=ENVIRONMENT_ID,
+    )
+
+
+def _write_state(root: Path, components: dict) -> None:
+    path = (
+        root
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    path.parent.mkdir(parents=True)
+    component_hash = snow._component_hash(components)
+    path.write_text(
+        json.dumps(
+            {
+                "provider": snow.PROVIDER_KEY,
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "evidence": {
+                    "credential": {"connectionId": CONNECTION_ID},
+                    "agentConnection": {
+                        "makerAttested": True,
+                        "binding": {
+                            "componentHash": component_hash,
+                            "connectionId": CONNECTION_ID,
+                        },
+                    },
+                    "parameterSharing": {
+                        "makerAttested": True,
+                        "status": "not-exposed",
+                        "binding": {
+                            "componentHash": component_hash,
+                            "connectionId": CONNECTION_ID,
+                        },
+                    },
+                    "publish": {
+                        "status": "completed",
+                        "componentHash": component_hash,
+                        "completedAt": "2026-09-28T00:00:00Z",
+                    },
+                    "test": {
+                        "result": "pass",
+                        "binding": {
+                            "publishedComponentHash": component_hash,
+                        },
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_hrsd_checks_preserve_manual_maker_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    statuses = {result.checkpoint_id: result.status for result in results}
+
+    assert statuses["SN-DA-HRSD-PKG-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-TOPICS-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
+    assert (
+        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
+        == Status.MANUAL.value
+    )
+    assert (
+        statuses["SN-DA-HRSD-PARAMETER-SHARING-001"]
+        == Status.MANUAL.value
+    )
+    assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
+
+
+def test_hrsd_checks_reopen_stale_maker_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    components["changeToken"] = "new-token"
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    statuses = {result.checkpoint_id: result.status for result in results}
+
+    assert (
+        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
+        == Status.NOT_CONFIGURED.value
+    )
+    assert (
+        statuses["SN-DA-HRSD-PARAMETER-SHARING-001"]
+        == Status.NOT_CONFIGURED.value
+    )
+    assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.NOT_CONFIGURED.value
+    assert statuses["SN-DA-HRSD-TEST-001"] == Status.NOT_CONFIGURED.value
+
+
+def test_hrsd_package_absence_is_not_configured(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    components["botComponentChanges"] = []
+    components["connectionReferenceChanges"] = []
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+
+    assert {
+        result.status for result in results
+    } == {Status.NOT_CONFIGURED.value}

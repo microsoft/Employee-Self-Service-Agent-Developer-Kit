@@ -59,7 +59,8 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `gateMode` | string | no (default `"attested"`) | `"programmatic"` or `"attested"` — passed to `permission-gate.md` as `GATE_MODE`. Use `"programmatic"` only when `roleQuery` names a real, working query. |
 | `roleQuery` | array of strings | required when `gateMode` is `"programmatic"` | The exact command(s) `permission-gate.md` runs as `ROLE_QUERY`, and the role name(s) that count as a pass. Copy an existing, already-proven query rather than inventing a new one (e.g. the Dataverse security-role check `src/skills/setup/workday/install-workday-extension-pack.md` section P5.0 uses for "Environment Maker"). |
 | `roleQueryPassNames` | array of strings | required when `gateMode` is `"programmatic"` | Role names in the query's result that count as holding `requiredRole` (include the role itself and any role that supersedes it, e.g. `System Administrator`). |
-| `actionDoc` | string (path) | required when `mutates` is `true` | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass (e.g. editing a topic file and pushing it). The runner reads and follows this file; it contains its own Message blocks and is written by the provider, not the runner. |
+| `actionDoc` | string (path) | no | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass. It is required whenever the phase needs an action before verification, including non-mutating maker evidence collection. |
+| `actionExecution` | string | no (default `"once"`) | `"once"` runs the action until it returns a successful result and then relies on live checkpoint verification. `"every-invocation"` reruns the action before verification on every lifecycle invocation, including a previously completed phase. Use this only for current maker evidence that no supported API can verify. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
 | `rollbackPushGlob` | string | no | Required with `rollbackLabel` when the action pushes a local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` glob when publishing the rollback. |
 
@@ -131,9 +132,12 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   checkpoint run that produced the current `status`. The runner never trusts
   a `done` status without a `lastVerifiedAt` from *this* resume — see
   "Live re-verification on resume" in `lifecycle-runner.md`.
-- `phases.{id}.actionApplied` — mutating phases only; `true` once the
-  action doc has been followed at least once (so a resume doesn't re-apply an
-  idempotent-unsafe action; it re-verifies instead).
+- `phases.{id}.actionApplied` — `true` once the action doc has returned
+  `applied` or `recorded`. For `actionExecution: "once"` this prevents an
+  idempotent-unsafe action from being repeated; `every-invocation` actions
+  still rerun before live verification.
+- `phases.{id}.lastActionAt` — timestamp of the most recent successful
+  `applied` or `recorded` action.
 - `phases.{id}.checkpointAcknowledgements` — map keyed by checkpoint ID for
   accepted `Manual`/`Warning` results. Each value records the acknowledged
   status and UTC `acknowledgedAt`. A resume may reuse the acknowledgement only
@@ -142,6 +146,17 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 The `agentSlug` and state-file path are mandatory isolation boundaries. A
 provider may be connected to multiple agents in one workspace; no agent may
 reuse another agent's progress or checkpoint results.
+
+### Action result vocabulary
+
+Provider action documents return one explicit result:
+
+- `ACTION_RESULT = "applied"` — a mutation or verified no-op completed.
+- `ACTION_RESULT = "recorded"` — non-mutating evidence was captured.
+- `ACTION_RESULT = "cancelled"` — the maker declined or is unavailable.
+
+Neither `applied` nor `recorded` completes a phase by itself. The phase's live
+checkpoints and `completionStatuses` remain authoritative.
 
 ---
 

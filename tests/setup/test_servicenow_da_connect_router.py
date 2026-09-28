@@ -8,7 +8,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _ROOT / "solutions" / "ess-maker-skills"
 
 
-def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
+def test_da_servicenow_connect_routes_to_hrsd_lifecycle() -> None:
     prompt = (
         _SOLUTION / ".github" / "prompts" / "connect.prompt.md"
     ).read_text(encoding="utf-8")
@@ -28,7 +28,8 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
     assert "never require the maker to invoke" in prompt
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
     assert "start with that skill's live `inspect` contract" in prompt
-    assert "src/skills/connect/servicenow-da/SKILL.md" in router
+    assert "src/skills/connect/servicenow-da-hrsd/SKILL.md" in router
+    assert "servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json" in router
     assert "releaseLine" in router
     assert "emit_capability.py connect --connector servicenow" in router
 
@@ -45,30 +46,35 @@ def test_global_gate_allows_connection_blocked_foundation() -> None:
     assert "`/connect servicenow` is available" in instructions
 
 
-def test_da_servicenow_skill_is_resumable_across_maker_questions() -> None:
+def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     skill = (
         _SOLUTION
         / "src"
         / "skills"
         / "connect"
-        / "servicenow-da"
+        / "servicenow-da-hrsd"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
-    normalized = " ".join(skill.split())
 
-    assert "Run `inspect` at the beginning of every invocation" in skill
-    assert "Before every step, check its current live evidence" in skill
-    assert "do not repeat its question or operation" in skill
-    assert "Always ask the maker to confirm their current state" in normalized
-    assert "cannot be verified by the available APIs" in normalized
-    assert "never sufficient to skip the current confirmation" in normalized
-    assert (
-        "does not require the maker to invoke `/connect servicenow` again"
-        in normalized
+    assert "connect/shared/lifecycle-runner.md" in skill
+    assert 'PROVIDER = "servicenow-da-hrsd"' in skill
+    assert "topic mutation and publish require" in skill
+
+    actions = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "connect"
+        / "servicenow-da-hrsd"
+        / "actions"
     )
-    assert "Never interpret a repeated `/connect servicenow` invocation" in skill
-    assert "If the host reports that the maker is unavailable" in skill
-    assert "Do not select a choice" in skill
-    assert "Use **Task completed** only after a passing Test pane result" in skill
-    assert "record-parameter-sharing --status enabled" in skill
-    assert "record-parameter-sharing --status not-exposed" in skill
+    agent = (actions / "connect-agent.md").read_text(encoding="utf-8")
+    parameter = (actions / "configure-parameter-sharing.md").read_text(
+        encoding="utf-8"
+    )
+    test = (actions / "test-connection.md").read_text(encoding="utf-8")
+    assert "record-agent-connection" in agent
+    assert "ACTION_RESULT = \"cancelled\"" in agent
+    assert "record-parameter-sharing --status enabled" in parameter
+    assert "record-parameter-sharing --status not-exposed" in parameter
+    assert 'ACTION_RESULT = "recorded"' in test

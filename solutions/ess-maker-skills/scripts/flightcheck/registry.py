@@ -29,12 +29,11 @@ the clients the target's transitive prerequisite closure declares, run the
 owning functions in canonical order, then filter results down to the
 target.
 
-**Scope:** the ESS + Workday *setup* checkpoints only — not the entire
-FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` /
-``ENV-004`` (+ detail) rows stay validated by the existing ``--scope``
-runs and are deliberately out of registry scope. See
-``plans/workday-setup/flightcheck-single-checkpoint.md``.
+**Scope:** setup-owned ESS/Workday checkpoints plus provider-owned lifecycle
+checkpoints that must support exact ``--checkpoint`` execution, including
+``SN-DA-HRSD-*``. Legacy generic ServiceNow ``SN-*``, graph connector
+``EXT-*``, ``SAP-*``, and the pre-existing ``ENV-003`` / ``ENV-004`` rows
+remain validated by their existing ``--scope`` runs.
 """
 
 from __future__ import annotations
@@ -50,6 +49,9 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
@@ -98,6 +100,7 @@ CATEGORY_ORDER = [
     "Infrastructure",
     "Environment",
     "Native Agent",
+    "ServiceNow DA HRSD",
     "Solution",
     "Authentication",
     "Entra App",
@@ -237,6 +240,85 @@ _SPECS: list[CheckpointSpec] = [
             Role.POWER_PLATFORM_ADMIN.value,
         ),
         is_family=True,
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PKG-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TOPICS-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PKG-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-CREDENTIAL-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PKG-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-AGENT-CONNECTION-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PARAMETER-SHARING-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PUBLISH-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-TOPICS-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TEST-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=(
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+            "SN-DA-HRSD-PUBLISH-001",
+        ),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
     ),
     CheckpointSpec(
         key="ENV-009",
@@ -666,6 +748,7 @@ OWNED_PREFIXES: tuple = (
     "DV-CONN",
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
+    "SN-DA-HRSD",
 )
 
 

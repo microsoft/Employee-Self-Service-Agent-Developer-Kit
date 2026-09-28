@@ -44,9 +44,40 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "rollbackPushGlob" in runner
     assert 'ACTION_RESULT = "applied"' not in runner
     assert '**`"applied"`**' in runner
+    assert '**`"recorded"`**' in runner
     assert '**`"cancelled"`**' in runner
+    assert 'actionExecution: "every-invocation"' in runner
+    assert "Non-mutating actions do not run a role" in runner
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
+
+
+def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
+    contract = json.loads(
+        (_CONNECT / "servicenow-da-hrsd" / "contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert contract["provider"] == "servicenow-da-hrsd"
+    assert [phase["id"] for phase in contract["phases"]] == [
+        "topics",
+        "credential",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ]
+    assert contract["phases"][2]["actionExecution"] == "every-invocation"
+    assert contract["phases"][3]["actionExecution"] == "every-invocation"
+    assert contract["phases"][5]["actionExecution"] == "every-invocation"
+    assert contract["phases"][5]["mutates"] is False
+    assert contract["phases"][5]["completionStatuses"] == ["Manual"]
+
+    workday = json.loads(
+        (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")
+    )
+    assert all("actionExecution" not in phase for phase in workday["phases"])
 
 
 def test_cea_workday_routing_is_package_gated() -> None:

@@ -20,6 +20,9 @@ from flightcheck.runner import Priority, Role
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -205,6 +208,23 @@ class TestTransitiveRequirements:
         assert connections.requires_dataverse_endpoint is False
         assert [label for label, _ in connections.ordered_fns] == [
             "Native Agent"
+        ]
+
+    def test_servicenow_hrsd_checkpoints_use_native_read_clients(self):
+        package = registry.transitive_requirements("SN-DA-HRSD-PKG-001")
+        assert package.clients == frozenset({registry.AGENTBUILDER})
+        assert package.requires_dataverse_endpoint is False
+        assert package.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+
+        test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
+        assert test.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY}
+        )
+        assert test.requires_dataverse_endpoint is False
+        assert [label for label, _ in test.ordered_fns] == [
+            "ServiceNow DA HRSD"
         ]
 
     def test_env009_is_individually_targetable_with_dataverse_only(self):

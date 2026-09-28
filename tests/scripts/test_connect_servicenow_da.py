@@ -15,6 +15,34 @@ import connect_servicenow_da as snow
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000-0000-4000-8000-000000003333"
+AGENT_SLUG = "employee-self-service-hr"
+
+
+def _context() -> dict:
+    return {
+        "agent": {
+            "id": AGENT_ID,
+            "schema_name": snow.HR_SCHEMA_NAME,
+            "workspace_slug": AGENT_SLUG,
+        },
+        "active": {"slug": AGENT_SLUG},
+        "environment": {
+            "id": ENVIRONMENT_ID,
+            "ring": "test",
+        },
+    }
+
+
+def _lifecycle_path(root: Path) -> Path:
+    return (
+        root
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
 
 
 def _components(connection_id: str | None = None) -> dict:
@@ -296,33 +324,13 @@ def test_keep_current_topic_choice_records_without_mutation(
         lambda _context: FakeAgentBuilder(),
     )
 
-    result = snow.record_keep_current_topic_choice(
-        {
-            "agent": {
-                "id": AGENT_ID,
-                "schema_name": snow.HR_SCHEMA_NAME,
-            },
-            "environment": {
-                "id": ENVIRONMENT_ID,
-                "ring": "test",
-            },
-        }
-    )
+    result = snow.record_keep_current_topic_choice(_context())
 
     assert result["customerChoice"] == "keep-current"
     assert result["changedTopics"] == []
-    state = json.loads(
-        (
-            tmp_path
-            / ".local"
-            / "connect"
-            / "servicenow"
-            / "agents"
-            / AGENT_ID
-            / "state.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert state["topicEnablement"]["customerChoice"] == "keep-current"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["topics"]["customerChoice"] == "keep-current"
+    assert state["provider"] == snow.PROVIDER_KEY
 
 
 def test_enable_all_topics_fails_when_refetch_is_still_inactive(
@@ -348,12 +356,9 @@ def test_enable_all_topics_fails_when_refetch_is_still_inactive(
 
     with pytest.raises(
         snow.ServiceNowConnectError,
-        match="remained inactive",
+        match="before any topic mutation",
     ):
-        snow.enable_all_servicenow_topics(
-            {"agent": {"id": AGENT_ID}},
-            confirmed=True,
-        )
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
 
 
 def test_connection_summary_prefers_token_status() -> None:
@@ -523,20 +528,27 @@ def test_record_agent_connection_validates_health_and_persists_attestation(
         "_connectivity_client",
         lambda _context: FakeConnectivity(),
     )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: _components()},
+        )(),
+    )
 
     result = snow.record_agent_connection_attestation(
-        {
-            "agent": {"id": AGENT_ID},
-            "environment": {"id": ENVIRONMENT_ID},
-        },
+        _context(),
         CONNECTION_ID,
     )
 
     assert result["connectionId"] == CONNECTION_ID.replace("-", "")
     assert result["physicalStatus"] == "Connected"
     assert result["makerAttested"] is True
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["steps"]["agentConnection"] == "done"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["agentConnection"]["makerAttested"] is True
+    assert state["migration"]["legacySourcePath"].endswith("state.json")
 
 
 def test_record_agent_connection_rejects_unsupported_auth_mode(
@@ -641,16 +653,7 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
                 }
             ]
 
-    context = {
-        "agent": {
-            "id": AGENT_ID,
-            "schema_name": snow.HR_SCHEMA_NAME,
-        },
-        "environment": {
-            "id": ENVIRONMENT_ID,
-            "ring": "test",
-        },
-    }
+    context = _context()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         snow,
@@ -667,20 +670,17 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
 
     assert result["progress"]["topics"]["status"] == "done"
     assert result["progress"]["credential"]["status"] == "done"
-    assert result["progress"]["publish"]["status"] == "done"
+    assert result["progress"]["publish"]["status"] == "pending"
     assert (
         result["progress"]["agentConnection"]["status"]
         == "confirmation-required"
     )
-    assert (
-        result["progress"]["parameterSharing"]["status"]
-        == "confirmation-required"
-    )
-    assert result["progress"]["test"]["status"] == "confirmation-required"
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["agentConnection"]["makerAttested"] is True
-    assert state["parameterSharing"]["status"] == "not-exposed"
-    assert state["test"]["result"] == "pass"
+    assert result["progress"]["parameterSharing"]["status"] == "pending"
+    assert result["progress"]["test"]["status"] == "pending"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["agentConnection"]["reconfirmRequired"] is True
+    assert state["evidence"]["parameterSharing"]["reconfirmRequired"] is True
+    assert state["evidence"]["test"]["reconfirmRequired"] is True
 
 
 def test_inspect_reopens_topics_after_later_deactivation(
@@ -812,7 +812,7 @@ def test_inspect_preserves_explicit_keep_current_topic_choice(
         }
     )
 
-    assert result["progress"]["topics"]["status"] == "done"
+    assert result["progress"]["topics"]["status"] == "pending"
 
 
 def test_record_parameter_sharing_persists_maker_observation(
@@ -840,19 +840,48 @@ def test_record_parameter_sharing_persists_maker_observation(
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: _components()},
+        )(),
+    )
+    lifecycle_path = _lifecycle_path(tmp_path)
+    lifecycle_path.parent.mkdir(parents=True)
+    lifecycle_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {},
+                "evidence": {
+                    "credential": {
+                        "connectionId": CONNECTION_ID.replace("-", ""),
+                    }
+                },
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = snow.record_parameter_sharing(
-        {
-            "agent": {"id": AGENT_ID},
-            "environment": {"id": ENVIRONMENT_ID},
-        },
+        _context(),
         "not-exposed",
     )
 
     assert result["status"] == "not-exposed"
     assert result["makerAttested"] is True
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    assert state["steps"]["parameterSharing"] == "done"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["parameterSharing"]["status"] == "not-exposed"
 
 
 def test_connectivity_scopes_are_read_only() -> None:
@@ -969,6 +998,7 @@ def test_prepare_manual_connection_requests_missing_metadata(
         / AGENT_ID
         / "state.json"
     ).exists()
+    assert not _lifecycle_path(tmp_path).exists()
 
 
 def test_record_test_attestation_persists_result(
@@ -976,10 +1006,45 @@ def test_record_test_attestation_persists_result(
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    context = {
-        "agent": {"id": AGENT_ID},
-        "environment": {"id": ENVIRONMENT_ID},
-    }
+    context = _context()
+    components = _components(CONNECTION_ID)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {},
+                "evidence": {
+                    "credential": {
+                        "connectionId": CONNECTION_ID.replace("-", ""),
+                    },
+                    "publish": {
+                        "status": "completed",
+                        "completedAt": "2026-09-28T00:00:00Z",
+                        "componentHash": snow._component_hash(components),
+                    },
+                },
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
 
     result = snow.record_test_attestation(
         context,
@@ -988,17 +1053,115 @@ def test_record_test_attestation_persists_result(
         details="Returned the case list.",
     )
 
-    state = json.loads(
-        (
-            tmp_path
-            / ".local"
-            / "connect"
-            / "servicenow"
-            / "agents"
-            / AGENT_ID
-            / "state.json"
-        ).read_text(encoding="utf-8")
-    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result["result"] == "pass"
-    assert state["test"]["prompt"] == "Show my HR cases"
-    assert state["steps"]["test"] == "done"
+    assert state["evidence"]["test"]["prompt"] == "Show my HR cases"
+    assert (
+        state["evidence"]["test"]["binding"]["publishedComponentHash"]
+        == snow._component_hash(components)
+    )
+
+
+def test_legacy_state_migration_is_idempotent_and_preserves_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    legacy_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / "servicenow"
+        / "agents"
+        / AGENT_ID
+        / "state.json"
+    )
+    legacy_path.parent.mkdir(parents=True)
+    legacy = {
+        "schemaVersion": 1,
+        "agentId": AGENT_ID,
+        "environmentId": ENVIRONMENT_ID,
+        "topicEnablement": {
+            "customerChoice": "keep-current",
+            "before": {"total": 1, "active": 0, "inactive": 1},
+        },
+        "test": {
+            "prompt": "Show my HR cases",
+            "result": "pass",
+        },
+    }
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    components = _components()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    first = snow.migrate_state(_context())
+    first_bytes = _lifecycle_path(tmp_path).read_bytes()
+    second = snow.migrate_state(_context())
+    second_bytes = _lifecycle_path(tmp_path).read_bytes()
+    state = json.loads(first_bytes)
+
+    assert first["status"] == "migrated"
+    assert second["migration"]["legacySha256"] == first["migration"][
+        "legacySha256"
+    ]
+    assert first_bytes == second_bytes
+    assert json.loads(legacy_path.read_text(encoding="utf-8")) == legacy
+    assert (
+        state["evidence"]["topics"]["customerChoice"]
+        == "keep-current"
+    )
+    assert state["evidence"]["test"]["reconfirmRequired"] is True
+
+
+def test_enable_all_topics_rolls_back_ambiguous_partial_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    topic = components["botComponentChanges"][0]["component"]
+    topic["state"] = "Inactive"
+    topic["status"] = "Inactive"
+    updates: list[dict] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updates.append(json.loads(json.dumps(payload)))
+            update = payload["botComponentChanges"][0]["component"]
+            topic.update(update)
+            topic["version"] = int(topic["version"]) + 1
+            components["changeToken"] = f"token-{len(updates) + 1}"
+            if len(updates) == 1:
+                raise RuntimeError("ambiguous network failure")
+            return {}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="rolled back safely",
+    ):
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
+
+    assert len(updates) == 2
+    assert topic["state"] == "Inactive"
+    assert topic["status"] == "Inactive"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = next(iter(state["transactions"]["topics"].values()))
+    assert transaction["status"] == "rolled-back"
+    assert list(transaction["topics"].values()) == ["restored"]

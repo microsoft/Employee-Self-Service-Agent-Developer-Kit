@@ -1,0 +1,76 @@
+{
+  "provider": "servicenow-da-hrsd",
+  "displayName": "ServiceNow HRSD",
+  "profile": "hrsd",
+  "detect": {
+    "checkpoint": "SN-DA-HRSD-PKG-001",
+    "meansInstalled": "Passed",
+    "meansNotInstalled": "NotConfigured"
+  },
+  "phases": [
+    {
+      "id": "topics",
+      "label": "Prepare the ServiceNow HRSD topics for this agent",
+      "checkpoints": ["SN-DA-HRSD-TOPICS-001"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
+      "actionExecution": "once",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "credential",
+      "label": "Create or select a healthy ServiceNow HRSD credential",
+      "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
+      "actionExecution": "once",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "agent-connection",
+      "label": "Connect the selected ServiceNow credential to this agent",
+      "checkpoints": ["SN-DA-HRSD-AGENT-CONNECTION-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/connect-agent.md",
+      "actionExecution": "every-invocation",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "parameter-sharing",
+      "label": "Confirm the ServiceNow connection's parameter-sharing behavior",
+      "checkpoints": ["SN-DA-HRSD-PARAMETER-SHARING-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-parameter-sharing.md",
+      "actionExecution": "every-invocation",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "publish",
+      "label": "Publish the current ServiceNow HRSD agent revision",
+      "checkpoints": ["SN-DA-HRSD-PUBLISH-001"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
+      "actionExecution": "once",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "test",
+      "label": "Confirm a ServiceNow HRSD request works in the Test pane",
+      "checkpoints": ["SN-DA-HRSD-TEST-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/test-connection.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    }
+  ]
+}

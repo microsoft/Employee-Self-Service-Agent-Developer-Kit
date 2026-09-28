@@ -38,6 +38,9 @@ CONNECTIVITY_API_VERSION = "1"
 SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
+PROVIDER_KEY = "servicenow-da-hrsd"
+PROFILE_KEY = "hrsd"
+LIFECYCLE_SCHEMA_VERSION = 2
 
 
 class ServiceNowConnectError(RuntimeError):
@@ -81,8 +84,36 @@ def _utc_now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
 
 
-def _state_path(agent_id: str) -> Path:
+def _legacy_state_path(agent_id: str) -> Path:
     return Path(".local/connect/servicenow/agents") / agent_id / "state.json"
+
+
+def _agent_slug(context: dict[str, Any]) -> str:
+    agent = context.get("agent")
+    active = context.get("active")
+    if isinstance(agent, dict):
+        slug = agent.get("workspace_slug")
+        if isinstance(slug, str) and slug:
+            return slug
+    if isinstance(active, dict):
+        slug = active.get("slug")
+        if isinstance(slug, str) and slug:
+            return slug
+    if isinstance(agent, dict):
+        agent_id = agent.get("id")
+        if isinstance(agent_id, str) and agent_id:
+            return agent_id
+    raise ServiceNowConnectError("The active agent has no workspace slug.")
+
+
+def _lifecycle_state_path(context: dict[str, Any]) -> Path:
+    return (
+        Path(".local/connect")
+        / PROVIDER_KEY
+        / "agents"
+        / _agent_slug(context)
+        / "lifecycle.json"
+    )
 
 
 def load_context(root: Path = Path(".")) -> dict[str, Any]:
@@ -652,26 +683,219 @@ def _state_base(
 ) -> dict[str, Any]:
     summary = summarize_components(components)
     return {
-        "schemaVersion": 1,
+        "schemaVersion": LIFECYCLE_SCHEMA_VERSION,
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
         "intent": "DA-GA ServiceNow HRSD connection",
+        "agentSlug": _agent_slug(context),
         "agentId": context["agent"]["id"],
         "agentSchemaName": context["agent"]["schema_name"],
         "environmentId": context["environment"]["id"],
         "ring": context["environment"]["ring"],
         "componentHash": _component_hash(components),
         "reference": summary["reference"],
+        "phases": {},
+        "evidence": {},
+        "transactions": {"topics": {}},
+        "migration": {},
         "updatedAt": _utc_now(),
     }
+
+
+def _canonical_json_hash(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_state_identity(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    expected = {
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+    }
+    for key, value in expected.items():
+        recorded = state.get(key)
+        if recorded and str(recorded).casefold() != str(value).casefold():
+            raise ServiceNowConnectError(
+                f"ServiceNow lifecycle {key} does not match the active agent."
+            )
+
+
+def _migrate_legacy_state(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    legacy_path = _legacy_state_path(context["agent"]["id"])
+    if not legacy_path.exists():
+        return state
+    legacy = _load_json(legacy_path)
+    _validate_state_identity(context, legacy)
+    digest = _canonical_json_hash(legacy)
+    migration = state.setdefault("migration", {})
+    if migration.get("legacySha256") == digest:
+        return state
+
+    evidence = state.setdefault("evidence", {})
+    mapping = {
+        "topicEnablement": "topics",
+        "connection": "credentialPreparation",
+        "publish": "publish",
+    }
+    phase_for_evidence = {
+        "topics": "topics",
+        "credentialPreparation": "credential",
+        "publish": "publish",
+    }
+    imported: list[str] = []
+    conflicts = list(migration.get("conflicts") or [])
+    for legacy_key, evidence_key in mapping.items():
+        value = legacy.get(legacy_key)
+        if not isinstance(value, dict):
+            continue
+        record_id = _canonical_json_hash({legacy_key: value})
+        existing = evidence.get(evidence_key)
+        if isinstance(existing, dict) and existing != value:
+            conflicts.append(
+                {
+                    "field": evidence_key,
+                    "legacyRecordId": record_id,
+                    "recordedAt": _utc_now(),
+                }
+            )
+            phase = state.setdefault("phases", {}).setdefault(
+                phase_for_evidence[evidence_key],
+                {"checkpointResults": {}},
+            )
+            phase["status"] = "in-progress"
+            continue
+        evidence.setdefault(evidence_key, copy.deepcopy(value))
+        imported.append(record_id)
+
+    for legacy_key, evidence_key in (
+        ("agentConnection", "agentConnection"),
+        ("parameterSharing", "parameterSharing"),
+        ("test", "test"),
+    ):
+        value = legacy.get(legacy_key)
+        if not isinstance(value, dict):
+            continue
+        record_id = _canonical_json_hash({legacy_key: value})
+        target = evidence.setdefault(evidence_key, {})
+        if not isinstance(target, dict):
+            target = {}
+            evidence[evidence_key] = target
+        existing_legacy = target.get("legacy")
+        if isinstance(existing_legacy, dict) and existing_legacy != value:
+            conflicts.append(
+                {
+                    "field": evidence_key,
+                    "legacyRecordId": record_id,
+                    "recordedAt": _utc_now(),
+                }
+            )
+        else:
+            target.setdefault("legacy", copy.deepcopy(value))
+            target["reconfirmRequired"] = True
+            imported.append(record_id)
+
+    migration.update(
+        {
+            "legacySourcePath": str(legacy_path),
+            "legacySchemaVersion": legacy.get("schemaVersion"),
+            "legacySha256": digest,
+            "completedAt": _utc_now(),
+            "importedRecordIds": sorted(
+                set(migration.get("importedRecordIds") or []) | set(imported)
+            ),
+            "conflicts": conflicts,
+            "legacySteps": copy.deepcopy(legacy.get("steps") or {}),
+            "lastLegacyInspection": copy.deepcopy(
+                legacy.get("lastInspection")
+            ),
+        }
+    )
+    return state
+
+
+def _load_lifecycle_state(
+    context: dict[str, Any],
+    components: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    path = _lifecycle_state_path(context)
+    if path.exists():
+        state = _load_json(path)
+        _validate_state_identity(context, state)
+    elif components is not None:
+        state = _state_base(context, components)
+    else:
+        state = {
+            "schemaVersion": LIFECYCLE_SCHEMA_VERSION,
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "intent": "DA-GA ServiceNow HRSD connection",
+            "agentSlug": _agent_slug(context),
+            "agentId": context["agent"]["id"],
+            "agentSchemaName": context["agent"].get("schema_name"),
+            "environmentId": context["environment"]["id"],
+            "ring": context["environment"].get("ring"),
+            "phases": {},
+            "evidence": {},
+            "transactions": {"topics": {}},
+            "migration": {},
+        }
+    state = _migrate_legacy_state(context, state)
+    if components is not None:
+        current = _state_base(context, components)
+        for key in (
+            "schemaVersion",
+            "provider",
+            "profile",
+            "intent",
+            "agentSlug",
+            "agentId",
+            "agentSchemaName",
+            "environmentId",
+            "ring",
+            "componentHash",
+            "reference",
+        ):
+            state[key] = current[key]
+    state.setdefault("phases", {})
+    state.setdefault("evidence", {})
+    state.setdefault("transactions", {}).setdefault("topics", {})
+    state.setdefault("migration", {})
+    return state
+
+
+def _write_lifecycle_state(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    path = _lifecycle_state_path(context)
+    if path.exists():
+        existing = _load_json(path)
+        before = copy.deepcopy(existing)
+        after = copy.deepcopy(state)
+        before.pop("updatedAt", None)
+        after.pop("updatedAt", None)
+        if before == after:
+            state["updatedAt"] = existing.get("updatedAt")
+            return
+    state["updatedAt"] = _utc_now()
+    _write_json_atomic(path, state)
 
 
 def _state_for_components(
     context: dict[str, Any],
     components: dict[str, Any],
 ) -> dict[str, Any]:
-    state_path = _state_path(context["agent"]["id"])
-    state = _load_json(state_path) if state_path.exists() else {}
-    state.update(_state_base(context, components))
-    return state
+    return _load_lifecycle_state(context, components)
 
 
 def _inspection_progress(
@@ -686,23 +910,24 @@ def _inspection_progress(
         if connection.get("status") == "Connected"
         and connection.get("authMode") == "entraIDUserLogin"
     }
-    steps = state.get("steps")
-    if not isinstance(steps, dict):
-        steps = {}
+    evidence = state.get("evidence")
+    if not isinstance(evidence, dict):
+        evidence = {}
 
     total_topics = components["serviceNowTopicCount"]
     active_topics = components["activeServiceNowTopicCount"]
-    topic_enablement = state.get("topicEnablement")
+    topic_enablement = evidence.get("topics")
     kept_current_topics = (
         isinstance(topic_enablement, dict)
         and topic_enablement.get("customerChoice") == "keep-current"
-        and steps.get("topics") == "done"
+        and topic_enablement.get("boundComponentHash")
+        == state.get("componentHash")
     )
     topics_done = (
         total_topics > 0 and active_topics == total_topics
     ) or kept_current_topics
 
-    attestation = state.get("agentConnection")
+    attestation = evidence.get("agentConnection")
     if not isinstance(attestation, dict):
         attestation = {}
     attested_connection_id = str(attestation.get("connectionId") or "")
@@ -711,25 +936,25 @@ def _inspection_progress(
         and attested_connection_id in connected
     )
 
-    publish_record = state.get("publish")
+    publish_record = evidence.get("publish")
     if not isinstance(publish_record, dict):
         publish_record = {}
     published_hash = publish_record.get("componentHash")
     current_hash = state.get("componentHash")
     publish_done = (
-        steps.get("publish") == "done"
+        publish_record.get("status") == "completed"
         and (
             published_hash == current_hash
             or published_hash is None
         )
     )
 
-    test_record = state.get("test")
+    test_record = evidence.get("test")
     if not isinstance(test_record, dict):
         test_record = {}
     test_result = test_record.get("result")
 
-    parameter_record = state.get("parameterSharing")
+    parameter_record = evidence.get("parameterSharing")
     if not isinstance(parameter_record, dict):
         parameter_record = {}
     parameter_status = parameter_record.get("status")
@@ -846,8 +1071,8 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
         }
         state = _state_for_components(context, components)
         result["progress"] = _inspection_progress(state, result)
-        state["lastInspection"] = result
-        _write_json_atomic(_state_path(context["agent"]["id"]), state)
+        state.setdefault("evidence", {})["lastInspection"] = result
+        _write_lifecycle_state(context, state)
     return result
 
 
@@ -887,7 +1112,7 @@ def prepare_manual_connection(
             ),
         }
     state = _state_for_components(context, components)
-    state["connection"] = {
+    preparation = {
         "connectionId": None,
         "displayName": (
             display_name or "ESS HR ServiceNow HRSD Connection"
@@ -898,20 +1123,14 @@ def prepare_manual_connection(
         "resourceUri": resource_uri,
         "createdBySkill": False,
     }
-    steps = state.setdefault("steps", {})
-    steps.setdefault("connection", "maker-action-required")
-    steps.setdefault("signIn", "maker-action-required")
-    steps.setdefault("agentConnection", "maker-action-required")
-    steps.setdefault("parameterSharing", "pending")
-    steps.setdefault("publish", "pending")
-    steps.setdefault("test", "pending")
-    _write_json_atomic(_state_path(context["agent"]["id"]), state)
+    state.setdefault("evidence", {})["credentialPreparation"] = preparation
+    _write_lifecycle_state(context, state)
     return {
         "status": "maker-action-required",
         "creationMode": "manual",
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
-        "connection": state["connection"],
+        "connection": preparation,
         "instructions": [
             "Open https://copilotstudio.microsoft.com and select the target environment.",
             "Open the Employee Self-Service HR agent.",
@@ -936,7 +1155,7 @@ def prepare_manual_connection(
     }
 
 
-def record_agent_connection_attestation(
+def _healthy_connection(
     context: dict[str, Any],
     connection_id: str,
 ) -> dict[str, Any]:
@@ -951,17 +1170,50 @@ def record_agent_connection_attestation(
             "The physical ServiceNow connection must use Microsoft Entra ID "
             "User Login."
         )
+    return physical
+
+
+def record_credential_selection(
+    context: dict[str, Any],
+    connection_id: str,
+) -> dict[str, Any]:
+    physical = _healthy_connection(context, connection_id)
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
+    normalized_connection_id = uuid.UUID(connection_id).hex
+    evidence = {
+        "connectionId": normalized_connection_id,
+        "displayName": physical.get("displayName"),
+        "connectorId": CONNECTOR_ID,
+        "physicalStatus": physical.get("status"),
+        "authMode": physical.get("authMode"),
+        "environmentId": context["environment"]["id"],
+        "selectedAt": _utc_now(),
+        "lastVerifiedAt": _utc_now(),
+        "parameterMetadata": copy.deepcopy(
+            physical.get("parameterValues") or {}
+        ),
+    }
+    state = _load_lifecycle_state(context, components)
+    state.setdefault("evidence", {})["credential"] = evidence
+    _write_lifecycle_state(context, state)
+    return evidence
+
+
+def record_agent_connection_attestation(
+    context: dict[str, Any],
+    connection_id: str,
+) -> dict[str, Any]:
+    physical = _healthy_connection(context, connection_id)
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
 
     normalized_connection_id = uuid.UUID(connection_id).hex
-    state_path = _state_path(context["agent"]["id"])
-    if state_path.exists():
-        state = _load_json(state_path)
-    else:
-        components = _agentbuilder_client(context).fetch_components(
-            context["agent"]["id"]
-        )
-        state = _state_base(context, components)
-    state["agentConnection"] = {
+    state = _load_lifecycle_state(context, components)
+    result = {
+        "kind": "maker-attestation",
         "mode": "maker-ui",
         "connectionId": normalized_connection_id,
         "displayName": physical.get("displayName"),
@@ -969,11 +1221,44 @@ def record_agent_connection_attestation(
         "authMode": physical.get("authMode"),
         "makerAttested": True,
         "recordedAt": _utc_now(),
+        "physicalVerifiedAt": _utc_now(),
+        "binding": {
+            "environmentId": context["environment"]["id"],
+            "agentId": context["agent"]["id"],
+            "agentSlug": _agent_slug(context),
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "componentHash": _component_hash(components),
+        },
     }
-    state.setdefault("steps", {})["agentConnection"] = "done"
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
-    return state["agentConnection"]
+    evidence = state.setdefault("evidence", {})
+    selected = evidence.get("credential")
+    if (
+        isinstance(selected, dict)
+        and selected.get("connectionId")
+        and str(selected["connectionId"]).casefold()
+        != normalized_connection_id.casefold()
+    ):
+        raise ServiceNowConnectError(
+            "The attested Agent Connect credential differs from the selected "
+            "lifecycle credential. Record the intended credential first."
+        )
+    evidence["agentConnection"] = result
+    evidence.setdefault(
+        "credential",
+        {
+            "connectionId": normalized_connection_id,
+            "displayName": physical.get("displayName"),
+            "connectorId": CONNECTOR_ID,
+            "physicalStatus": physical.get("status"),
+            "authMode": physical.get("authMode"),
+            "environmentId": context["environment"]["id"],
+            "selectedAt": _utc_now(),
+            "lastVerifiedAt": _utc_now(),
+        },
+    )
+    _write_lifecycle_state(context, state)
+    return result
 
 
 def record_parameter_sharing(
@@ -984,23 +1269,31 @@ def record_parameter_sharing(
         raise ServiceNowConnectError(
             "Parameter-sharing status must be enabled or not-exposed."
         )
-    state_path = _state_path(context["agent"]["id"])
-    if state_path.exists():
-        state = _load_json(state_path)
-    else:
-        components = _agentbuilder_client(context).fetch_components(
-            context["agent"]["id"]
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
+    state = _load_lifecycle_state(context, components)
+    credential = state.get("evidence", {}).get("credential", {})
+    if not isinstance(credential, dict) or not credential.get("connectionId"):
+        raise ServiceNowConnectError(
+            "Select and verify a ServiceNow credential before recording "
+            "parameter sharing."
         )
-        state = _state_base(context, components)
     result = {
+        "kind": "maker-attestation",
         "status": status,
         "makerAttested": True,
         "recordedAt": _utc_now(),
+        "binding": {
+            "connectionId": credential.get("connectionId"),
+            "environmentId": context["environment"]["id"],
+            "agentId": context["agent"]["id"],
+            "agentSlug": _agent_slug(context),
+            "componentHash": _component_hash(components),
+        },
     }
-    state["parameterSharing"] = result
-    state.setdefault("steps", {})["parameterSharing"] = "done"
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
+    state.setdefault("evidence", {})["parameterSharing"] = result
+    _write_lifecycle_state(context, state)
     return result
 
 
@@ -1055,6 +1348,152 @@ def set_topic_state(
     }
 
 
+def _servicenow_topic_components(
+    components: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    topics: dict[str, dict[str, Any]] = {}
+    for change in components.get("botComponentChanges") or []:
+        component = change.get("component")
+        if (
+            isinstance(component, dict)
+            and "ServiceNowHRSD" in str(component.get("schemaName") or "")
+            and component.get("id")
+        ):
+            topics[str(component["id"]).casefold()] = component
+    return topics
+
+
+def _component_content_hash(component: dict[str, Any]) -> str:
+    normalized = copy.deepcopy(component)
+    normalized.pop("version", None)
+    return _canonical_json_hash(normalized)
+
+
+def _rollback_topic_transaction(
+    context: dict[str, Any],
+    agentbuilder: AgentBuilderClient,
+    state: dict[str, Any],
+    operation_id: str,
+) -> dict[str, Any]:
+    transactions = state.setdefault("transactions", {}).setdefault(
+        "topics", {}
+    )
+    transaction = transactions.get(operation_id)
+    if not isinstance(transaction, dict):
+        raise ServiceNowConnectError(
+            f"Unknown topic transaction: {operation_id}"
+        )
+    current = agentbuilder.fetch_components(context["agent"]["id"])
+    current_topics = _servicenow_topic_components(current)
+    changes = []
+    statuses: dict[str, str] = {}
+    for topic_id, target in transaction.get("targets", {}).items():
+        if not isinstance(target, dict):
+            continue
+        if target.get("changedByOperation") is False:
+            statuses[topic_id] = "restored"
+            continue
+        current_topic = current_topics.get(topic_id.casefold())
+        if current_topic is None:
+            statuses[topic_id] = "missing"
+            continue
+        post_hash = target.get("postContentHashExcludingVersion")
+        if post_hash and _component_content_hash(current_topic) != post_hash:
+            statuses[topic_id] = "conflict"
+            continue
+        preimage = target.get("component")
+        if not isinstance(preimage, dict):
+            statuses[topic_id] = "missing"
+            continue
+        restored = copy.deepcopy(preimage)
+        restored["version"] = current_topic.get("version")
+        changes.append(
+            {
+                "$kind": "BotComponentUpdate",
+                "component": restored,
+            }
+        )
+        statuses[topic_id] = "pending"
+    if any(value in {"conflict", "missing"} for value in statuses.values()):
+        transaction.update(
+            {
+                "status": "rollback-incomplete",
+                "rolledBackAt": _utc_now(),
+                "topics": statuses,
+                "remediation": (
+                    "Review conflicting or missing topics before restoring "
+                    "their pre-mutation content."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        return transaction
+    if changes:
+        token = current.get("changeToken")
+        if not isinstance(token, str) or not token:
+            raise ServiceNowConnectError(
+                "Cannot roll back topics without a fresh change token."
+            )
+        agentbuilder.update_components(
+            context["agent"]["id"],
+            {
+                "changeToken": token,
+                "botComponentChanges": changes,
+            },
+        )
+    verified = agentbuilder.fetch_components(context["agent"]["id"])
+    verified_topics = _servicenow_topic_components(verified)
+    for topic_id, target in transaction.get("targets", {}).items():
+        restored = verified_topics.get(topic_id.casefold())
+        preimage = target.get("component") if isinstance(target, dict) else None
+        if (
+            restored is None
+            or not isinstance(preimage, dict)
+            or _component_content_hash(restored)
+            != _component_content_hash(preimage)
+        ):
+            statuses[topic_id] = "pending"
+        else:
+            statuses[topic_id] = "restored"
+    transaction.update(
+        {
+            "status": (
+                "rolled-back"
+                if all(value == "restored" for value in statuses.values())
+                else "rollback-incomplete"
+            ),
+            "rolledBackAt": _utc_now(),
+            "topics": statuses,
+        }
+    )
+    if transaction["status"] != "rolled-back":
+        transaction["remediation"] = (
+            "Refetch the pending topics and retry rollback only when their "
+            "current content still matches the provider-owned postimage."
+        )
+    _write_lifecycle_state(context, state)
+    return transaction
+
+
+def rollback_topic_transaction(
+    context: dict[str, Any],
+    operation_id: str,
+    *,
+    confirmed: bool,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Topic rollback requires explicit confirmation (--yes)."
+        )
+    state = _load_lifecycle_state(context)
+    return _rollback_topic_transaction(
+        context,
+        _agentbuilder_client(context),
+        state,
+        operation_id,
+    )
+
+
 def enable_all_servicenow_topics(
     context: dict[str, Any],
     *,
@@ -1076,24 +1515,100 @@ def enable_all_servicenow_topics(
     ]
     if inactive:
         payload = build_enable_all_topics_payload(before)
-        agentbuilder.update_components(context["agent"]["id"], payload)
+    state = _load_lifecycle_state(context, before)
+    operation_id = str(uuid.uuid4())
+    transaction = {
+        "operationId": operation_id,
+        "status": "prepared",
+        "preparedAt": _utc_now(),
+        "changeTokenHash": _canonical_json_hash(before.get("changeToken")),
+        "beforeComponentHash": _component_hash(before),
+        "targets": {
+            str(topic["id"]): {
+                "beforeVersion": topic.get("version"),
+                "beforeContentHashExcludingVersion": _component_content_hash(
+                    find_servicenow_topic(before, str(topic["id"]))
+                ),
+                "component": copy.deepcopy(
+                    find_servicenow_topic(before, str(topic["id"]))
+                ),
+            }
+            for topic in inactive
+        },
+    }
+    state.setdefault("transactions", {}).setdefault("topics", {})[
+        operation_id
+    ] = transaction
+    _write_lifecycle_state(context, state)
+    update_error: Exception | None = None
+    if inactive:
+        try:
+            agentbuilder.update_components(context["agent"]["id"], payload)
+        except Exception as exc:  # refetch decides whether rollback is needed
+            update_error = exc
     after = agentbuilder.fetch_components(context["agent"]["id"])
     after_summary = summarize_components(after)
+    after_topics = _servicenow_topic_components(after)
+    for topic_id, target in transaction["targets"].items():
+        postimage = after_topics.get(topic_id.casefold())
+        if postimage is not None:
+            target["postVersion"] = postimage.get("version")
+            target["postContentHashExcludingVersion"] = _component_content_hash(
+                postimage
+            )
+            target["changedByOperation"] = (
+                target["postContentHashExcludingVersion"]
+                != target["beforeContentHashExcludingVersion"]
+            )
     not_active = [
         topic
         for topic in after_summary["serviceNowTopics"]
         if topic.get("state") != "Active"
         or topic.get("status") != "Active"
     ]
-    if not_active:
+    if update_error is not None or not_active:
+        changed = any(
+            target.get("changedByOperation") is True
+            for target in transaction["targets"].values()
+        )
+        if not changed:
+            transaction.update(
+                {
+                    "status": "failed-no-mutation",
+                    "afterComponentHash": _component_hash(after),
+                    "failedAt": _utc_now(),
+                }
+            )
+            _write_lifecycle_state(context, state)
+            raise ServiceNowConnectError(
+                "ServiceNow topic update failed before any topic mutation."
+            ) from update_error
+        transaction["status"] = "rollback-required"
+        transaction["afterComponentHash"] = _component_hash(after)
+        _write_lifecycle_state(context, state)
+        rollback = _rollback_topic_transaction(
+            context,
+            agentbuilder,
+            state,
+            operation_id,
+        )
+        if rollback.get("status") != "rolled-back":
+            raise ServiceNowConnectError(
+                "ServiceNow topic update failed and automatic rollback is "
+                "incomplete; review the transaction remediation."
+            ) from update_error
         names = ", ".join(
             str(topic.get("displayName") or topic.get("id"))
             for topic in not_active
         )
         raise ServiceNowConnectError(
-            "MinimalBot update completed, but these ServiceNow topics "
-            f"remained inactive: {names}."
-        )
+            (
+                "ServiceNow topic update failed and was rolled back safely."
+                if update_error is not None
+                else "MinimalBot update left inactive topics and was rolled "
+                f"back safely: {names}."
+            )
+        ) from update_error
     result = {
         "status": "updated" if inactive else "already-active",
         "customerChoice": "enable-all",
@@ -1117,17 +1632,19 @@ def enable_all_servicenow_topics(
             "inactive": len(not_active),
         },
         "published": False,
+        "operationId": operation_id,
+        "transactionStatus": "committed",
     }
-    state_path = _state_path(context["agent"]["id"])
-    state = _load_json(state_path) if state_path.exists() else _state_base(
-        context,
-        before,
+    transaction.update(
+        {
+            "status": "committed",
+            "committedAt": _utc_now(),
+            "afterComponentHash": _component_hash(after),
+        }
     )
-    state["topicEnablement"] = result
-    state.setdefault("steps", {})["topics"] = "done"
+    state.setdefault("evidence", {})["topics"] = result
     state["componentHash"] = _component_hash(after)
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
+    _write_lifecycle_state(context, state)
     return result
 
 
@@ -1154,16 +1671,14 @@ def record_keep_current_topic_choice(
         "after": counts,
         "published": False,
     }
-    state_path = _state_path(context["agent"]["id"])
-    state = _load_json(state_path) if state_path.exists() else _state_base(
-        context,
-        components,
-    )
-    state["topicEnablement"] = result
-    state.setdefault("steps", {})["topics"] = "done"
+    result["boundComponentHash"] = _component_hash(components)
+    result["topicStates"] = summary["serviceNowTopics"]
+    result["makerAttested"] = True
+    result["recordedAt"] = _utc_now()
+    state = _load_lifecycle_state(context, components)
+    state.setdefault("evidence", {})["topics"] = result
     state["componentHash"] = _component_hash(components)
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
+    _write_lifecycle_state(context, state)
     return result
 
 
@@ -1178,18 +1693,43 @@ def publish(
         )
     agentbuilder = _agentbuilder_client(context)
     components = agentbuilder.fetch_components(context["agent"]["id"])
-    response = agentbuilder.publish_agent(context["agent"]["id"])
-    state_path = _state_path(context["agent"]["id"])
-    state = _state_for_components(context, components)
-    state["publish"] = {
+    state = _load_lifecycle_state(context, components)
+    requested_at = _utc_now()
+    try:
+        response = agentbuilder.publish_agent(context["agent"]["id"])
+    except Exception as exc:
+        state.setdefault("evidence", {})["publish"] = {
+            "requestedAt": requested_at,
+            "status": "needs_remediation",
+            "mutationMayHaveOccurred": True,
+            "componentHash": _component_hash(components),
+            "errorCode": type(exc).__name__,
+            "recordedAt": _utc_now(),
+        }
+        _write_lifecycle_state(context, state)
+        raise ServiceNowConnectError(
+            "Publish outcome is ambiguous. Review Copilot Studio publish "
+            "details before retrying; automatic unpublish is not available."
+        ) from exc
+    publish_record = {
+        "requestedAt": requested_at,
         "completedAt": _utc_now(),
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
         "componentHash": _component_hash(components),
-        "responseKeys": sorted(response.keys()),
+        "response": {
+            "validationPending": response.get("validationPending"),
+            "responseKeys": sorted(response.keys()),
+        },
+        "status": (
+            "completed"
+            if response.get("validationPending") is False
+            else "confirmation-required"
+        ),
+        "mutationMayHaveOccurred": True,
     }
-    steps = state.setdefault("steps", {})
-    steps["publish"] = "done"
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
+    state.setdefault("evidence", {})["publish"] = publish_record
+    _write_lifecycle_state(context, state)
     return state
 
 
@@ -1207,26 +1747,56 @@ def record_test_attestation(
         raise ServiceNowConnectError(
             "Test pane result must be pass or fail."
         )
-    state_path = _state_path(context["agent"]["id"])
-    state = _load_json(state_path) if state_path.exists() else {
-        "schemaVersion": 1,
-        "intent": "DA-GA ServiceNow HRSD connection",
-        "agentId": context["agent"]["id"],
-        "environmentId": context["environment"]["id"],
-    }
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
+    state = _load_lifecycle_state(context, components)
+    evidence = state.setdefault("evidence", {})
+    credential = evidence.get("credential")
+    publish_record = evidence.get("publish")
+    if not isinstance(credential, dict) or not credential.get("connectionId"):
+        raise ServiceNowConnectError(
+            "Select and verify a ServiceNow credential before recording a test."
+        )
+    if (
+        not isinstance(publish_record, dict)
+        or publish_record.get("status")
+        not in {"completed", "confirmation-required"}
+    ):
+        raise ServiceNowConnectError(
+            "Publish the current component revision before recording a test."
+        )
     attestation = {
+        "kind": "maker-attestation",
         "prompt": prompt,
         "result": result,
         "details": details.strip() if details else None,
         "recordedAt": _utc_now(),
+        "binding": {
+            "connectionId": credential["connectionId"],
+            "publishCompletedAt": publish_record.get("completedAt"),
+            "publishedComponentHash": publish_record.get("componentHash"),
+            "environmentId": context["environment"]["id"],
+            "agentId": context["agent"]["id"],
+            "agentSlug": _agent_slug(context),
+        },
     }
-    state["test"] = attestation
-    state.setdefault("steps", {})["test"] = (
-        "done" if result == "pass" else "failed"
-    )
-    state["updatedAt"] = _utc_now()
-    _write_json_atomic(state_path, state)
+    evidence["test"] = attestation
+    _write_lifecycle_state(context, state)
     return attestation
+
+
+def migrate_state(context: dict[str, Any]) -> dict[str, Any]:
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
+    state = _load_lifecycle_state(context, components)
+    _write_lifecycle_state(context, state)
+    return {
+        "status": "migrated",
+        "statePath": str(_lifecycle_state_path(context)),
+        "migration": state.get("migration", {}),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1252,6 +1822,12 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--instance-name")
     create_parser.add_argument("--resource-uri")
     create_parser.add_argument("--display-name")
+
+    credential_parser = subparsers.add_parser(
+        "record-credential",
+        help="Record a selected healthy ServiceNow credential.",
+    )
+    credential_parser.add_argument("--connection-id", required=True)
 
     agent_connection_parser = subparsers.add_parser(
         "record-agent-connection",
@@ -1286,6 +1862,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     enable_all_parser.add_argument("--yes", action="store_true")
 
+    rollback_parser = subparsers.add_parser(
+        "rollback-topics",
+        help="Restore a prepared ServiceNow topic transaction.",
+    )
+    rollback_parser.add_argument("--operation-id", required=True)
+    rollback_parser.add_argument("--yes", action="store_true")
+
     topic_choice_parser = subparsers.add_parser(
         "record-topic-choice",
         help="Record the customer's decision to keep current topic states.",
@@ -1313,6 +1896,10 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     test_parser.add_argument("--details")
+    subparsers.add_parser(
+        "migrate-state",
+        help="Migrate legacy Agent-ID ServiceNow state into lifecycle state.",
+    )
     return parser
 
 
@@ -1328,6 +1915,11 @@ def main(argv: list[str] | None = None) -> int:
                 instance_name=args.instance_name,
                 resource_uri=args.resource_uri,
                 display_name=args.display_name,
+            )
+        elif args.command == "record-credential":
+            result = record_credential_selection(
+                context,
+                args.connection_id,
             )
         elif args.command == "record-agent-connection":
             result = record_agent_connection_attestation(
@@ -1348,6 +1940,12 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 confirmed=args.yes,
             )
+        elif args.command == "rollback-topics":
+            result = rollback_topic_transaction(
+                context,
+                args.operation_id,
+                confirmed=args.yes,
+            )
         elif args.command == "record-topic-choice":
             result = record_keep_current_topic_choice(context)
         elif args.command == "publish":
@@ -1359,6 +1957,8 @@ def main(argv: list[str] | None = None) -> int:
                 result=args.result,
                 details=args.details,
             )
+        elif args.command == "migrate-state":
+            result = migrate_state(context)
         else:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
