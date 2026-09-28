@@ -83,7 +83,10 @@ local `review.json` contains `review_requested`.
 `src/skills/evaluations/curate/SKILL.md` may enter this skill with the exact
 generated workspace set folders already preselected after structural and
 Maker Kit quality validation. Accept each of its three named handoffs without
-rediscovering or reselecting those sets:
+rediscovering or reselecting those sets. The curator skill supplies the
+normalized folder and CSV paths returned by `eval_curator_handoff.py`; this
+skill must receive those paths unchanged and must not reconstruct them from set
+names or other handoff fields:
 
 - **Edit the test sets myself** — enter the edit path at Step 2, then complete
   Steps 2 through 6, including YAML/CSV synchronization and quality validation.
@@ -567,9 +570,9 @@ are two selected sets with mixed answers — one is approved and one is declined
 — only the approved set enters `push-approved sets`; the declined set finishes
 locally and must not appear in any later command or mutation lifecycle.
 
-### If the user declines
+### For each set the user declines
 
-Confirm the local locations and finish without checking setup:
+Confirm the local locations and finish that set locally without checking setup:
 
 - `.mcs.yml`: the selected set folder.
 - CSV: that source's `evaluations/exports/` folder.
@@ -577,7 +580,9 @@ Confirm the local locations and finish without checking setup:
 Declined or keep-local sets must never appear in promotion, review tagging,
 dry-run, `--yes` push, cleanup, or successful-push actions. If
 `push-approved sets` is empty after all answers, skip Steps 8 and 9 and proceed
-to the local-only final summary.
+to the local-only final summary. Do not finish the overall flow while
+`push-approved sets` contains another set; that approved subset continues
+through Steps 8 and 9.
 
 ### If the user chooses push
 

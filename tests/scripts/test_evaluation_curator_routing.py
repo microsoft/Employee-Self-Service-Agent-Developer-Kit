@@ -153,6 +153,8 @@ def test_update_authorizes_every_curator_preselected_set_entry():
     assert "for normal update entries, always discover sets" in rules
     assert "curator-originated preselected-set handoffs are exempt" in rules
     assert "use only the exact folders supplied by the curator skill" in rules
+    assert "normalized folder and csv paths returned by" in update_lower
+    assert "must receive those paths unchanged" in update_lower
 
 
 def test_curator_edit_path_returns_to_mandatory_maker_gate():
@@ -246,6 +248,14 @@ def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
         "enter Step 7 and follow its push-decision, configuration, promotion, "
         "dry-run, push, cleanup, and post-push gates" in flow_r1
     )
+
+
+def test_update_mixed_declines_do_not_stop_approved_pushes():
+    update = _normalized("src/skills/evaluations/update/SKILL.md").lower()
+
+    assert "for each set the user declines" in update
+    assert "do not finish the overall flow while `push-approved sets`" in update
+    assert "continues through steps 8 and 9" in update
 
 
 def test_run_skill_is_referenced_only_after_successful_push():

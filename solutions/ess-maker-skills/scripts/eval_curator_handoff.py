@@ -10,6 +10,7 @@ import csv
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from typing import Any
 
@@ -26,19 +27,28 @@ def _is_reparse_point(path: Path) -> bool:
     if path.is_symlink():
         return True
     isjunction = getattr(os.path, "isjunction", None)
-    return bool(isjunction and isjunction(path))
+    if isjunction and isjunction(path):
+        return True
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_attribute)
 
 
 def _contains_parent_reference(value: str) -> bool:
     return ".." in Path(value).parts
 
 
-def _resolve_supplied_path(solution_root: Path, value: str) -> Path:
+def _logical_supplied_path(solution_root: Path, value: str) -> Path:
     supplied = Path(value)
     try:
-        return supplied.resolve() if supplied.is_absolute() else (
-            solution_root / supplied
-        ).resolve()
+        return Path(
+            os.path.abspath(
+                supplied if supplied.is_absolute() else solution_root / supplied
+            )
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         raise CuratorHandoffError(
             "invalid_path",
@@ -46,42 +56,60 @@ def _resolve_supplied_path(solution_root: Path, value: str) -> Path:
         ) from exc
 
 
-def _require_physical_containment(
+def _normalized_path(path: Path) -> str:
+    return os.path.normcase(str(Path(os.path.abspath(path))))
+
+
+def _is_contained(root: Path, path: Path) -> bool:
+    normalized_root = _normalized_path(root)
+    normalized_path = _normalized_path(path)
+    try:
+        return os.path.commonpath(
+            (normalized_root, normalized_path)
+        ) == normalized_root
+    except ValueError:
+        return False
+
+
+def _require_safe_path(
     root: Path,
     path: Path,
     *,
     error_code: str,
     label: str,
-) -> None:
-    resolved_root = Path(os.path.realpath(root))
-    resolved_path = Path(os.path.realpath(path))
-    try:
-        contained = os.path.commonpath(
-            (str(resolved_root), str(resolved_path))
-        ) == str(resolved_root)
-    except ValueError:
-        contained = False
-    if not contained:
+) -> Path:
+    absolute_root = Path(os.path.abspath(root))
+    absolute_path = Path(os.path.abspath(path))
+    if not _is_contained(absolute_root, absolute_path):
         raise CuratorHandoffError(
             error_code,
-            f"{label} resolves outside workspace/evaluations.",
+            f"{label} escapes workspace/evaluations.",
         )
 
-    current = path.absolute()
-    root_absolute = root.absolute()
-    while current != root_absolute:
+    relative = Path(os.path.relpath(absolute_path, absolute_root))
+    current = absolute_root
+    for part in relative.parts:
+        current /= part
         if os.path.lexists(current) and _is_reparse_point(current):
             raise CuratorHandoffError(
                 error_code,
                 f"{label} traverses a symlink or junction.",
             )
-        parent = current.parent
-        if parent == current:
-            raise CuratorHandoffError(
-                error_code,
-                f"{label} escapes workspace/evaluations.",
-            )
-        current = parent
+
+    try:
+        resolved_root = absolute_root.resolve()
+        resolved_path = absolute_path.resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CuratorHandoffError(
+            error_code,
+            f"{label} contains an invalid filesystem path.",
+        ) from exc
+    if not _is_contained(resolved_root, resolved_path):
+        raise CuratorHandoffError(
+            error_code,
+            f"{label} resolves outside workspace/evaluations.",
+        )
+    return resolved_path
 
 
 def _require_string(
@@ -113,15 +141,15 @@ def _validate_set_folder(
             "invalid_set_folder",
             "Set folder must not contain path traversal.",
         )
-    folder = _resolve_supplied_path(solution_root, supplied)
-    _require_physical_containment(
+    logical_folder = _logical_supplied_path(solution_root, supplied)
+    folder = _require_safe_path(
         output_root,
-        folder,
+        logical_folder,
         error_code="invalid_set_folder",
         label="Set folder",
     )
     if (
-        folder.parent != output_root
+        logical_folder.parent != output_root
         or folder.name.casefold() == "exports"
         or not folder.is_dir()
     ):
@@ -131,11 +159,16 @@ def _validate_set_folder(
             "workspace/evaluations and must not be exports.",
         )
     try:
-        yaml_documents = [
-            path.read_text(encoding="utf-8")
-            for path in folder.glob("*.mcs.yml")
-            if path.is_file()
-        ]
+        yaml_documents = []
+        for path in folder.glob("*.mcs.yml"):
+            artifact = _require_safe_path(
+                folder,
+                path,
+                error_code="invalid_set_folder",
+                label="Set folder artifact",
+            )
+            if artifact.is_file():
+                yaml_documents.append(artifact.read_text(encoding="utf-8"))
     except (OSError, UnicodeError) as exc:
         raise CuratorHandoffError(
             "invalid_set_folder",
@@ -167,15 +200,15 @@ def _validate_set_csv(
             "invalid_set_csv",
             "Set CSV must not contain path traversal.",
         )
-    csv_path = _resolve_supplied_path(solution_root, supplied)
-    _require_physical_containment(
+    logical_csv_path = _logical_supplied_path(solution_root, supplied)
+    csv_path = _require_safe_path(
         output_root,
-        csv_path,
+        logical_csv_path,
         error_code="invalid_set_csv",
         label="Set CSV",
     )
     if (
-        csv_path.parent != output_root / "exports"
+        logical_csv_path.parent != output_root / "exports"
         or csv_path.suffix.casefold() != ".csv"
         or not csv_path.is_file()
     ):
@@ -215,7 +248,13 @@ def validate_handoff(
     solution_root = (
         repo_root.resolve() / "solutions" / "ess-maker-skills"
     ).resolve()
-    output_root = (solution_root / "workspace" / "evaluations").resolve()
+    logical_output_root = solution_root / "workspace" / "evaluations"
+    output_root = _require_safe_path(
+        solution_root,
+        logical_output_root,
+        error_code="invalid_output_root",
+        label="outputRoot",
+    )
 
     if not isinstance(document, dict) or set(document) != {"Curator handoff"}:
         raise CuratorHandoffError(
@@ -259,21 +298,24 @@ def validate_handoff(
             "invalid_output_root",
             "outputRoot must not contain path traversal.",
         )
-    resolved_supplied_root = _resolve_supplied_path(
+    logical_supplied_root = _logical_supplied_path(
         solution_root,
         supplied_root,
     )
-    if resolved_supplied_root != output_root:
+    resolved_supplied_root = _require_safe_path(
+        solution_root,
+        logical_supplied_root,
+        error_code="invalid_output_root",
+        label="outputRoot",
+    )
+    if (
+        logical_supplied_root != logical_output_root
+        or resolved_supplied_root != output_root
+    ):
         raise CuratorHandoffError(
             "invalid_output_root",
             "outputRoot must resolve exactly to workspace/evaluations.",
         )
-    _require_physical_containment(
-        output_root,
-        output_root,
-        error_code="invalid_output_root",
-        label="outputRoot",
-    )
 
     sets = handoff.get("sets")
     if not isinstance(sets, list) or not sets:
@@ -283,8 +325,8 @@ def validate_handoff(
         )
 
     normalized_sets: list[dict[str, Any]] = []
-    seen_folders: set[Path] = set()
-    seen_csvs: set[Path] = set()
+    seen_folders: set[str] = set()
+    seen_csvs: set[str] = set()
     for index, entry in enumerate(sets):
         if not isinstance(entry, dict):
             raise CuratorHandoffError(
@@ -309,12 +351,12 @@ def validate_handoff(
         )
         folder, yaml_case_count = _validate_set_folder(
             solution_root,
-            output_root,
+            logical_output_root,
             entry.get("folder"),
         )
         csv_path, csv_case_count = _validate_set_csv(
             solution_root,
-            output_root,
+            logical_output_root,
             entry.get("csv"),
         )
         case_count = entry.get("caseCount")
@@ -338,13 +380,15 @@ def validate_handoff(
                 "invalid_handoff",
                 f"Set entry {index} qualityScore must be between 1 and 5.",
             )
-        if folder in seen_folders or csv_path in seen_csvs:
+        folder_key = _normalized_path(folder)
+        csv_key = _normalized_path(csv_path)
+        if folder_key in seen_folders or csv_key in seen_csvs:
             raise CuratorHandoffError(
                 "invalid_handoff",
                 "Curator handoff contains duplicate set paths.",
             )
-        seen_folders.add(folder)
-        seen_csvs.add(csv_path)
+        seen_folders.add(folder_key)
+        seen_csvs.add(csv_key)
         normalized_sets.append(
             {
                 "name": name,
