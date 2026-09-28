@@ -301,6 +301,13 @@ class TestGrsCommitPin:
         # Even though every reference is bound, the GRS mismatch fails ENV-004.
         assert by_id["ENV-004"].status == "Failed"
         assert "GRS commit pin: Failed" in by_id["ENV-004"].result
+        # A targeted `--checkpoint ENV-004` run filters out the ENV-004-GRS
+        # detail row, so the summary must carry the GRS reason + remediation.
+        assert "deadbeef" in by_id["ENV-004"].result
+        assert (
+            "Publish or import the ESS agent solution"
+            in by_id["ENV-004"].remediation
+        )
 
     def test_missing_commit_in_configure_fails(self):
         components = ab.components_with_references(references=[_bound()])
@@ -342,6 +349,9 @@ class TestGrsCommitPin:
         # A GRS WARNING folds into the summary as a WARNING (refs all bound).
         assert by_id["ENV-004"].status == "Warning"
         assert "GRS commit pin: Warning" in by_id["ENV-004"].result
+        # The summary carries the GRS reason + remediation for targeted runs.
+        assert "Could not read minimalBots ALM configure" in by_id["ENV-004"].result
+        assert "signed in to Copilot Studio" in by_id["ENV-004"].remediation
 
     def test_invalid_realm_fails(self):
         components = ab.components_with_references(references=[_bound()])

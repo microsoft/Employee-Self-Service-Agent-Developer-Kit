@@ -302,7 +302,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             checkpoint_id="ENV-001", category="Environment",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Power Platform environment",
-            result=f"Unable to check: {e}",
+            result=f"Unable to check: {type(e).__name__}: {e}",
             remediation="Ensure Power Platform Admin permissions.",
         ))
 
@@ -369,7 +369,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             checkpoint_id="ENV-008", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="DLP policies",
-            result=f"Unable to check: {e}",
+            result=f"Unable to check: {type(e).__name__}: {e}",
             remediation=(
                 "Reading DLP policies requires the **Power Platform Administrator** role at the tenant level. "
                 "Ask a tenant admin to either grant you the role or to review policies on your behalf at the "
@@ -572,8 +572,17 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     ]
     if unbound_refs:
         summary_parts.append(f"{len(unbound_refs)} unbound")
+    grs_nonpass = grs_result.status in (
+        Status.FAILED.value,
+        Status.WARNING.value,
+    )
     if grs_result.status != Status.SKIPPED.value:
         summary_parts.append(f"GRS commit pin: {grs_result.status}")
+    # Fold the GRS reason into the summary result. A targeted
+    # `--checkpoint ENV-004` run filters out the ENV-004-GRS detail row, so
+    # without this the summary would report FAILED/WARNING with no reason.
+    if grs_nonpass and grs_result.result:
+        summary_parts.append(grs_result.result)
 
     env_id = getattr(runner, "env_id", None)
     solutions_url = maker_solutions_url(env_id) if env_id else None
@@ -598,9 +607,19 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     else:
         remediation = ""
 
+    # Carry the GRS remediation onto the summary row for the same reason: on a
+    # targeted run the ENV-004-GRS detail row is filtered, so its remediation
+    # must survive on the summary when GRS is what drove the non-pass status.
+    if grs_nonpass and grs_result.remediation:
+        remediation = (
+            f"{remediation} {grs_result.remediation}".strip()
+            if remediation
+            else grs_result.remediation
+        )
+
     summary_doc_link = (
         conn_ref_doc
-        if overall_status == Status.FAILED.value
+        if unbound_refs
         else f"{DOC_BASE}/prepare#set-up-your-power-platform-environment"
     )
     results.append(CheckResult(roles=roles,
