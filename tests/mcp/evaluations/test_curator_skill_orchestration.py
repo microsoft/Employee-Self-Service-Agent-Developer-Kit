@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import json
 from pathlib import Path
 
@@ -21,10 +22,12 @@ from tests.mcp.evaluations.skill_eval import (
     QUALITY_FIX_FLOW_PATH,
     STRUCTURAL_VALIDATOR_PATH,
     SYNTHETIC_REPO_ROOT,
+    SYNTHETIC_SOLUTION_ROOT,
     UPDATE_SKILL_PATH,
     WRAPPER_SKILL_PATH,
     EvalTurn,
     FakeEvaluationWorkspace,
+    RecordedCall,
     session_options,
     tool_contracts,
     run_eval,
@@ -37,6 +40,39 @@ def _ready_backend() -> FakeEvaluationWorkspace:
         contract.name: contract for contract in tool_contracts()
     }
     return backend
+
+
+def _matching_read_index(
+    calls: Sequence[RecordedCall],
+    expected_path: str,
+    *,
+    before_index: int | None = None,
+) -> int | None:
+    relevant_calls = calls if before_index is None else calls[:before_index]
+    return next(
+        (
+            index
+            for index, call in enumerate(relevant_calls)
+            if call.name == "read_file"
+            and FakeEvaluationWorkspace.path_matches(
+                call.arguments["path"], expected_path
+            )
+        ),
+        None,
+    )
+
+
+def _missing_required_read_paths(
+    calls: Sequence[RecordedCall],
+    required_paths: Sequence[str],
+    *,
+    before_index: int | None = None,
+) -> list[str]:
+    return [
+        path
+        for path in required_paths
+        if _matching_read_index(calls, path, before_index=before_index) is None
+    ]
 
 
 @pytest.mark.live
@@ -63,15 +99,7 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         None,
     )
     assert preflight_index is not None, "Missing curator preflight call."
-    curator_read_index = next(
-        (
-            index
-            for index, call in enumerate(calls)
-            if call.name == "read_file"
-            and call.arguments["path"].replace("\\", "/") == CURATOR_SKILL_PATH
-        ),
-        None,
-    )
+    curator_read_index = _matching_read_index(calls, CURATOR_SKILL_PATH)
     assert curator_read_index is not None, "Missing curator skill read."
     first_write_index = next(
         (index for index, call in enumerate(calls) if call.name == "write_file"),
@@ -86,15 +114,18 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
     )
     assert not any(call.name == "write_file" and call.turn == 0 for call in calls)
 
-    required_reads = {KNOWLEDGE_PATH, AGENT_INSTRUCTIONS_PATH, CURATOR_SKILL_PATH}
+    required_reads = (KNOWLEDGE_PATH, AGENT_INSTRUCTIONS_PATH, CURATOR_SKILL_PATH)
     observed_reads = {
         call.arguments["path"].replace("\\", "/")
         for call in calls[:first_write_index]
         if call.name == "read_file"
     }
-    assert required_reads <= observed_reads, (
+    missing_required_reads = _missing_required_read_paths(
+        calls, required_reads, before_index=first_write_index
+    )
+    assert not missing_required_reads, (
         "Missing required reads before the first artifact write: "
-        f"{sorted(required_reads - observed_reads)}; observed={sorted(observed_reads)}."
+        f"{missing_required_reads}; observed={sorted(observed_reads)}."
     )
 
     writes = [call for call in calls if call.name == "write_file"]
@@ -135,15 +166,8 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         "Maker Kit validation must follow the first artifact write; "
         f"got maker_kit={maker_kit_index}, first_write={first_write_index}."
     )
-    maker_validator_read_index = next(
-        (
-            index
-            for index, call in enumerate(calls)
-            if call.name == "read_file"
-            and call.arguments["path"].replace("\\", "/")
-            == MAKER_VALIDATOR_SKILL_PATH
-        ),
-        None,
+    maker_validator_read_index = _matching_read_index(
+        calls, MAKER_VALIDATOR_SKILL_PATH
     )
     assert maker_validator_read_index is not None, "Missing Maker validator skill read."
     assert maker_validator_read_index < maker_kit_index, (
@@ -295,6 +319,26 @@ def test_synthetic_workspace_accepts_absolute_contract_paths() -> None:
 
     assert not curator_skill.failed
     assert structural.kind == "structural_validation"
+
+
+@pytest.mark.parametrize("authoritative_absolute", [False, True])
+def test_read_gate_helpers_accept_relative_and_absolute_paths(
+    authoritative_absolute: bool,
+) -> None:
+    backend = _ready_backend()
+    required_paths = (
+        KNOWLEDGE_PATH,
+        AGENT_INSTRUCTIONS_PATH,
+        CURATOR_SKILL_PATH,
+        MAKER_VALIDATOR_SKILL_PATH,
+    )
+    for path in required_paths:
+        read_path = str(SYNTHETIC_SOLUTION_ROOT / path) if authoritative_absolute else path
+        backend.invoke("read_file", {"path": read_path})
+
+    assert _matching_read_index(backend.calls, CURATOR_SKILL_PATH) is not None
+    assert _missing_required_read_paths(backend.calls, required_paths) == []
+    assert _matching_read_index(backend.calls, MAKER_VALIDATOR_SKILL_PATH) is not None
 
 
 def test_session_options_disable_host_and_production_connections(tmp_path) -> None:

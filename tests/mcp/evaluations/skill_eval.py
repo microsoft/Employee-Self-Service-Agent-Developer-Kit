@@ -308,7 +308,7 @@ class FakeEvaluationWorkspace:
         return str(PurePosixPath(path.replace("\\", "/").removeprefix("./")))
 
     @classmethod
-    def _path_matches(cls, path: str, expected_suffix: str) -> bool:
+    def path_matches(cls, path: str, expected_suffix: str) -> bool:
         normalized_path = cls._normalize(path)
         normalized_suffix = cls._normalize(expected_suffix)
         return normalized_path == normalized_suffix or normalized_path.endswith(
@@ -320,7 +320,7 @@ class FakeEvaluationWorkspace:
             (
                 file_key
                 for file_key in self.files
-                if self._path_matches(path, file_key)
+                if self.path_matches(path, file_key)
             ),
             None,
         )
@@ -333,7 +333,7 @@ class FakeEvaluationWorkspace:
             (
                 index
                 for index, token in enumerate(tokens)
-                if cls._path_matches(token, expected_suffix)
+                if cls.path_matches(token, expected_suffix)
             ),
             None,
         )
