@@ -72,6 +72,8 @@ The scenarios cover matching widget drafts, stale snapshots, server-side changes
 
 `mcp/evaluations/test_curator_skill_orchestration.py` runs one real Copilot model case against the shipped `/evaluate` routing, Maker Kit curator wrapper, and vendored curator skill. The case verifies orchestration by tool-call ordering: valid preflight, reading the returned curator skill before generation, topic confirmation before writes, writes restricted to `workspace/evaluations/`, structural and Maker Kit validation, and no push without a separate explicit approval turn.
 
+The curator case has a 40-tool-call safety cap. This is intentionally separate from the 24-tool-call limit used by the landing-page skill evaluations.
+
 Install and configure the same optional SDK runtime described in [Landing-page skill evaluations](#landing-page-skill-evaluations). The authenticated `gh` account must have Copilot model access. Run the deterministic offline harness and routing coverage first:
 
 ```powershell

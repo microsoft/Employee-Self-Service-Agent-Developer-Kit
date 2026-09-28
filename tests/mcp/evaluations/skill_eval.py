@@ -51,6 +51,33 @@ AGENT_INSTRUCTIONS_PATH = "fixtures/agent/instructions.md"
 MAKER_VALIDATOR_SKILL_PATH = "src/skills/evaluations/validate/SKILL.md"
 QUALITY_FIX_FLOW_PATH = "src/skills/evaluations/quality-fix-flow.md"
 UPDATE_SKILL_PATH = "src/skills/evaluations/update/SKILL.md"
+SYNTHETIC_SOLUTION_PATH_KEYS = (
+    EVALUATE_PROMPT_PATH,
+    DISPATCHER_SKILL_PATH,
+    WRAPPER_SKILL_PATH,
+    CURATOR_SKILL_PATH,
+    STRUCTURAL_VALIDATOR_PATH,
+    KNOWLEDGE_PATH,
+    AGENT_INSTRUCTIONS_PATH,
+    MAKER_VALIDATOR_SKILL_PATH,
+    QUALITY_FIX_FLOW_PATH,
+    UPDATE_SKILL_PATH,
+    "scripts/eval_curator_submodule.py",
+    "scripts/evaluate_evals.py",
+    "scripts/push.py",
+)
+SYNTHETIC_ABSOLUTE_PATHS = {
+    **{
+        key: SYNTHETIC_SOLUTION_ROOT / key
+        for key in SYNTHETIC_SOLUTION_PATH_KEYS
+    },
+    **{
+        f"solutions/ess-maker-skills/{key}": (
+            SYNTHETIC_REPO_ROOT / "solutions" / "ess-maker-skills" / key
+        )
+        for key in SYNTHETIC_SOLUTION_PATH_KEYS
+    },
+}
 DEFAULT_MODEL = "gpt-5.4"
 MAX_CALLS = 40
 TURN_TIMEOUT = 120
@@ -214,7 +241,7 @@ class FakeEvaluationWorkspace:
         command = arguments["command"]
         normalized = command.replace("\\", "/")
         try:
-            tokens = shlex.split(normalized, posix=False)
+            tokens = shlex.split(normalized, posix=True)
         except ValueError:
             return self._record(
                 "run_command",
@@ -257,19 +284,48 @@ class FakeEvaluationWorkspace:
 
         if (
             self._matching_token_index(cleaned, STRUCTURAL_VALIDATOR_PATH) is not None
-            and "--evaluation-folder" in cleaned
+            and self._evaluation_folder_from_tokens(cleaned) is not None
         ):
+            evaluation_folder, error = self._validated_evaluation_folder(cleaned)
+            if error is not None:
+                return self._validation_failure(arguments, error)
             return self._record(
                 "run_command",
                 arguments,
-                {"exitCode": 0, "stdout": "Structural validation passed."},
+                {
+                    "exitCode": 0,
+                    "stdout": "Structural validation passed.",
+                    "evaluationFolder": evaluation_folder,
+                },
                 kind="structural_validation",
             )
 
         if (
             self._matching_token_index(cleaned, "scripts/evaluate_evals.py") is not None
-            and "--evaluation-folder" in cleaned
+            and self._evaluation_folder_from_tokens(cleaned) is not None
         ):
+            evaluation_folder, error = self._validated_evaluation_folder(cleaned)
+            if error is not None:
+                return self._validation_failure(arguments, error)
+            last_write_index = self._last_call_index("write_file")
+            validator_read_index = self._last_matching_read_index(
+                MAKER_VALIDATOR_SKILL_PATH
+            )
+            if (
+                last_write_index is None
+                or validator_read_index is None
+                or validator_read_index < last_write_index
+            ):
+                return self._validation_failure(
+                    arguments,
+                    "Maker validator skill must be read after generation.",
+                )
+            structural_index = self._last_call_index("run_command", "structural_validation")
+            if structural_index is None or structural_index < last_write_index:
+                return self._validation_failure(
+                    arguments,
+                    "Maker Kit validation requires structural validation after generation.",
+                )
             return self._record(
                 "run_command",
                 arguments,
@@ -308,12 +364,19 @@ class FakeEvaluationWorkspace:
         return str(PurePosixPath(path.replace("\\", "/").removeprefix("./")))
 
     @classmethod
-    def path_matches(cls, path: str, expected_suffix: str) -> bool:
+    def path_matches(cls, path: str, expected_key: str) -> bool:
         normalized_path = cls._normalize(path)
-        normalized_suffix = cls._normalize(expected_suffix)
-        return normalized_path == normalized_suffix or normalized_path.endswith(
-            f"/{normalized_suffix}"
-        )
+        normalized_key = cls._normalize(expected_key)
+        if (
+            ".." in PurePosixPath(normalized_path).parts
+            or ".." in PurePosixPath(normalized_key).parts
+        ):
+            return False
+        allowed_path = SYNTHETIC_ABSOLUTE_PATHS.get(normalized_key)
+        if allowed_path is None:
+            return False
+        allowed_absolute = cls._normalize(str(allowed_path))
+        return normalized_path in {normalized_key, allowed_absolute}
 
     def _matching_file_key(self, path: str) -> str | None:
         return next(
@@ -336,6 +399,98 @@ class FakeEvaluationWorkspace:
                 if cls.path_matches(token, expected_suffix)
             ),
             None,
+        )
+
+    @classmethod
+    def evaluation_folder_from_command(cls, command: str) -> str | None:
+        try:
+            tokens = shlex.split(command.replace("\\", "/"), posix=True)
+        except ValueError:
+            return None
+        return cls._evaluation_folder_from_tokens(tokens)
+
+    @classmethod
+    def _evaluation_folder_from_tokens(cls, tokens: list[str]) -> str | None:
+        option = "--evaluation-folder"
+        for index, token in enumerate(tokens):
+            cleaned = token.strip("\"'")
+            if cleaned == option:
+                if index + 1 >= len(tokens):
+                    return None
+                return cls._normalize(tokens[index + 1].strip("\"'"))
+            if cleaned.startswith(f"{option}="):
+                return cls._normalize(cleaned.removeprefix(f"{option}="))
+        return None
+
+    def generated_set_folders(self) -> set[str]:
+        folders: set[str] = set()
+        for path in self.files:
+            parts = PurePosixPath(path).parts
+            if len(parts) >= 4 and parts[:2] == ("workspace", "evaluations"):
+                folders.add("/".join(parts[:3]))
+        return folders
+
+    def _validated_evaluation_folder(
+        self, tokens: list[str]
+    ) -> tuple[str | None, str | None]:
+        evaluation_folder = self._evaluation_folder_from_tokens(tokens)
+        if evaluation_folder is None:
+            return None, "Missing --evaluation-folder value."
+        if ".." in PurePosixPath(evaluation_folder).parts:
+            return None, "Evaluation folder cannot contain parent traversal."
+
+        generated_folders = self.generated_set_folders()
+        if len(generated_folders) != 1:
+            return (
+                None,
+                "Validation requires exactly one generated evaluation set; "
+                f"found {sorted(generated_folders)}.",
+            )
+        generated_folder = next(iter(generated_folders))
+        allowed_absolute = self._normalize(str(SYNTHETIC_REPO_ROOT / generated_folder))
+        if evaluation_folder not in {generated_folder, allowed_absolute}:
+            return (
+                None,
+                "Validator must target the generated evaluation set folder "
+                f"{generated_folder}; got {evaluation_folder}.",
+            )
+        return generated_folder, None
+
+    def _last_call_index(self, name: str, kind: str | None = None) -> int | None:
+        return next(
+            (
+                index
+                for index in range(len(self.calls) - 1, -1, -1)
+                if self.calls[index].name == name
+                and (kind is None or self.calls[index].kind == kind)
+                and not self.calls[index].failed
+            ),
+            None,
+        )
+
+    def _last_matching_read_index(self, expected_key: str) -> int | None:
+        return next(
+            (
+                index
+                for index in range(len(self.calls) - 1, -1, -1)
+                if self.calls[index].name == "read_file"
+                and not self.calls[index].failed
+                and self.path_matches(
+                    self.calls[index].arguments["path"], expected_key
+                )
+            ),
+            None,
+        )
+
+    def _validation_failure(
+        self, arguments: dict[str, Any], message: str
+    ) -> RecordedCall:
+        return self._record(
+            "run_command",
+            arguments,
+            {"exitCode": 2, "stderr": message},
+            failed=True,
+            kind="validation",
         )
 
     def _record(
