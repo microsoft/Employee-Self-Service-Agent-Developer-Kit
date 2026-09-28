@@ -144,6 +144,15 @@ def test_status_rejects_missing_referenced_path(tmp_path, capsys):
     assert payload["errorCode"] == "invalid_contract_path"
 
 
+def test_status_rejects_malformed_contract_path(tmp_path, capsys):
+    _write_contract(tmp_path, skillPath="skills/\0/SKILL.md")
+
+    exit_code, payload = _run_status(tmp_path, capsys)
+
+    assert exit_code == 2
+    assert payload["errorCode"] == "invalid_contract_path"
+
+
 def test_status_rejects_malformed_json(tmp_path, capsys):
     submodule_root = _submodule_root(tmp_path)
     contract_path = submodule_root / "integration" / "host-contract.json"

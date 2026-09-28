@@ -51,14 +51,23 @@ def _resolve_contract_path(
     field_name: str,
     relative_path: str,
 ) -> Path:
-    contract_path = Path(relative_path)
-    if contract_path.is_absolute():
+    try:
+        contract_path = Path(relative_path)
+        if contract_path.is_absolute():
+            raise CuratorSubmoduleError(
+                "invalid_contract_path",
+                f"{field_name} must be relative to the submodule root.",
+            )
+        resolved = (submodule_root / contract_path).resolve()
+        is_valid = resolved.is_relative_to(submodule_root) and resolved.is_file()
+    except (OSError, ValueError) as exc:
         raise CuratorSubmoduleError(
             "invalid_contract_path",
-            f"{field_name} must be relative to the submodule root.",
-        )
-    resolved = (submodule_root / contract_path).resolve()
-    if not resolved.is_relative_to(submodule_root) or not resolved.is_file():
+            f"{field_name} contains an invalid filesystem path; "
+            "use a relative path inside the submodule.",
+        ) from exc
+
+    if not is_valid:
         raise CuratorSubmoduleError(
             "invalid_contract_path",
             f"{field_name} must reference an existing file inside the submodule.",
