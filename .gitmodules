@@ -1,0 +1,3 @@
+[submodule "solutions/ess-maker-skills/vendor/evals-curator"]
+	path = solutions/ess-maker-skills/vendor/evals-curator
+	url = https://github.com/rarame_microsoft/EvalsCuratorForAgent.git
