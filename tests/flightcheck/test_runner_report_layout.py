@@ -416,6 +416,45 @@ def test_category_section_open_when_actionable_collapsed_when_all_pass(
     )
 
 
+def test_category_section_open_and_flagged_when_only_blocked(tmp_path):
+    """A category whose only bad row is BLOCKED must behave like a
+    Failed-only category: the section opens by default and carries a
+    "fail" mini badge. BLOCKED forces overall NOT_READY, so hiding it
+    behind a collapsed, badge-less section would recreate the
+    release-gate-hidden-as-success failure mode."""
+    from flightcheck.runner import save_results
+
+    blocked_only = _build_run_with([
+        _make_result("B-1", "Blocked"),
+        _make_result("P-1", "Passed"),
+    ])
+    save_results(blocked_only, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert re.search(
+        r'<details class="sec" id="cat-test" open>', html
+    ), "A BLOCKED-only category must open by default"
+    assert '<span class="b fail">1 fail</span>' in html, (
+        "A BLOCKED row must count toward the category's fail mini badge"
+    )
+    # Synopsis tile for the category must paint red, not green/gray.
+    assert 'class="syn-tile red"' in html, (
+        "A BLOCKED-only category tile must be red"
+    )
+
+
+def test_category_color_treats_blocked_as_red():
+    """_category_color must rank BLOCKED with Failed/Error (red), so a
+    category containing only BLOCKED rows never paints green/gray."""
+    from flightcheck.runner import _category_color
+
+    assert _category_color([_make_result("B-1", "Blocked")]) == "red"
+    assert _category_color([
+        _make_result("B-1", "Blocked"),
+        _make_result("P-1", "Passed"),
+    ]) == "red"
+
+
 def test_empty_category_renders_friendly_note(tmp_path):
     """Defensive: a category with zero results renders a friendly note
     rather than an empty card list. (The grouping path never emits an
