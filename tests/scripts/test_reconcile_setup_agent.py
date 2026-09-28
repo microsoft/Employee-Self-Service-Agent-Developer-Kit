@@ -125,6 +125,136 @@ def test_native_probe_returns_identity_without_dataverse_probe(
 
 
 @pytest.mark.parametrize(
+    "schema_name",
+    [
+        "gptagent_copilotforemployeeselfservicehr",
+        "gptagent_copilotforemployeeselfserviceit",
+    ],
+)
+def test_native_probe_completes_missing_schema_from_dev_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    schema_name: str,
+) -> None:
+    observed: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            observed.append(("agent", agent_id))
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service",
+                "managedProperties": {"isManaged": True},
+            }
+
+        def get_dev_configuration(self, agent_id: str) -> dict:
+            observed.append(("config", agent_id))
+            return {"schemaName": schema_name}
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host="https://example.environment.api.powerplatform.com",
+    )
+
+    assert observed == [("agent", AGENT_ID), ("config", AGENT_ID)]
+    assert result["outcome"] == "found"
+    assert result["productFamily"] == "da-ga"
+    assert result["identity"]["schemaName"] == schema_name
+    assert result["identity"]["displayName"] == "Employee Self-Service"
+
+
+@pytest.mark.parametrize("config_result", [{}, {"schemaName": ""}])
+def test_native_probe_missing_configuration_schema_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_result: dict,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            return config_result
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host="https://example.environment.api.powerplatform.com",
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "productFamily" not in result
+    assert "identity" not in result
+
+
+def test_native_probe_configuration_failure_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            raise AgentBuilderError("Dev configuration unavailable")
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host="https://example.environment.api.powerplatform.com",
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert result["error"]["causes"][0]["type"] == "NativeIdentityIncomplete"
+    assert result["error"]["causes"][1]["type"] == "AgentBuilderError"
+
+
+@pytest.mark.parametrize(
     ("status_code", "outcome"),
     [
         (401, "authentication-required"),

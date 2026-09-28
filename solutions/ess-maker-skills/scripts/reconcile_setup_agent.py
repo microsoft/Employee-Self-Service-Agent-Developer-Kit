@@ -45,6 +45,10 @@ _GUID_AT_END = re.compile(
 )
 
 
+class NativeIdentityIncomplete(AgentBuilderError):
+    """Raised when exact native lookup cannot prove the product schema."""
+
+
 def _normalize_guid(value: str, label: str) -> str:
     try:
         return str(uuid.UUID(value))
@@ -145,7 +149,27 @@ def _probe_native_agent(
         tenant_id=tenant_id,
         api_version=api_version,
     )
-    return client.get_agent(agent_id)
+    agent = client.get_agent(agent_id)
+    schema_name = str(agent.get("schemaName") or "").strip()
+    if schema_name:
+        return agent
+
+    try:
+        configuration = client.get_dev_configuration(agent_id)
+    except (AgentBuilderError, OSError, ValueError, requests.RequestException) as exc:
+        raise NativeIdentityIncomplete(
+            "Exact native agent lookup succeeded, but its Dev configuration "
+            "could not be read to complete the product identity."
+        ) from exc
+    schema_name = str(configuration.get("schemaName") or "").strip()
+    if not schema_name:
+        raise NativeIdentityIncomplete(
+            "Exact native agent lookup succeeded, but its Dev configuration "
+            "did not return a schema name."
+        )
+    enriched = dict(agent)
+    enriched["schemaName"] = schema_name
+    return enriched
 
 
 def _resolve_dataverse_url(
@@ -307,6 +331,12 @@ def probe_native_identity(
             kit_root.resolve(),
             host,
             api_version,
+        )
+    except NativeIdentityIncomplete as exc:
+        return _failure_result(
+            "native",
+            exc,
+            stage="identity-completion",
         )
     except (
         AgentBuilderError,
