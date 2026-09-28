@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # MOS Starter Package Setup
 
 ## Scope
@@ -9,28 +10,29 @@ This reference defines the safety and evidence contract for installing a new Dev
 
 ## Current evidence
 
-| Claim | Status |
-| --- | --- |
-| Listing uses `GET /copilotstudio/minimalBots/agentStarterPackages` with `api-version` and `pageSize` | Live-proven |
-| The listing response is an object with a `packages` list and an optional `continuationToken` | Live-proven |
-| The listing surface returns only public- and tenant-scoped `AgentSchemaTemplates` entries, not general agent inventory | Documented by the platform team; consistent with observed shape |
-| An entitled Employee Self-Service package can be listed in a flighted TEST environment | Live-proven |
-| The catalog can return the same package entry more than once | Live-observed; preserve service rows rather than silently deduplicating |
-| Existing-agent inventory and exact-agent responses expose no stable source-package identity to join against the catalog | Live-proven |
-| `POST /copilotstudio/minimalBots/createFromStarterPackage` with `{"packageId":"..."}` creates from the exact selected package | Live-proven |
-| Successful create returns HTTP 201 with `{botId, sourcePackage:{packageId,schemaName,version}}` | Live-proven |
-| Catalog package revision and `sourcePackage.version` are distinct concepts and can differ | Live-proven (`1.0.6` catalog revision versus `1.0.0` source template in the observed run) |
-| Current server source maps a starter-package collision to HTTP 409 | Source-confirmed; live 409 response remains pending |
-| A created starter agent is not automatically opted into ALM | Live-proven |
-| ALM opt-in uses the full fetched `BotEntity`, adds `configuration.settings["alm.isAlmEnabled"] = true`, and submits an empty `botComponentChanges` list through `PUT /api/{agentId}/components` | Live-proven |
-| ALM opt-in persisted and advanced the BotEntity version on read-back | Live-proven |
-| Direct Dev-route and component validation can materialize a newly created starter agent while published Dev configuration is absent | Live-proven in TEST |
-| Existing-Dev validation and attachment remain separate and expose service-owned prerequisites | Live-proven |
-| Direct native ALM import already creates agents from packages declaring `packageType: "templated"` | Live-proven, using the generic import path, not this surface |
+| Claim                                                                                                                                                                                           | Status                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Listing uses `GET /copilotstudio/minimalBots/agentStarterPackages` with `api-version` and `pageSize`                                                                                            | Live-proven                                                                                  |
+| The listing response is an object with a `packages` list and an optional `continuationToken`                                                                                                    | Live-proven                                                                                  |
+| The listing surface returns only public- and tenant-scoped `AgentSchemaTemplates` entries, not general agent inventory                                                                          | Documented by the platform team; consistent with observed shape                              |
+| An entitled Employee Self-Service package can be listed in a flighted TEST environment                                                                                                          | Live-proven                                                                                  |
+| The catalog can return the same package entry more than once                                                                                                                                    | Live-observed; preserve service rows rather than silently deduplicating                      |
+| Existing-agent inventory and exact-agent responses expose no stable source-package identity to join directly against catalog `packageId`                                                        | Live-proven                                                                                  |
+| Registered product families can be correlated locally through exact catalog-name and exact agent-schema mappings without treating that mapping as package provenance                            | Live-proven for Hub and HR in the TEST environment; IT uses the same exact registry contract |
+| `POST /copilotstudio/minimalBots/createFromStarterPackage` with `{"packageId":"..."}` creates from the exact selected package                                                                   | Live-proven                                                                                  |
+| Successful create returns HTTP 201 with `{botId, sourcePackage:{packageId,schemaName,version}}`                                                                                                 | Live-proven                                                                                  |
+| Catalog package revision and `sourcePackage.version` are distinct concepts and can differ                                                                                                       | Live-proven (`1.0.6` catalog revision versus `1.0.0` source template in the observed run)    |
+| Current server source maps a starter-package collision to HTTP 409                                                                                                                              | Source-confirmed; live 409 response remains pending                                          |
+| A created starter agent is not automatically opted into ALM                                                                                                                                     | Live-proven                                                                                  |
+| ALM opt-in uses the full fetched `BotEntity`, adds `configuration.settings["alm.isAlmEnabled"] = true`, and submits an empty `botComponentChanges` list through `PUT /api/{agentId}/components` | Live-proven                                                                                  |
+| ALM opt-in persisted and advanced the BotEntity version on read-back                                                                                                                            | Live-proven                                                                                  |
+| Direct Dev-route and component validation can materialize a newly created starter agent while published Dev configuration is absent                                                             | Live-proven in TEST                                                                          |
+| Existing-Dev validation and attachment remain separate and expose service-owned prerequisites                                                                                                   | Live-proven                                                                                  |
+| Direct native ALM import already creates agents from packages declaring `packageType: "templated"`                                                                                              | Live-proven, using the generic import path, not this surface                                 |
 
 Do not describe a pending-validation claim as supported behavior. In particular, non-TEST behavior and product-specific package availability remain open runtime evidence.
 
-**Load-bearing assumption:** HTTP 409 means the selected package collides somewhere in the target environment, but it does not identify the corresponding agent. The UX therefore asks the maker to choose an existing visible Dev agent and does not infer a package-to-agent association.
+**Load-bearing assumption:** HTTP 409 means the selected package collides somewhere in the target environment, but it does not identify the corresponding agent. After recording the collision mapping, the session may correlate only exact product-key or observed-schema matches from the current Dev inventory. One exact match can be offered directly as **Use this agent**; multiple exact matches can be presented by service-provided display name only. Unrelated agents are never offered, and no agent ID, schema, product key, or verification annotation is maker-facing. With no exact match, setup uses the installed-without-visible-identity recovery.
 
 ## Safety invariants
 
@@ -85,8 +87,12 @@ It does not:
 
 `create` and `enable-alm` are separate remotely mutating commands. Neither invokes the other or attachment. `list` never mutates. An accepted create response emits the returned identity but does not opt in, attach, or report setup complete. A successful `list` emits
 `DA_MOS_STARTER_PACKAGES_JSON:` with a `packages` array plus a
-`catalogWarnings` array, empty when every row was valid. A failed `list`
-instead emits
+`catalogWarnings` array, empty when every row was valid.
+Each package and verified Dev agent resolves `.local/setup/da-product-observations.json` before the checked-in seed. `da_product_registry.py observe` atomically upserts session-established package, catalog, schema, environment, ring, and installed facts; it does not call the service or interpret operation results. Successful create responses and definitive collision handling can supply these facts through the existing setup flow. Product identity remains reusable across targets, while installed state applies only to the exact observed environment and ring. `setup_existing_da.py list-agents` returns `devAgents`, `testAgents`, `prodAgents`, and `realmNotEstablishedAgents` rather than discarding listed identities after realm inspection. Product identity enrichment applies only to `devAgents`; `productIdentityUnavailableCount` reports verified Dev agents whose exact schema could not be read. A session may correlate known keys or exact observed schemas to offer an existing editable Dev agent, but the correlation does not establish installed template version.
+
+The product picker is a projection of the latest successful catalog result. After grouping duplicate service rows by exact package ID, it contains one choice for every resulting catalog product in catalog order. Workspace observations and `devAgents` enrich each projected row. An exact matching Dev identity produces **Use — Already installed**. When agent listing succeeds, environment-scoped installed evidence without a matching Dev identity produces **Already installed** without **Use** and replaces that row's default product description with the explanation that the current account’s agent list did not return the match. After selection, setup explains that it cannot install another copy and cannot identify the existing agent automatically from that list before offering recovery choices. When agent listing fails, both the row and selection explanation instead state that identity verification was unavailable because the list could not be loaded. The row explanation is visible in the catalog before selection rather than appearing only after the row is selected. Identity-only or inconclusive evidence leaves the row in its default **Create** state.
+
+A failed `list` instead emits
 `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and either
 `DA_MOS_STARTER_LIST_RESPONSE_JSON:` or
 `DA_MOS_STARTER_LIST_RESPONSE_TEXT:` before the CLI fails. For `create`,
@@ -121,15 +127,15 @@ not remove prior create evidence.
 
 ### Fuse disposition matrix
 
-| Observed outcome | Fuse disposition |
-| --- | --- |
-| Pre-dispatch failure (DNS, refused connection, connect timeout) | Removed |
-| 2xx with a usable identity | Retained |
-| 2xx that is malformed, non-JSON, or identifies a different source package | Retained |
-| 3xx (redirects are disabled, so this is unexpected) | Retained |
-| 400, 401, 403, 404, 409, 412, 422 (definitive normal rejection) | Removed |
-| 408, 425, 429, 5xx, or any other uncertain response | Retained |
-| Generic timeout, reset, or other ambiguous transport failure | Retained |
+| Observed outcome                                                          | Fuse disposition |
+| ------------------------------------------------------------------------- | ---------------- |
+| Pre-dispatch failure (DNS, refused connection, connect timeout)           | Removed          |
+| 2xx with a usable identity                                                | Retained         |
+| 2xx that is malformed, non-JSON, or identifies a different source package | Retained         |
+| 3xx (redirects are disabled, so this is unexpected)                       | Retained         |
+| 400, 401, 403, 404, 409, 412, 422 (definitive normal rejection)           | Removed          |
+| 408, 425, 429, 5xx, or any other uncertain response                       | Retained         |
+| Generic timeout, reset, or other ambiguous transport failure              | Retained         |
 
 A connect timeout is treated as pre-dispatch only because `requests` proves the connection never completed. Every other timeout is conservatively kept as uncertain, because the service may already have received and acted on the request. Request-evidence disposition is a duplicate-mutation guard for that exact request identity.
 
@@ -144,9 +150,10 @@ Canonical setup provenance is `mos-starter`
 with selection evidence `mos-starter-result`, written only when the
 executing session runs `setup_existing_da.py attach --setup-source
 mos-starter`. The canonical setup schema is not extended with package
-fields: this session's transcript (the printed annotations and response
-evidence) is the only durable record of which package, name, and version
-were used. Durable, machine-readable package/version persistence and read-back verification remain a formalization gap; see Open validation.
+fields. Workspace product observations durably retain package, catalog, and
+schema mappings as supporting identity evidence; catalog and source-template
+versions remain in the request and response evidence rather than canonical
+setup state.
 
 ## Open validation
 
@@ -158,5 +165,5 @@ Remaining runtime coverage:
 - pre-dispatch DNS/connect-refused classification against a live failure;
 - behavior outside the TEST ring;
 - HR, IT, and connected-system package availability;
-- durable, machine-readable package/version persistence and read-back
-  verification, to replace the session-transcript-only record above.
+- read-back coverage for workspace-local product observations outside the TEST
+  ring.

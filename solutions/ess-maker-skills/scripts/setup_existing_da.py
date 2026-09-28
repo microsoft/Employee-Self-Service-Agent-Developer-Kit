@@ -42,6 +42,7 @@ from agentbuilder_object_model import (
 )
 from da_product_registry import (
     DAProductRegistryError,
+    resolve_product_identity,
     resolve_product_setup,
 )
 
@@ -1264,12 +1265,61 @@ def _record_canonical_setup_ready(
     return agent_state
 
 
-def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
-    """Classify listed agents using authoritative direct realm metadata."""
+def _safe_listed_agent(
+    agent: dict[str, Any],
+    *,
+    realm: Any = None,
+    verification_error_type: str | None = None,
+    verification_http_status: int | None = None,
+) -> dict[str, Any]:
+    agent_id = str(
+        agent.get("botId")
+        or agent.get("cdsBotId")
+        or agent.get("componentIdUnique")
+        or ""
+    )
+    name = str(
+        agent.get("fullBotName")
+        or agent.get("displayName")
+        or agent.get("shortBotName")
+        or agent_id
+    )
+    result: dict[str, Any] = {
+        "listedId": agent_id,
+        "name": name,
+    }
+    if realm is not None:
+        result["realm"] = realm
+    if verification_error_type is not None:
+        result["verificationErrorType"] = verification_error_type
+    if verification_http_status is not None:
+        result["verificationHttpStatus"] = verification_http_status
+    return result
+
+
+def _realm_name(value: Any) -> str | None:
+    return next(
+        (
+            name.casefold()
+            for realm, name in REALM_NAMES.items()
+            if value == realm
+            or (
+                isinstance(value, str)
+                and value.casefold() == name.casefold()
+            )
+        ),
+        None,
+    )
+
+
+def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
+    """Classify every listed identity using direct service realm metadata."""
     listed_agents = client.list_agents()
     dev_agents: list[dict[str, Any]] = []
-    excluded_non_dev = 0
-    unverified = 0
+    test_agents: list[dict[str, Any]] = []
+    prod_agents: list[dict[str, Any]] = []
+    realm_not_established_agents: list[dict[str, Any]] = []
+    product_identity_unavailable = 0
     for listed_agent in listed_agents:
         agent_id = str(
             listed_agent.get("botId")
@@ -1285,7 +1335,12 @@ def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
                 f"{type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
-            unverified += 1
+            realm_not_established_agents.append(
+                _safe_listed_agent(
+                    listed_agent,
+                    verification_error_type=type(exc).__name__,
+                )
+            )
             continue
         try:
             metadata = client.get_agent(normalized_agent_id)
@@ -1301,21 +1356,59 @@ def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
                 exc,
                 marker="DA_AGENT_LIST_WARNING",
             )
-            unverified += 1
+            realm_not_established_agents.append(
+                _safe_listed_agent(
+                    listed_agent,
+                    verification_error_type=type(exc).__name__,
+                    verification_http_status=exc.status_code,
+                )
+            )
             continue
-        realm = metadata.get("realm")
-        is_dev = realm == 0 or (
-            isinstance(realm, str) and realm.casefold() == "dev"
-        )
-        if is_dev:
-            dev_agents.append({**listed_agent, **metadata})
+        realm = _realm_name(metadata.get("realm"))
+        if realm == "dev":
+            enriched_agent = {**listed_agent, **metadata}
+            try:
+                configuration = client.get_dev_configuration(
+                    normalized_agent_id
+                )
+            except AgentBuilderHTTPError as exc:
+                if exc.status_code not in (403, 404):
+                    raise
+                print(
+                    f"WARNING: Agent {normalized_agent_id} product identity: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                _print_http_error_response(
+                    exc,
+                    marker="DA_AGENT_LIST_PRODUCT_WARNING",
+                )
+                product_identity_unavailable += 1
+            else:
+                schema_name, _ = _confirm_dev(
+                    normalized_agent_id,
+                    enriched_agent,
+                    configuration,
+                )
+                enriched_agent["schemaName"] = schema_name
+            dev_agents.append(enriched_agent)
+        elif realm == "test":
+            test_agents.append({**listed_agent, **metadata})
+        elif realm == "prod":
+            prod_agents.append({**listed_agent, **metadata})
         else:
-            excluded_non_dev += 1
+            realm_not_established_agents.append(
+                _safe_listed_agent(
+                    {**listed_agent, **metadata},
+                    realm=metadata.get("realm"),
+                )
+            )
     return {
-        "listedAgents": listed_agents,
         "devAgents": dev_agents,
-        "excludedNonDevCount": excluded_non_dev,
-        "unverifiedAgentCount": unverified,
+        "testAgents": test_agents,
+        "prodAgents": prod_agents,
+        "realmNotEstablishedAgents": realm_not_established_agents,
+        "productIdentityUnavailableCount": product_identity_unavailable,
     }
 
 
@@ -2502,9 +2595,13 @@ def attach_existing_dev(
     return response
 
 
-def summarize_agents(agents: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Return the safe user-choice fields from AgentBuilder agent cards."""
-    choices = []
+def summarize_agents(
+    agents: list[dict[str, Any]],
+    *,
+    kit_root: Path | None = None,
+) -> list[dict[str, str]]:
+    """Return safe user-choice fields and exact registered product identity."""
+    choices: list[dict[str, str]] = []
     for agent in agents:
         agent_id = str(
             agent.get("botId")
@@ -2522,7 +2619,54 @@ def summarize_agents(agents: list[dict[str, Any]]) -> list[dict[str, str]]:
             or agent.get("shortBotName")
             or normalized_id
         )
-        choices.append({"id": normalized_id, "name": name})
+        choice = {"id": normalized_id, "name": name}
+        schema_name = str(agent.get("schemaName") or "").strip()
+        product = resolve_product_identity(
+            agent_schema_name=schema_name,
+            kit_root=kit_root,
+        )
+        if product is not None:
+            choice["productKey"] = product["productKey"]
+            choice["productIdentitySource"] = product["identitySource"]
+        if schema_name:
+            choice["schemaName"] = schema_name
+        choices.append(choice)
+    return sorted(
+        choices,
+        key=lambda item: (item["name"].casefold(), item["id"]),
+    )
+
+
+def summarize_realm_agents(
+    agents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return safe identity and realm facts without product interpretation."""
+    choices: list[dict[str, Any]] = []
+    for agent in agents:
+        agent_id = str(
+            agent.get("botId")
+            or agent.get("cdsBotId")
+            or agent.get("componentIdUnique")
+            or ""
+        )
+        try:
+            normalized_id = _normalize_guid(agent_id, "Agent ID")
+        except ExistingDASetupError:
+            continue
+        name = str(
+            agent.get("fullBotName")
+            or agent.get("displayName")
+            or agent.get("shortBotName")
+            or normalized_id
+        )
+        item: dict[str, Any] = {
+            "id": normalized_id,
+            "name": name,
+        }
+        realm = _realm_name(agent.get("realm"))
+        if realm is not None:
+            item["realm"] = realm
+        choices.append(item)
     return sorted(
         choices,
         key=lambda item: (item["name"].casefold(), item["id"]),
@@ -2881,13 +3025,24 @@ def main(argv: list[str] | None = None) -> int:
             _require_object_model_dependencies()
         client = _client_from_args(args, environment_id, target["ring"])
         if args.command == "list-agents":
-            inspection = inspect_dev_agents(client)
+            inspection = inspect_listed_agents(client)
             result = {
                 "environmentId": environment_id,
-                "agents": summarize_agents(inspection["devAgents"]),
-                "excludedNonDevCount": inspection["excludedNonDevCount"],
-                "unverifiedAgentCount": inspection[
-                    "unverifiedAgentCount"
+                "devAgents": summarize_agents(
+                    inspection["devAgents"],
+                    kit_root=args.kit_root.resolve(),
+                ),
+                "testAgents": summarize_realm_agents(
+                    inspection["testAgents"]
+                ),
+                "prodAgents": summarize_realm_agents(
+                    inspection["prodAgents"]
+                ),
+                "realmNotEstablishedAgents": inspection[
+                    "realmNotEstablishedAgents"
+                ],
+                "productIdentityUnavailableCount": inspection[
+                    "productIdentityUnavailableCount"
                 ],
             }
             print(

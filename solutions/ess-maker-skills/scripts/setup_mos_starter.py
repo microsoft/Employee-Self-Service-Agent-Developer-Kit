@@ -34,6 +34,7 @@ from agentbuilder import (
     AgentBuilderError,
     AgentBuilderHTTPError,
 )
+from da_product_registry import resolve_product_identity
 from setup_existing_da import (
     ExistingDASetupError,
     _add_agentbuilder_target_arguments,
@@ -73,6 +74,10 @@ class MosStarterSetupError(RuntimeError):
 # --- list (read-only) -------------------------------------------------
 def summarize_starter_packages(
     packages: list[dict[str, Any]],
+    *,
+    kit_root: Path | None = None,
+    environment_id: str | None = None,
+    ring: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return safe catalog fields for entries with a non-empty packageId.
 
@@ -88,11 +93,29 @@ def summarize_starter_packages(
         and isinstance(package.get("packageId"), str)
         and package["packageId"].strip()
     ]
+    summarized = []
+    for package in valid:
+        item = {
+            field: package.get(field) for field in _SAFE_PACKAGE_FIELDS
+        }
+        product = resolve_product_identity(
+            package_id=package.get("packageId"),
+            catalog_name=package.get("name"),
+            kit_root=kit_root,
+            environment_id=environment_id,
+            ring=ring,
+        )
+        if product is not None:
+            item["productKey"] = product["productKey"]
+            item["productIdentitySource"] = product["identitySource"]
+            observed_schema = product.get("agentSchemaName")
+            if observed_schema:
+                item["agentSchemaName"] = observed_schema
+            if product.get("installed") is True:
+                item["installed"] = True
+        summarized.append(item)
     return sorted(
-        (
-            {field: package.get(field) for field in _SAFE_PACKAGE_FIELDS}
-            for package in valid
-        ),
+        summarized,
         key=lambda item: (
             str(item.get("name") or "").casefold(),
             str(item["packageId"]),
@@ -132,6 +155,8 @@ def list_starter_packages(
     client: AgentBuilderClient,
     *,
     environment_id: str,
+    kit_root: Path | None = None,
+    ring: str | None = None,
 ) -> dict[str, Any]:
     """List the catalog, never silently discarding a malformed row.
 
@@ -179,7 +204,12 @@ def list_starter_packages(
         raise
     return {
         "environmentId": environment_id,
-        "packages": summarize_starter_packages(packages),
+        "packages": summarize_starter_packages(
+            packages,
+            kit_root=kit_root,
+            environment_id=environment_id,
+            ring=ring,
+        ),
         "catalogWarnings": catalog_warnings(packages),
     }
 
@@ -786,6 +816,8 @@ def main(argv: list[str] | None = None) -> int:
             result = list_starter_packages(
                 client,
                 environment_id=target["environmentId"],
+                kit_root=args.kit_root.resolve(),
+                ring=target["ring"],
             )
             print(
                 f"DA_MOS_STARTER_PACKAGES_JSON:{json.dumps(result, ensure_ascii=True)}"
