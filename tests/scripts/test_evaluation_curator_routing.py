@@ -239,6 +239,11 @@ def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
         in flow_r1
     )
     assert "For every other Flow R1 entry" in flow_r1
+    assert (
+        "enter Step 7 and follow its push-decision, configuration, promotion, "
+        "dry-run, push, cleanup, and post-push gates"
+        in flow_r1
+    )
 
 
 def test_run_skill_is_referenced_only_after_successful_push():

@@ -166,8 +166,8 @@ Step 7 exactly once.
      once after recording and explaining the local `review_requested` state.
      Do not run configuration, promotion, dry-run, or push actions before that
      Step 7 handoff.
-   - For every other Flow R1 entry, continue through the normal configuration
-     check, promotion when needed, dry run, and push flow.
+   - For every other Flow R1 entry, enter Step 7 and follow its push-decision,
+     configuration, promotion, dry-run, push, cleanup, and post-push gates.
 
 The pushed parent description contains:
 
