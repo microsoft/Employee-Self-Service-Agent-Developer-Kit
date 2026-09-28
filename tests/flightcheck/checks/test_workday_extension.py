@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any
 
+import pytest
 import responses
 
 from tests.conftest import require_validated_mock
@@ -449,7 +450,9 @@ def _write_component_map(
     agent: str,
     *,
     setup_file: str = "Setusercontext.mcs.yml",
+    setup_path: str | None = None,
     target_file: str = "WorkdaySystemGetUserContextV2.mcs.yml",
+    target_path: str | None = None,
     dialog: str | None = None,
 ):
     agent_dir = tmp_path / "workspace" / "agents" / agent
@@ -461,14 +464,14 @@ def _write_component_map(
         else {}
     )
     component_map.update({
-        f"topics/{setup_file}": {
+        setup_path or f"topics/{setup_file}": {
             "componentKind": "DialogComponent",
             "displayName": "[Admin] - User Context - Setup",
             "schemaName": "contoso.topic.Setusercontext",
         }
     })
     if dialog:
-        component_map[f"topics/{target_file}"] = {
+        component_map[target_path or f"topics/{target_file}"] = {
             "componentKind": "DialogComponent",
             "displayName": "Workday [System] - 1: Set User Context V2",
             "schemaName": dialog,
@@ -616,6 +619,67 @@ class TestUserContextRedirect:
             tmp_path,
             "acme",
             target_file="../outside.mcs.yml",
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "Workday User Context V2 topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_setup_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_component_map(
+            tmp_path,
+            "acme",
+            setup_path=mapped_path,
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "admin user-context topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_target_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n",
+        )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            target_path=mapped_path,
             dialog="cr123_WorkdaySystemGetUserContextV3",
         )
         runner = _Runner(config={}, agent_slug="acme")

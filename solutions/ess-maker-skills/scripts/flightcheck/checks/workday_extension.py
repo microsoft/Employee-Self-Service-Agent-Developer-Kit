@@ -55,7 +55,7 @@ import json
 import os
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import yaml
 
@@ -144,6 +144,32 @@ def _selected_agent_slug(runner) -> str:
     return validate_agent_slug(str(slug)) if slug else ""
 
 
+def _safe_mapped_topic_path(
+    agent_dir: Path,
+    mapped_path: object,
+    label: str,
+) -> tuple[Path | None, str | None]:
+    raw_path = str(mapped_path)
+    relative_path = Path(raw_path)
+    windows_path = PureWindowsPath(raw_path)
+    if (
+        relative_path.is_absolute()
+        or windows_path.drive
+        or windows_path.root
+        or ".." in relative_path.parts
+        or ".." in windows_path.parts
+    ):
+        return None, f"The mapped {label} topic path is unsafe."
+
+    agent_root = agent_dir.resolve()
+    candidate = (agent_root / relative_path).resolve()
+    try:
+        candidate.relative_to(agent_root)
+    except ValueError:
+        return None, f"The mapped {label} topic path is unsafe."
+    return candidate, None
+
+
 def _mapped_user_context_topics(
     agent_dir: Path,
 ) -> tuple[Path | None, Path | None, str | None, str | None]:
@@ -185,22 +211,20 @@ def _mapped_user_context_topics(
             f"'{agent_dir.name}'."
         )
 
-    setup_relative_path = Path(str(setup_matches[0][0]))
-    if (
-        setup_relative_path.is_absolute()
-        or ".." in setup_relative_path.parts
-    ):
-        return None, None, None, (
-            "The mapped admin user-context topic path is unsafe."
-        )
-    target_relative_path = Path(str(target_matches[0][0]))
-    if (
-        target_relative_path.is_absolute()
-        or ".." in target_relative_path.parts
-    ):
-        return None, None, None, (
-            "The mapped Workday User Context V2 topic path is unsafe."
-        )
+    setup_topic_path, path_error = _safe_mapped_topic_path(
+        agent_dir,
+        setup_matches[0][0],
+        "admin user-context",
+    )
+    if path_error:
+        return None, None, None, path_error
+    target_topic_path, path_error = _safe_mapped_topic_path(
+        agent_dir,
+        target_matches[0][0],
+        "Workday User Context V2",
+    )
+    if path_error:
+        return None, None, None, path_error
     target_schema = str(
         target_matches[0][1].get("schemaName") or ""
     ).strip()
@@ -209,8 +233,8 @@ def _mapped_user_context_topics(
             "The mapped Workday User Context V2 topic has no schemaName."
         )
     return (
-        agent_dir / setup_relative_path,
-        agent_dir / target_relative_path,
+        setup_topic_path,
+        target_topic_path,
         target_schema,
         None,
     )
