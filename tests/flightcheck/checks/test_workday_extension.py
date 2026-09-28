@@ -10,9 +10,9 @@ Coverage per emitter:
     connection, degrades gracefully when it does not. Cached-ref read + a
     best-effort Power Platform admin owner echo — no cassette required (the
     admin connections listing is the ``validated`` pp_admin mock).
-  * DV-CONN-001 — PASS/FAIL/SKIPPED over the validated minimalBots components
-    read (Workday SOAP connection reference; faked ``runner.agentbuilder``);
-    owner echo via the ``validated`` pp_admin mock.
+  * DV-CONN-001 — PASS/FAIL/NOT_CONFIGURED/SKIPPED over a documented-tier
+    Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
+    echo via the ``validated`` pp_admin mock.
   * WD-REST-001 — pure-config check (restBaseUrl trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
@@ -28,17 +28,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import responses
+
 from tests.conftest import require_validated_mock
-from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 from tests.mocks import pp_admin as pp
 
-require_validated_mock(ab)
 require_validated_mock(dv)
 require_validated_mock(pp)
 
 from flightcheck.checks import workday_extension as wx  # noqa: E402
 from flightcheck.runner import Priority, Role, Status  # noqa: E402
+
+_DV_CONNECTOR_ID = (
+    "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -58,17 +62,6 @@ class _FakePPAdmin:
         return self._connections
 
 
-class _FakeAgentBuilder:
-    """Stand-in for FlightCheckRunner.agentbuilder. Only ``fetch_components``
-    is consumed (DV-CONN-001's connection-reference read)."""
-
-    def __init__(self, components: dict[str, Any]):
-        self._components = components
-
-    def fetch_components(self, _agent_id: str):
-        return self._components
-
-
 @dataclass
 class _Runner:
     config: Any = field(default_factory=dict)
@@ -76,7 +69,6 @@ class _Runner:
     env_url: str | None = None
     dv_token: str | None = None
     pp_admin: Any = None
-    agentbuilder: Any = None
     env_id: str | None = None
     agent_slug: str = ""
     _workday_connection_refs: list[dict[str, Any]] = field(default_factory=list)
@@ -96,6 +88,28 @@ class _BoomConfig:
 
 def _by_id(results):
     return {r.checkpoint_id: r for r in results}
+
+
+def _dv_ref(*, connection_id, statuscode=1):
+    """A Dataverse connection reference matching the extension pack's shipped
+    ref (connector shared_commondataserviceforapps, logical-name suffix
+    92b66)."""
+    return dv.connection_ref(
+        logical_name="msdyn_sharedcommondataserviceforapps_92b66",
+        display_name="Microsoft Dataverse",
+        connector_id=_DV_CONNECTOR_ID,
+        connection_id=connection_id,
+        statuscode=statuscode,
+    )
+
+
+def _register_refs(base_url: str, refs: list[dict[str, Any]]) -> None:
+    responses.add(
+        method="GET",
+        url=f"{base_url}/api/data/v9.2/connectionreferences",
+        json=dv.collection(refs),
+        status=200,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -241,111 +255,147 @@ class TestConnectionAuth:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# DV-CONN-001 — Workday SOAP connection binding (S5.4, PASS/FAIL).
+# DV-CONN-001 — Dataverse connection binding (S5.4, PASS/FAIL).
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _runner_with_refs(references, *, pp_admin=None, env_id=None):
-    """A runner whose faked ``agentbuilder.fetch_components`` returns the given
-    connection references and whose config names an active agent (botId)."""
-    components = ab.components_with_references(references=references)
-    return _Runner(
-        config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-        agentbuilder=_FakeAgentBuilder(components),
-        pp_admin=pp_admin,
-        env_id=env_id,
-    )
-
-
 class TestDataverseConnection:
-    def test_bound_with_owner_echo_passes(self):
+    @responses.activate
+    def test_bound_active_with_owner_echo_passes(
+        self, fake_dataverse_url, fake_token
+    ):
+        _register_refs(
+            fake_dataverse_url,
+            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
+        )
         owner_conn = pp.connection(
-            name="wd-conn-active",
-            api_name="shared_workdaysoap",
+            name="dv-conn-active",
+            api_name="shared_commondataserviceforapps",
             extra_properties={"accountName": "maker@contoso.com"},
         )
-        runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id="wd-conn-active")],
+        runner = _Runner(
+            env_url=fake_dataverse_url,
+            dv_token=fake_token,
             pp_admin=_FakePPAdmin([owner_conn]),
             env_id="env-1",
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.PASSED.value
-        assert "bound to a connection" in r.result
+        assert "bound to an active" in r.result
         assert "maker@contoso.com" in r.result
         assert "your own account" in r.result
 
-    def test_passes_without_pp_admin_notes_owner_unreadable(self):
-        runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id="wd-conn-active")],
+    @responses.activate
+    def test_passes_without_pp_admin_notes_owner_unreadable(
+        self, fake_dataverse_url, fake_token
+    ):
+        _register_refs(
+            fake_dataverse_url,
+            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
         )
+        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.PASSED.value
         assert "owner could not be read" in r.result
         assert "your own account" in r.result
 
-    def test_unbound_fails(self):
-        runner = _runner_with_refs(
-            [ab.workday_connection_reference(connection_id=None)],
+    @responses.activate
+    def test_runtime_dataverse_reference_passes(
+        self, fake_dataverse_url, fake_token
+    ):
+        runtime_ref = dv.workday_connection_refs_runtime()[1]
+        _register_refs(fake_dataverse_url, [runtime_ref])
+        runner = _Runner(
+            env_url=fake_dataverse_url,
+            dv_token=fake_token,
         )
+
+        r = _by_id(
+            wx.run_workday_extension_checks(runner)
+        )["DV-CONN-001"]
+
+        assert r.status == Status.PASSED.value
+        assert (
+            "msdyn_sharedcommondataserviceforapps_workdayruntime"
+            in r.result
+        )
+
+    @responses.activate
+    def test_mixed_runtime_and_legacy_dataverse_refs_warn(
+        self, fake_dataverse_url, fake_token
+    ):
+        runtime_ref = dv.workday_connection_refs_runtime()[1]
+        _register_refs(
+            fake_dataverse_url,
+            [_dv_ref(connection_id="legacy-dv"), runtime_ref],
+        )
+        runner = _Runner(
+            env_url=fake_dataverse_url,
+            dv_token=fake_token,
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.WARNING.value
+        assert "Multiple ESS Dataverse connection references" in r.result
+        assert "Remove obsolete Workday package references" in r.remediation
+
+    @responses.activate
+    def test_unbound_fails(self, fake_dataverse_url, fake_token):
+        _register_refs(
+            fake_dataverse_url, [_dv_ref(connection_id=None, statuscode=1)]
+        )
+        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
         assert "unbound" in r.result
-        assert "connectionId=null" in r.result
-        assert "bind the Workday SOAP connection reference" in r.remediation
+        assert "connectionid=null" in r.result
+        assert "bind the Dataverse connection reference" in r.remediation
 
-    def test_workday_ref_absent_fails(self):
-        # Only a ServiceNow ref is present - no Workday SOAP ref.
-        runner = _runner_with_refs(
-            [
-                ab.connection_reference_change(
-                    connector="shared_service-now",
-                    connection_id="sn-1",
-                )
-            ]
+    @responses.activate
+    def test_inactive_statuscode_fails(self, fake_dataverse_url, fake_token):
+        _register_refs(
+            fake_dataverse_url,
+            [_dv_ref(connection_id="dv-conn-inactive", statuscode=2)],
         )
+        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
-        assert "was not found" in r.result
-        assert "shared_workdaysoap" in r.result
-        assert "Install or repair the Workday extension pack" in r.remediation
+        assert "inactive" in r.result
+        assert "statuscode=2" in r.result
+        assert "Re-authenticate or re-bind" in r.remediation
 
-    def test_no_agentbuilder_client_skips(self):
-        runner = _Runner(config={"agent": {"botId": ab.MOCK_AGENT_ID}})
+    @responses.activate
+    def test_missing_ref_not_configured(self, fake_dataverse_url, fake_token):
+        # Only a Workday ref present — no Dataverse (92b66) ref.
+        _register_refs(
+            fake_dataverse_url,
+            [
+                dv.connection_ref(
+                    logical_name="new_sharedworkdaysoap_ff0df",
+                    display_name="OAuthUser",
+                    connector_id=dv.WORKDAY_SOAP_CONNECTOR_ID,
+                    connection_id="wd-conn-1",
+                )
+            ],
+        )
+        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.NOT_CONFIGURED.value
+        assert "was not found in this environment" in r.result
+        assert "Install/repair the Workday extension pack" in r.remediation
+
+    def test_no_dv_token_skips(self):
+        runner = _Runner(env_url="https://x.crm.dynamics.com", dv_token="")
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.SKIPPED.value
-        assert "not available" in r.result
-
-    def test_no_active_agent_botid_skips(self):
-        runner = _Runner(
-            config={},
-            agentbuilder=_FakeAgentBuilder(ab.components_with_references()),
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
-
-        assert r.status == Status.SKIPPED.value
-        assert "not available" in r.result
-
-    def test_malformed_changeset_degrades_to_warning(self):
-        # A 200 payload whose connectionReferenceChanges is present but not a
-        # list is a shape we do not understand: fail loudly (dispatcher WARNING)
-        # rather than reporting a confident "reference not found" FAILED.
-        runner = _Runner(
-            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-            agentbuilder=_FakeAgentBuilder(
-                {"connectionReferenceChanges": {"unexpected": "dict"}}
-            ),
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
-
-        assert r.status == Status.WARNING.value
-        assert "Unable to run DV-CONN-001" in r.result
-        assert "DV-CONN-001" in r.remediation
+        assert "Dataverse token not available" in r.result
 
 
 # ─────────────────────────────────────────────────────────────────────
