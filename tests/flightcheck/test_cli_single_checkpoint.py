@@ -71,6 +71,37 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
     )
 
 
+class _FakeRunResult:
+    """Minimal stand-in exposing only the counts ``_run_exit_code`` reads."""
+
+    def __init__(self, *, failed: int = 0, blocked: int = 0, errors: int = 0):
+        self.failed = failed
+        self.blocked = blocked
+        self.errors = errors
+
+
+@pytest.mark.parametrize(
+    ("failed", "blocked", "errors", "expected"),
+    [
+        (0, 0, 0, 0),   # clean run -> ready
+        (1, 0, 0, 1),   # failed row -> not ready
+        (0, 0, 1, 1),   # errored row -> not ready
+        (0, 1, 0, 1),   # BLOCKED-only run must NOT exit 0 (hard release gate)
+        (0, 2, 0, 1),   # multiple blocked rows -> not ready
+        (1, 1, 1, 1),   # all three -> not ready
+    ],
+)
+def test_run_exit_code_treats_blocked_as_not_ready(
+    failed: int, blocked: int, errors: int, expected: int
+) -> None:
+    # BLOCKED forces overall = NOT_READY; the exit code must mirror that so a
+    # CI/Connect caller keying on it can't read a blocked essential capability
+    # as success. Regression guard for the checkpoint/full-run exit paths that
+    # previously omitted result.blocked.
+    result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
+    assert cli._run_exit_code(result) == expected
+
+
 @pytest.mark.parametrize(
     ("config", "explicit_ring", "expected"),
     [

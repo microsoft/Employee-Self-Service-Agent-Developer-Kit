@@ -155,6 +155,7 @@ class _FakeRunner:
             manual=0,
             not_configured=0,
             skipped=0,
+            blocked=0,
             passed=0,
             total=0,
             duration_secs=0,

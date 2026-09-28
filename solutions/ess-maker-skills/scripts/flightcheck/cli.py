@@ -820,6 +820,18 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     return merged
 
 
+def _run_exit_code(result) -> int:
+    """Map a completed run to a process exit code (1 = not ready, 0 = ready).
+
+    BLOCKED is a hard release gate (it forces overall = NOT_READY), so it must
+    fail the exit code alongside FAILED and ERROR. Centralizing the rule here
+    keeps every entry point (checkpoint / profile / full run) consistent, so a
+    blocked essential capability can never exit 0 and read as success to a
+    CI/Connect caller keying on the exit code.
+    """
+    return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
+
+
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """Emit anonymous outcome telemetry for a completed run (best-effort).
 
@@ -1205,7 +1217,10 @@ def _run_single_checkpoint(args):
         result, args, config, graph, tenant_id, scope=f"checkpoint:{target}"
     )
 
-    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
+    # BLOCKED is a hard release gate (forces overall = NOT_READY), so it must
+    # fail the exit code just like FAILED/ERROR — otherwise a CI/Connect caller
+    # keying on the exit code reads a blocked essential capability as success.
+    sys.exit(_run_exit_code(result))
 
 
 def _run_profile(args):
@@ -1443,7 +1458,7 @@ def _run_profile(args):
         result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
     )
 
-    sys.exit(1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0)
+    sys.exit(_run_exit_code(result))
 
 
 def main():
@@ -2130,8 +2145,10 @@ def main():
     if not args.no_open and result.manual > 0:
         open_report_in_browser(args.output)
 
-    # Exit code
-    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
+    # Exit code. BLOCKED is a hard release gate (forces overall = NOT_READY),
+    # so it must fail the exit code alongside FAILED/ERROR; otherwise a blocked
+    # essential capability would exit 0 and read as success to a CI caller.
+    sys.exit(_run_exit_code(result))
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
