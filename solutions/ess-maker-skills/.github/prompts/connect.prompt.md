@@ -6,12 +6,19 @@ description: "Connect Workday or another supported integration"
 # Connect
 
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
-Resolve `.local/config.json`'s `activeAgent` slug to the matching object in its
+For a pre-selected ServiceNow integration, require only canonical
+`schema_version: 4` and environment evidence, then proceed to the router. The
+ServiceNow DA workflow lists the live ESS HR/IT agents and applies the
+workspace and `authoring_ready` gate to the agent the maker chooses; do not
+gate this invocation on `.local/config.json.activeAgent`.
+
+For other integrations, resolve
+.local/config.json's `activeAgent` slug to the matching object in its
 `agents` array, then use that object's `botId` to select the entry in
 `.local/setup/config.json`'s `agents` object. Continue when canonical state has
 `schema_version: 4`, that agent has `authoring_ready: true`, complete workspace evidence,
 and `steps.SETUP-07.state: "done"`. Do not require
-`connect_ready: true`; Ignore `connect_ready`, `active_step`, blocked capacity,
+`connect_ready: true`; ignore `connect_ready`, `active_step`, blocked capacity,
 and blocked connection steps for this admission check because this command
 configures the product-extension connections that may currently block runtime
 readiness. If local workspace materialization is incomplete, show:
