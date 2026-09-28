@@ -7,15 +7,10 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from flightcheck.checks.servicenow_da_hrsd import (
-    _is_throttled_error,
     run_servicenow_da_hrsd_checks,
 )
 from flightcheck.runner import Status
-from agentbuilder import AgentBuilderHTTPError
-from requests.exceptions import RetryError
 
 import connect_servicenow_da as snow
 
@@ -374,95 +369,3 @@ def test_hrsd_checks_prefer_explicit_agent_slug(
     run_servicenow_da_hrsd_checks(runner)
 
     assert fetched == [requested_id]
-
-
-def test_hrsd_credential_check_falls_back_to_connector_inventory(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    fallback_calls: list[tuple[str, str]] = []
-    runner = _runner(components)
-
-    def fail_environment_inventory(_environment_id: str) -> list[dict]:
-        raise AgentBuilderHTTPError(
-            "Connection listing",
-            429,
-            error_code="TooManyRequests",
-        )
-
-    def list_connector_inventory(
-        environment_id: str,
-        connector_name: str,
-        *,
-        one_shot: bool,
-    ) -> list[dict]:
-        assert one_shot is True
-        fallback_calls.append((environment_id, connector_name))
-        return [_connection()]
-
-    runner.connectivity = SimpleNamespace(
-        list_connections=fail_environment_inventory,
-        list_connector_connections=list_connector_inventory,
-    )
-    monkeypatch.chdir(tmp_path)
-
-    results = run_servicenow_da_hrsd_checks(runner)
-    statuses = {result.checkpoint_id: result.status for result in results}
-
-    assert fallback_calls == [(ENVIRONMENT_ID, snow.CONNECTOR_NAME)]
-    assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
-    credential = next(
-        result
-        for result in results
-        if result.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
-    )
-    assert "connector-scoped-429-fallback" in credential.result
-
-
-@pytest.mark.parametrize("status_code", [401, 403, 500])
-def test_hrsd_credential_check_does_not_fallback_non_429(
-    monkeypatch,
-    tmp_path: Path,
-    status_code: int,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    runner = _runner(components)
-    fallback_calls: list[tuple[str, str]] = []
-
-    def fail_environment_inventory(_environment_id: str) -> list[dict]:
-        raise AgentBuilderHTTPError(
-            "Connection listing",
-            status_code,
-        )
-
-    def list_connector_inventory(
-        environment_id: str,
-        connector_name: str,
-        *,
-        one_shot: bool,
-    ) -> list[dict]:
-        fallback_calls.append((environment_id, connector_name))
-        return [_connection()]
-
-    runner.connectivity = SimpleNamespace(
-        list_connections=fail_environment_inventory,
-        list_connector_connections=list_connector_inventory,
-    )
-    monkeypatch.chdir(tmp_path)
-
-    results = run_servicenow_da_hrsd_checks(runner)
-    credential = next(
-        result
-        for result in results
-        if result.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
-    )
-
-    assert fallback_calls == []
-    assert credential.status == Status.ERROR.value
-
-
-def test_throttle_detection_accepts_retry_exhaustion_shape() -> None:
-    assert _is_throttled_error(RetryError("too many 429 error responses"))

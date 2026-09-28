@@ -16,7 +16,6 @@ from connect_servicenow_da import (
     PROVIDER_KEY,
     summarize_components,
 )
-from agentbuilder import AgentBuilderHTTPError
 
 from ..agent_scope import validate_agent_slug
 from ..runner import CheckResult, Priority, Role, Status
@@ -131,28 +130,6 @@ def _servicenow_connections(
     ]
 
 
-def _is_throttled_error(exc: BaseException) -> bool:
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if isinstance(current, AgentBuilderHTTPError):
-            if current.status_code == 429:
-                return True
-        response = getattr(current, "response", None)
-        if getattr(response, "status_code", None) == 429:
-            return True
-        text = str(current).casefold()
-        if "429" in text and (
-            "too many" in text
-            or "thrott" in text
-            or "retry" in text
-        ):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
-
-
 def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     selected = _active_agent(runner)
     if selected is None:
@@ -213,7 +190,6 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     component_hash = _hash(components)
     connections: list[dict[str, Any]] = []
     connectivity_error = ""
-    inventory_source = "environment-wide"
     connectivity = getattr(runner, "connectivity", None)
     environment_id = str(getattr(runner, "env_id", None) or "")
     if connectivity is None:
@@ -223,43 +199,18 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             connections = _servicenow_connections(
                 connectivity.list_connections(environment_id)
             )
-        except Exception as primary_exc:
-            if not _is_throttled_error(primary_exc):
-                connectivity_error = (
-                    f"{type(primary_exc).__name__}: {primary_exc}"
-                )
-            else:
-                try:
-                    connections = _servicenow_connections(
-                        connectivity.list_connector_connections(
-                            environment_id,
-                            CONNECTOR_NAME,
-                            one_shot=True,
-                        )
-                    )
-                    inventory_source = "connector-scoped-429-fallback"
-                except Exception as fallback_exc:
-                    connectivity_error = (
-                        f"{type(primary_exc).__name__}: {primary_exc}; "
-                        "connector-scoped 429 fallback failed: "
-                        f"{type(fallback_exc).__name__}: {fallback_exc}"
-                    )
+        except Exception as exc:
+            connectivity_error = f"{type(exc).__name__}: {exc}"
 
     return [
         _package_result(slug, summary),
         _topics_result(summary, evidence, component_hash),
-        _credential_result(
-            evidence,
-            connections,
-            connectivity_error,
-            inventory_source,
-        ),
+        _credential_result(evidence, connections, connectivity_error),
         _agent_connection_result(
             evidence,
             connections,
             connectivity_error,
             component_hash,
-            inventory_source,
         ),
         _parameter_result(evidence, component_hash),
         _publish_result(evidence, component_hash),
@@ -366,7 +317,6 @@ def _credential_result(
     evidence: dict[str, Any],
     connections: list[dict[str, Any]],
     error: str,
-    inventory_source: str = "environment-wide",
 ) -> CheckResult:
     match, credential = _selected_connection(evidence, connections)
     if error:
@@ -389,10 +339,7 @@ def _credential_result(
         )
     else:
         status = Status.PASSED.value
-        result = (
-            "The selected ServiceNow credential is Connected and uses Entra "
-            f"(inventory source: {inventory_source})."
-        )
+        result = "The selected ServiceNow credential is Connected and uses Entra."
     return _result(
         "SN-DA-HRSD-CREDENTIAL-001",
         status,
@@ -452,14 +399,8 @@ def _agent_connection_result(
     connections: list[dict[str, Any]],
     error: str,
     component_hash: str,
-    inventory_source: str = "environment-wide",
 ) -> CheckResult:
-    credential_check = _credential_result(
-        evidence,
-        connections,
-        error,
-        inventory_source,
-    )
+    credential_check = _credential_result(evidence, connections, error)
     record = evidence.get("agentConnection")
     if credential_check.status not in {
         Status.PASSED.value,

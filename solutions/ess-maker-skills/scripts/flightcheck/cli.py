@@ -985,7 +985,6 @@ def _run_single_checkpoint(args):
                     api_version=config.get(
                         "agentBuilderApiVersion", "2024-10-01"
                     ),
-                    environment_host=native_host,
                 )
             if not quiet_auth:
                 print("  Native AgentBuilder APIs: OK")
@@ -1514,11 +1513,7 @@ def main():
                 ring=ring,
                 tenant_id=tenant_id,
             )
-            connectivity = ConnectivityClient(
-                token,
-                ring=ring,
-                environment_host=environment_host,
-            )
+            connectivity = ConnectivityClient(token, ring=ring)
             print("  AgentBuilder and connection inventory: OK")
         else:
             tenant_id = "organizations"
