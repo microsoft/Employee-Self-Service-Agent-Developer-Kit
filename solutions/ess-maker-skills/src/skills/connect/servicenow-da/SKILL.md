@@ -24,6 +24,12 @@ to choose exactly one agent for this invocation. Agents with
 `status: setup-required` are not selectable; tell the maker to run `/setup`
 for that agent first.
 
+Live enumeration is the primary discovery source. The command also performs a
+read-only exact lookup for locally configured, authoring-ready Dev agents that
+enumeration omitted. Show any `discoveryErrors` and do not offer those agents
+as choices; an authorization, not-found, or identity-mismatch result requires
+the maker to verify the selected account, environment, and agent access.
+
 Store the chosen ID as `SELECTED_AGENT_ID` for this invocation only. Pass it to
 every command as `--agent-id <SELECTED_AGENT_ID>`. Do not change
 `.local/config.json` or its `activeAgent`.

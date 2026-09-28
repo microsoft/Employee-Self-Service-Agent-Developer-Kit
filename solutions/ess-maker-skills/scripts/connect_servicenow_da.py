@@ -25,6 +25,7 @@ from urllib3.util.retry import Retry
 from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
+    AgentBuilderHTTPError,
     RING_CONFIG,
     authenticate,
     validate_environment_host,
@@ -237,6 +238,95 @@ def _agent_card_identity(card: dict[str, Any]) -> tuple[str, str] | None:
     return agent_id, display_name
 
 
+def _canonical_agent(
+    canonical_agents: dict[str, Any],
+    agent_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            value
+            for key, value in canonical_agents.items()
+            if isinstance(key, str)
+            and key.casefold() == agent_id.casefold()
+            and isinstance(value, dict)
+        ),
+        None,
+    )
+
+
+def _operational_agent(
+    operational_agents: list[Any],
+    agent_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in operational_agents
+            if isinstance(item, dict)
+            and str(item.get("botId") or "").casefold()
+            == agent_id.casefold()
+        ),
+        None,
+    )
+
+
+def _canonical_profile_and_readiness(
+    canonical: dict[str, Any] | None,
+    operational: dict[str, Any] | None,
+    agent_id: str,
+) -> tuple[ServiceNowProductProfile | None, bool]:
+    agent = canonical.get("agent") if isinstance(canonical, dict) else None
+    if not isinstance(agent, dict):
+        return None, False
+    profile = product_profile_for_schema(str(agent.get("schema_name") or ""))
+    workspace = canonical.get("workspace")
+    setup_ready = (
+        profile is not None
+        and str(agent.get("id") or "").casefold() == agent_id.casefold()
+        and agent.get("realm") == "dev"
+        and canonical.get("authoring_ready") is True
+        and isinstance(workspace, dict)
+        and bool(workspace.get("folder"))
+        and bool(workspace.get("agent_path"))
+        and isinstance(operational, dict)
+        and agent.get("workspace_slug") == operational.get("slug")
+        and bool(operational.get("agentBuilderChangeSetPath"))
+    )
+    return profile, setup_ready
+
+
+def _agent_choice(
+    root: Path,
+    *,
+    agent_id: str,
+    display_name: str,
+    profile: ServiceNowProductProfile,
+    setup_ready: bool,
+) -> dict[str, Any]:
+    status = "setup-required"
+    if setup_ready:
+        status = "ready"
+        state_path = root / _state_path(agent_id)
+        if state_path.exists():
+            state = _load_json(state_path)
+            attestation = state.get("agentConnection")
+            steps = state.get("steps")
+            if (
+                isinstance(attestation, dict)
+                and attestation.get("makerAttested") is True
+                and isinstance(steps, dict)
+                and steps.get("agentConnection") == "done"
+            ):
+                status = "connected-revalidation-required"
+    return {
+        "id": agent_id,
+        "name": display_name,
+        "product": profile.product_name,
+        "status": status,
+        "selectable": setup_ready,
+    }
+
+
 def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
     setup = _load_json(root / SETUP_STATE)
     config = _load_json(root / ACTIVE_CONFIG)
@@ -256,83 +346,127 @@ def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
 
     client = _agentbuilder_client({"environment": environment})
     choices = []
+    discovery_errors = []
+    listed_agent_ids: set[str] = set()
     for card in client.list_agents():
         identity = _agent_card_identity(card)
         if identity is None:
             continue
         agent_id, display_name = identity
-        canonical = next(
-            (
-                value
-                for key, value in canonical_agents.items()
-                if isinstance(key, str)
-                and key.casefold() == agent_id.casefold()
-                and isinstance(value, dict)
-            ),
-            None,
-        )
+        if agent_id.casefold() in listed_agent_ids:
+            continue
+        listed_agent_ids.add(agent_id.casefold())
+        canonical = _canonical_agent(canonical_agents, agent_id)
+        operational = _operational_agent(operational_agents, agent_id)
         agent = canonical.get("agent") if isinstance(canonical, dict) else None
-        schema_name = (
-            str(agent.get("schema_name") or "")
-            if isinstance(agent, dict)
-            else ""
+        canonical_profile, setup_ready = _canonical_profile_and_readiness(
+            canonical,
+            operational,
+            agent_id,
         )
         profile = (
-            product_profile_for_schema(schema_name)
+            canonical_profile
             if isinstance(agent, dict)
             else product_profile_for_name(display_name)
         )
         if profile is None:
             continue
-        operational = next(
-            (
-                item
-                for item in operational_agents
-                if isinstance(item, dict)
-                and str(item.get("botId") or "").casefold()
-                == agent_id.casefold()
-            ),
-            None,
-        )
-        workspace = (
-            canonical.get("workspace")
-            if isinstance(canonical, dict)
-            else None
-        )
-        setup_ready = (
-            isinstance(canonical, dict)
-            and canonical.get("authoring_ready") is True
-            and isinstance(workspace, dict)
-            and bool(workspace.get("folder"))
-            and bool(workspace.get("agent_path"))
-            and isinstance(operational, dict)
-            and bool(operational.get("agentBuilderChangeSetPath"))
-        )
-        status = "setup-required"
-        if setup_ready:
-            status = "ready"
-            state_path = root / _state_path(agent_id)
-            if state_path.exists():
-                state = _load_json(state_path)
-                attestation = state.get("agentConnection")
-                steps = state.get("steps")
-                if (
-                    isinstance(attestation, dict)
-                    and attestation.get("makerAttested") is True
-                    and isinstance(steps, dict)
-                    and steps.get("agentConnection") == "done"
-                ):
-                    status = "connected-revalidation-required"
         choices.append(
-            {
-                "id": agent_id,
-                "name": display_name,
-                "product": profile.product_name,
-                "status": status,
-                "selectable": setup_ready,
-            }
+            _agent_choice(
+                root,
+                agent_id=agent_id,
+                display_name=display_name,
+                profile=profile,
+                setup_ready=setup_ready,
+            )
         )
-    return {
+
+    for raw_agent_id, canonical in canonical_agents.items():
+        if not isinstance(raw_agent_id, str) or not isinstance(canonical, dict):
+            continue
+        try:
+            agent_id = _normalize_agent_id(raw_agent_id)
+        except ServiceNowConnectError:
+            continue
+        if agent_id.casefold() in listed_agent_ids:
+            continue
+        operational = _operational_agent(operational_agents, agent_id)
+        profile, setup_ready = _canonical_profile_and_readiness(
+            canonical,
+            operational,
+            agent_id,
+        )
+        if profile is None or not setup_ready:
+            continue
+        canonical_agent = canonical["agent"]
+        canonical_name = str(
+            canonical_agent.get("display_name")
+            or canonical_agent.get("name")
+            or profile.agent_display_name
+        )
+        try:
+            exact = client.get_agent(agent_id)
+        except AgentBuilderHTTPError as exc:
+            status = (
+                "not-authorized"
+                if exc.status_code == 403
+                else "not-found"
+                if exc.status_code == 404
+                else "lookup-failed"
+            )
+            discovery_errors.append(
+                {
+                    "id": agent_id,
+                    "name": canonical_name,
+                    "product": profile.product_name,
+                    "status": status,
+                    "message": str(exc),
+                }
+            )
+            continue
+        except AgentBuilderError as exc:
+            discovery_errors.append(
+                {
+                    "id": agent_id,
+                    "name": canonical_name,
+                    "product": profile.product_name,
+                    "status": "lookup-failed",
+                    "message": str(exc),
+                }
+            )
+            continue
+        exact_identity = _agent_card_identity(exact)
+        exact_realm = str(exact.get("realm") or "").casefold()
+        if (
+            exact_identity is None
+            or exact_identity[0].casefold() != agent_id.casefold()
+            or exact_realm != "dev"
+        ):
+            discovery_errors.append(
+                {
+                    "id": agent_id,
+                    "name": canonical_name,
+                    "product": profile.product_name,
+                    "status": "identity-mismatch",
+                    "message": (
+                        "Direct agent lookup did not return the configured "
+                        "editable Dev agent. Verify the selected account and "
+                        "environment, then rerun /setup if access changed."
+                    ),
+                }
+            )
+            continue
+        choices.append(
+            _agent_choice(
+                root,
+                agent_id=agent_id,
+                display_name=exact_identity[1],
+                profile=profile,
+                setup_ready=True,
+            )
+        )
+
+    result = {
         "environmentId": environment.get("id"),
         "agents": sorted(
             choices,
@@ -342,6 +476,15 @@ def list_agent_choices(root: Path = Path(".")) -> dict[str, Any]:
             ),
         ),
     }
+    if discovery_errors:
+        result["discoveryErrors"] = sorted(
+            discovery_errors,
+            key=lambda item: (
+                str(item["name"]).casefold(),
+                str(item["id"]),
+            ),
+        )
+    return result
 
 
 def load_context(

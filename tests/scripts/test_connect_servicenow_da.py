@@ -707,12 +707,12 @@ def test_agent_selection_lists_live_hr_and_it_without_changing_active_agent(
         def list_agents(self) -> list[dict]:
             return [
                 {
-                    "botId": IT_AGENT_ID,
-                    "displayName": "Employee Self-Service IT",
-                },
-                {
                     "botId": AGENT_ID,
                     "displayName": "Employee Self-Service HR",
+                },
+                {
+                    "botId": IT_AGENT_ID,
+                    "displayName": "Employee Self-Service IT",
                 },
                 {
                     "botId": "00000000-0000-4000-8000-000000007777",
@@ -760,6 +760,10 @@ def test_agent_selection_shows_unset_up_live_ess_agent(
         def list_agents(self) -> list[dict]:
             return [
                 {
+                    "botId": AGENT_ID,
+                    "displayName": "Employee Self-Service HR",
+                },
+                {
                     "botId": IT_AGENT_ID,
                     "displayName": "Employee Self-Service IT",
                 }
@@ -772,9 +776,148 @@ def test_agent_selection_shows_unset_up_live_ess_agent(
     )
 
     result = snow.list_agent_choices(tmp_path)
+    it_choice = next(
+        choice for choice in result["agents"] if choice["id"] == IT_AGENT_ID
+    )
 
-    assert result["agents"][0]["status"] == "setup-required"
-    assert result["agents"][0]["selectable"] is False
+    assert it_choice["status"] == "setup-required"
+    assert it_choice["selectable"] is False
+
+
+def test_agent_selection_directly_verifies_ready_agent_omitted_from_list(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+    setup_path = tmp_path / snow.SETUP_STATE
+    config_path = tmp_path / snow.ACTIVE_CONFIG
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    canonical = setup["agents"][AGENT_ID]
+    canonical["agent"].update(
+        {
+            "schema_name": snow.IT_SCHEMA_NAME,
+            "workspace_slug": "employee-self-service-it",
+        }
+    )
+    canonical["workspace"]["folder"] = (
+        "workspace/agents/employee-self-service-it"
+    )
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["activeAgent"] = "employee-self-service-it"
+    config["agents"][0].update(
+        {
+            "slug": "employee-self-service-it",
+            "agentBuilderChangeSetPath": (
+                "workspace/agents/employee-self-service-it/"
+                ".agentbuilder/components.json"
+            ),
+        }
+    )
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    original_config = config_path.read_text(encoding="utf-8")
+
+    class FakeAgentBuilder:
+        def list_agents(self) -> list[dict]:
+            return []
+
+        def get_agent(self, agent_id: str) -> dict:
+            assert agent_id == AGENT_ID
+            return {
+                "botId": AGENT_ID,
+                "fullBotName": "Employee Self-Service (IT)",
+                "realm": "dev",
+            }
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.list_agent_choices(tmp_path)
+
+    assert result["agents"] == [
+        {
+            "id": AGENT_ID,
+            "name": "Employee Self-Service (IT)",
+            "product": "ServiceNow ITSM",
+            "status": "ready",
+            "selectable": True,
+        }
+    ]
+    assert "discoveryErrors" not in result
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_agent_selection_rejects_mismatched_exact_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+
+    class FakeAgentBuilder:
+        def list_agents(self) -> list[dict]:
+            return []
+
+        def get_agent(self, _agent_id: str) -> dict:
+            return {
+                "botId": IT_AGENT_ID,
+                "fullBotName": "Employee Self-Service HR",
+                "realm": "dev",
+            }
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.list_agent_choices(tmp_path)
+
+    assert result["agents"] == []
+    assert result["discoveryErrors"][0]["status"] == "identity-mismatch"
+    assert "editable Dev agent" in result["discoveryErrors"][0]["message"]
+
+
+def test_agent_selection_reports_exact_lookup_failure_without_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+
+    class FakeAgentBuilder:
+        def list_agents(self) -> list[dict]:
+            return []
+
+        def get_agent(self, _agent_id: str) -> dict:
+            raise snow.AgentBuilderHTTPError(
+                "Direct agent lookup",
+                403,
+                request_id="request-id",
+            )
+
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.list_agent_choices(tmp_path)
+
+    assert result["agents"] == []
+    assert result["discoveryErrors"] == [
+        {
+            "id": AGENT_ID,
+            "name": "Employee Self-Service (HR)",
+            "product": "ServiceNow HRSD",
+            "status": "not-authorized",
+            "message": (
+                "Direct agent lookup failed with HTTP 403; the signed-in "
+                "account is not authorized [request request-id]"
+            ),
+        }
+    ]
 
 
 def test_load_context_rejects_unsupported_da_product(
