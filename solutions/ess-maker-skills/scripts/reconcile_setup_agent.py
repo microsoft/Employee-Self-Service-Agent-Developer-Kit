@@ -19,8 +19,10 @@ import requests
 from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
+    RING_CONFIG,
     authenticate_flightcheck,
     derive_environment_host,
+    normalize_environment_id,
     validate_environment_host,
 )
 from auth import AuthExpiredError, authenticate, dataverse_get
@@ -137,11 +139,24 @@ def _probe_native_agent(
         account_hint=account,
         include_connectivity=False,
     )
-    service_host = (
-        validate_environment_host(host, ring)
-        if host
-        else derive_environment_host(environment_id, ring)
-    )
+    if host:
+        service_host = validate_environment_host(host, ring)
+        config = RING_CONFIG[ring]
+        compact = normalize_environment_id(environment_id)
+        primary = int(config["primary_split"])
+        splits = {primary, 31 if primary == 30 else 30}
+        suffix = str(config["host_suffix"]).casefold()
+        valid_hosts = {
+            f"https://{compact[:split]}.{compact[split:]}.{suffix}"
+            for split in splits
+        }
+        if service_host.casefold() not in valid_hosts:
+            raise NativeIdentityIncomplete(
+                "The explicit AgentBuilder host does not match the selected "
+                "environment identity."
+            )
+    else:
+        service_host = derive_environment_host(environment_id, ring)
     client = AgentBuilderClient(
         service_host,
         token,
@@ -150,7 +165,36 @@ def _probe_native_agent(
         api_version=api_version,
     )
     agent = client.get_agent(agent_id)
-    schema_name = str(agent.get("schemaName") or "").strip()
+    returned_id = str(
+        agent.get("botId")
+        or agent.get("cdsBotId")
+        or agent.get("componentIdUnique")
+        or ""
+    )
+    try:
+        normalized_returned_id = _normalize_guid(
+            returned_id,
+            "Direct native agent ID",
+        )
+    except ValueError as exc:
+        raise NativeIdentityIncomplete(
+            "Direct native agent lookup did not return a valid exact identity."
+        ) from exc
+    if normalized_returned_id.casefold() != agent_id.casefold():
+        raise NativeIdentityIncomplete(
+            "Direct native agent lookup returned a different agent identity."
+        )
+    realm = agent.get("realm")
+    if realm not in (0, "dev", "Dev"):
+        raise NativeIdentityIncomplete(
+            f"Direct native agent lookup returned non-Dev realm {realm!r}."
+        )
+    raw_schema_name = agent.get("schemaName")
+    if raw_schema_name is not None and not isinstance(raw_schema_name, str):
+        raise NativeIdentityIncomplete(
+            "Direct native agent lookup returned an invalid schema-name shape."
+        )
+    schema_name = (raw_schema_name or "").strip()
     if schema_name:
         return agent
 
@@ -161,7 +205,32 @@ def _probe_native_agent(
             "Exact native agent lookup succeeded, but its Dev configuration "
             "could not be read to complete the product identity."
         ) from exc
-    schema_name = str(configuration.get("schemaName") or "").strip()
+    configured_id = str(configuration.get("cdsBotId") or "")
+    try:
+        normalized_configured_id = _normalize_guid(
+            configured_id,
+            "Configured Dev agent ID",
+        )
+    except ValueError as exc:
+        raise NativeIdentityIncomplete(
+            "Dev configuration did not return a valid exact agent identity."
+        ) from exc
+    if normalized_configured_id.casefold() != agent_id.casefold():
+        raise NativeIdentityIncomplete(
+            "Dev configuration returned a different agent identity."
+        )
+    configuration_realm = configuration.get("realm")
+    if configuration_realm not in (0, "dev", "Dev"):
+        raise NativeIdentityIncomplete(
+            "Dev configuration returned a non-Dev realm "
+            f"{configuration_realm!r}."
+        )
+    raw_schema_name = configuration.get("schemaName")
+    if raw_schema_name is not None and not isinstance(raw_schema_name, str):
+        raise NativeIdentityIncomplete(
+            "Dev configuration returned an invalid schema-name shape."
+        )
+    schema_name = (raw_schema_name or "").strip()
     if not schema_name:
         raise NativeIdentityIncomplete(
             "Exact native agent lookup succeeded, but its Dev configuration "
