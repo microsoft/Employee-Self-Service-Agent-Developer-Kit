@@ -21,8 +21,12 @@ workspace.
    results**, or **delete**?"
 2. Wait for the answer.
 3. Route to the matching skill:
-   - **create** -> read `src/skills/evaluations/dispatcher/SKILL.md` and follow
-     it.
+   - **create** -> offer these creation choices, then read
+     `src/skills/evaluations/dispatcher/SKILL.md` and follow it for either
+     choice:
+     - **Create for a configured or named scenario**.
+     - **Curate from a knowledge source** using local documents plus an
+       agent-instructions file.
    - **update** -> read `src/skills/evaluations/update/SKILL.md` and follow it.
    - **tag for review** -> read
      `src/skills/evaluations/update/SKILL.md` and follow **Flow R1**.

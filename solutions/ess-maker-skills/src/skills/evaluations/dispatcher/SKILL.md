@@ -19,6 +19,25 @@ generates, edits, or pushes evaluation files itself.
 Extract the scenario, goal, or capability the user wants to evaluate, such as
 compensation, employee ID, HR policy lookup, or IT ticketing.
 
+Before topic discovery, identify whether the user explicitly supplied a local
+knowledge source (one or more files or a folder) and asked to generate or
+curate evaluations grounded in those documents.
+
+### Local knowledge-source route
+
+When the request explicitly combines a local knowledge source with document-
+grounded evaluation creation, require a separate agent-instructions file. If
+the user did not provide one, ask for the agent-instructions file and wait.
+
+When both inputs are available, read
+`src/skills/evaluations/curate/SKILL.md` and follow it. This route occurs before
+configured-topic search, even when a configured topic covers the same subject.
+
+Do not choose this route for a plain named scenario with no documents. A plain
+named scenario stays on the catalogue-grounded route when no configured topic
+matches. A configured topic stays on the topic-grounded create route unless
+there is an explicit document grounding request.
+
 If the request does not identify a scenario or goal, ask:
 
 > Which scenario or goal should I create evaluation tests for?
