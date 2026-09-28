@@ -561,16 +561,15 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — reads the Workday SOAP connection reference from the
-    # Declarative Agent minimalBots components API (AGENTBUILDER), plus a
-    # best-effort BAP owner echo (PP_ADMIN).
+    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
+    # query) plus a best-effort BAP owner echo.
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({AGENTBUILDER, PP_ADMIN}),
+        clients=frozenset({DATAVERSE, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=False,
+        requires_dataverse_endpoint=True,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
