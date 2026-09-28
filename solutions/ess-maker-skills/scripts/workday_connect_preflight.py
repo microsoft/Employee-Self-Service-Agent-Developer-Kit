@@ -355,7 +355,7 @@ def resolve_target(
             "Refresh environment inventory for the recorded environment ID "
             "or provide that environment's exact Dataverse URL."
         )
-    if not exact_url.startswith("https://"):
+    if not exact_url.casefold().startswith("https://"):
         raise WorkdayConnectPreflightError(
             "The Workday Dataverse environment URL must use HTTPS."
         )

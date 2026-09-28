@@ -146,19 +146,19 @@ def _selected_agent_slug(runner) -> str:
 
 def _mapped_user_context_topics(
     agent_dir: Path,
-) -> tuple[Path | None, str | None, str | None]:
+) -> tuple[Path | None, Path | None, str | None, str | None]:
     component_map_path = agent_dir / _COMPONENT_MAP_FILE
     try:
         component_map = json.loads(
             component_map_path.read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError) as exc:
-        return None, None, (
+        return None, None, None, (
             f"The selected agent '{agent_dir.name}' {_COMPONENT_MAP_FILE} "
             f"could not be read: {exc}"
         )
     if not isinstance(component_map, dict):
-        return None, None, (
+        return None, None, None, (
             f"The selected agent's {_COMPONENT_MAP_FILE} is not a JSON object."
         )
 
@@ -171,31 +171,49 @@ def _mapped_user_context_topics(
         == _SETUP_TOPIC_DISPLAY.casefold()
     ]
     target_matches = [
-        entry
-        for entry in component_map.values()
+        (relative_path, entry)
+        for relative_path, entry in component_map.items()
         if isinstance(entry, dict)
         and entry.get("componentKind") == "DialogComponent"
         and str(entry.get("displayName") or "").casefold()
         == _TARGET_TOPIC_DISPLAY.casefold()
     ]
     if len(setup_matches) != 1 or len(target_matches) != 1:
-        return None, None, (
+        return None, None, None, (
             f"Expected exactly one mapped admin user-context topic and one "
             f"mapped Workday User Context V2 topic for selected agent "
             f"'{agent_dir.name}'."
         )
 
-    relative_path = Path(str(setup_matches[0][0]))
-    if relative_path.is_absolute() or ".." in relative_path.parts:
-        return None, None, (
+    setup_relative_path = Path(str(setup_matches[0][0]))
+    if (
+        setup_relative_path.is_absolute()
+        or ".." in setup_relative_path.parts
+    ):
+        return None, None, None, (
             "The mapped admin user-context topic path is unsafe."
         )
-    target_schema = str(target_matches[0].get("schemaName") or "").strip()
+    target_relative_path = Path(str(target_matches[0][0]))
+    if (
+        target_relative_path.is_absolute()
+        or ".." in target_relative_path.parts
+    ):
+        return None, None, None, (
+            "The mapped Workday User Context V2 topic path is unsafe."
+        )
+    target_schema = str(
+        target_matches[0][1].get("schemaName") or ""
+    ).strip()
     if not target_schema:
-        return None, None, (
+        return None, None, None, (
             "The mapped Workday User Context V2 topic has no schemaName."
         )
-    return agent_dir / relative_path, target_schema, None
+    return (
+        agent_dir / setup_relative_path,
+        agent_dir / target_relative_path,
+        target_schema,
+        None,
+    )
 
 
 def _fmt(config, key: str) -> str:
@@ -667,9 +685,12 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
         )]
 
     agent_dir = resolve_agent_directory(agents_root, agent_slug)
-    topic_file, target_dialog, mapping_error = _mapped_user_context_topics(
-        agent_dir
-    )
+    (
+        topic_file,
+        target_topic_file,
+        target_dialog,
+        mapping_error,
+    ) = _mapped_user_context_topics(agent_dir)
     if mapping_error:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
@@ -680,6 +701,7 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             doc_link=_DOC_SIMPLIFIED,
         )]
     assert topic_file is not None
+    assert target_topic_file is not None
     assert target_dialog is not None
     if not topic_file.is_file():
         return [CheckResult(roles=_MAKER_ROLES,
@@ -689,6 +711,18 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             result=(
                 f"No mapped admin user-context topic found for selected "
                 f"agent '{agent_slug}' at {topic_file}."
+            ),
+            remediation=_REDIRECT_REMEDIATION,
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+    if not target_topic_file.is_file():
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_REDIRECT_DESC,
+            result=(
+                f"No mapped Workday User Context V2 topic found for selected "
+                f"agent '{agent_slug}' at {target_topic_file}."
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,

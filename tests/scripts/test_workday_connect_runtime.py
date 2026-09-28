@@ -246,6 +246,76 @@ def test_physical_connection_verification_returns_selected_connection_ids():
     }
 
 
+@pytest.mark.parametrize(
+    ("connector_name", "duplicate_id", "display_name"),
+    [
+        (
+            "shared_workdaysoap",
+            "88888888-8888-8888-8888-888888888888",
+            "Workday alternate",
+        ),
+        (
+            "shared_commondataserviceforapps",
+            "99999999-9999-9999-9999-999999999999",
+            "Dataverse alternate",
+        ),
+    ],
+)
+def test_physical_connection_ambiguity_exposes_structured_candidates(
+    connector_name: str,
+    duplicate_id: str,
+    display_name: str,
+):
+    payload = _connections()
+    payload["value"].append(
+        {
+            "name": duplicate_id,
+            "properties": {
+                "apiId": (
+                    f"/providers/Microsoft.PowerApps/apis/{connector_name}"
+                ),
+                "displayName": display_name,
+                "statuses": [{"status": "Connected"}],
+            },
+        }
+    )
+
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=runner,
+        )
+
+    details = raised.value.details
+    candidates = details["candidateConnections"]
+    assert details["connector"] == connector_name
+    assert {value["connectionId"] for value in candidates} == {
+        duplicate_id,
+        (
+            WORKDAY_CONNECTION
+            if connector_name == "shared_workdaysoap"
+            else DATAVERSE_CONNECTION
+        ),
+    }
+    assert duplicate_id not in str(raised.value)
+
+
 def test_runtime_plan_reuses_recorded_connection_ids():
     state = _state()
     state["phases"]["connections"]["evidence"] = [

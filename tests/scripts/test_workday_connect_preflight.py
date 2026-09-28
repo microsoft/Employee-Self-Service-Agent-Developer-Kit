@@ -119,6 +119,24 @@ def test_resolve_target_accepts_exact_url_without_inventory_lookup(
     assert target.dataverse_url == ENV_URL
 
 
+def test_resolve_target_accepts_case_insensitive_https_scheme(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    uppercase_scheme_url = "HTTPS://target.crm.dynamics.com"
+    _write_foundation(tmp_path, dataverse_url=uppercase_scheme_url)
+
+    target = preflight.resolve_target(
+        tmp_path,
+        dataverse_url=uppercase_scheme_url,
+        state=model.default_state(),
+    )
+
+    assert target.dataverse_url == uppercase_scheme_url
+
+
 def test_resolve_target_ignores_stale_url_from_different_environment(
     tmp_path: Path,
 ) -> None:

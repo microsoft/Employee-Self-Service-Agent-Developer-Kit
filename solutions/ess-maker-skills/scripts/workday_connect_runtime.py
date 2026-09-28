@@ -32,6 +32,15 @@ AUTHORIZATION_SCRIPT = "alm/Enable-CosmosDAFlowAuthorization.ps1"
 class WorkdayConnectRuntimeError(RuntimeError):
     """Raised when runtime configuration cannot proceed safely."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
 
 def _required_text(
     document: Mapping[str, Any],
@@ -68,29 +77,44 @@ def _select_connection(
     *,
     explicit_id: str | None,
 ) -> dict[str, Any]:
-    matches = [
+    connected_matches = [
         value
         for value in connections
         if _connector_name(value) == connector_name.casefold()
         and _connected(value)
-        and (
-            not explicit_id
-            or str(value.get("name") or "").casefold() == explicit_id.casefold()
-        )
+    ]
+    matches = [
+        value
+        for value in connected_matches
+        if not explicit_id
+        or str(value.get("name") or "").casefold() == explicit_id.casefold()
     ]
     if len(matches) != 1:
-        safe = sorted(
-            {
-                str(
-                    (value.get("properties") or {}).get("displayName") or connector_name
-                )
-                for value in matches
-            }
+        candidates = sorted(
+            (
+                {
+                    "connectionId": str(value.get("name") or ""),
+                    "displayName": str(
+                        (value.get("properties") or {}).get("displayName")
+                        or connector_name
+                    ),
+                }
+                for value in connected_matches
+            ),
+            key=lambda value: (
+                value["displayName"].casefold(),
+                value["connectionId"].casefold(),
+            ),
         )
+        safe = sorted({value["displayName"] for value in candidates})
         raise WorkdayConnectRuntimeError(
             f"Expected exactly one connected {connector_name} connection; "
             f"found {len(matches)}. Connected display names: "
-            f"{json.dumps(safe, sort_keys=True)}"
+            f"{json.dumps(safe, sort_keys=True)}",
+            details={
+                "connector": connector_name,
+                "candidateConnections": candidates,
+            },
         )
     return matches[0]
 

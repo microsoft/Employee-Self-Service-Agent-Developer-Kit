@@ -822,6 +822,11 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
             "tenantId": scope.get("entraTenantId"),
             "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
             "appIdUri": identifiers.get("entraAppIdUri"),
+            "tokenEndpoint": (
+                endpoints.get("tokenEndpoint")
+                or endpoints.get("oauthTokenUrl")
+                or overlay.get("tokenEndpoint")
+            ),
         }
 
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:

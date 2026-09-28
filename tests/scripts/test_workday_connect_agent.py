@@ -273,6 +273,59 @@ def test_controller_surfaces_blocker_persistence_failure(
     assert '"blockerPersistenceError": "state is read-only"' in error
 
 
+def test_controller_emits_structured_runtime_error_details(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_runtime import WorkdayConnectRuntimeError
+
+    details = {
+        "connector": "shared_workdaysoap",
+        "candidateConnections": [
+            {
+                "connectionId": "connection-id",
+                "displayName": "Workday",
+            }
+        ],
+    }
+
+    def raise_ambiguity(_args, _store):
+        raise WorkdayConnectRuntimeError(
+            "Select one connected Workday connection.",
+            details=details,
+        )
+
+    monkeypatch.setitem(
+        workday_connect._COMMAND_HANDLERS,
+        "status",
+        raise_ambiguity,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "status",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    payload = json.loads(
+        error.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+    )
+    assert payload["details"] == details
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,
@@ -487,6 +540,18 @@ def test_record_agent_binding_completes_only_from_verifier_output(
     assert result["verified"] is True
     assert runtime["status"] == "complete"
     assert "workday-topics-activated" in runtime["completedActions"]
+    topic_evidence = next(
+        item
+        for item in runtime["evidence"]
+        if item["action"] == "workday-topics-activated"
+    )
+    assert topic_evidence["blockingDiagnostics"] == [
+        {
+            "errorCode": "NotFound",
+            "errorMessage": "CloudFlow not found",
+            "referenceType": "CloudFlow",
+        }
+    ]
 
 
 def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics(

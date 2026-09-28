@@ -438,6 +438,9 @@ def _record_agent_binding(
             "expected": evidence["workdayTopics"]["expected"],
             "verified": evidence["workdayTopics"]["verified"],
             "active": evidence["workdayTopics"]["active"],
+            "blockingDiagnostics": (
+                evidence["workdayTopics"]["blockingDiagnostics"]
+            ),
         },
     )
     store.set_phase_status("runtime", "complete")
@@ -629,6 +632,9 @@ def main() -> None:
             "error": str(exc),
             "errorType": type(exc).__name__,
         }
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict) and details:
+            error_payload["details"] = details
         if blocker_persistence_error:
             error_payload["blockerPersistenceError"] = blocker_persistence_error
         print(

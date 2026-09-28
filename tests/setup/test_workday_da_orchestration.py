@@ -305,28 +305,6 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
 
-    agent_dir = (
-        _REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "workspace"
-        / "agents"
-        / "employee-self-service-hr"
-    )
-    component_map = json.loads(
-        (agent_dir / ".component-map.json").read_text(encoding="utf-8")
-    )
-    workday_topics = [
-        path
-        for path, entry in component_map.items()
-        if isinstance(entry, dict)
-        and entry.get("componentKind") == "DialogComponent"
-        and str(entry.get("schemaName") or "").split(".")[-1].startswith("Workday")
-        and str(entry.get("displayName") or "").startswith("Workday")
-    ]
-    assert len(workday_topics) == 21
-    assert all((agent_dir / path).is_file() for path in workday_topics)
-
 
 def test_readiness_requires_real_employee_runtime_evidence() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")

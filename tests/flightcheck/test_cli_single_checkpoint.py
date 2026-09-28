@@ -270,7 +270,11 @@ class TestGates:
                     "endpoints": {
                         "restBaseUrl": (
                             "https://wd2-impl-services1.workday.com/ccx/api"
-                        )
+                        ),
+                        "oauthTokenUrl": (
+                            "https://wd2-impl-services1.workday.com/"
+                            "ccx/oauth2/acme_impl/token"
+                        ),
                     },
                 }
             ),
@@ -288,6 +292,10 @@ class TestGates:
         assert merged["appIdUri"] == "api://app-id"
         assert merged["workdaySamlEntityId"] == (
             "http://www.workday.com/acme_impl"
+        )
+        assert merged["tokenEndpoint"] == (
+            "https://wd2-impl-services1.workday.com/"
+            "ccx/oauth2/acme_impl/token"
         )
 
     @pytest.mark.parametrize(
