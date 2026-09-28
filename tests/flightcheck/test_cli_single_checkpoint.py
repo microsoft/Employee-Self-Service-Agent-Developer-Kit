@@ -44,6 +44,7 @@ def _args(
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
+    ring: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -55,6 +56,7 @@ def _args(
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
+        ring=ring,
     )
 
 
@@ -67,6 +69,66 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
         description="fake",
         result="fake",
     )
+
+
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "expected"),
+    [
+        ({}, "test", "test"),
+        (
+            {
+                "ring": "preprod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.preprod.powerplatform.com"
+                ),
+            },
+            None,
+            "preprod",
+        ),
+    ],
+)
+def test_resolve_environment_ring(
+    config: dict,
+    explicit_ring: str | None,
+    expected: str,
+) -> None:
+    assert (
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "message"),
+    [
+        ({}, None, "ring is unavailable"),
+        (
+            {
+                "ring": "prod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.test.powerplatform.com"
+                ),
+            },
+            None,
+            "do not identify the same",
+        ),
+    ],
+)
+def test_resolve_environment_ring_rejects_inconclusive_state(
+    config: dict,
+    explicit_ring: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
 
 
 @pytest.fixture
@@ -320,6 +382,7 @@ class TestGates:
                     environment_id=(
                         "00000000-0000-4000-8000-000000001111"
                     ),
+                    ring="prod",
                 )
             )
 
@@ -339,6 +402,11 @@ class TestGates:
                     "releaseLine": "da",
                     "environmentId": (
                         "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "ring": "test",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000000000000000000000000.0."
+                        "environment.api.test.powerplatform.com"
                     ),
                 }
             ),
@@ -368,6 +436,35 @@ class TestGates:
             )
 
         assert exc.value.code == 0
+
+    def test_capacity_requires_ring_when_setup_state_is_inconclusive(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "PowerPlatformClient",
+            lambda _tenant_id: pytest.fail(
+                "ring validation must complete before authentication"
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 1
+        assert "Confirm whether the environment uses" in capsys.readouterr().out
 
 
 class TestHermeticRun:
@@ -608,6 +705,7 @@ class TestCheckpointTelemetry:
             )
         assert captured["called"] is False
 
+
     def test_tenant_name_falls_back_to_cache_when_graph_unavailable(
         self,
         tmp_path: Path,
@@ -686,3 +784,93 @@ class TestCheckpointTelemetry:
         # consulted so a previously-seen tenant still gets its display name.
         assert captured["kwargs"]["tenant_name"] == "Contoso Cached"
         assert captured["kwargs"]["tenant_id"] == cached_tid
+
+
+class TestCheckpointAdkConnector:
+    """Single-checkpoint runs on the CLI runtime path must derive the
+    connector from the owning check's category and forward it to the ADK
+    ``emit_flightcheck_run`` / ``emit_flightcheck_result`` calls (ADO 7943641
+    review, finding 1). Without this, only the legacy
+    ``ESSMakerKit.FlightCheck.*`` events were attributed and the ADK
+    ``adk.flightcheck.*`` event family emitted an empty connector for real
+    runs even though the standalone helper tests exercised the kwarg.
+    """
+
+    @staticmethod
+    def _row_with_category(
+        checkpoint_id: str, category: str, status: str = Status.PASSED.value
+    ) -> CheckResult:
+        return CheckResult(
+            checkpoint_id=checkpoint_id,
+            category=category,
+            priority=Priority.MEDIUM.value,
+            status=status,
+            description="fake",
+            result="fake",
+        )
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> dict:
+        from flightcheck import telemetry as _tele_mod
+        import adk_telemetry as _adk_mod
+
+        captured: dict = {"run_kwargs": None, "result_kwargs": None}
+
+        def _fake_run(**kwargs):
+            captured["run_kwargs"] = kwargs
+
+        def _fake_result(**kwargs):
+            captured["result_kwargs"] = kwargs
+
+        monkeypatch.setattr(
+            _tele_mod,
+            "emit_flightcheck_telemetry",
+            lambda *_a, **_k: {"sent": False, "events": 0, "status": None,
+                               "env": "dev", "reason": "test"},
+        )
+        monkeypatch.setattr(_adk_mod, "set_identity", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "next_run_index", lambda *a, **k: 1)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_run", _fake_run)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_result", _fake_result)
+        monkeypatch.setattr(_adk_mod, "flush", lambda *a, **k: None)
+        return captured
+
+    def test_workday_category_row_forwards_workday_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("WD-CFG-001", "Workday")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("WD-CFG-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"] is not None
+        assert captured["run_kwargs"]["connector"] == "workday"
+        assert captured["result_kwargs"]["connector"] == "workday"
+
+    def test_servicenow_subcategory_row_forwards_servicenow_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("SN-HRSD-001", "ServiceNow HRSD")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("SN-HRSD-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == "servicenow"
+        assert captured["result_kwargs"]["connector"] == "servicenow"
+
+    def test_cross_cutting_category_row_forwards_empty_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("ENV-001", "Environment")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("ENV-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == ""
+        assert captured["result_kwargs"]["connector"] == ""

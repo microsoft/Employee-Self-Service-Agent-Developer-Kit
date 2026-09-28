@@ -21,10 +21,14 @@ files. Do not attempt any customization work. Do not answer questions about ESS.
 Do not list your capabilities. Do not greet the user with a menu of options.
 Do not say "hello" or introduce yourself.
 
-Respond with ONLY this exact message and nothing else:
+Use this setup-required Message block and finish the request:
 
-> Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+**Message:**
+
+Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
+environment. Type `/setup` to get started — it only takes a couple minutes.
+
+**End message.**
 
 **Exceptions:**
 
@@ -46,10 +50,8 @@ Respond with ONLY this exact message and nothing else:
   requests such as "edit the testsets" and "change an expected response." That
   skill discovers workspace-level sets without setup and agent-owned sets when
   configuration is available. Deleting deployed sets still requires setup.
-- If the user typed `/flightcheck`, read `.local/config.json`. If it has
-  `flightCheckOnly: true`, proceed with `src/skills/flightcheck/SKILL.md`.
-  This exception applies only to `/flightcheck`; every other command remains
-  gated.
+- If the user typed `/flightcheck` or explicitly asked to validate setup or
+  environment readiness, follow the **FlightCheck entry contract** below.
 - If the user typed `/connect` or `/connect-workday`, allow the command after
   **local workspace materialization**, even when runtime `connect_ready` is
   false. Require
@@ -58,13 +60,135 @@ Respond with ONLY this exact message and nothing else:
   workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
   is intentionally not a prerequisite because `/connect` is the workflow that
   resolves product-extension connection gaps. If materialization is incomplete,
-  show the setup message above and stop.
+  use the setup-required Message block above and finish the request.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready, and the user didn't say `/setup`,
-show ONLY the welcome message above. No other text. No capabilities list. No greeting.
+If foundation setup isn't ready and no exception above applies,
+use the setup-required Message block above and finish the request.
+
+#### FlightCheck entry contract
+
+Read `.local/config.json` and resolve its `activeAgent` to the canonical agent
+whose `agent.workspace_slug` matches. Apply the first matching state:
+Message blocks contain the exact maker-facing copy. Replace their template
+values with resolved evidence and render only the block contents.
+
+1. **Standalone FlightCheck:** local config has `flightCheckOnly: true`.
+   Proceed with `src/skills/flightcheck/SKILL.md`.
+2. **Canonical setup ready:** canonical state has `schema_version: 4`, the
+   matching agent exists, and its `connect_ready` is `true`. Proceed with
+   `src/skills/flightcheck/SKILL.md`.
+3. **Setup readiness outstanding:** canonical state has `schema_version: 4`,
+   the matching agent has `workspace.folder`, `workspace.agent_path`, and
+   `steps.SETUP-07.state: "done"`, and canonical readiness is outstanding
+   (`connect_ready` is false or absent). Build `{READINESS_ISSUES}` from
+   canonical setup evidence and use the readiness-outstanding Message block
+   below.
+4. **Workspace preparation required:** use the workspace-preparation Message
+   block below for every remaining state.
+
+Build `{READINESS_ISSUES}` as follows:
+
+1. Collect every non-empty `failure_causes` entry from every step whose `state`
+   is `blocked`, combining exact duplicates.
+2. Preserve the recorded service or readiness check, exception cause, status,
+   error code, request ID, and supported remediation. Translate
+   implementation-specific exception names into plain language while retaining
+   their diagnostic meaning.
+3. Map each step to its maker-facing label:
+   - `SETUP-01` — **Target environment**
+   - `SETUP-02.1` — **Agent access**
+   - `SETUP-02.2` — **Environment capacity**
+   - `SETUP-03` — **Editable Dev agent**
+   - `SETUP-05` — **Connections**
+   - `SETUP-06` — **Agent content**
+   - `SETUP-07` — **Local workspace**
+   Present the bold labels in maker-facing text and keep the canonical setup
+   IDs internal.
+4. Render each collected cause with this readiness issue template:
+
+   - **{READINESS_ITEM}:** {READINESS_DETAIL}
+
+5. When the recorded blocked-cause collection is empty, render one line for
+   the first incomplete step. Set `{READINESS_DETAIL}` to
+   `/setup` will run this readiness check.
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Some setup items still
+require attention:
+
+{READINESS_ISSUES}
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to return to Setup now?",
+    "options": [
+      {
+        "label": "Return to Setup",
+        "description": "Continue Setup and work through these readiness items",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Use the following Message block for workspace preparation:
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Setup needs to prepare the
+local agent workspace.
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to run Setup now?",
+    "options": [
+      {
+        "label": "Run Setup",
+        "description": "Prepare the local agent workspace",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+When the maker selects **Return to Setup** or **Run Setup**, treat the selection
+as a `/setup` invocation and read `src/skills/foundation-setup/SKILL.md`. The
+selection already confirms setup intent. Carry forward the active agent,
+environment, and canonical setup state resolved by this contract. Do not ask
+the maker to select **Resume setup for this agent** or otherwise reconfirm the
+same known target. Start at the first setup decision or operation not already
+established by that context. If no usable target identity was resolved, follow
+the normal target-selection flow. When the maker selects **Not now** or
+dismisses the question, finish the request with canonical setup state
+unchanged.
 
 ### If canonical setup is ready
 
