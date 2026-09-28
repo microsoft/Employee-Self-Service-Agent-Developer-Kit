@@ -1032,18 +1032,19 @@ if (-not $FlightCheckOnly) {
 # chrome and surfaces a big-button "Quick actions" rail tied to the kit's
 # slash commands. We install it from the cloned repo (not the marketplace -
 # this is a POC build that isn't published) so it auto-activates the next
-# time `code` launches. When the maker profile is installed, the extension
-# itself opens chat and injects /setup (section 7 just opens the workspace).
+# time `code` launches. When the profile is installed, the extension reads
+# essMaker.mode and applies the mode-specific layout (Maker: guided rail;
+# Developer: README preview). /setup is user-driven (section 7 just opens
+# the workspace).
 #
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     # Install the ESS Maker Profile extension in every mode. In maker mode
-    # it applies the chat-first layout; in developer mode it only handles
-    # /setup injection after the welcome wizard closes (no visual
-    # changes). $modeLabel is always 'maker' or 'developer' by this
-    # point - the CLI prompt above resolves 'prompt' before we reach any
-    # of the install steps.
+    # it applies the guided layout; in developer mode it shows the rendered
+    # README preview (/setup is user-driven in both). $modeLabel is always
+    # 'maker' or 'developer' by this point - the CLI prompt above resolves
+    # 'prompt' before we reach any of the install steps.
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
     $code = Resolve-CodeCommand
@@ -1098,7 +1099,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
         }
 
         # Write the mode setting so the extension knows whether to apply
-        # the maker (chat-first) layout or inject /setup (developer mode).
+        # the guided maker layout or show the README preview (developer mode).
         # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
@@ -1480,35 +1481,26 @@ if (-not $SkipLaunch) {
     $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
-        # Launch strategy depends on mode:
-        # - Maker mode: just open the workspace. The ESS Maker Profile extension
-        #   handles layout + /setup injection after the welcome wizard closes.
-        # - Developer mode: use `code chat '/setup'` which opens Copilot Chat in
-        #   the sidebar panel on the right (the standard chat experience).
+        # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
+        # extension reads essMaker.mode and applies the mode-specific layout
+        # (Maker: guided rail + walkthrough; Developer: rendered README preview).
+        # /setup is user-driven in both modes - neither the installer nor the
+        # extension runs it automatically.
         # By the time we get here $modeLabel is always 'maker' or 'developer'
         # (the CLI prompt above resolves 'prompt' before we reach any launch
         # code), so there is no third fall-through branch to handle.
         Push-Location $workspace
         try {
             if ($modeLabel -eq 'developer') {
-                # Developer mode - use code chat to open /setup in sidebar panel
-                Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
-                $chatOutput = Invoke-Native { & $codePath chat '/setup' }
-                $chatExit = $LASTEXITCODE
-                foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
-                if ($chatExit -ne 0) {
-                    Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
-                    Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                    Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
-                    Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
-                } else {
-                    Write-Ok "Requested /setup in Copilot Chat at $workspace"
-                    Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
-                    Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
-                }
+                # Developer mode - open the workspace; the extension shows the
+                # rendered README preview. /setup is user-driven.
+                Write-Step 'Opening workspace in VS Code'
+                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
+                Write-Ok "Launched VS Code at $workspace"
+                Write-Host "Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Yellow
+                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
             } else {
-                # Maker mode - extension handles /setup after welcome wizard
+                # Maker mode - extension opens the guided view; /setup is user-driven
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"

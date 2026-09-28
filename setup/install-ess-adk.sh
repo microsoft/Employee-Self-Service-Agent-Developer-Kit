@@ -23,8 +23,8 @@ BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
-# 'maker'    (was 'lite')     - chat-first layout, /setup after welcome wizard
-# 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`
+# 'maker'    (was 'lite')     - guided layout; /setup is user-driven
+# 'developer' (was 'standard') - default VS Code layout + README preview; /setup is user-driven
 # 'prompt'                    - ask the maker in the terminal (defaults to
 #                               maker under a non-interactive shell)
 # Legacy env var SKIP_MAKER_PROFILE=true is still accepted and, matching the
@@ -475,8 +475,8 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         done
 
         # ESS Maker Profile - installs in every mode. In maker mode it
-        # applies the chat-first layout; in developer mode it only handles
-        # /setup injection (no visual changes). By this point MODE_LABEL
+        # applies the guided layout; in developer mode it shows the rendered
+        # README preview (/setup is user-driven in both). By this point MODE_LABEL
         # is always 'maker' or 'developer' - the CLI prompt at the top of
         # the script resolves 'prompt' before we reach any install step.
         MODE_LABEL="$INSTALL_MODE"
@@ -502,7 +502,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         fi
 
         # Write the mode setting so the extension knows whether to apply
-        # the maker (chat-first) layout or inject /setup (developer mode).
+        # the guided maker layout or show the README preview (developer mode).
         SETTINGS_DIR="$HOME/Library/Application Support/Code/User"
         if [[ "$(uname)" != "Darwin" ]]; then
             SETTINGS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User"
@@ -768,24 +768,22 @@ fi
 # 8. Launch VS Code
 # ---------------------------------------------------------------------------
 if [[ -n "$CODE_CMD" ]]; then
-    # Launch strategy depends on mode:
-    # - Developer mode: use `code chat` to open /setup in the sidebar panel
-    #   (the default Copilot Chat experience).
-    # - Maker mode: just open the workspace. The ESS Maker Profile extension
-    #   handles layout + /setup injection after the welcome wizard closes.
+    # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
+    # extension reads essMaker.mode and applies the mode-specific layout
+    # (Maker: guided rail + walkthrough; Developer: rendered README preview).
+    # /setup is user-driven in both modes - neither the installer nor the
+    # extension runs it automatically.
     # By this point INSTALL_MODE is always 'maker' or 'developer' - the CLI
     # prompt at the top of the script resolves 'prompt' before we reach any
     # launch code.
     if [[ "$INSTALL_MODE" == "developer" ]]; then
-        step "Opening workspace in VS Code and requesting /setup in Copilot Chat"
-        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
-            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run.${NC}"
-            echo -e "    ${YELLOW}If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup.${NC}"
+        step "Opening workspace in VS Code"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+            ok "Launched VS Code at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent.${NC}"
+            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts.${NC}"
         else
-            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
-            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
             echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
     else

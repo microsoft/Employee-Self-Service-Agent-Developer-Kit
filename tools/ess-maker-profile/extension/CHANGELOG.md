@@ -2,6 +2,11 @@
 
 ## 0.4.29 (POC)
 
+- **Developer mode no longer auto-runs `/setup`.** `/setup` is now user-driven
+  in both modes. The installer opens the workspace (no `code chat "/setup"`),
+  and the extension no longer re-injects `/setup` on Developer-mode reopens —
+  it just re-shows the rendered README preview. Run `/setup` yourself in
+  Copilot Chat (or via the guided rail's **Start set up**) when ready.
 - **Reveal the rail → guided welcome (Developer mode).** Clicking the "Agent
   Developer Kit" activity-bar icon in Developer mode now closes the static
   README preview and opens the getting-started walkthrough (the welcome

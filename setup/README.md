@@ -14,7 +14,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, the installer asks in the terminal which experience you want — **Maker** (chat-first, big-button layout — recommended) or **Developer** (default VS Code view with Copilot Chat in the side panel). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
+Once complete, the installer asks in the terminal which experience you want — **Maker** (chat-first, big-button layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, click **Start set up** in the Quick start panel — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 

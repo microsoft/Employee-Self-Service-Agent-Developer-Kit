@@ -1781,13 +1781,11 @@ function activate(context) {
                 _log(`activate: alreadyConfigured=${alreadyConfigured}`);
 
                 if (isDeveloperMode) {
-                    // Developer mode: no guided layout. The installer opens
-                    // Copilot Chat + /setup via `code chat`; the extension adds
-                    // the rendered README preview (previously a committed
-                    // workspace setting, which also affected the guided
-                    // experience — now scoped to developer mode only).
+                    // Developer mode: no guided layout, just the rendered
+                    // README preview. /setup is user-driven — neither the
+                    // installer nor the extension runs it automatically.
                     context.globalState.update(APPLIED_KEY, true);
-                    _log('activate: developer mode — README preview; installer handles /setup via code chat');
+                    _log('activate: developer mode — README preview; /setup is user-driven');
                     setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
                 } else {
                     // Maker (guided) mode: activity bar + rail visible,
@@ -1804,14 +1802,10 @@ function activate(context) {
             // sure the rail is reachable without re-opening walkthrough/chat.
             setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
         } else {
-            // Subsequent developer-mode launch: the installer only runs `code
-            // chat /setup` on the very first launch, so on every later reopen
-            // the extension re-shows the README preview AND re-sends /setup
-            // into Copilot Chat automatically (developer mode only).
-            setTimeout(() => {
-                openReadmePreview().catch(() => {});
-                setTimeout(() => { injectSetup().catch(() => {}); }, 1000);
-            }, 1200);
+            // Subsequent developer-mode launch: re-show the rendered README
+            // preview. /setup is user-driven (run it manually in Copilot Chat
+            // or via the guided rail), so the extension never auto-injects it.
+            setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
         }
         // If userWantsMakerLayout is false (developer mode), skip re-applying.
 
