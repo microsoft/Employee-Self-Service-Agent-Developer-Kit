@@ -19,5 +19,4 @@ what you want in plain English and Copilot takes it from there.
 
 Complete setup first — then open the **Customization** panel in the activity bar
 to customize the landing page, create or update topics, scan for issues, run a
-flightcheck, generate tests, and push to Copilot Studio. Hover over any option
-to learn what it does.
+flightcheck, generate tests, and push to Copilot Studio.
