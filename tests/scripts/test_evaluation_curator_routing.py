@@ -99,15 +99,21 @@ def test_curator_wrapper_hands_off_to_maker_kit_lifecycle():
     assert "do not duplicate" in normalized_lower
 
 
-def test_update_step_7_accepts_prevalidated_curator_handoff():
+def test_update_step_7_accepts_only_prevalidated_curator_handoff():
     update = _read("src/skills/evaluations/update/SKILL.md")
     normalized = " ".join(update.split()).lower()
 
     assert "authoritative post-validation lifecycle" in normalized
-    assert "generated workspace sets" in normalized
-    assert "explicitly preselected" in normalized
+    assert "src/skills/evaluations/curate/SKILL.md" in update
+    assert "preselected generated workspace set folders" in normalized
+    assert (
+        "curator validation and maker kit validation have both completed successfully"
+        in normalized
+    )
+    assert "only this curator handoff may bypass steps 1 through 6" in normalized
     assert "enter step 7 directly" in normalized
     assert "do not repeat steps 1 through 6" in normalized
+    assert "another skill" not in normalized
     assert "decline/keep-local" in normalized
     assert "optional review tagging" in normalized
     assert "setup check" in normalized

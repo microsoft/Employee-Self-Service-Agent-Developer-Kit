@@ -478,16 +478,17 @@ validation; completion requires the user's explicit choice in an active review.
 ## Step 7: Ask whether to push
 
 This section is the authoritative post-validation lifecycle for generated
-workspace sets. When another skill hands off already-generated and
-quality-validated workspace sets, treat the exact handed-off folders as
-explicitly preselected and enter Step 7 directly. Do not repeat Steps 1 through
-6 or rediscover/reselect those sets. For this handoff, the curator's completed
-generation preview and Maker Kit quality validation satisfy the prerequisites
-for entering Step 7.
+workspace sets. A Step 7 handoff is allowed only when
+`src/skills/evaluations/curate/SKILL.md` provides preselected generated
+workspace set folders and confirms that curator validation and Maker Kit
+validation have both completed successfully. Only this curator handoff may
+bypass Steps 1 through 6. Treat the exact handed-off folders as explicitly
+preselected and enter Step 7 directly. Do not repeat Steps 1 through 6 or
+rediscover/reselect those sets.
 
 From this point onward, this skill owns decline/keep-local, optional review
 tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
-status. The calling skill must not duplicate these questions, commands, or
+status. The curator skill must not duplicate these questions, commands, or
 behaviors.
 
 Only after the update, CSV synchronization, validation, file review, and any
