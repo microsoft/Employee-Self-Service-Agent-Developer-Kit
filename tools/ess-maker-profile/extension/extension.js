@@ -223,6 +223,7 @@ function startPrereqWatcher(context) {
             if (_actionsViewProvider) _actionsViewProvider.refresh();
             if (_customizationProvider) _customizationProvider.refresh();
             if (_quickStartProvider) _quickStartProvider.refresh();
+            if (_customizationView) _customizationView.message = customizationMessageFor(context);
         }
     };
 
@@ -1058,30 +1059,24 @@ class CustomizationTreeProvider {
     }
     refresh() { this._emitter.fire(); }
     getTreeItem(item) { return item; }
-    async getChildren(element) {
+    getChildren(element) {
         if (element) return [];
-        const items = [];
-        // Until setup is complete, show a one-line nudge above the options.
-        // It disappears once "Start setup" turns green (setup connected).
-        if (!getCompleted(this._context).has('setup')) {
-            const note = new vscode.TreeItem('To customize your ESS agent, make sure to complete setup first.', vscode.TreeItemCollapsibleState.None);
-            note.iconPath = new vscode.ThemeIcon('info');
-            note.tooltip = 'Run "Start setup" in the Quick start panel to unlock these options.';
-            note.contextValue = 'adkNote';
-            items.push(note);
-        }
-        for (const meta of CUSTOMIZATION_ITEMS) {
+        return CUSTOMIZATION_ITEMS.map((meta) => {
             const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
-            item._adkId = meta.id;
-            item._adkInfo = `${meta.label}: ${meta.desc}`;
-            item.contextValue = 'adkInfo:' + meta.id;
+            // Hovering the row reveals the option's description (no click needed).
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
             item.iconPath = new vscode.ThemeIcon(meta.icon);
             item.command = { command: meta.run, title: meta.label };
-            items.push(item);
-        }
-        return items;
+            return item;
+        });
     }
+}
+
+// The "complete setup first" nudge is a free-standing tree message (muted,
+// wrapped text above the items), not a fake option. Cleared once setup is done.
+const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
+function customizationMessageFor(context) {
+    return getCompleted(context).has('setup') ? undefined : CUSTOMIZATION_NUDGE;
 }
 
 class HelpTreeProvider {
@@ -1100,6 +1095,7 @@ class HelpTreeProvider {
 let _customizationProvider = null;
 let _helpProvider = null;
 let _quickStartProvider = null;
+let _customizationView = null;
 
 // Standard mode ships no guided layout; instead it shows a rendered preview of
 // the workspace README (the "static README preview") alongside the Copilot Chat
@@ -1571,18 +1567,20 @@ function activate(context) {
         vscode.commands.registerCommand('essMaker.openIntroduction', () =>
             openGettingStarted('overview')
         ),
-        vscode.commands.registerCommand('essMaker.showItemInfo', (item) =>
-            vscode.window.showInformationMessage(item && item._adkInfo ? item._adkInfo : 'Agent Developer Kit')
-        ),
-        vscode.commands.registerCommand('essMaker.itemLocked', () =>
-            vscode.window.showInformationMessage('Complete Set up first to unlock this step.')
-        ),
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
         ),
-        vscode.window.registerTreeDataProvider('essMaker.customizationView', _customizationProvider),
         vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
+
+    // Customization is a tree view backed by createTreeView so we can show a
+    // free-standing "complete setup first" message (muted, wrapped text) above
+    // the items until setup is done — rather than a fake option row.
+    _customizationView = vscode.window.createTreeView('essMaker.customizationView', {
+        treeDataProvider: _customizationProvider
+    });
+    _customizationView.message = customizationMessageFor(context);
+    context.subscriptions.push(_customizationView);
 
     // Quick start is a tree view (like Customization and Help). Use
     // createTreeView so we can react to the user revealing the rail and, in
