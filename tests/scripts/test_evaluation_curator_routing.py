@@ -235,14 +235,12 @@ def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
     assert status_update < curator_handoff
     assert (
         "Do not run configuration, promotion, dry-run, or push actions before that "
-        "Step 7 handoff"
-        in flow_r1
+        "Step 7 handoff" in flow_r1
     )
     assert "For every other Flow R1 entry" in flow_r1
     assert (
         "enter Step 7 and follow its push-decision, configuration, promotion, "
-        "dry-run, push, cleanup, and post-push gates"
-        in flow_r1
+        "dry-run, push, cleanup, and post-push gates" in flow_r1
     )
 
 
@@ -354,3 +352,79 @@ def test_curator_wrapper_blocks_on_missing_input_or_failed_validation():
     assert "failed or partial validation" in normalized
     assert "stays local" in normalized
     assert "blocks lifecycle handoff" in normalized
+
+
+def test_curator_wrapper_accepts_only_complete_successful_handoffs():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+
+    assert "`structuralValidation` is exactly `passed`" in wrapper
+    assert "`qualityValidation` is exactly `passed`" in wrapper
+    assert "one or more generated set entries" in wrapper
+    assert "every entry in `sets`" in wrapper
+    assert "successful Maker Kit quality validation" in wrapper
+    assert "even when the curator reports `qualityValidation: passed`" in wrapper
+    assert "malformed, failed, or partial handoff" in wrapper
+    assert "remain local" in wrapper
+    assert "must not enter the update skill" in wrapper
+    assert "promotion, push, cleanup, or run" in wrapper
+
+
+def test_curator_wrapper_delegates_push_contract_without_commands():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+
+    assert (
+        "Topic confirmation, generation preview, and the maker review choice "
+        "are not push approval"
+    ) in wrapper
+    assert "explicit push approval inside update Step 7" in wrapper
+    assert "sole source of truth" in wrapper
+    assert "evaluation_promotion.py" not in wrapper
+    assert "push.py" not in wrapper
+    assert "--dry-run" not in wrapper
+    assert "--yes" not in wrapper
+
+
+def test_update_owns_concrete_workspace_push_and_cleanup_gates():
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    update = " ".join(update_text.split())
+    step_8 = " ".join(
+        _section(
+            update_text,
+            "## Step 8: Prepare the selected set for push",
+            "## Step 9:",
+        ).split()
+    )
+    step_9 = " ".join(
+        _section(update_text, "## Step 9: Dry run and push", "## Step 10:").split()
+    )
+
+    promote = (
+        'python scripts/evaluation_promotion.py promote --set-name "{set}" '
+        '--agent-folder "{agent.folder}"'
+    )
+    dry_run = 'python scripts/push.py --only "evaluations/{set}/*" --dry-run'
+    confirmed_push = 'python scripts/push.py --only "evaluations/{set}/*" --yes'
+    cleanup = (
+        'python scripts/evaluation_promotion.py cleanup --set-name "{set}" '
+        '--agent-folder "{agent.folder}"'
+    )
+
+    assert promote in step_8
+    assert "preserves the workspace source until the push succeeds" in step_8
+    assert "until cleanup completes successfully" in step_8
+    assert dry_run in step_9
+    assert confirmed_push in step_9
+    assert step_9.index(dry_run) < step_9.index("Show the output and get confirmation")
+    assert step_9.index("Show the output and get confirmation") < step_9.index(
+        confirmed_push
+    )
+    assert (
+        "Use `--yes` only after the user explicitly confirms the push in Step 7"
+        in step_9
+    )
+    assert step_9.index("Only when `push.py --yes` exits successfully") < step_9.index(
+        cleanup
+    )
+    assert "do not perform cleanup" in step_9
+    assert "workspace source remains available for retry" in step_9
+    assert "must not duplicate these questions, commands, or behaviors" in update

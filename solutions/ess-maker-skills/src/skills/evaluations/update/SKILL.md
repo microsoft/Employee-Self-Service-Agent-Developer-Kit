@@ -37,8 +37,8 @@ available in this workspace.
 - Never push until the user explicitly chooses to push.
 - Promote a workspace-level set only after the user chooses to push it. Promotion
   stages a copy under the configured agent. Remove the workspace source and its
-  matching workspace CSV only after the push succeeds; preserve both if
-  promotion or push fails.
+  matching workspace CSV only through successful cleanup after the push
+  succeeds; preserve both if promotion, push, or cleanup fails.
 - Track progress with the todo list tool.
 - Never ask a user to type `review_requested` or `review_completed`; the skill
   owns review status values.
@@ -632,7 +632,7 @@ review complete and do not describe the staging copy as proof that review
 occurred.
 
 The agent-folder copy becomes the source for `push.py`. Keep the workspace set
-unchanged until the push reports full success.
+unchanged until cleanup completes successfully after a full push success.
 
 ## Step 9: Dry run and push
 

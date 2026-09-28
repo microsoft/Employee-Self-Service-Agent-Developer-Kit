@@ -71,6 +71,23 @@ lifecycle.
 
 ## Step 4: Validate, then ask for maker review
 
+### Accept only a complete hosted handoff
+
+Accept the curator handoff only when it is well formed, contains one or more
+generated set entries and all paths required by the curator contract,
+`structuralValidation` is exactly `passed`, and `qualityValidation` is exactly
+`passed`. A missing set, missing field, unexpected validation value, or
+incomplete curator run is a malformed, failed, or partial handoff.
+
+For every entry in `sets`, always run the Maker Kit validator in the next step,
+even when the curator reports `qualityValidation: passed`. Every generated set
+must then have successful Maker Kit quality validation before any lifecycle
+handoff.
+
+Any malformed, failed, or partial handoff, structural validation failure, or
+Maker Kit quality validation failure must remain local. It must not enter the
+update skill or proceed to promotion, push, cleanup, or run.
+
 For each generated set in the curator handoff:
 
 1. Read `src/skills/evaluations/validate/SKILL.md` and invoke its quality
@@ -113,8 +130,12 @@ synchronization, review metadata, or push behavior in this wrapper:
 The update skill is the one authoritative flow for all post-validation
 edit/synchronization/validation, review metadata, keep-local, setup check,
 promotion, scoped dry-run and push, cleanup, final status, and successful-push
-next actions. Do not duplicate any of those commands, questions, or behaviors
-in this wrapper.
+next actions. It is the sole source of truth for those lifecycle gates. Do not
+duplicate any of those commands, questions, or behaviors in this wrapper.
+
+Topic confirmation, generation preview, and the maker review choice are not
+push approval. Only explicit push approval inside update Step 7 authorizes the
+update skill to continue toward staging and push.
 
 Failed or partial validation stays local and blocks lifecycle handoff,
 promotion, push, and run. A missing or incompatible curator submodule also
