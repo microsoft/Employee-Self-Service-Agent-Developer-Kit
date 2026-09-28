@@ -7,6 +7,37 @@ The skill does not create physical connector connections or complete connector
 OAuth. The maker performs those actions; the skill discovers and verifies the
 result.
 
+Agent **Connection Settings** is a later Runtime step. While either physical
+connection is missing, disconnected, ambiguous, or awaiting confirmation, tell
+the maker:
+
+> Do not open Copilot Studio Connection Settings yet. That page is configured
+> only after both Power Platform connections are verified and the Workday
+> Runtime changes have been applied.
+
+Do not provide the agent Connection Settings link during the Connections phase.
+Do not diagnose the flow authorization script as failed when Runtime apply has
+not run.
+
+Form direct connection-creation links from the recorded environment ID and
+service ring. Resolve `{POWER_AUTOMATE_ORIGIN}` exactly as follows:
+
+- `prod` -> `https://make.powerautomate.com`
+- `preprod` -> `https://make.preprod.powerautomate.com`
+- `test` -> `https://make.test.powerautomate.com`
+
+Never send a non-production environment to the production maker portal. If the
+ring is missing or unsupported, do not guess; ask the maker to confirm it.
+
+Use these environment-scoped links:
+
+- Workday:
+  `{POWER_AUTOMATE_ORIGIN}/environments/{ENVIRONMENT_ID}/connections/available/shared_workdaysoap`
+- Microsoft Dataverse:
+  `{POWER_AUTOMATE_ORIGIN}/environments/{ENVIRONMENT_ID}/connections/available/shared_commondataserviceforapps`
+- Connections list fallback:
+  `{POWER_AUTOMATE_ORIGIN}/environments/{ENVIRONMENT_ID}/connections`
+
 Do not begin with a yes/no question asking whether both connections are
 already connected. First explain that this phase needs exactly two Power
 Platform connections, then discover them:
@@ -37,9 +68,12 @@ return to the affected Workday administrator step rather than guessing.
 
 Then give the maker this creation process:
 
-1. Open the Power Apps maker portal and select the exact Power Platform
-   environment being configured.
-2. Open **Connections**, select **New connection**, and choose **Workday**.
+1. Show a **Create Workday connection** link using the environment-scoped
+   Workday URL above. It opens the correct connector in the already selected
+   environment.
+2. If the direct link does not open, use the Connections list fallback or open
+   the Power Apps maker portal, select the exact environment, open
+   **Connections**, select **New connection**, and choose **Workday**.
 3. Select **Microsoft Entra ID Integrated** authentication.
 4. Enter the three displayed values in the matching connection fields.
 5. Select **Create** and complete the Workday sign-in window. This connector
@@ -54,14 +88,21 @@ sign-in window.
 
 If the Microsoft Dataverse connection is missing or disconnected:
 
-1. In the same environment's **Connections** page, select **New connection**.
-2. Choose **Microsoft Dataverse**.
+1. Show a **Create Microsoft Dataverse connection** link using the
+   environment-scoped Microsoft Dataverse URL above.
+2. If the direct link does not open, use the Connections list fallback, select
+   **New connection**, and choose **Microsoft Dataverse**.
 3. Create or repair the connection using the selected maker account.
 4. Confirm that it shows **Connected**.
 
 Reuse a healthy existing connection when one already exists. Do not create
 duplicates merely to satisfy the phase, and do not ask the maker to paste
 connection IDs.
+
+Until both connections show **Connected** and `record-connections` succeeds,
+keep the customer in the Power Apps **Connections** page. Ask them to return to
+the skill for another check; do not redirect them to the agent's Connection
+Settings page.
 
 Show the safe display name of the selected Workday connection and the three
 saved non-secret Workday values. Use `vscode_askQuestions`:
@@ -181,6 +222,12 @@ rather than hiding earlier successful changes. Report permission issues only
 from an explicit forbidden response, `[FAIL]` marker, ambiguity result, or
 nonzero script exit.
 
+Do not direct the maker to agent Connection Settings unless `runtime-apply`
+returns `applied.verified: true` and confirms all three verified stages:
+`connection-references-bound`, `runtime-flows-active`, and
+`delegated-authorization-configured`. If Runtime apply has not run or any stage
+is incomplete, keep Runtime active and show the controller's actual blocker.
+
 ## Agent binding after flow activation
 
 Only after runtime apply has activated the reviewed flows, wire the native
@@ -205,13 +252,21 @@ Continue with the supported live checkpoints, topic-state verification, and
 employee scenario. Do not recreate, clone, reselect, or rewrite packaged flows
 in response to topic metadata alone.
 
-Then open the agent connection settings. Connect **ESS Workday Runtime REST
-Execution** and any other Workday flow shown there. The reviewed native agent
-contract marks **ESS Workday Runtime** and **ESS Workday Runtime References** as
-`EmbeddedOnly`; embedded flows are not expected to require a maker-selected
-user connection. For every Workday connection the page does expose, enable
-**Allow permission to share parameters**. This prevents each employee from
-receiving an unexpected first-use connection prompt.
+Only now direct the maker to the selected agent's **Settings** >
+**Connection Settings** page. Before they continue, show the exact recorded
+Power Platform maker account and tell them to verify that Copilot Studio's
+browser profile is signed in as that account. The CLI credential cache and the
+Copilot Studio browser session are separate. If the browser shows another
+account, the maker must switch accounts or use a separate browser profile
+before selecting a connection.
+
+Connect **ESS Workday Runtime REST Execution** and any other Workday flow shown
+there. The reviewed native agent contract marks **ESS Workday Runtime** and
+**ESS Workday Runtime References** as `EmbeddedOnly`; embedded flows are not
+expected to require a maker-selected user connection. For every Workday
+connection the page does expose, enable **Allow permission to share
+parameters**. This prevents each employee from receiving an unexpected
+first-use connection prompt.
 
 Internal execution note—never show this implementation detail to the customer:
 `connectionType: EmbeddedOnly` is separate from the Dataverse

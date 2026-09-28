@@ -217,6 +217,21 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "--confirm-workday-target" in text
     assert "Do not begin with a yes/no question" in text
     assert text.count("workday_connect.py record-connections") == 2
+    assert "`prod` -> `https://make.powerautomate.com`" in text
+    assert "`preprod` -> `https://make.preprod.powerautomate.com`" in text
+    assert "`test` -> `https://make.test.powerautomate.com`" in text
+    assert "Never send a non-production environment to the production maker portal" in text
+    assert (
+        "{POWER_AUTOMATE_ORIGIN}/environments/{ENVIRONMENT_ID}/connections/"
+        "available/shared_workdaysoap"
+    ) in text
+    assert (
+        "{POWER_AUTOMATE_ORIGIN}/environments/{ENVIRONMENT_ID}/connections/"
+        "available/shared_commondataserviceforapps"
+    ) in text
+    assert "Create Workday connection" in text
+    assert "Create Microsoft Dataverse connection" in text
+    assert "Connections list fallback" in text
     assert "Power Apps maker portal" in text
     assert "Microsoft Entra ID Integrated" in text
     assert "**Microsoft Entra resource URL:**" in text
@@ -227,7 +242,20 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
     assert "Reuse a healthy existing connection" in text
+    assert "Do not open Copilot Studio Connection Settings yet" in text
+    assert "Do not provide the agent Connection Settings link" in text
+    assert "Do not diagnose the flow authorization script as failed" in text
+    assert "keep the customer in the Power Apps **Connections** page" in text
     assert "runtime-apply" in text
+    assert "applied.verified: true" in text
+    assert "connection-references-bound" in text
+    assert "runtime-flows-active" in text
+    assert "delegated-authorization-configured" in text
+    assert text.index("applied.verified: true") < text.index(
+        "Only now direct the maker"
+    )
+    assert "CLI credential cache and the\nCopilot Studio browser session are separate" in text
+    assert "show the exact recorded\nPower Platform maker account" in text
     assert "record-agent-binding" in text
     assert "--attachment-file" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
