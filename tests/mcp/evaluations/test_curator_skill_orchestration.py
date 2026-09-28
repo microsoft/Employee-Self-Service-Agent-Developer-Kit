@@ -7,17 +7,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from tests.mcp.evaluations.skill_eval import (
     AGENT_INSTRUCTIONS_PATH,
     CURATOR_SKILL_PATH,
+    DISPATCHER_SKILL_PATH,
+    EVALUATE_PROMPT_PATH,
     KNOWLEDGE_PATH,
     MAKER_VALIDATOR_SKILL_PATH,
     QUALITY_FIX_FLOW_PATH,
     STRUCTURAL_VALIDATOR_PATH,
+    SYNTHETIC_REPO_ROOT,
     UPDATE_SKILL_PATH,
+    WRAPPER_SKILL_PATH,
     EvalTurn,
     FakeEvaluationWorkspace,
     session_options,
@@ -74,7 +79,11 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
     )
     assert first_write_index is not None, "Missing evaluation artifact write."
 
-    assert preflight_index < curator_read_index < first_write_index
+    assert preflight_index < curator_read_index < first_write_index, (
+        "Expected preflight, curator skill read, and first artifact write in order; "
+        f"got preflight={preflight_index}, curator_read={curator_read_index}, "
+        f"first_write={first_write_index}."
+    )
     assert not any(call.name == "write_file" and call.turn == 0 for call in calls)
 
     required_reads = {KNOWLEDGE_PATH, AGENT_INSTRUCTIONS_PATH, CURATOR_SKILL_PATH}
@@ -83,7 +92,10 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         for call in calls[:first_write_index]
         if call.name == "read_file"
     }
-    assert required_reads <= observed_reads
+    assert required_reads <= observed_reads, (
+        "Missing required reads before the first artifact write: "
+        f"{sorted(required_reads - observed_reads)}; observed={sorted(observed_reads)}."
+    )
 
     writes = [call for call in calls if call.name == "write_file"]
     assert writes
@@ -115,8 +127,14 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         None,
     )
     assert maker_kit_index is not None, "Missing Maker Kit validation call."
-    assert structural_index > first_write_index
-    assert maker_kit_index > first_write_index
+    assert structural_index > first_write_index, (
+        "Structural validation must follow the first artifact write; "
+        f"got structural={structural_index}, first_write={first_write_index}."
+    )
+    assert maker_kit_index > first_write_index, (
+        "Maker Kit validation must follow the first artifact write; "
+        f"got maker_kit={maker_kit_index}, first_write={first_write_index}."
+    )
     maker_validator_read_index = next(
         (
             index
@@ -128,7 +146,11 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         None,
     )
     assert maker_validator_read_index is not None, "Missing Maker validator skill read."
-    assert maker_validator_read_index < maker_kit_index
+    assert maker_validator_read_index < maker_kit_index, (
+        "Maker validator skill must be read before Maker Kit validation; "
+        f"got validator_read={maker_validator_read_index}, "
+        f"maker_kit={maker_kit_index}."
+    )
     assert not any(call.kind == "push" for call in calls)
 
 
@@ -149,8 +171,17 @@ def test_synthetic_preflight_exposes_valid_host_contract() -> None:
     assert not call.failed
     payload = json.loads(call.result["stdout"])
     assert payload["available"] is True
-    assert payload["skillPath"] == CURATOR_SKILL_PATH
-    assert payload["structuralValidatorPath"] == STRUCTURAL_VALIDATOR_PATH
+    skill_path = payload["skillPath"].replace("\\", "/")
+    structural_validator_path = payload["structuralValidatorPath"].replace("\\", "/")
+    synthetic_root = str(SYNTHETIC_REPO_ROOT).replace("\\", "/")
+    assert Path(payload["skillPath"]).is_absolute()
+    assert Path(payload["structuralValidatorPath"]).is_absolute()
+    assert skill_path.startswith(f"{synthetic_root}/")
+    assert structural_validator_path.startswith(f"{synthetic_root}/")
+    assert skill_path.endswith(f"/solutions/ess-maker-skills/{CURATOR_SKILL_PATH}")
+    assert structural_validator_path.endswith(
+        f"/solutions/ess-maker-skills/{STRUCTURAL_VALIDATOR_PATH}"
+    )
     assert payload["supportsHostOutputOverride"] is True
     assert payload["supportsHostLifecycleHandoff"] is True
 
@@ -204,16 +235,66 @@ def test_synthetic_workspace_records_only_scoped_writes_and_validations() -> Non
 def test_synthetic_workspace_exposes_wrapper_reads_as_read_only() -> None:
     backend = _ready_backend()
 
+    evaluate_prompt = backend.invoke("read_file", {"path": EVALUATE_PROMPT_PATH})
+    dispatcher_skill = backend.invoke("read_file", {"path": DISPATCHER_SKILL_PATH})
+    wrapper_skill = backend.invoke("read_file", {"path": WRAPPER_SKILL_PATH})
     quality_flow = backend.invoke("read_file", {"path": QUALITY_FIX_FLOW_PATH})
     update_skill = backend.invoke("read_file", {"path": UPDATE_SKILL_PATH})
-    rejected_write = backend.invoke(
-        "write_file",
-        {"path": QUALITY_FIX_FLOW_PATH, "content": "synthetic"},
-    )
 
+    assert not evaluate_prompt.failed
+    assert not dispatcher_skill.failed
+    assert not wrapper_skill.failed
     assert not quality_flow.failed
     assert not update_skill.failed
-    assert rejected_write.failed
+    read_only_paths = (
+        EVALUATE_PROMPT_PATH,
+        DISPATCHER_SKILL_PATH,
+        WRAPPER_SKILL_PATH,
+        CURATOR_SKILL_PATH,
+        KNOWLEDGE_PATH,
+        AGENT_INSTRUCTIONS_PATH,
+        MAKER_VALIDATOR_SKILL_PATH,
+        QUALITY_FIX_FLOW_PATH,
+        UPDATE_SKILL_PATH,
+    )
+    before = dict(backend.files)
+    for path in read_only_paths:
+        rejected_write = backend.invoke(
+            "write_file",
+            {"path": path, "content": "synthetic"},
+        )
+        assert rejected_write.failed, f"Expected read-only synthetic path: {path}"
+    assert backend.files == before
+
+
+def test_synthetic_workspace_accepts_absolute_contract_paths() -> None:
+    backend = _ready_backend()
+    skill_path = (
+        SYNTHETIC_REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / Path(CURATOR_SKILL_PATH)
+    )
+    validator_path = (
+        SYNTHETIC_REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / Path(STRUCTURAL_VALIDATOR_PATH)
+    )
+
+    curator_skill = backend.invoke("read_file", {"path": str(skill_path)})
+    structural = backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{validator_path}" '
+                '--evaluation-folder "workspace/evaluations/leave"'
+            )
+        },
+    )
+
+    assert not curator_skill.failed
+    assert structural.kind == "structural_validation"
 
 
 def test_session_options_disable_host_and_production_connections(tmp_path) -> None:

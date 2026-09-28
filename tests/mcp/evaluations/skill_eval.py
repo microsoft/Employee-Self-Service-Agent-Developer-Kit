@@ -39,6 +39,11 @@ UPDATE_SKILL_FILE = (
     SOLUTION_ROOT / "src" / "skills" / "evaluations" / "update" / "SKILL.md"
 )
 
+SYNTHETIC_REPO_ROOT = REPO_ROOT / ".synthetic-eval-repo"
+SYNTHETIC_SOLUTION_ROOT = SYNTHETIC_REPO_ROOT / "solutions" / "ess-maker-skills"
+EVALUATE_PROMPT_PATH = ".github/prompts/evaluate.prompt.md"
+DISPATCHER_SKILL_PATH = "src/skills/evaluations/dispatcher/SKILL.md"
+WRAPPER_SKILL_PATH = "src/skills/evaluations/curate/SKILL.md"
 CURATOR_SKILL_PATH = "vendor/evals-curator/skills/curate-evals/SKILL.md"
 STRUCTURAL_VALIDATOR_PATH = "vendor/evals-curator/scripts/check_eval_artifacts.py"
 KNOWLEDGE_PATH = "fixtures/knowledge/leave-policy.md"
@@ -150,6 +155,9 @@ class FakeEvaluationWorkspace:
     def __post_init__(self) -> None:
         self.files.update(
             {
+                EVALUATE_PROMPT_PATH: PROMPT_PATH.read_text(encoding="utf-8"),
+                DISPATCHER_SKILL_PATH: DISPATCHER_PATH.read_text(encoding="utf-8"),
+                WRAPPER_SKILL_PATH: WRAPPER_PATH.read_text(encoding="utf-8"),
                 CURATOR_SKILL_PATH: REAL_CURATOR_PATH.read_text(encoding="utf-8"),
                 KNOWLEDGE_PATH: KNOWLEDGE_TEXT,
                 AGENT_INSTRUCTIONS_PATH: AGENT_INSTRUCTIONS_TEXT,
@@ -174,11 +182,12 @@ class FakeEvaluationWorkspace:
 
         if name == "read_file":
             path = self._normalize(arguments["path"])
-            if path not in self.files:
+            file_key = self._matching_file_key(path)
+            if file_key is None:
                 return self._record(
                     name, arguments, {"error": "Synthetic file not found."}, failed=True
                 )
-            return self._record(name, arguments, self.files[path], kind="read")
+            return self._record(name, arguments, self.files[file_key], kind="read")
 
         if name == "write_file":
             path = self._normalize(arguments["path"])
@@ -215,20 +224,26 @@ class FakeEvaluationWorkspace:
                 kind="command",
             )
         cleaned = [token.strip("\"'") for token in tokens]
+        preflight_index = self._matching_token_index(
+            cleaned, "scripts/eval_curator_submodule.py"
+        )
 
         if (
-            "scripts/eval_curator_submodule.py" in cleaned
+            preflight_index is not None
             and "status" in cleaned
-            and cleaned.index("status")
-            == cleaned.index("scripts/eval_curator_submodule.py") + 1
+            and cleaned.index("status") == preflight_index + 1
             and "--repo-root" in cleaned
         ):
             result = {
                 "available": True,
                 "schemaVersion": 1,
-                "submoduleRoot": "vendor/evals-curator",
-                "skillPath": CURATOR_SKILL_PATH,
-                "structuralValidatorPath": STRUCTURAL_VALIDATOR_PATH,
+                "submoduleRoot": str(
+                    SYNTHETIC_SOLUTION_ROOT / "vendor" / "evals-curator"
+                ),
+                "skillPath": str(SYNTHETIC_SOLUTION_ROOT / CURATOR_SKILL_PATH),
+                "structuralValidatorPath": str(
+                    SYNTHETIC_SOLUTION_ROOT / STRUCTURAL_VALIDATOR_PATH
+                ),
                 "defaultOutputRoot": "workspace/evaluations",
                 "supportsHostOutputOverride": True,
                 "supportsHostLifecycleHandoff": True,
@@ -240,7 +255,10 @@ class FakeEvaluationWorkspace:
                 kind="preflight",
             )
 
-        if STRUCTURAL_VALIDATOR_PATH in cleaned and "--evaluation-folder" in cleaned:
+        if (
+            self._matching_token_index(cleaned, STRUCTURAL_VALIDATOR_PATH) is not None
+            and "--evaluation-folder" in cleaned
+        ):
             return self._record(
                 "run_command",
                 arguments,
@@ -249,7 +267,7 @@ class FakeEvaluationWorkspace:
             )
 
         if (
-            "scripts/evaluate_evals.py" in cleaned
+            self._matching_token_index(cleaned, "scripts/evaluate_evals.py") is not None
             and "--evaluation-folder" in cleaned
         ):
             return self._record(
@@ -268,7 +286,7 @@ class FakeEvaluationWorkspace:
                 kind="maker_kit_validation",
             )
 
-        if "scripts/push.py" in cleaned:
+        if self._matching_token_index(cleaned, "scripts/push.py") is not None:
             return self._record(
                 "run_command",
                 arguments,
@@ -288,6 +306,37 @@ class FakeEvaluationWorkspace:
     @staticmethod
     def _normalize(path: str) -> str:
         return str(PurePosixPath(path.replace("\\", "/").removeprefix("./")))
+
+    @classmethod
+    def _path_matches(cls, path: str, expected_suffix: str) -> bool:
+        normalized_path = cls._normalize(path)
+        normalized_suffix = cls._normalize(expected_suffix)
+        return normalized_path == normalized_suffix or normalized_path.endswith(
+            f"/{normalized_suffix}"
+        )
+
+    def _matching_file_key(self, path: str) -> str | None:
+        return next(
+            (
+                file_key
+                for file_key in self.files
+                if self._path_matches(path, file_key)
+            ),
+            None,
+        )
+
+    @classmethod
+    def _matching_token_index(
+        cls, tokens: list[str], expected_suffix: str
+    ) -> int | None:
+        return next(
+            (
+                index
+                for index, token in enumerate(tokens)
+                if cls._path_matches(token, expected_suffix)
+            ),
+            None,
+        )
 
     def _record(
         self,
