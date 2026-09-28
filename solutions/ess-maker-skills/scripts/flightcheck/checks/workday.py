@@ -40,7 +40,10 @@ from defusedxml.common import DefusedXmlException
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
 from ..agent_scope import resolve_agent_directory
-from ._da_connection_refs import workday_shared_connection_parameters
+from ._da_connection_refs import (
+    WORKDAY_REF_NOT_FOUND,
+    workday_shared_connection_parameters,
+)
 from .infrastructure import (
     _infra_003_directive,
     _infra_003_probe_layer_note,
@@ -1781,6 +1784,27 @@ def _check_da_env_config(runner) -> list[CheckResult]:
         )]
 
     missing = [key for key in _WORKDAY_SHARED_ENV_KEYS if not values.get(key)]
+    if unavailable_reason == WORKDAY_REF_NOT_FOUND:
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value,
+            status=Status.NOT_CONFIGURED.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=(
+                "No Workday connection reference (connector "
+                "shared_workdaysoap) was found in this environment, so "
+                "Workday tenant and OAuth configuration is not set up."
+            ),
+            remediation=(
+                "If this environment is meant to use Workday, install/repair "
+                "the Workday extension pack and connect the Workday "
+                "connection from Copilot Studio so tenantName, "
+                "token:ResourceUri, token:WorkdayTokenUri, and "
+                "token:WorkdayClientId are captured. If Workday is not used "
+                "here, no action is needed."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
     if missing:
         reason = f" {unavailable_reason}." if unavailable_reason else ""
         return [CheckResult(roles=[Role.ESS_MAKER.value],

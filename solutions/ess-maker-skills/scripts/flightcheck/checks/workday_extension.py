@@ -62,7 +62,10 @@ from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
-from ._da_connection_refs import workday_shared_connection_parameters
+from ._da_connection_refs import (
+    WORKDAY_REF_NOT_FOUND,
+    workday_shared_connection_parameters,
+)
 
 # scripts/auth.py is on sys.path via cli.py at runtime (tests add it too); this
 # mirrors checks/environment.py's top-level import so query_all is patchable as
@@ -565,6 +568,26 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
         )]
 
     rest = values.get("restBaseUri")
+
+    if unavailable_reason == WORKDAY_REF_NOT_FOUND:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-001", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_REST_URL_DESC,
+            result=(
+                "No Workday connection reference (connector "
+                "shared_workdaysoap) was found in this environment, so the "
+                "Workday REST base URI is not configured."
+            ),
+            remediation=(
+                "If this environment is meant to use Workday, install/repair "
+                "the Workday extension pack and connect the Workday "
+                "connection from Copilot Studio so restBaseUri is captured "
+                "and trimmed to end at '/api' (e.g. https://<host>/ccx/api). "
+                "If Workday is not used here, no action is needed."
+            ),
+            doc_link=_DOC_SIMPLIFIED,
+        )]
 
     if not rest:
         return [CheckResult(roles=_MAKER_ROLES,

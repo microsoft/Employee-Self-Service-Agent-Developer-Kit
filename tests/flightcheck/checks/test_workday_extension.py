@@ -528,6 +528,24 @@ class TestRestBaseUrl:
         assert "restBaseUri is missing or empty" in r.result
         assert "restBaseUri is captured" in r.remediation
 
+    def test_no_workday_ref_is_not_configured(self):
+        """No Workday connection reference at all means Workday was never set
+        up. WD-REST-001 must report NOT_CONFIGURED (which does not fail
+        readiness), mirroring DV-CONN-001's "no ref" contract, rather than a
+        hard FAILED that misfires on non-Workday tenants."""
+        # components() carries only the ServiceNow reference, no Workday one.
+        runner = _Runner(
+            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
+            agentbuilder=_FakeAgentBuilder(ab.components()),
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.NOT_CONFIGURED.value
+        assert "No Workday connection reference" in r.result
+        assert "shared_workdaysoap" in r.result
+        assert "install/repair the Workday extension pack" in r.remediation
+        assert "If Workday is not used here" in r.remediation
+
     def test_no_agentbuilder_client_skips(self):
         runner = _Runner(config={"agent": {"botId": ab.MOCK_AGENT_ID}})
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]

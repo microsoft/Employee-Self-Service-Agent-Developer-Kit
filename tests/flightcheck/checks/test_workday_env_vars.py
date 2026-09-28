@@ -279,6 +279,26 @@ class TestDeclarativeAgentWorkdayEnvConfig:
         assert "Reconnect the Workday connection" in result.remediation
         assert "token:WorkdayClientId" in result.remediation
 
+    def test_no_workday_ref_is_not_configured(self) -> None:
+        """No Workday connection reference at all means Workday was never set
+        up in this environment. WD-ENV-001 must report NOT_CONFIGURED (which
+        does not fail readiness), mirroring the DV-CONN-001 "no ref" contract,
+        not FAILED — a targeted or non-Workday tenant run otherwise misfires a
+        hard CRITICAL failure."""
+        from flightcheck.checks.workday import _check_da_env_config
+
+        # components() carries only the ServiceNow reference, no Workday one.
+        runner = _runner_with_da_components(ab.components())
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.checkpoint_id == "WD-ENV-001"
+        assert result.status == "NotConfigured"
+        assert "No Workday connection reference" in result.result
+        assert "shared_workdaysoap" in result.result
+        assert "install/repair the Workday extension pack" in result.remediation
+        assert "If Workday is not used here" in result.remediation
+
     def test_no_agentbuilder_client_skips(self) -> None:
         from flightcheck.checks.workday import _check_da_env_config
 

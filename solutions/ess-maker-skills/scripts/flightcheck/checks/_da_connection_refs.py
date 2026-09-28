@@ -36,6 +36,17 @@ from typing import Any
 
 WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 
+# Distinguishable ``unavailable_reason`` values returned by
+# ``workday_shared_connection_parameters`` when ``values == {}``. Consumers
+# compare against these constants (never the prose) to tell "Workday was never
+# set up" (NOT_CONFIGURED) apart from "the Workday reference exists but is
+# broken" (FAILED). See WD-ENV-001 / WD-REST-001.
+WORKDAY_REF_NOT_FOUND = "Workday connection reference was not found"
+WORKDAY_REF_MISSING_VALUES = (
+    "Workday connection reference is missing "
+    "sharedConnectionParameters.values"
+)
+
 
 def agent_bot_ids(config: dict[str, Any]) -> list[str]:
     """Return configured bot IDs from multi-agent and single-agent config."""
@@ -253,9 +264,6 @@ def workday_shared_connection_parameters(
                 return values, ""
 
     if found_workday_ref:
-        return {}, (
-            "Workday connection reference is missing "
-            "sharedConnectionParameters.values"
-        )
+        return {}, WORKDAY_REF_MISSING_VALUES
 
-    return {}, "Workday connection reference was not found"
+    return {}, WORKDAY_REF_NOT_FOUND
