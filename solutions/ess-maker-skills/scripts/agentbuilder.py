@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import msal
 import requests
@@ -618,12 +618,21 @@ class ConnectivityClient:
         *,
         ring: str,
         api_version: str = DEFAULT_API_VERSION,
+        environment_host: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.host = _ring_api_host(ring)
+        self.environment_host = (
+            validate_environment_host(environment_host, ring)
+            if environment_host
+            else self.host
+        )
         self.ring = ring
         self.api_version = api_version
         self.session = session or requests.Session()
+        self._one_shot_session = (
+            self.session if session is not None else requests.Session()
+        )
         retry = Retry(
             total=3,
             backoff_factor=1,
@@ -666,6 +675,94 @@ class ConnectivityClient:
             raise AgentBuilderError(
                 "Connection listing returned an invalid shape."
             )
+        return values
+
+    def list_connector_connections(
+        self,
+        environment_id: str,
+        connector_name: str,
+        *,
+        one_shot: bool = False,
+    ) -> list[dict[str, Any]]:
+        """List one connector's physical connections in an environment."""
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        normalized_connector_name = connector_name.strip()
+        if not normalized_connector_name:
+            raise ValueError("connector_name must not be empty")
+        request_session = (
+            self._one_shot_session if one_shot else self.session
+        )
+        response = request_session.request(
+            "GET",
+            (
+                f"{self.environment_host}/connectivity/connectors/"
+                f"{quote(normalized_connector_name, safe='')}/connections"
+            ),
+            params={
+                "api-version": "1",
+                "$filter": (
+                    f"environment eq '{normalized_environment_id}'"
+                ),
+            },
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connector connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connector connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connector connection listing returned an invalid shape."
+            )
+        if body.get("nextLink") or body.get("@odata.nextLink"):
+            raise AgentBuilderError(
+                "Connector connection listing returned an unsupported "
+                "continuation page."
+            )
+        for value in values:
+            properties = value.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            api_id = str(properties.get("apiId") or "")
+            if (
+                api_id
+                and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
+                != normalized_connector_name.casefold()
+            ):
+                raise AgentBuilderError(
+                    "Connector connection listing returned a different "
+                    "connector identity."
+                )
+            environment = properties.get("environment")
+            if environment:
+                if isinstance(environment, dict):
+                    raw_environment = str(
+                        environment.get("name")
+                        or environment.get("id")
+                        or ""
+                    )
+                else:
+                    raw_environment = str(environment)
+                raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    returned_environment_id = str(uuid.UUID(raw_environment))
+                except ValueError as exc:
+                    raise AgentBuilderError(
+                        "Connector connection listing returned an invalid "
+                        "environment identity."
+                    ) from exc
+                if returned_environment_id != normalized_environment_id:
+                    raise AgentBuilderError(
+                        "Connector connection listing returned a different "
+                        "environment identity."
+                    )
         return values
 
 
