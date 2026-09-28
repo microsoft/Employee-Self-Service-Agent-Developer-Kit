@@ -1223,6 +1223,7 @@ def record_agent_connection_attestation(
         "recordedAt": _utc_now(),
         "physicalVerifiedAt": _utc_now(),
         "binding": {
+            "connectionId": normalized_connection_id,
             "environmentId": context["environment"]["id"],
             "agentId": context["agent"]["id"],
             "agentSlug": _agent_slug(context),

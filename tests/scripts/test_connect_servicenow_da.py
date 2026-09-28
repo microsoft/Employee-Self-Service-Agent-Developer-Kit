@@ -545,10 +545,15 @@ def test_record_agent_connection_validates_health_and_persists_attestation(
     )
 
     assert result["connectionId"] == CONNECTION_ID.replace("-", "")
+    assert result["binding"]["connectionId"] == result["connectionId"]
     assert result["physicalStatus"] == "Connected"
     assert result["makerAttested"] is True
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["evidence"]["agentConnection"]["makerAttested"] is True
+    assert (
+        state["evidence"]["agentConnection"]["binding"]["connectionId"]
+        == state["evidence"]["agentConnection"]["connectionId"]
+    )
     assert state["migration"]["legacySourcePath"].endswith("state.json")
 
 

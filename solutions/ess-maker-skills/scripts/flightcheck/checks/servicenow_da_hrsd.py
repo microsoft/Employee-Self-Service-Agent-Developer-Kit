@@ -354,20 +354,43 @@ def _credential_result(
     )
 
 
+def _binding_evaluation(
+    record: dict[str, Any],
+    component_hash: str,
+    connection_id: str | None = None,
+) -> str:
+    binding = record.get("binding")
+    if not isinstance(binding, dict):
+        return "binding-missing"
+    if binding.get("componentHash") != component_hash:
+        return "revision-stale"
+
+    nested_connection_id = str(binding.get("connectionId") or "")
+    legacy_connection_id = str(record.get("connectionId") or "")
+    if (
+        nested_connection_id
+        and legacy_connection_id
+        and nested_connection_id.casefold() != legacy_connection_id.casefold()
+    ):
+        return "connection-conflict"
+
+    recorded_connection_id = nested_connection_id or legacy_connection_id
+    if connection_id is not None:
+        if not recorded_connection_id:
+            return "connection-missing"
+        if recorded_connection_id.casefold() != connection_id.casefold():
+            return "connection-mismatch"
+    return "valid"
+
+
 def _binding_current(
     record: dict[str, Any],
     component_hash: str,
     connection_id: str | None = None,
 ) -> bool:
-    binding = record.get("binding")
     return (
-        isinstance(binding, dict)
-        and binding.get("componentHash") == component_hash
-        and (
-            connection_id is None
-            or str(binding.get("connectionId") or "").casefold()
-            == connection_id.casefold()
-        )
+        _binding_evaluation(record, component_hash, connection_id)
+        == "valid"
     )
 
 
@@ -387,14 +410,42 @@ def _agent_connection_result(
     elif not isinstance(record, dict) or not record.get("makerAttested"):
         status = Status.NOT_CONFIGURED.value
         result = "Current maker evidence for the agent's ServiceNow row is absent."
-    elif not _binding_current(
-        record,
-        component_hash,
-        str((evidence.get("credential") or {}).get("connectionId") or ""),
+    else:
+        binding_evaluation = _binding_evaluation(
+            record,
+            component_hash,
+            str((evidence.get("credential") or {}).get("connectionId") or ""),
+        )
+    if (
+        credential_check.status == Status.PASSED.value
+        and isinstance(record, dict)
+        and record.get("makerAttested")
+        and binding_evaluation != "valid"
     ):
         status = Status.NOT_CONFIGURED.value
-        result = "The prior Agent Connect attestation is stale for this revision."
-    else:
+        if binding_evaluation == "revision-stale":
+            result = (
+                "The prior Agent Connect attestation is stale for this "
+                "component revision."
+            )
+        elif binding_evaluation == "connection-conflict":
+            result = (
+                "The Agent Connect evidence contains conflicting connection "
+                "identities."
+            )
+        elif binding_evaluation == "connection-mismatch":
+            result = (
+                "The Agent Connect evidence belongs to a different selected "
+                "credential."
+            )
+        else:
+            result = (
+                "The Agent Connect evidence does not identify the selected "
+                "credential."
+            )
+    elif credential_check.status == Status.PASSED.value and isinstance(
+        record, dict
+    ) and record.get("makerAttested"):
         status = Status.MANUAL.value
         result = "Maker attested that the ServiceNow row currently shows Connected."
     return _result(

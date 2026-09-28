@@ -116,6 +116,7 @@ def _write_state(root: Path, components: dict) -> None:
                     "credential": {"connectionId": CONNECTION_ID},
                     "agentConnection": {
                         "makerAttested": True,
+                        "connectionId": CONNECTION_ID,
                         "binding": {
                             "componentHash": component_hash,
                             "connectionId": CONNECTION_ID,
@@ -195,6 +196,127 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
     )
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.NOT_CONFIGURED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.NOT_CONFIGURED.value
+
+
+def test_agent_connection_accepts_legacy_root_only_connection_id(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(path.read_text(encoding="utf-8"))
+    del state["evidence"]["agentConnection"]["binding"]["connectionId"]
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    result = next(
+        item
+        for item in results
+        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+    )
+
+    assert result.status == Status.MANUAL.value
+
+
+def test_agent_connection_rejects_conflicting_nested_and_root_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["evidence"]["agentConnection"]["connectionId"] = (
+        "00000000000040008000000000009999"
+    )
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    result = next(
+        item
+        for item in results
+        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "conflicting connection identities" in result.result
+
+
+def test_agent_connection_rejects_wrong_selected_connection_id(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    other_id = "00000000000040008000000000009999"
+    path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["evidence"]["credential"]["connectionId"] = other_id
+    path.write_text(json.dumps(state), encoding="utf-8")
+    runner = _runner(components)
+    other_connection = _connection()
+    other_connection["name"] = other_id
+    runner.connectivity = SimpleNamespace(
+        list_connections=lambda _environment_id: [other_connection]
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    result = next(
+        item
+        for item in results
+        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "different selected credential" in result.result
+
+
+def test_agent_connection_reports_component_revision_stale(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    components["changeToken"] = "new-token"
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    result = next(
+        item
+        for item in results
+        if item.checkpoint_id == "SN-DA-HRSD-AGENT-CONNECTION-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "stale for this component revision" in result.result
 
 
 def test_hrsd_package_absence_is_not_configured(
