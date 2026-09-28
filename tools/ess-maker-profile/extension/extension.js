@@ -223,7 +223,6 @@ function startPrereqWatcher(context) {
             if (_actionsViewProvider) _actionsViewProvider.refresh();
             if (_customizationProvider) _customizationProvider.refresh();
             if (_quickStartProvider) _quickStartProvider.refresh();
-            if (_customizationView) _customizationView.message = customizationMessageFor(context);
         }
     };
 
@@ -1051,6 +1050,24 @@ const CUSTOMIZATION_ITEMS = [
     { id: 'push',        label: 'Push to Copilot Studio', run: 'essMaker.runPush',         icon: 'rocket',    requires: ['setup'], desc: 'Push your Employee Self-Service agent changes to Copilot Studio.' },
 ];
 
+// Guidance shown above the Customization options. The "complete setup first"
+// line clears once setup is done; the "hover to learn more" hint always stays.
+const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
+const CUSTOMIZATION_HOVER_HINT = 'Hover on each option to learn more about it.';
+
+// Word-wrap a sentence to ~34 chars so the muted guidance rows read like a
+// paragraph and don't truncate in a normal-width side bar.
+function wrapGuidance(text, width = 34) {
+    const lines = [];
+    let line = '';
+    for (const word of text.split(' ')) {
+        if (line && (line + ' ' + word).length > width) { lines.push(line); line = word; }
+        else line = line ? `${line} ${word}` : word;
+    }
+    if (line) lines.push(line);
+    return lines;
+}
+
 class CustomizationTreeProvider {
     constructor(context) {
         this._context = context;
@@ -1061,26 +1078,42 @@ class CustomizationTreeProvider {
     getTreeItem(item) { return item; }
     getChildren(element) {
         if (element) return [];
-        return CUSTOMIZATION_ITEMS.map((meta) => {
+        const rows = [];
+
+        // Free-standing guidance rendered as muted (lighter) description text —
+        // TreeView.message can't be recolored, so we use description rows, which
+        // pick up the dimmer descriptionForeground color and are visually
+        // distinct from the options (no icon, not clickable).
+        const done = getCompleted(this._context).has('setup');
+        const sentences = done ? [CUSTOMIZATION_HOVER_HINT] : [CUSTOMIZATION_NUDGE, CUSTOMIZATION_HOVER_HINT];
+        sentences.forEach((sentence, i) => {
+            if (i > 0) rows.push(this._guidanceRow('\u00A0', sentence)); // blank line between sentences
+            for (const line of wrapGuidance(sentence)) rows.push(this._guidanceRow(line, sentence));
+        });
+        // Breathing room between the guidance and the first option.
+        rows.push(this._guidanceRow('\u00A0'));
+        rows.push(this._guidanceRow('\u00A0'));
+
+        for (const meta of CUSTOMIZATION_ITEMS) {
             const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
             // Hovering the option row reveals its description via this tooltip.
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
             item.iconPath = new vscode.ThemeIcon(meta.icon);
             item.command = { command: meta.run, title: meta.label };
-            return item;
-        });
+            rows.push(item);
+        }
+        return rows;
     }
-}
 
-// The Customization view message. The "complete setup first" nudge clears once
-// setup is done; the "hover to learn more" hint always stays. Trailing blank
-// lines add breathing room between the message and the first option.
-const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
-const CUSTOMIZATION_HOVER_HINT = 'Hover on each option to learn more about it.';
-function customizationMessageFor(context) {
-    const done = getCompleted(context).has('setup');
-    const lines = done ? [CUSTOMIZATION_HOVER_HINT] : [CUSTOMIZATION_NUDGE, CUSTOMIZATION_HOVER_HINT];
-    return lines.join('\n') + '\n\u00A0\n\u00A0';
+    // A non-interactive, muted guidance row. Text lives in `description` so it
+    // renders in the lighter descriptionForeground color.
+    _guidanceRow(text, tooltip) {
+        const row = new vscode.TreeItem('', vscode.TreeItemCollapsibleState.None);
+        row.description = text;
+        if (tooltip) row.tooltip = tooltip;
+        row.contextValue = 'adkGuidance';
+        return row;
+    }
 }
 
 class HelpTreeProvider {
@@ -1099,7 +1132,6 @@ class HelpTreeProvider {
 let _customizationProvider = null;
 let _helpProvider = null;
 let _quickStartProvider = null;
-let _customizationView = null;
 
 // Standard mode ships no guided layout; instead it shows a rendered preview of
 // the workspace README (the "static README preview") alongside the Copilot Chat
@@ -1574,17 +1606,9 @@ function activate(context) {
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
         ),
+        vscode.window.registerTreeDataProvider('essMaker.customizationView', _customizationProvider),
         vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
-
-    // Customization is a tree view backed by createTreeView so we can show a
-    // free-standing "complete setup first" message (muted, wrapped text) above
-    // the items until setup is done — rather than a fake option row.
-    _customizationView = vscode.window.createTreeView('essMaker.customizationView', {
-        treeDataProvider: _customizationProvider
-    });
-    _customizationView.message = customizationMessageFor(context);
-    context.subscriptions.push(_customizationView);
 
     // Quick start is a tree view (like Customization and Help). Use
     // createTreeView so we can react to the user revealing the rail and, in
