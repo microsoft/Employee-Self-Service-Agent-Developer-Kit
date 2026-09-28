@@ -394,9 +394,11 @@ def test_update_owns_concrete_workspace_push_and_cleanup_gates():
             "## Step 9:",
         ).split()
     )
-    step_9 = " ".join(
-        _section(update_text, "## Step 9: Dry run and push", "## Step 10:").split()
+    step_9_text = _section(
+        update_text, "## Step 9: Dry run and push", "## Step 10:"
     )
+    step_9 = " ".join(step_9_text.split())
+    step_9_lines = [line.strip() for line in step_9_text.splitlines()]
 
     promote = (
         'python scripts/evaluation_promotion.py promote --set-name "{set}" '
@@ -404,6 +406,9 @@ def test_update_owns_concrete_workspace_push_and_cleanup_gates():
     )
     dry_run = 'python scripts/push.py --only "evaluations/{set}/*" --dry-run'
     confirmed_push = 'python scripts/push.py --only "evaluations/{set}/*" --yes'
+    confirmed_force_delete_push = (
+        'python scripts/push.py --only "evaluations/{set}/*" --yes --force-delete'
+    )
     cleanup = (
         'python scripts/evaluation_promotion.py cleanup --set-name "{set}" '
         '--agent-folder "{agent.folder}"'
@@ -412,12 +417,23 @@ def test_update_owns_concrete_workspace_push_and_cleanup_gates():
     assert promote in step_8
     assert "preserves the workspace source until the push succeeds" in step_8
     assert "until cleanup completes successfully" in step_8
-    assert dry_run in step_9
-    assert confirmed_push in step_9
-    assert step_9.index(dry_run) < step_9.index("Show the output and get confirmation")
-    assert step_9.index("Show the output and get confirmation") < step_9.index(
-        confirmed_push
+    assert dry_run in step_9_lines
+    assert confirmed_push in step_9_lines
+    assert confirmed_force_delete_push in step_9_lines
+
+    dry_run_line = step_9_lines.index(dry_run)
+    confirmation_line = next(
+        index
+        for index, line in enumerate(step_9_lines)
+        if line.startswith("Show the output and get confirmation.")
     )
+    confirmed_push_lines = (
+        step_9_lines.index(confirmed_push),
+        step_9_lines.index(confirmed_force_delete_push),
+    )
+
+    assert all(dry_run_line < line for line in confirmed_push_lines)
+    assert all(confirmation_line < line for line in confirmed_push_lines)
     assert (
         "Use `--yes` only after the user explicitly confirms the push in Step 7"
         in step_9
