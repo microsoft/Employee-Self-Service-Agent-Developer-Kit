@@ -1211,12 +1211,14 @@ def _status_minis(results: list[CheckResult]) -> tuple[str, bool]:
     """Build the "N fail / N warn / N manual / N ok" mini badges for a group.
 
     Returns the badge HTML and whether the group has any actionable row
-    (fail/error/warning/manual/not-configured) so callers can decide
+    (fail/blocked/error/warning/manual/not-configured) so callers can decide
     whether to open the section by default.
     """
     n_fail = sum(
         1 for x in results
-        if x.status in (Status.FAILED.value, Status.ERROR.value)
+        if x.status in (
+            Status.FAILED.value, Status.BLOCKED.value, Status.ERROR.value
+        )
     )
     n_warn = sum(1 for x in results if x.status == Status.WARNING.value)
     n_other = sum(
@@ -1267,7 +1269,10 @@ def _group_by_category(r: RunResult) -> list[tuple[str, list[CheckResult]]]:
 def _category_color(results: list[CheckResult]) -> str:
     """Worst-status colour for a category tile: red > amber > gray > green."""
     statuses = [x.status for x in results]
-    if any(s in (Status.FAILED.value, Status.ERROR.value) for s in statuses):
+    if any(
+        s in (Status.FAILED.value, Status.BLOCKED.value, Status.ERROR.value)
+        for s in statuses
+    ):
         return "red"
     if any(s == Status.WARNING.value for s in statuses):
         return "amber"
@@ -1516,7 +1521,7 @@ def _render_category_section(
 ) -> str:
     """One collapsible <details> section per category, with a card per check.
 
-    Opens by default when the category has any Failed/Error/Warning/
+    Opens by default when the category has any Failed/Blocked/Error/Warning/
     Manual/NotConfigured row; all-passing categories stay collapsed.
     Defensive: a category with zero results (shouldn't happen, since
     grouping only emits categories that have checks) renders a friendly
@@ -1536,7 +1541,9 @@ def _render_category_section(
 
     n_fail = sum(
         1 for x in results
-        if x.status in (Status.FAILED.value, Status.ERROR.value)
+        if x.status in (
+            Status.FAILED.value, Status.BLOCKED.value, Status.ERROR.value
+        )
     )
     n_warn = sum(1 for x in results if x.status == Status.WARNING.value)
     n_other = sum(
