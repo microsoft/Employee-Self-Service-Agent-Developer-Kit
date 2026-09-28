@@ -1,0 +1,26 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      x-ms-client-name:
+      - EssAdk
+    method: GET
+    uri: https://api.preprod.powerplatform.com/connectivity/environments/00000000-0000-0000-0000-000000001111/connections?api-version=2024-10-01
+  response:
+    body:
+      string: '{"value":[{"name":"mock-servicenow-connection","id":"/providers/Microsoft.PowerApps/apis/shared_service-now/connections/mock-servicenow-connection","type":"Microsoft.PowerApps/apis/connections","properties":{"apiId":"/providers/Microsoft.PowerApps/apis/shared_service-now","displayName":"Mock
+        Display Name","statuses":[{"status":"Connected"}],"isSsoConnection":false,"createdBy":{"id":"00000000-0000-0000-0000-000000001111","displayName":"Mock
+        Display Name","email":"mock.user@contoso.com","tenantId":"00000000-0000-0000-0000-000000001111"},"environment":{"id":"/providers/Microsoft.PowerApps/environments/00000000-0000-0000-0000-000000001111","name":"00000000-0000-0000-0000-000000001111"},"allowSharing":false}}]}'
+    headers:
+      Content-Type:
+      - application/json; charset=utf-8
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

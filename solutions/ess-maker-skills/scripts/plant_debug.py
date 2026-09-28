@@ -232,8 +232,14 @@ def main(argv=None) -> int:
                         help="skip the confirmation prompt")
     args = parser.parse_args(argv)
 
-    from auth import authenticate, load_config
+    from auth import authenticate, is_connect_ready, load_config
 
+    if is_connect_ready():
+        print(
+            "ERROR: Server-side debug planting is not yet available for "
+            "DA-GA workspaces."
+        )
+        return 2
     config = load_config()
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]

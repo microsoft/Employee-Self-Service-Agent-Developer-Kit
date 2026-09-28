@@ -131,6 +131,74 @@ def _write_topic_invoke_flow_action(
     )
 
 
+def test_discovery_honors_explicit_agent_slug(tmp_path: Path) -> None:
+    from flightcheck.checks.workday import _discover_customer_workday_scenarios
+
+    agents_root = tmp_path / "workspace" / "agents"
+    _write_topic_system_common_execution(
+        agents_root / "selected-agent" / "topics" / "selected.mcs.yml",
+        scenario_name="HRWorkdayHCMSelected",
+    )
+    _write_topic_system_common_execution(
+        agents_root / "other-agent" / "topics" / "other.mcs.yml",
+        scenario_name="HRWorkdayHCMOther",
+    )
+
+    discovered = _discover_customer_workday_scenarios(
+        agents_root,
+        "selected-agent",
+    )
+
+    assert {item["agent"] for item in discovered} == {"selected-agent"}
+    assert {item["scenarioName"] for item in discovered} == {
+        "HRWorkdayHCMSelected"
+    }
+
+
+@pytest.mark.parametrize(
+    "agent_slug",
+    (
+        ".",
+        "..",
+        "../other-agent",
+        r"..\other-agent",
+        "/tmp/agent",
+        "C:other-agent",
+        "other agent",
+    ),
+)
+def test_discovery_rejects_unsafe_explicit_agent_slug(
+    tmp_path: Path,
+    agent_slug: str,
+) -> None:
+    from flightcheck.checks.workday import _discover_customer_workday_scenarios
+
+    agents_root = tmp_path / "workspace" / "agents"
+    agents_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="agent slug"):
+        _discover_customer_workday_scenarios(agents_root, agent_slug)
+
+
+def test_discovery_rejects_agent_symlink_outside_workspace(
+    tmp_path: Path,
+) -> None:
+    from flightcheck.checks.workday import _discover_customer_workday_scenarios
+
+    agents_root = tmp_path / "workspace" / "agents"
+    agents_root.mkdir(parents=True)
+    outside = tmp_path / "outside-agent"
+    outside.mkdir()
+    linked_agent = agents_root / "linked-agent"
+    try:
+        linked_agent.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are not available")
+
+    with pytest.raises(ValueError, match="direct child"):
+        _discover_customer_workday_scenarios(agents_root, "linked-agent")
+
+
 def _write_workflow(
     agent_dir: Path,
     *,

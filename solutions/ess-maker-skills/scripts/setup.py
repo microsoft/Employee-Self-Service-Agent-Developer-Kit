@@ -38,6 +38,8 @@ import sys
 from datetime import date
 
 from auth import EXPECTED_CONFIG_VERSION
+from evaluation_csv import regenerate_evaluation_exports
+from evaluation_review import REVIEW_FILENAME, metadata_from_description
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -122,6 +124,29 @@ def extract_components(components, output_dir):
     """Write each component's data to the correct subfolder. Returns stats."""
     os.makedirs(output_dir, exist_ok=True)
 
+    existing_component_map = {}
+    existing_map_path = os.path.join(output_dir, ".component-map.json")
+    if os.path.exists(existing_map_path):
+        try:
+            with open(existing_map_path, "r", encoding="utf-8") as f:
+                existing_component_map = json.load(f)
+        except (OSError, ValueError):
+            existing_component_map = {}
+
+    # EvaluationData records point to their EvaluationSet parent by ID. Build
+    # this lookup before writing so ordering from Dataverse does not matter and
+    # every type-19 component lands under evaluations/<set>/.
+    evaluation_set_folders = {}
+    for comp in components:
+        if (comp.get("componenttype") == 19
+                and not comp.get("parentbotcomponentid")):
+            set_id = comp.get("botcomponentid")
+            if set_id:
+                evaluation_set_folders[set_id] = friendly_filename(
+                    comp.get("name", comp.get("schemaname", "evaluation-set")),
+                    comp.get("schemaname", "evaluation-set"),
+                )
+
     topics = []
     variables = []
     evaluations = []  # type-19 evaluation test sets and cases
@@ -141,6 +166,7 @@ def extract_components(components, output_dir):
         schemaname = comp.get("schemaname", "unknown")
         name = comp.get("name", schemaname)
         botcomponentid = comp.get("botcomponentid")
+        parent_id = comp.get("parentbotcomponentid")
 
         mapping = TYPE_MAP.get(ctype)
         if mapping is None:
@@ -152,6 +178,16 @@ def extract_components(components, output_dir):
                 subfolder, filename = "", ext
             else:
                 filename = f"{friendly_filename(name, schemaname)}{ext}"
+
+        if ctype == 19:
+            if parent_id:
+                set_folder = evaluation_set_folders.get(parent_id, "unassigned")
+            else:
+                set_folder = evaluation_set_folders.get(
+                    botcomponentid,
+                    friendly_filename(name, schemaname),
+                )
+            subfolder = f"evaluations/{set_folder}"
 
         if subfolder:
             folder = os.path.join(output_dir, subfolder)
@@ -173,9 +209,9 @@ def extract_components(components, output_dir):
             "schemaname": schemaname,
             "componenttype": ctype,
             "name": name,
+            "description": comp.get("description") or "",
         }
         # Store parent link for evaluation test cases (type 19)
-        parent_id = comp.get("parentbotcomponentid")
         if parent_id:
             map_entry["parentbotcomponentid"] = parent_id
         component_map[relative_path] = map_entry
@@ -187,11 +223,47 @@ def extract_components(components, output_dir):
         elif ctype == 12:
             variables.append({"name": name, "schema": schemaname})
         elif ctype == 19:
-            evaluations.append({"name": name, "schema": schemaname,
-                                "parentbotcomponentid": comp.get("parentbotcomponentid")})
+            review_metadata = metadata_from_description(
+                comp.get("description")) if not parent_id else None
+            evaluations.append({
+                "name": name,
+                "schema": schemaname,
+                "parentbotcomponentid": comp.get("parentbotcomponentid"),
+                "reviewStatus": (
+                    review_metadata.get("status")
+                    if review_metadata else None
+                ),
+            })
+            if not parent_id:
+                review_path = os.path.join(folder, REVIEW_FILENAME)
+                if review_metadata:
+                    with open(review_path, "w", encoding="utf-8") as review_file:
+                        json.dump(review_metadata, review_file, indent=2)
+                elif os.path.isfile(review_path):
+                    os.remove(review_path)
         else:
             other_items.append({"name": name, "schema": schemaname,
                                 "type": ctype})
+
+    # A refresh from an older kit may already have type-19 files flattened
+    # directly under evaluations/. Remove only stale paths that the prior
+    # component map ties to the same fetched Dataverse records. The refresh
+    # checkpoint preserves any pre-refresh local edits.
+    incoming_evaluation_ids = {
+        comp.get("botcomponentid")
+        for comp in components
+        if comp.get("componenttype") == 19 and comp.get("botcomponentid")
+    }
+    for old_path, old_entry in existing_component_map.items():
+        if (old_entry.get("componenttype") != 19
+                or old_entry.get("botcomponentid") not in incoming_evaluation_ids
+                or old_path in component_map):
+            continue
+        stale_path = os.path.join(output_dir, *old_path.split("/"))
+        if os.path.isfile(stale_path):
+            os.remove(stale_path)
+
+    evaluation_exports = regenerate_evaluation_exports(output_dir)
 
     return {
         "written": written,
@@ -201,6 +273,10 @@ def extract_components(components, output_dir):
         "evaluations": evaluations,
         "other": other_items,
         "component_map": component_map,
+        "evaluation_exports": [
+            os.path.relpath(path, output_dir).replace("\\", "/")
+            for path in evaluation_exports
+        ],
         "_topic_data": topic_data,
     }
 
@@ -531,6 +607,9 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "slug": slug,
         "folder": output_dir.replace("\\", "/"),
     })
+    environment_id = str(agent_info.get("environmentId") or "").strip()
+    if environment_id:
+        agent_entry["environmentId"] = environment_id
     # Detect schema migration. write_config always stamps the current
     # EXPECTED_CONFIG_VERSION; if the existing file was on an older
     # version, surface that to the operator so they know /setup just
@@ -568,6 +647,14 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "workflowCount": workflow_count,
         "evaluationCount": evaluation_count,
     }
+    if environment_id:
+        config["environmentId"] = environment_id
+    elif agent_entry.get("environmentId"):
+        # Mirror the active agent's own value rather than a stale top-level
+        # environmentId that may belong to a previously onboarded agent.
+        config["environmentId"] = agent_entry["environmentId"]
+    elif existing.get("environmentId"):
+        config["environmentId"] = existing["environmentId"]
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):
@@ -618,6 +705,14 @@ def print_summary(stats, template_configs, workflows=None):
     print(f"Variables: {len(stats['variables'])}")
     if eval_sets or eval_cases:
         print(f"Evaluations: {len(eval_sets)} sets, {len(eval_cases)} test cases")
+        pending_review = [
+            item["name"] for item in eval_sets
+            if item.get("reviewStatus") == "review_requested"
+        ]
+        if pending_review:
+            print("Tagged for review:")
+            for name in pending_review:
+                print(f"  - {name}")
     if stats["other"]:
         print(f"Other: {len(stats['other'])}")
     if template_configs:
@@ -683,6 +778,10 @@ def main():
         description="ESS Maker Kit — one-shot setup")
     parser.add_argument("--url", required=True,
                         help="Power Platform environment URL")
+    parser.add_argument(
+        "--environment-id",
+        help="Power Platform environment ID selected during discovery",
+    )
     parser.add_argument("--bot-id", required=True,
                         help="Selected bot ID from Dataverse")
     parser.add_argument("--name", required=True,
@@ -711,6 +810,7 @@ def main():
         "schema": args.schema,
         "managed": args.managed,
         "url": args.url,
+        "environmentId": args.environment_id,
     }
 
     # --- Idempotency gate: refuse silent overwrite of existing agent dir ---

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# ESS ADK - macOS Bootstrap (Developer Mode)
+#
+# One-liner entry point:
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-dev-mac.sh)"
+#
+# Installs the full maker kit and lands the maker in the default VS Code
+# layout (activity bar, file explorer, status bar visible) with /setup
+# injected into Copilot Chat. Shortcut for makers who already know they want
+# the Developer experience and want to skip the terminal mode prompt.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+# Developer mode: pin INSTALL_MODE so install-ess-adk.sh uses `code chat`
+# to open /setup in the sidebar panel, skips the terminal mode prompt, and
+# does not apply the chat-first layout.
+export INSTALL_MODE="developer"
+
+# Parse optional --branch / --source-base-url arguments
+BRANCH="main"
+SOURCE_BASE_URL=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --branch)       BRANCH="$2"; shift 2 ;;
+        --source-base-url) SOURCE_BASE_URL="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
+
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+echo "Fetching ESS ADK installer to $TEMP_DIR"
+INSTALLER_URL="$SOURCE_BASE_URL/install-ess-adk.sh"
+echo "  $INSTALLER_URL"
+
+if ! curl -fsSL "$INSTALLER_URL" -o "$TEMP_DIR/install-ess-adk.sh"; then
+    echo "  [ERR] Failed to download: $INSTALLER_URL" >&2
+    echo "  If raw.githubusercontent.com is blocked by your firewall/proxy," >&2
+    echo "  clone the repo manually and run: INSTALL_MODE=developer setup/install-ess-adk.sh" >&2
+    exit 1
+fi
+
+# Verify the downloaded file looks like a valid script
+if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess-adk.sh" | grep -q '^#!/'; then
+    echo "  [ERR] Downloaded file appears invalid (empty or not a shell script)" >&2
+    echo "  A corporate proxy may be intercepting the request." >&2
+    exit 1
+fi
+
+# Best-effort: fetch the installer telemetry emitter (fail-open - a telemetry
+# download failure must never block the install).
+if curl -fsSL "$SOURCE_BASE_URL/telemetry/install-telemetry.sh" -o "$TEMP_DIR/install-telemetry.sh" 2>/dev/null; then
+    export ESS_INSTALL_TELEMETRY_LIB="$TEMP_DIR/install-telemetry.sh"
+fi
+
+# Run the downloaded installer in a subshell to avoid issues if it calls exit
+export ESS_ADK_BRANCH="$BRANCH"
+bash "$TEMP_DIR/install-ess-adk.sh"

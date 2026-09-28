@@ -48,6 +48,7 @@ $script:EssTelSchemaVersion = '1.0'
 $script:EssTel = @{
     Ready        = $false
     Installer    = 'adk'
+    InstallMode  = 'prompt'
     Env          = 'prod'
     IKey         = ''
     InstanceId   = ''
@@ -208,6 +209,7 @@ function Get-EssTelCommonData {
         schemaVersion    = $script:EssTelSchemaVersion
         env              = $script:EssTel.Env
         installer        = $script:EssTel.Installer
+        installMode      = $script:EssTel.InstallMode
         invocationSource = 'installer'
         platform         = $script:EssTel.Platform
         os               = $script:EssTel.OsVersion
@@ -220,17 +222,22 @@ function Get-EssTelCommonData {
 function Initialize-EssInstallTelemetry {
     <#
     .SYNOPSIS Begin installer telemetry: notice, identity, and the start event.
-    .PARAMETER Installer  One of adk | lite | flightcheck.
+    .PARAMETER Installer  One of adk | lite | flightcheck. 'lite' is retained
+        for the back-compat bootstrap-lite.ps1 shim; new callers should pass
+        'adk' with -InstallMode maker instead.
+    .PARAMETER InstallMode  The VS Code experience the maker will land in
+        after the installer completes: maker | developer | prompt (or the
+        legacy aliases 'lite' | 'standard'). 'prompt' means the installer
+        will ask in the terminal before VS Code launches.
     #>
     param(
         [ValidateSet('adk', 'lite', 'flightcheck')]
-        [string]$Installer = 'adk'
+        [string]$Installer = 'adk',
+        [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
+        [string]$InstallMode = 'prompt'
     )
     try {
         if (-not (Test-EssTelemetryEnabled)) { $script:EssTel.Ready = $false; return }
-        # The Lite-mode installer is being merged into the standard ADK installer
-        # (mode will become an onboarding prompt), so it is no longer instrumented.
-        if ($Installer -eq 'lite') { $script:EssTel.Ready = $false; return }
         Initialize-EssTelConfig
 
         $envName = "$env:ESS_ADK_ARIA_ENV".Trim().ToLowerInvariant()
@@ -241,6 +248,7 @@ function Initialize-EssInstallTelemetry {
         $adkVer = "$env:ESS_ADK_VERSION".Trim(); if (-not $adkVer) { $adkVer = 'unknown' }
 
         $script:EssTel.Installer   = $Installer
+        $script:EssTel.InstallMode = $InstallMode
         $script:EssTel.Env         = $envName
         $script:EssTel.IKey        = $script:EssTelIKeys[$envName]
         $script:EssTel.InstanceId  = $inst.Id

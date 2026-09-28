@@ -48,15 +48,23 @@ from flightcheck.runner import (
     BUCKET_MANUAL,
     BUCKET_PASSED,
 )
+from flightcheck.agent_scope import validate_agent_slug
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.azure_arm_client import AzureArmClient
+from agentbuilder import (
+    AgentBuilderClient,
+    ConnectivityClient,
+    authenticate_flightcheck,
+    ring_from_environment_host,
+    validate_environment_host,
+)
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
-from flightcheck.checks.environment import run_environment_checks
+from flightcheck.checks.environment import run_capacity_check, run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -64,6 +72,7 @@ from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -73,6 +82,7 @@ from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
+from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck import consent
 
 
@@ -94,6 +104,7 @@ SCOPE_MAP = {
         ("Workday", run_workday_checks),
         ("Workday Extension", run_workday_extension_checks),
     ],
+    "workdayda": [("Workday DA", run_workday_da_checks)],
     "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
@@ -130,6 +141,22 @@ FULL_SCOPE = [
     ("Publishing", run_publishing_checks),
     ("Cloud Policies", run_cloud_policy_checks),
 ]
+
+NATIVE_NO_DATAVERSE_SCOPE_MAP = {
+    "full": [
+        ("Native Agent", run_native_agent_checks),
+        ("Environment", run_capacity_check),
+        ("Local Files", run_local_file_checks),
+    ],
+    "environment": [("Environment", run_capacity_check)],
+    "servicenow": [("Native Agent", run_native_agent_checks)],
+    "workday": [("Native Agent", run_native_agent_checks)],
+}
+NATIVE_CONNECTOR_FILTERS = {
+    "servicenow": ("shared_service-now",),
+    "workday": ("shared_workdaysoap",),
+}
+NATIVE_NO_DATAVERSE_LOCAL_SCOPES = frozenset({"infrastructure", "local"})
 
 # Scopes whose checks query the Copilot Studio Island Gateway (PVA) and so
 # require PVA authentication in main(). Keep in sync with the SCOPE_MAP checks
@@ -659,6 +686,120 @@ def _resolve_target_selection(args, runner):
         _resolve_servicenow_connection(args, runner)
 
 
+def _active_agent_config(config: dict) -> dict:
+    active_slug = str(config.get("activeAgent") or "")
+    agents = config.get("agents")
+    if isinstance(agents, list):
+        for agent in agents:
+            if (
+                isinstance(agent, dict)
+                and str(agent.get("slug") or "") == active_slug
+            ):
+                return agent
+    agent = config.get("agent")
+    return agent if isinstance(agent, dict) else {}
+
+
+def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
+    if env_url:
+        return False
+    release_line = str(config.get("releaseLine") or "").casefold()
+    if release_line == "da":
+        return True
+    active = _active_agent_config(config)
+    return str(active.get("releaseLine") or "").casefold() == "da"
+
+
+def _resolve_environment_ring(
+    config: dict,
+    *,
+    explicit_ring: str | None = None,
+) -> str:
+    """Resolve one supported ring and reject contradictory environment state."""
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    requested_ring = str(explicit_ring or "").strip().casefold()
+    host = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    inferred_ring = None
+    if host:
+        inferred_ring = ring_from_environment_host(host)
+
+    candidates = {
+        ring
+        for ring in (requested_ring, configured_ring, inferred_ring)
+        if ring
+    }
+    if not candidates:
+        raise ValueError(
+            "The Power Platform environment ring is unavailable. Confirm "
+            "whether the environment uses prod, preprod, or test, then rerun "
+            "FlightCheck with --ring."
+        )
+    if not candidates <= {"prod", "preprod", "test"}:
+        raise ValueError(
+            "The Power Platform environment ring must be prod, preprod, or "
+            "test."
+        )
+    if len(candidates) != 1:
+        raise ValueError(
+            "The supplied ring, configured ring, and Power Platform endpoint "
+            "do not identify the same environment ring."
+        )
+    return candidates.pop()
+
+
+_PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
+    "appIdUri",
+    "baseUrl",
+    "domainName",
+    "entraAppId",
+    "entraAppIdUri",
+    "entraAppObjectId",
+    "entraSSO",
+    "installPath",
+    "oauthClientId",
+    "oauthTokenUrl",
+    "ootbTopics",
+    "restBaseUrl",
+    "scopeGuid",
+    "setupStatus",
+    "sidecarDataverseEndpoint",
+    "soapBaseUrl",
+    "tenant",
+    "tenantId",
+    "tokenEndpoint",
+    "tokenHost",
+    "vertical",
+    "verticals",
+})
+
+
+def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict:
+    """Overlay provider-owned validation fields onto foundation config.
+
+    Provider connect state intentionally lives outside ``.local/config.json``.
+    An explicit path keeps provider state from being guessed or merged when
+    multiple integrations exist in the same workspace.
+    """
+    merged = dict(config or {})
+    if not connect_config_path:
+        return merged
+
+    with open(connect_config_path, "r", encoding="utf-8") as f:
+        overlay = json.load(f)
+    if not isinstance(overlay, dict):
+        raise ValueError(f"{connect_config_path} must contain a JSON object")
+
+    for key in _PROVIDER_CONNECT_CONFIG_KEYS:
+        if key in overlay:
+            merged[key] = overlay[key]
+    if not merged.get("dataverseEndpoint"):
+        sidecar_endpoint = overlay.get("sidecarDataverseEndpoint")
+        if isinstance(sidecar_endpoint, str) and sidecar_endpoint.strip():
+            merged["dataverseEndpoint"] = sidecar_endpoint.strip()
+    merged["_connectConfigPath"] = connect_config_path
+    return merged
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -674,6 +815,13 @@ def _run_single_checkpoint(args):
     from flightcheck import registry
 
     target = args.checkpoint
+    explicit_agent_slug = getattr(args, "agent_slug", None)
+    if explicit_agent_slug is not None:
+        try:
+            validate_agent_slug(explicit_agent_slug)
+        except ValueError as e:
+            print(f"ERROR: Invalid --agent-slug: {e}")
+            sys.exit(2)
     spec = registry.resolve(target)
     if spec is None:
         _print_unknown_checkpoint(target)
@@ -692,10 +840,27 @@ def _run_single_checkpoint(args):
         print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
+    try:
+        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to load --connect-config: {e}")
+        sys.exit(1)
+
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
+
+    resolved_ring = None
+    if target == "ENV-CAPACITY-001":
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=getattr(args, "ring", None),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
 
     quiet_auth = getattr(args, "quiet_auth", False)
     if not quiet_auth:
@@ -717,13 +882,21 @@ def _run_single_checkpoint(args):
     pp_admin = None
     pva = None
     powerplatform = None
+    agentbuilder = None
+    connectivity = None
 
     # Tenant discovery feeds Graph / Power Platform / PVA auth. Normally read
     # from the Dataverse environment's auth challenge; when this checkpoint
     # needs no Dataverse endpoint (Entra-only), fall back to the multi-tenant
     # "organizations" authority so interactive sign-in resolves the operator's
     # home tenant.
-    if needed & {registry.GRAPH, registry.PP_ADMIN, registry.PVA, registry.DATAVERSE, registry.POWERPLATFORM}:
+    if needed & {
+        registry.GRAPH,
+        registry.PP_ADMIN,
+        registry.PVA,
+        registry.DATAVERSE,
+        registry.POWERPLATFORM,
+    }:
         from auth import discover_tenant
         if env_url:
             try:
@@ -770,12 +943,55 @@ def _run_single_checkpoint(args):
             print(f"  Power Platform: WARNING — {e}")
             pp_admin = None
 
-    env_id = None
-    if registry.PP_ADMIN in needed:
-        if args.environment_id:
-            env_id = args.environment_id
-        elif env_url:
-            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+    env_id = args.environment_id or config.get("environmentId") or None
+    if not env_id and registry.PP_ADMIN in needed and env_url:
+        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+
+    if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
+        native_host = config.get("powerPlatformApiEndpoint", "")
+        if not native_host:
+            print(
+                "ERROR: No powerPlatformApiEndpoint in .local/config.json. "
+                "Run /setup again."
+            )
+            sys.exit(1)
+        try:
+            native_ring = ring_from_environment_host(native_host)
+            native_host = validate_environment_host(native_host, native_ring)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        if not quiet_auth:
+            print("Authenticating to native AgentBuilder APIs...")
+        try:
+            native_token, native_tenant_id = authenticate_flightcheck(
+                native_ring,
+                include_connectivity=registry.CONNECTIVITY in needed,
+            )
+            tenant_id = native_tenant_id
+            agentbuilder = AgentBuilderClient(
+                native_host,
+                native_token,
+                ring=native_ring,
+                tenant_id=native_tenant_id,
+                api_version=config.get(
+                    "agentBuilderApiVersion", "2024-10-01"
+                ),
+            )
+            if registry.CONNECTIVITY in needed:
+                connectivity = ConnectivityClient(
+                    native_token,
+                    ring=native_ring,
+                    api_version=config.get(
+                        "agentBuilderApiVersion", "2024-10-01"
+                    ),
+                )
+            if not quiet_auth:
+                print("  Native AgentBuilder APIs: OK")
+        except Exception as e:
+            print(f"  Native AgentBuilder APIs: WARNING — {e}")
+            agentbuilder = None
+            connectivity = None
 
     if registry.PVA in needed:
         if not quiet_auth:
@@ -807,6 +1023,14 @@ def _run_single_checkpoint(args):
         target_matcher=lambda cid: registry.matches(target, cid),
     )
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
+    runner.agent_slug = (
+        explicit_agent_slug
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -815,6 +1039,8 @@ def _run_single_checkpoint(args):
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = None
+    runner.agentbuilder = agentbuilder
+    runner.connectivity = connectivity
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -836,8 +1062,7 @@ def _run_single_checkpoint(args):
     if not result.results:
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
-        if not getattr(spec, "is_family", False):
-            sys.exit(1)
+        sys.exit(1)
 
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
     # Single-checkpoint mode never auto-opens the HTML report; results.json /
@@ -910,12 +1135,26 @@ def _run_single_checkpoint(args):
         # --scope emit so checkpoint runs also count toward the adk.* cubes.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_category
 
             _agent_id = _active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Single-checkpoint runs execute exactly one owning check, so the
+            # first result row's category is the run's connector (or "" for
+            # cross-cutting checkpoints like Environment / Authentication).
+            # Derived here rather than passed by the caller so the CLI runtime
+            # path matches the same connector attribution as the legacy
+            # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
+            _connector = ""
+            if result.results:
+                _connector = derive_connector_from_category(
+                    getattr(result.results[0], "category", "") or ""
+                )
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -926,6 +1165,7 @@ def _run_single_checkpoint(args):
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -962,6 +1202,14 @@ def main():
         help="Override the Power Platform environment ID (used by environment_picker.py)",
     )
     parser.add_argument(
+        "--ring",
+        choices=["prod", "preprod", "test"],
+        help=(
+            "Confirm the Power Platform service ring when it cannot be "
+            "resolved from local setup state."
+        ),
+    )
+    parser.add_argument(
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
     )
@@ -971,6 +1219,24 @@ def main():
              "report only its result. Hydrates the checkpoint's declared "
              "prerequisites and initialises only the clients it needs. Mutually "
              "exclusive with --scope.",
+    )
+    parser.add_argument(
+        "--connect-config",
+        default=None,
+        help=(
+            "Merge a provider-specific connect config JSON object into "
+            ".local/config.json for this run. Connect/setup skills use this "
+            "when their validation state intentionally lives outside the "
+            "foundation config."
+        ),
+    )
+    parser.add_argument(
+        "--agent-slug",
+        default=None,
+        help=(
+            "Scope agent-local checks to one workspace/agents/<slug> folder. "
+            "Defaults to activeAgent (or agent.slug) from .local/config.json."
+        ),
     )
     parser.add_argument(
         "--list-checkpoints", action="store_true",
@@ -1037,6 +1303,11 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.agent_slug is not None:
+        try:
+            validate_agent_slug(args.agent_slug)
+        except ValueError as e:
+            parser.error(f"invalid --agent-slug: {e}")
 
     # --- Single-checkpoint mode (additive; leaves all --scope behavior intact) ---
     if args.list_checkpoints:
@@ -1077,9 +1348,48 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    try:
+        config = _merge_connect_config(config, args.connect_config)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to load --connect-config: {e}")
+        sys.exit(1)
+
     infra_only_scope = args.scope == "infrastructure"
+    da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if not env_url and not infra_only_scope:
+    native_no_dataverse = _is_native_no_dataverse(config, env_url)
+    native_remote_scope = (
+        native_no_dataverse
+        and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
+    )
+    resolved_ring = None
+    if args.scope in {"full", "environment"}:
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=args.ring,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+    native_supported_scopes = (
+        set(NATIVE_NO_DATAVERSE_SCOPE_MAP)
+        | set(NATIVE_NO_DATAVERSE_LOCAL_SCOPES)
+    )
+    if native_no_dataverse and args.scope not in native_supported_scopes:
+        supported = ", ".join(sorted(native_supported_scopes))
+        print(
+            f"ERROR: Scope '{args.scope}' requires Dataverse and is not "
+            "available for this native no-Dataverse agent. "
+            f"Supported scopes: {supported}."
+        )
+        sys.exit(1)
+    if (
+        not env_url
+        and not infra_only_scope
+        and not da_local_scope
+        and not native_remote_scope
+    ):
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
@@ -1103,12 +1413,29 @@ def main():
         for a in agents:
             marker = "->" if a.get("slug") == active else "  "
             print(f"    {marker} {a.get('name', 'Unknown')}")
-    print(f"  Environment: {env_url}")
+    print(
+        f"  Environment: "
+        f"{env_url or config.get('powerPlatformApiEndpoint') or 'AgentBuilder workspace (local files only)'}"
+    )
     print(f"  Scope:       {args.scope}")
     print("=" * 64)
     print()
 
-    if infra_only_scope:
+    agentbuilder = None
+    connectivity = None
+    powerplatform = None
+    azure_arm = None
+    if da_local_scope:
+        tenant_id = None
+        dv_token = None
+        graph = None
+        pp_admin = None
+        env_id = config.get("environmentId") or None
+        print(
+            "Skipping Dataverse and remote-service authentication for "
+            "DA local-files scope."
+        )
+    elif infra_only_scope:
         # Infrastructure scope skips auth to stay fast and read-only. The one
         # exception is the INFRA-003 egress probe: when explicitly opted in with
         # --runtime-reachability it needs Dataverse + Power Platform tokens to
@@ -1142,6 +1469,65 @@ def main():
             print(
                 "Skipping Dataverse/Graph/Power Platform auth for infrastructure scope."
             )
+    elif native_remote_scope:
+        tenant_id = None
+        dv_token = None
+        graph = None
+        pp_admin = None
+        env_id = args.environment_id or config.get("environmentId") or None
+        if not env_id:
+            print(
+                "ERROR: Native FlightCheck requires environmentId in "
+                ".local/config.json or --environment-id."
+            )
+            sys.exit(1)
+
+        needs_agent_readiness = args.scope in {"full", "servicenow", "workday"}
+        if needs_agent_readiness:
+            environment_host = str(
+                config.get("powerPlatformApiEndpoint") or ""
+            ).strip()
+            if not environment_host:
+                print(
+                    "ERROR: Native FlightCheck requires "
+                    "powerPlatformApiEndpoint in .local/config.json."
+                )
+                sys.exit(1)
+            try:
+                ring = ring_from_environment_host(environment_host)
+                environment_host = validate_environment_host(
+                    environment_host,
+                    ring,
+                )
+            except ValueError as exc:
+                print(f"ERROR: Invalid native Power Platform endpoint: {exc}")
+                sys.exit(1)
+            print("Authenticating for native AgentBuilder FlightCheck...")
+            token, tenant_id = authenticate_flightcheck(
+                ring,
+                include_connectivity=True,
+            )
+            agentbuilder = AgentBuilderClient(
+                environment_host,
+                token,
+                ring=ring,
+                tenant_id=tenant_id,
+            )
+            connectivity = ConnectivityClient(token, ring=ring)
+            print("  AgentBuilder and connection inventory: OK")
+        else:
+            tenant_id = "organizations"
+
+        if args.scope in {"full", "environment"}:
+            print("Authenticating to Power Platform API (capacity)...")
+            powerplatform = PowerPlatformClient(tenant_id)
+            try:
+                powerplatform.authenticate()
+                print("  Power Platform API: OK")
+            except Exception as exc:
+                print(f"  Power Platform API: WARNING — {exc}")
+                print("  (ENV-CAPACITY-001 will be skipped)")
+                powerplatform = None
     else:
         # --- Authenticate ---
         from auth import authenticate, discover_tenant
@@ -1237,7 +1623,13 @@ def main():
     # Authenticating unconditionally would prompt for a second interactive login
     # on scopes like --scope prerequisites that don't need it.
     pva = None
-    if infra_only_scope:
+    if native_remote_scope:
+        print("Skipping legacy Copilot Studio auth for native DA scope.")
+    elif da_local_scope:
+        print(
+            "Skipping Copilot Studio auth for DA local-files scope."
+        )
+    elif infra_only_scope:
         print("Skipping Copilot Studio auth for infrastructure scope.")
     elif args.scope in PVA_SCOPES:
         print("Authenticating to Copilot Studio (Island Gateway)...")
@@ -1260,9 +1652,10 @@ def main():
     # prerequisites checks read them, and each is a separate interactive
     # sign-in (Power Platform API + Azure ARM are distinct audiences), so
     # don't prompt on scopes that won't run PRE-005. Mirrors the PVA gating.
-    powerplatform = None
-    azure_arm = None
-    if args.scope in ("full", "prerequisites"):
+    if (
+        not native_remote_scope
+        and args.scope in ("full", "prerequisites")
+    ):
         print("Authenticating to Power Platform API (billing policies)...")
         powerplatform = PowerPlatformClient(tenant_id)
         try:
@@ -1286,6 +1679,14 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
+    runner.agent_slug = (
+        getattr(args, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -1294,6 +1695,11 @@ def main():
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
+    runner.agentbuilder = agentbuilder
+    runner.connectivity = connectivity
+    runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
+        args.scope
+    )
 
     # --- Target selection (standalone scope runs only) ---
     # Pin the Workday SSO app / ServiceNow connection the operator wants this
@@ -1301,10 +1707,13 @@ def main():
     # interactive picker). This is reached ONLY from the scope-mode main();
     # --checkpoint mode builds its own runner and never calls this, keeping
     # setup gates deterministic.
-    _resolve_target_selection(args, runner)
+    if not native_remote_scope:
+        _resolve_target_selection(args, runner)
 
     # Register checks based on scope
-    if args.scope == "full":
+    if native_remote_scope:
+        checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+    elif args.scope == "full":
         checks = FULL_SCOPE
     else:
         checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
@@ -1384,12 +1793,20 @@ def main():
         # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_scope
 
             _agent_id = active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Derive connector from the CLI scope so scope-based runs get the
+            # same attribution as the legacy flightcheck events (ADO 7943641
+            # review). "full" and cross-cutting scopes return "" — the finer
+            # per-check attribution lives on the check events, not run events.
+            _connector = derive_connector_from_scope(args.scope)
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1400,6 +1817,7 @@ def main():
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1417,7 +1835,7 @@ def main():
         open_report_in_browser(args.output)
 
     # Exit code
-    sys.exit(1 if result.failed > 0 else 0)
+    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
@@ -1429,8 +1847,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
       3. ACTION REQUIRED — full per-row detail (Failed / Error).
       4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
          Manual / NotConfigured).
-      5. PASSED — count only (includes Passed + Skipped); point to
-         report.html for the list.
+      5. SKIPPED — count only, when present.
+      6. PASSED — count only; point to report.html for the list.
 
     The goal is for an operator scanning the terminal to see, in
     order: am I OK? what must I fix? what must I verify? — without
@@ -1439,7 +1857,9 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]
-    passed = buckets[BUCKET_PASSED]
+    completed = buckets[BUCKET_PASSED]
+    passed = [r for r in completed if r.status == Status.PASSED.value]
+    skipped = [r for r in completed if r.status == Status.SKIPPED.value]
 
     print()
     print("=" * 64)
@@ -1526,7 +1946,13 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
             print("  (Open report.html for the full result + verification "
                   "steps.)")
 
-    # Section 3 — PASSED (count only; the operator doesn't need to
+    if skipped:
+        print()
+        print(f"  SKIPPED ({len(skipped)})")
+        print("  " + "-" * 62)
+        print("  See report.html for the checks that could not be evaluated.")
+
+    # Section 4 — PASSED (count only; the operator doesn't need to
     # scroll past 200+ green rows to find what needs their attention).
     print()
     print(f"  PASSED ({len(passed)})")

@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# ESS ADK — macOS Bootstrap (Lite Mode)
+# ESS ADK - macOS Bootstrap (Maker Mode - formerly "Lite Mode")
 #
-# One-liner entry point:
+# One-liner entry point (kept as-is for URL back-compat):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 #
 # Installs the full maker kit with the ESS Maker Profile extension enabled,
-# giving users a chat-first, big-button experience.
+# giving users a chat-first, big-button experience (Maker mode). This is the
+# macOS equivalent of the Windows bootstrap-lite.ps1 compat shim: same
+# unified install-ess-adk.sh script, mode pinned to 'maker' up front.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-# Lite mode: do NOT set SKIP_MAKER_PROFILE so the chat-first profile installs.
+# Maker mode: pin INSTALL_MODE so install-ess-adk.sh skips the mode-prompt
+# path and lands the maker in the chat-first layout. Legacy telemetry
+# gating: the bash emitter still guards out ESS_TEL_INSTALLER=lite until
+# macOS consolidation ships, so we opt this shim out of the new 'adk'
+# installer identity by exporting the override.
+export INSTALL_MODE="maker"
+export ESS_TEL_INSTALLER_OVERRIDE="lite"
 
 # Parse optional --branch / --source-base-url arguments
 BRANCH="main"

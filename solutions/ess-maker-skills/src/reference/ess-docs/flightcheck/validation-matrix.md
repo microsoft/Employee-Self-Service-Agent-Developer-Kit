@@ -70,6 +70,19 @@ Workday → Entra Admin + Workday Admin).
 | ENV-CAPACITY-001 | Copilot Studio message capacity provisioned | Critical | Power Platform Licensing API | [requirements-messages-management#prepaid-capacity](https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management?tabs=new#prepaid-capacity) |
 | ENV-008 | DLP policies configured | High | BAP Admin API | [prepare#allow-the-external-systems-connector](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#allow-the-external-systems-connector) |
 
+### Native no-Dataverse agent readiness (DA-xxx)
+
+These checkpoints replace Dataverse solution/reference checks for a native
+AgentBuilder agent. If the config also has a `dataverseEndpoint`, FlightCheck
+preserves the hybrid/legacy route instead.
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| DA-AGENT-001 | Saved active agent is directly accessible as the exact editable Dev agent | Critical | AgentBuilder Minimal Bot API | — |
+| DA-CONTENT-001 | Exact agent returns an authored component footprint | High | AgentBuilder Minimal Bot API | — |
+| DA-CONN-001 | Summary of native logical-to-physical connection readiness | High | AgentBuilder component snapshot + Power Platform Connectivity API | — |
+| DA-CONN-002+ | One detail row per logical connector reference. Exact ID matches are verified; a sole connected candidate passes with an explicit unverified-binding disclaimer; ambiguous candidates warn without guessing; missing or disconnected candidates do not pass. | High | AgentBuilder component snapshot + Power Platform Connectivity API | — |
+
 ## 2b. ESS Solution Installation (ESS-SOLN-xxx)
 
 | ID | Check | Priority | Role | Gate | Method | Doc Link |
@@ -133,8 +146,8 @@ are **not** minted here. See the setup catalog below for the owning checklist ro
 
 | ID | Check | Priority | Method | Doc Link |
 |----|-------|----------|--------|----------|
-| WD-CONN-AUTH-001 | Workday connection authentication is **Microsoft Entra ID Integrated**. Reads the cached Workday (`ff0df`) reference and echoes the observed `connectionParametersSet.name` + owner from the Power Platform admin connection. **Always `MANUAL`** — the admin API exposes no kit-verifiable fingerprint for the "Microsoft Entra ID Integrated" auth type, so this echoes for operator confirmation rather than PASS/FAIL (see reconciliation note below). | High | Power Platform admin connections (echo only) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
-| DV-CONN-001 | ESS Dataverse connection reference (`…_92b66`, connector `shared_commondataserviceforapps`) bound to an **active** connection; echoes the owner so the operator can confirm it is their own account. Programmatic PASS/FAIL on a documented-tier Dataverse `connectionreferences` read. **Non-`WD` family.** | High | Dataverse `connectionreferences` (+ PP admin owner echo) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| WD-CONN-AUTH-001 | Workday connection authentication is **Microsoft Entra ID Integrated**. Reads the cached Workday (`ff0df` or `msdyn_sharedworkdaysoap_workdayruntime`) reference and echoes the observed `connectionParametersSet.name` + owner from the Power Platform admin connection. **Always `MANUAL`** — the admin API exposes no kit-verifiable fingerprint for the "Microsoft Entra ID Integrated" auth type, so this echoes for operator confirmation rather than PASS/FAIL (see reconciliation note below). | High | Power Platform admin connections (echo only) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| DV-CONN-001 | ESS Dataverse connection reference (`…_92b66` or `msdyn_sharedcommondataserviceforapps_workdayruntime`, connector `shared_commondataserviceforapps`) bound to an **active** connection; echoes the owner so the operator can confirm it is their own account. Programmatic PASS/FAIL on a documented-tier Dataverse `connectionreferences` read. **Non-`WD` family.** | High | Dataverse `connectionreferences` (+ PP admin owner echo) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | WD-REST-001 | Captured `restBaseUrl` is present and **trimmed to** `/api`. Pure-config check — no client. | High | None (reads captured config) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | WD-REST-002 | Agent's `user-context-setup.mcs.yml` topic contains a `BeginDialog` redirect to the Workday user-context system topic (`WorkdaySystemGetUserContextV2` on the simplified pack). Pure local-file check; `SKIPPED` on the legacy install path. | High | None (reads local agent YAML) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
 | WD-NET-001 | Workday REST + SOAP endpoints allowlisted at the corporate firewall for the Power Platform managed connectors. **Always `MANUAL`** — the kit has no reliable probe (a local reachability test proves only the dev machine's egress, not the managed-connector outbound path), so it echoes the endpoints InfoSec/IT must allowlist. | High | None (InfoSec/IT attestation; echoes captured hosts) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
@@ -458,10 +471,10 @@ of those checkpoint IDs, owned by the master setup checklist
 | `WD-CONN-010` | reuse | skill-3 | S3.7 | attest | Single-Entra-tenant federation alignment |
 | `WD-API-CLIENT-001` | mint | skill-4 | S4.1 | attest | Workday API client registered (functional areas + Workday-owned scope) |
 | `WD-TENANT-001` | mint | skill-4 | S4.2, S4.3 | attest | Connection fields captured; auth policies scoped to the OAuth client |
-| `WD-PKG-001` | reuse | skill-5 | S5.1 | manual | Extension-pack flavor = `simplified` (exact `ff0df` match) |
-| `WD-CONN-012` | reuse | skill-5 | S5.2 | prog | Workday connection ref (`ff0df`) bound, own account |
+| `WD-PKG-001` | reuse | skill-5 | S5.1 | manual | Extension-pack flavor = `simplified` (exact `ff0df` or `msdyn_EssWorkdayRuntime` reference shape) |
+| `WD-CONN-012` | reuse | skill-5 | S5.2 | prog | Workday connection ref (`ff0df` or `msdyn_sharedworkdaysoap_workdayruntime`) bound, own account |
 | `WD-CONN-AUTH-001` | mint | skill-5 | S5.3 | attest | Connection auth type = Entra ID Integrated (echoes `MANUAL`; see §3d reconciliation) |
-| `DV-CONN-001` | mint | skill-5 | S5.4 | prog | Dataverse connection (`92b66`) bound — **non-`WD` family** |
+| `DV-CONN-001` | mint | skill-5 | S5.4 | prog | Dataverse connection (`92b66` or `msdyn_sharedcommondataserviceforapps_workdayruntime`) bound — **non-`WD` family** |
 | `WD-REST-001` | mint | skill-5 | S5.5 | prog | REST base URL present and trimmed to `/api` |
 | `WD-FLOW-*` | reuse | skill-5 | S5.6 | prog | Cloud flows on (one row per discovered flow) |
 | `WD-REST-002` | mint | skill-5 | S5.7 | prog w/ rollback | User-context redirect pushed → REST resolves `/workers/me` |
@@ -471,13 +484,15 @@ of those checkpoint IDs, owned by the master setup checklist
 
 **Notes**
 
-- **`92b66` is the Dataverse connector, not a Workday ref.** The simplified
-  Workday family fingerprints a single `ff0df` connection ref; the `92b66` binding
-  is verified under the non-`WD` ID `DV-CONN-001`, never as a second `WD-CONN` ref.
+- **The Dataverse reference is not a Workday ref.** The simplified family
+  fingerprints `ff0df`; the runtime package fingerprints
+  `msdyn_sharedworkdaysoap_workdayruntime`. Their corresponding Dataverse
+  references (`92b66` or
+  `msdyn_sharedcommondataserviceforapps_workdayruntime`) are verified under
+  the non-`WD` ID `DV-CONN-001`, never as a second `WD-CONN` ref.
 - **Legacy `WD-ENV-*` / `WD-WF-*` are not reused for simplified.** They test
   ISU/RaaS artifacts that simplified setup removes (reusing them yields false
   failures / N/A noise); the families are registered only so the registry resolves
   them. The new simplified-only IDs above are used instead.
 - **Reuse before minting.** New IDs are minted only for outputs no existing
   simplified-aware checkpoint covers.
-

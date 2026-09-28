@@ -1,6 +1,8 @@
 # ESS FlightCheck — Permissions Required
 
-FlightCheck queries three API surfaces. Each requires specific permissions.
+FlightCheck queries several API surfaces. The surfaces used depend on whether
+the configured agent follows the legacy/hybrid Dataverse path or the native
+AgentBuilder no-Dataverse path.
 
 ---
 
@@ -85,6 +87,24 @@ message. Other Workday checks (env vars, connections, flows) still run.
 
 ---
 
+## 5. Native AgentBuilder and Connectivity APIs
+
+Used for native no-Dataverse agents: exact Dev-agent access, authored component
+footprint, logical connector references, and environment connection health.
+
+| Scope | Used by | Type |
+|-------|---------|------|
+| `CopilotStudio.MinimalBot.Read` | DA-AGENT-001, DA-CONTENT-001, DA-CONN-* | Delegated |
+| `Connectivity.Connections.Read` | DA-CONN-* | Delegated |
+
+The audience is ring-specific (`api.powerplatform.com`,
+`api.preprod.powerplatform.com`, or `api.test.powerplatform.com`). These
+checks do not require a Dataverse endpoint or Power Platform Administrator
+enumeration. Capacity remains a separate read through the Power Platform
+Licensing API and uses the persisted environment ID.
+
+---
+
 ## Graceful Degradation
 
 FlightCheck is designed to run with whatever permissions are available:
@@ -95,6 +115,8 @@ FlightCheck is designed to run with whatever permissions are available:
 | No PP Admin role | Environment + flow checks show Warning |
 | No Workday creds | SOAP workflow tests skipped |
 | No agent files | Local file checks skipped |
+| No native AgentBuilder access | Native agent/content checks fail or error |
+| No native connection-inventory access | Native connection readiness errors; it never reports a guessed binding as verified |
 
 The CLI still exits with code 0 (success) unless automated checks
 produce actual Failed results. Warnings and skipped checks don't

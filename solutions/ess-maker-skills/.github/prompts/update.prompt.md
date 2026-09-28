@@ -9,11 +9,16 @@ You are helping a customer modify an existing component in their ESS agent.
 This edits the local working copy, pushes the change to Copilot Studio, and
 then helps the maker **validate the change's runtime behaviour**.
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state note.** Topic and workflow updates require a completed setup.
+Workspace-level evaluation updates and review-tag workflows do not. Apply the
+setup gate only after the user chooses a topic or workflow, or when an
+evaluation operation needs a configured agent for push.
 
-> Welcome to the ESS Maker Kit. Before running `/update`, type `/setup` to set up your environment.
-
-and STOP. Otherwise proceed.
+Continue with local authoring but skip every instruction to push, publish, or
+run server-backed validation. Finish by stating that the local files were
+saved and DA-GA deployment is not yet available in this release. Do not offer
+`/test` as validation of the local change because `/test` can exercise only
+the unchanged deployed version.
 
 **IMPORTANT: When the user just types `/update` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to update first.**
@@ -43,29 +48,41 @@ When `/update` includes additional text, explicit component intent always wins:
 2. Wait for the user to answer.
 3. Route based on their answer:
    - **topic**
-     -> Read `src/skills/topics/update-eval-driven/SKILL.md` and follow its instructions.
-       It handles simple topics with evals and delegates integration topics to
-       the existing topic-update skill.
+     -> Read `.local/setup/config.json` and `.local/config.json`. If canonical
+     state does not have `schema_version: 4` and an `agents` entry matching the
+     active workspace slug with `connect_ready: true`, show the setup message below
+     and STOP. Otherwise read
+     `src/skills/topics/update-eval-driven/SKILL.md` and follow its
+     instructions. It handles simple topics with evals and delegates
+     integration topics to the existing topic-update skill.
    - **workflow**
-     -> Read `src/skills/workflows/update/SKILL.md` and follow its instructions.
+     -> Apply the same setup check, then read
+     `src/skills/workflows/update/SKILL.md` and follow its instructions.
    - **evaluation**
-     -> Read `src/skills/evaluations/update/SKILL.md` and follow its instructions.
+     -> Read `src/skills/evaluations/update/SKILL.md` and follow its
+     instructions.
+   - **review evaluation test sets** / **review testsets**
+     -> Read `src/skills/evaluations/review/SKILL.md` and follow it. Do not
+     invoke quality validation before listing `review_requested` sets and
+     obtaining a selection.
+
+> Welcome to the ESS Maker Kit. Before updating topics or workflows, type `/setup` to set up your environment.
 
 Do NOT proceed without reading the appropriate skill file first.
 
-## Completion gate — offer `/test` before finishing
+## Topic/workflow completion gate
 
-A scan, a push, `validate.py` (flow **registration** check), or a publish is a
-deploy step, **not** a behavioural test — do not treat any of them as validating
-that the change works. The request is **not complete** until you have offered to
-run the **`/test`** skill (`topics/test` or `workflows/test`) to drive the
-just-changed component.
+This gate does not apply in this DA-only release. State that runtime testing
+is deferred until a supported deployment path can make the local change live.
 
-Before your final response, you MUST have asked the maker whether to run
-**`/test`** against the changed component now (the offer defined in the skill's
-final step — e.g. topics/update Step 9). Wait for their answer; if yes, run the
-`/test` skill. This holds even when the publish is handed off to the maker or run
-asynchronously — a deferred publish does not end the request.
+This gate applies only to topic and workflow updates. Evaluation updates and
+evaluation review workflows follow their evaluation skill's completion steps.
 
-Your final completion response MUST explicitly state whether **`/test`** was
-offered and whether it was run, declined, or deferred.
+For a topic or workflow, a scan, a push, `validate.py` (flow
+**registration** check), or a publish is a deploy step, **not** a behavioural
+test. Before the final response, ask whether to run **`/test`** against the
+changed component now. Wait for the answer; if yes, run the `topics/test` or
+`workflows/test` skill.
+
+For topic/workflow updates, the final response must state whether **`/test`**
+was offered and whether it was run, declined, or deferred.

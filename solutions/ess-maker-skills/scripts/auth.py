@@ -38,10 +38,9 @@ except ImportError:
 from http_errors import APIError, raise_api_error  # noqa: E402
 
 
-# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
-# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
-# Scope: user_impersonation only (delegated, no admin consent).
-CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+# Shared public client ID used across the ADK's MSAL flows. Delegated access
+# only (user_impersonation).
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 # Delegated scope for the Power Automate Flow Management API
 # (https://api.flow.microsoft.com). The double slash is required — the resource
@@ -196,7 +195,7 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
-def authenticate(env_url):
+def authenticate(env_url, preferred_username=None):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
@@ -217,11 +216,20 @@ def authenticate(env_url):
         CLIENT_ID, authority=authority, token_cache=cache
     )
 
-    # Try silent first (cached token from previous run)
+    # Try silent first (cached token from previous run).
     accounts = app.get_accounts()
+    preferred = str(preferred_username or "").casefold()
+    selected_account = next(
+        (
+            account
+            for account in accounts
+            if str(account.get("username") or "").casefold() == preferred
+        ),
+        accounts[0] if accounts and not preferred else None,
+    )
     result = None
-    if accounts:
-        result = app.acquire_token_silent([scope], account=accounts[0])
+    if selected_account:
+        result = app.acquire_token_silent([scope], account=selected_account)
 
     if (
         result
@@ -233,7 +241,7 @@ def authenticate(env_url):
             env_url,
             cache=cache,
             app=app,
-            account=accounts[0],
+            account=selected_account,
         )
         app = msal.PublicClientApplication(
             CLIENT_ID, authority=authority, token_cache=cache
@@ -243,9 +251,12 @@ def authenticate(env_url):
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
         print("Please select the account that has access to this environment.")
-        result = app.acquire_token_interactive(
-            [scope], prompt="select_account"
+        interactive_options = (
+            {"login_hint": preferred_username}
+            if preferred_username
+            else {"prompt": "select_account"}
         )
+        result = app.acquire_token_interactive([scope], **interactive_options)
 
     if "access_token" not in result:
         # Don't echo error_description - it can include tenant IDs and
@@ -804,3 +815,36 @@ def load_config():
         )
         sys.exit(1)
     return cfg
+
+
+def is_connect_ready():
+    """Return readiness for the active locally configured DA agent."""
+    state_path = os.path.join(LOCAL_STATE_DIR, "setup", "config.json")
+    config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
+    if not os.path.exists(state_path) or not os.path.exists(config_path):
+        return False
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            "ERROR: Could not read DA workspace state at "
+            f"{state_path} and {config_path}: "
+            f"{exc}. Run /setup again."
+        )
+        sys.exit(1)
+    if state.get("schema_version") != 4:
+        return False
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if not isinstance(agents, dict) or not isinstance(active_slug, str):
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
+    )

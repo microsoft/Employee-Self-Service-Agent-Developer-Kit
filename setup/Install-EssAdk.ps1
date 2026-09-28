@@ -8,10 +8,10 @@
     a single PowerShell invocation. Specifically, it:
 
       1. Verifies prerequisites (Windows 10/11, winget present).
-      2. Runs `winget configure` against ess-adk-setup.winget.yaml to install
-         VS Code, Python 3.12, PowerShell 7, Git, and GitHub CLI.
-      3. Installs Python pip dependencies from requirements.txt (msal, requests,
-         PyYAML, defusedxml, etc.) so that /setup scripts work immediately.
+      2. Uses winget to install VS Code, Python 3.12, PowerShell 7, Git,
+         GitHub CLI, the .NET 10 runtime, and NuGet.
+      3. Installs Python pip and Microsoft Object Model dependencies so that
+         /setup scripts work immediately.
       4. Installs the VS Code extensions required by the maker kit
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
@@ -53,12 +53,21 @@
     Prompts for your Dataverse environment URL and creates a minimal
     .local/config.json so FlightCheck can authenticate without running /setup.
 
+.PARAMETER InstallMode
+    Selects the VS Code experience: 'maker' (chat-first, hidden developer
+    chrome - was 'lite'), 'developer' (default VS Code layout with /setup
+    injection - was 'standard'), or 'prompt' (default: this installer
+    asks the maker in the terminal, defaulting to 'maker' under a
+    non-interactive shell). The ESS Maker Profile extension is installed
+    in every mode; only the layout and /setup delivery differ. Explicit
+    values are respected without a prompt; 'prompt' is the recommended
+    default for new customers. The legacy values 'lite' and 'standard' are
+    still accepted and coerced to 'maker' and 'developer' respectively.
+
 .PARAMETER SkipMakerProfile
-    Skip installing the bundled "ESS Maker Profile" VS Code extension. The
-    profile hides developer chrome (file tree, tabs, status bar, etc.) and
-    drops the user into a chat-first surface tailored to the HR/IT admin
-    persona. Use this switch to keep the stock VS Code layout - typically
-    only relevant for developers iterating on the kit itself.
+    Back-compat switch. Equivalent to -InstallMode developer. Retained so
+    existing bootstrap.ps1 invocations and CI scripts keep working; new
+    callers should use -InstallMode instead.
 
 .EXAMPLE
     # Default invocation. May fail on stock Windows due to PowerShell
@@ -84,8 +93,73 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
+    [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
 )
+
+# Back-compat: -SkipMakerProfile forces developer mode even when
+# -InstallMode is passed. This preserves the old behaviour where the
+# switch was the only way to say "no chat-first layout".
+if ($SkipMakerProfile) { $InstallMode = 'developer' }
+
+# Back-compat: legacy value aliases from the pre-rename installer
+# (bootstrap-lite.ps1 previously pinned 'lite'; -SkipMakerProfile alias
+# previously coerced to 'standard'). Coerce to the new canonical names
+# so every downstream reference sees maker|developer|prompt.
+if ($InstallMode -eq 'lite')     { $InstallMode = 'maker' }
+if ($InstallMode -eq 'standard') { $InstallMode = 'developer' }
+
+# When the caller didn't pin a mode (the default one-liner path via
+# bootstrap.ps1), prompt the maker in the terminal for their preference.
+# Doing it here in the CLI, before we hand off to VS Code, makes the
+# choice deterministic: the answer is applied to essMaker.mode before
+# any editor UI appears, so there's no race with the theme picker or
+# GitHub Copilot sign-in that VS Code renders on first launch.
+if ($InstallMode -eq 'prompt') {
+    $nonInteractive = $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or [Console]::IsInputRedirected
+    if ($nonInteractive) {
+        Write-Host ""
+        Write-Host "Non-interactive environment detected. Defaulting to Maker mode." -ForegroundColor Yellow
+        $InstallMode = 'maker'
+    } else {
+        Write-Host ""
+        Write-Host "==> Choose your ESS Maker experience" -ForegroundColor Cyan
+        Write-Host "  [1] Maker (recommended)"
+        Write-Host "      Chat-first layout; hides file tree, tabs, and status bar;"
+        Write-Host "      big-button Quick Actions rail. Best if you mostly work in"
+        Write-Host "      chat and want a focused HR/IT admin surface."
+        Write-Host ""
+        Write-Host "  [2] Developer"
+        Write-Host "      Default VS Code layout with GitHub Copilot Chat in the"
+        Write-Host "      side panel. Best if you plan to inspect or edit files"
+        Write-Host "      directly."
+        Write-Host ""
+        $choice = $null
+        while ($null -eq $choice) {
+            $answer = Read-Host "Enter 1 for Maker, 2 for Developer (default: 1)"
+            # ``$answer ?? ''`` would need PS7's null-coalescing operator, but
+            # the supported Windows path invokes Windows PowerShell 5.1 - the
+            # 5.1 parser rejects ``??`` before running a line of the installer.
+            if ($null -eq $answer) { $answer = '' }
+            $answer = $answer.Trim()
+            switch -Regex ($answer) {
+                '^(1|maker|m|)$'      { $choice = 'maker' }
+                '^(2|developer|dev|d)$' { $choice = 'developer' }
+                default { Write-Host "Please enter 1 or 2." -ForegroundColor Yellow }
+            }
+        }
+        $InstallMode = $choice
+        Write-Host "  Selected: $InstallMode" -ForegroundColor Green
+        Write-Host ""
+    }
+}
+
+# Canonical mode label used throughout this script for both telemetry and
+# the VS Code settings write. Kept in $modeLabel so all downstream
+# references (5c extension install, launch, telemetry) share one source
+# of truth.
+$modeLabel = $InstallMode
 
 $ErrorActionPreference = 'Stop'
 
@@ -163,6 +237,79 @@ function Resolve-Python {
     }
 
     return $null
+}
+
+function Resolve-CodeCommand {
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if ($code) { return $code }
+
+    $knownPaths = @(
+        "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd",
+        "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd",
+        "${env:ProgramFiles(x86)}\Microsoft VS Code\bin\code.cmd"
+    )
+    foreach ($path in $knownPaths) {
+        if (Test-Path -LiteralPath $path) { return Get-Item -LiteralPath $path }
+    }
+
+    return $null
+}
+
+function Get-PythonArchitecture {
+    param([string] $PythonExe = (Resolve-Python))
+
+    if (-not $PythonExe) { return $null }
+    if ($PythonExe -eq 'py -3.12' -or $PythonExe -eq 'py -3') {
+        $pyVersion = ($PythonExe -split ' ')[1]
+        $platform = Invoke-Native {
+            & py $pyVersion -c 'import sysconfig; print(sysconfig.get_platform())'
+        }
+    } else {
+        $platform = Invoke-Native {
+            & $PythonExe -c 'import sysconfig; print(sysconfig.get_platform())'
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { return $null }
+
+    $platformName = "$($platform | Select-Object -Last 1)".Trim().ToLowerInvariant()
+    if ($platformName -match 'arm64|aarch64') { return 'arm64' }
+    if ($platformName -match 'amd64|x86_64') { return 'x64' }
+    return $null
+}
+
+function Test-DotNet10Runtime {
+    param([Parameter(Mandatory)] [ValidateSet('arm64', 'x64')] [string] $Architecture)
+
+    $candidateExecutables = @()
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($dotnet) { $candidateExecutables += $dotnet.Source }
+    foreach ($rootVariable in @('DOTNET_ROOT', 'DOTNET_ROOT_ARM64', 'DOTNET_ROOT_X64')) {
+        $root = [Environment]::GetEnvironmentVariable($rootVariable)
+        if ($root) { $candidateExecutables += (Join-Path $root 'dotnet.exe') }
+    }
+    $candidateExecutables += @(
+        "$env:ProgramFiles\dotnet\dotnet.exe",
+        "$env:ProgramFiles\dotnet\arm64\dotnet.exe",
+        "$env:ProgramFiles\dotnet\x64\dotnet.exe"
+    )
+
+    foreach ($candidate in ($candidateExecutables | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $info = Invoke-Native { & $candidate --info }
+        if ($LASTEXITCODE -ne 0) { continue }
+        $reportedArchitecture = $info |
+            Select-String '^\s*Architecture:\s*(\S+)\s*$' |
+            Select-Object -First 1
+        if (-not $reportedArchitecture -or
+            $reportedArchitecture.Matches[0].Groups[1].Value.ToLowerInvariant() -ne $Architecture) {
+            continue
+        }
+        $runtimes = Invoke-Native { & $candidate --list-runtimes }
+        if ($LASTEXITCODE -eq 0 -and $runtimes -match '^Microsoft\.NETCore\.App 10\.') {
+            return $true
+        }
+    }
+    return $false
 }
 
 # Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
@@ -304,6 +451,7 @@ function Get-EssStepKey {
         'Preflight'                { 'preflight'; break }
         'winget|toolchain'         { 'toolchain'; break }
         'pip'                      { 'pip_dependencies'; break }
+        'Object Model'             { 'object_model_dependencies'; break }
         'extension'                { 'vscode_extensions'; break }
         'Clon|clone|repo'          { 'clone'; break }
         'Maker Profile'            { 'maker_profile'; break }
@@ -339,8 +487,8 @@ if (-not $essTelLoaded) {
     function Complete-EssInstallTelemetry  { param($Outcome, $ErrorRecord) }
 }
 
-$essInstaller = if ($FlightCheckOnly) { 'flightcheck' } elseif ($SkipMakerProfile) { 'adk' } else { 'lite' }
-Initialize-EssInstallTelemetry -Installer $essInstaller
+$essInstaller = if ($FlightCheckOnly) { 'flightcheck' } else { 'adk' }
+Initialize-EssInstallTelemetry -Installer $essInstaller -InstallMode $modeLabel
 
 try {
 
@@ -454,21 +602,31 @@ if (-not $wingetAvailable) {
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        $existing = if ($pkg.Cmd -eq 'python') {
+            Resolve-Python
+        } elseif ($pkg.Cmd -eq 'code') {
+            Resolve-CodeCommand
+        } else {
+            Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+        }
         if ($existing) {
             Write-Ok "$($pkg.Name) (already installed)"
             continue
         }
 
         Start-Spinner "installing $($pkg.Name) ($($pkg.Id))"
+        $wingetArgs = @(
+            'install',
+            '--id', $pkg.Id,
+            '--source', 'winget',
+            '--exact',
+            '--silent',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
         $wingetOutput = Invoke-Native {
-            & winget install --id $pkg.Id `
-                             --source winget `
-                             --exact `
-                             --silent `
-                             --accept-package-agreements `
-                             --accept-source-agreements `
-                             --disable-interactivity
+            & winget @wingetArgs
         }
         Stop-Spinner
         foreach ($rawLine in $wingetOutput) {
@@ -491,6 +649,94 @@ if (-not $wingetAvailable) {
                 Write-Warn2 "$($pkg.Name) install exited $code. Will check if usable anyway."
             } else {
                 throw "winget install $($pkg.Id) failed with exit code $code"
+            }
+        }
+    }
+}
+
+if (-not $FlightCheckOnly) {
+    Write-Step 'Installing optional Object Model tools'
+    $pythonArchitecture = Get-PythonArchitecture
+    $objectModelRecoveryPath = Join-Path (
+        Join-Path $InstallRoot ([IO.Path]::GetFileNameWithoutExtension(($RepoUrl -split '/')[-1]))
+    ) 'solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+    $objectModelTools = @(
+        @{
+            Id = 'Microsoft.DotNet.Runtime.10'
+            Name = '.NET 10 Runtime'
+            Architecture = $pythonArchitecture
+            IsInstalled = {
+                $pythonArchitecture -and
+                (Test-DotNet10Runtime -Architecture $pythonArchitecture)
+            }
+            Manual = if ($pythonArchitecture) {
+                "winget install --id Microsoft.DotNet.Runtime.10 --architecture $pythonArchitecture"
+            } else {
+                'https://dotnet.microsoft.com/download/dotnet/10.0'
+            }
+            FollowUp = $null
+        },
+        @{
+            Id = 'Microsoft.NuGet'
+            Name = 'NuGet'
+            Architecture = $null
+            IsInstalled = { [bool](Get-Command nuget -ErrorAction SilentlyContinue) }
+            Manual = 'winget install --id Microsoft.NuGet'
+            FollowUp = "python `"$objectModelRecoveryPath`""
+        }
+    )
+
+    foreach ($tool in $objectModelTools) {
+        if (& $tool.IsInstalled) {
+            Write-Ok "$($tool.Name) (already installed)"
+            continue
+        }
+        if (-not $wingetAvailable) {
+            Write-Warn2 "Serialization support dependency '$($tool.Name)' was not installed."
+            Write-Warn2 'ESS ADK setup will continue.'
+            Write-Warn2 "Install it later with: $($tool.Manual)"
+            if ($tool.FollowUp) {
+                Write-Warn2 "Then install the serialization packages: $($tool.FollowUp)"
+            }
+            continue
+        }
+
+        $wingetArgs = @(
+            'install',
+            '--id', $tool.Id,
+            '--source', 'winget',
+            '--exact',
+            '--silent',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+        if ($tool.Architecture) {
+            $wingetArgs += @('--architecture', $tool.Architecture, '--force')
+        }
+        Start-Spinner "installing $($tool.Name) ($($tool.Id))"
+        $wingetOutput = Invoke-Native { & winget @wingetArgs }
+        $code = $LASTEXITCODE
+        Stop-Spinner
+        foreach ($rawLine in $wingetOutput) {
+            $line = "$rawLine".Trim()
+            if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
+                Write-Host "      $line"
+            }
+        }
+        if ($code -eq 0 -or $code -eq -1978335189) {
+            $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+                        [Environment]::GetEnvironmentVariable('Path','User')
+        }
+
+        if (($code -eq 0 -or $code -eq -1978335189) -and (& $tool.IsInstalled)) {
+            Write-Ok "$($tool.Name)"
+        } else {
+            Write-Warn2 "Serialization support dependency '$($tool.Name)' was not installed."
+            Write-Warn2 'ESS ADK setup will continue.'
+            Write-Warn2 "Install it later with: $($tool.Manual)"
+            if ($tool.FollowUp) {
+                Write-Warn2 "Then install the serialization packages: $($tool.FollowUp)"
             }
         }
     }
@@ -536,14 +782,7 @@ if ($FlightCheckOnly) {
 } elseif (-not $SkipExtensions) {
     Write-Step 'Installing VS Code extensions'
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        # Fallback: check the known VS Code install location (winget/user install)
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) {
-            $code = Get-Item $knownCodeCmd
-        }
-    }
+    $code = Resolve-CodeCommand
     if (-not $code) {
         Write-Warn2 'code CLI not on PATH yet. Open a new PowerShell window after this script and run:'
         Write-Warn2 '  code --install-extension GitHub.copilot'
@@ -557,7 +796,23 @@ if ($FlightCheckOnly) {
             'GitHub.copilot-chat',
             'ms-python.python'
         )
+        $installedExtensions = @()
+        $extensionListOutput = Invoke-Native { & $codeBin --list-extensions }
+        if ($LASTEXITCODE -eq 0) {
+            $installedExtensions = @(
+                $extensionListOutput |
+                    ForEach-Object { "$_".Trim().ToLowerInvariant() } |
+                    Where-Object { $_ }
+            )
+        } else {
+            Write-Warn2 'Could not list installed VS Code extensions. Existing extensions will be verified individually.'
+        }
         foreach ($ext in $extensions) {
+            if ($installedExtensions -contains $ext.ToLowerInvariant()) {
+                Write-Ok "extension $ext (already present / built-in)"
+                continue
+            }
+
             # `code` writes its install errors to stderr; combined with the
             # script-global $ErrorActionPreference='Stop' that causes 2>&1 to
             # raise a terminating exception before we can inspect the output.
@@ -630,7 +885,7 @@ if (-not $SkipClone) {
     }
 
     if (Test-Path (Join-Path $repoPath '.git')) {
-        Write-Ok "Repo already cloned at $repoPath - pulling latest"
+        Write-Ok "Repo already cloned at $repoPath - refreshing requested ref"
         Push-Location $repoPath
         try {
             # Self-heal --single-branch clones from earlier installer versions.
@@ -640,12 +895,20 @@ if (-not $SkipClone) {
             # from. Idempotent: no-op if the refspec is already broad.
             $null = Invoke-Native { & git remote set-branches origin '*' }
 
-            $gitOutput = Invoke-Native { & git fetch --quiet origin }
+            $gitOutput = Invoke-Native { & git fetch --quiet --tags origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
-                $currentBranch = (Invoke-Native { & git branch --show-current } | Select-Object -First 1).Trim()
+                $currentRef = Invoke-Native { & git branch --show-current } |
+                    Select-Object -First 1
+                if ([string]::IsNullOrWhiteSpace([string]$currentRef)) {
+                    $currentCommit = Invoke-Native { & git rev-parse --short HEAD } |
+                        Select-Object -First 1
+                    $currentRef = "detached HEAD at $currentCommit"
+                } else {
+                    $currentRef = $currentRef.Trim()
+                }
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
@@ -654,17 +917,33 @@ if (-not $SkipClone) {
                     # open" regression reports for users who first installed
                     # from a feature branch.
                     Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE)."
-                    Write-Warn2 "Your local clone is on '$currentBranch' and cannot switch to '$Branch'."
-                    Write-Warn2 "You will run STALE code from '$currentBranch' instead of '$Branch'."
+                    Write-Warn2 "Your local clone is on '$currentRef' and cannot switch to '$Branch'."
+                    Write-Warn2 "You will run STALE code from '$currentRef' instead of '$Branch'."
                     Write-Warn2 "To recover: delete the local clone and re-run, e.g."
                     Write-Warn2 "  Remove-Item -Recurse -Force '$repoPath'"
                     Write-Warn2 "Then re-run the installer / bootstrap command."
                 } else {
-                    $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
-                    foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
-                        Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                    $null = Invoke-Native {
+                        & git show-ref --verify --quiet "refs/remotes/origin/$Branch"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        $gitOutput = Invoke-Native {
+                            & git pull --quiet --ff-only origin $Branch
+                        }
+                        foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
+                            Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                        }
+                    } else {
+                        $null = Invoke-Native {
+                            & git show-ref --verify --quiet "refs/tags/$Branch"
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Ok "Checked out pinned tag $Branch"
+                        } else {
+                            Write-Ok "Checked out pinned ref $Branch"
+                        }
                     }
                 }
             }
@@ -691,7 +970,7 @@ if (-not $SkipClone) {
 }
 
 # ---------------------------------------------------------------------------
-# 5b. Deferred pip install (if requirements.txt was not available pre-clone)
+# 5b. Post-clone dependencies
 # ---------------------------------------------------------------------------
 if ($deferPip) {
     $requirementsFile = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\requirements.txt'
@@ -708,6 +987,44 @@ if ($deferPip) {
     }
 }
 
+if (-not $FlightCheckOnly) {
+    $objectModelInstaller = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+    if (-not (Test-Path -LiteralPath $objectModelInstaller)) {
+        Write-Warn2 'Serialization support dependencies were not installed.'
+        Write-Warn2 'ESS ADK setup will continue.'
+        Write-Warn2 "The dependency installer was not found: $objectModelInstaller"
+    } else {
+        $pythonExe = Resolve-Python
+        if (-not $pythonExe) {
+            Write-Warn2 'Python not found. Cannot install Microsoft Object Model dependencies.'
+        } else {
+            Write-Step 'Installing Microsoft Object Model dependencies'
+            if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
+                $pyVersion = ($pythonExe -split ' ')[1]
+                $objectModelOutput = Invoke-Native {
+                    & py $pyVersion $objectModelInstaller
+                }
+            } else {
+                $objectModelOutput = Invoke-Native {
+                    & $pythonExe $objectModelInstaller
+                }
+            }
+            $objectModelExit = $LASTEXITCODE
+            foreach ($line in $objectModelOutput) {
+                if ($line) { Write-Host "      $line" }
+            }
+            if ($objectModelExit -eq 0) {
+                Write-Ok 'Microsoft Object Model dependencies installed'
+            } else {
+                Write-Warn2 "Serialization support dependencies were not installed (exit $objectModelExit)."
+                Write-Warn2 'ESS ADK setup will continue.'
+                Write-Warn2 'After resolving the reported NuGet issue, run:'
+                Write-Warn2 '  python solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+            }
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # 5c. ESS Maker Profile (chat-first VS Code layout)
 # ---------------------------------------------------------------------------
@@ -721,17 +1038,15 @@ if ($deferPip) {
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
-    # Install the ESS Maker Profile extension in both modes. In lite mode it
-    # applies the chat-first layout; in standard mode it only handles /setup
-    # injection after the welcome wizard closes (no visual changes).
-    $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
+    # Install the ESS Maker Profile extension in every mode. In maker mode
+    # it applies the chat-first layout; in developer mode it only handles
+    # /setup injection after the welcome wizard closes (no visual
+    # changes). $modeLabel is always 'maker' or 'developer' by this
+    # point - the CLI prompt above resolves 'prompt' before we reach any
+    # of the install steps.
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if (-not $codeBin) {
         Write-Warn2 'code CLI not on PATH. ESS Maker Profile will not be installed.'
@@ -750,35 +1065,46 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
         if (-not $vsix) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
-            $out = $null
-            $vsix_exit = 0
-            try {
-                $prevEAP = $ErrorActionPreference
-                $ErrorActionPreference = 'Continue'
-                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                $vsix_exit = $LASTEXITCODE
-            } catch {
-                $out = $_.Exception.Message
-                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-            } finally {
-                $ErrorActionPreference = $prevEAP
-            }
+            $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
+            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
+            $makerProfileCurrent = $makerVersion -and
+                $LASTEXITCODE -eq 0 -and
+                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
 
-            if ($vsix_exit -eq 0) {
-                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+            if ($makerProfileCurrent) {
+                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
             } else {
-                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                $out = $null
+                $vsix_exit = 0
+                try {
+                    $prevEAP = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                    $vsix_exit = $LASTEXITCODE
+                } catch {
+                    $out = $_.Exception.Message
+                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
+
+                if ($vsix_exit -eq 0) {
+                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+                } else {
+                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                }
             }
         }
 
         # Write the mode setting so the extension knows whether to apply
-        # the lite layout or inject /setup (standard mode).
+        # the maker (chat-first) layout or inject /setup (developer mode).
         # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
         $settingsFile = Join-Path $settingsDir 'settings.json'
-        $modeEntry = "`"essMaker.mode`": `"$modeLabel`""
+        $settingsModeValue = $modeLabel
+        $modeEntry = "`"essMaker.mode`": `"$settingsModeValue`""
         if (Test-Path $settingsFile) {
             $raw = Get-Content $settingsFile -Raw
             if ($raw -match '"essMaker\.mode"\s*:') {
@@ -1151,22 +1477,21 @@ if ($FlightCheckOnly) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
         # Launch strategy depends on mode:
-        # - Lite mode: just open the workspace. The ESS Maker Profile extension
+        # - Maker mode: just open the workspace. The ESS Maker Profile extension
         #   handles layout + /setup injection after the welcome wizard closes.
-        # - Standard mode: use `code chat '/setup'` which opens Copilot Chat in
+        # - Developer mode: use `code chat '/setup'` which opens Copilot Chat in
         #   the sidebar panel on the right (the standard chat experience).
+        # By the time we get here $modeLabel is always 'maker' or 'developer'
+        # (the CLI prompt above resolves 'prompt' before we reach any launch
+        # code), so there is no third fall-through branch to handle.
         Push-Location $workspace
         try {
-            if ($SkipMakerProfile) {
-                # Standard mode - use code chat to open /setup in sidebar panel
+            if ($modeLabel -eq 'developer') {
+                # Developer mode - use code chat to open /setup in sidebar panel
                 Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
                 $chatOutput = Invoke-Native { & $codePath chat '/setup' }
                 $chatExit = $LASTEXITCODE
@@ -1176,14 +1501,14 @@ if (-not $SkipLaunch) {
                     Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
                     Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
                     Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
                 } else {
                     Write-Ok "Requested /setup in Copilot Chat at $workspace"
                     Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
                     Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
                 }
             } else {
-                # Lite mode - extension handles /setup after welcome wizard
+                # Maker mode - extension handles /setup after welcome wizard
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
@@ -1193,11 +1518,11 @@ if (-not $SkipLaunch) {
         } finally { Pop-Location }
     } else {
         Write-Warn2 "code CLI not on PATH. Open this folder manually: $workspace"
-        Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+        Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
     }
 } else {
     Write-Warn2 'Skipping launch per -SkipLaunch'
-    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
 }
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green

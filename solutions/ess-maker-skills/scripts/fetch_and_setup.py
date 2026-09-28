@@ -56,6 +56,7 @@ def normalize_components(raw_records):
             "schemaname": r.get("schemaname"),
             "componenttype": r.get("componenttype"),
             "data": r.get("data"),
+            "description": r.get("description") or "",
             "parentbotcomponentid": r.get("_parentbotcomponentid_value"),
         })
     return normalized
@@ -115,6 +116,24 @@ def discover_flow_ids_from_components(components):
 # Main
 # ---------------------------------------------------------------------------
 
+def _component_select():
+    return (
+        "botcomponentid,name,schemaname,componenttype,data,description,"
+        "_parentbotcomponentid_value"
+    )
+
+
+def fetch_components(env_url, token, bot_id):
+    """Fetch all agent components, including every evaluation test set."""
+    raw_components = query_all(
+        env_url, token,
+        entity_set="botcomponents",
+        select=_component_select(),
+        filter_expr=f"_parentbotid_value eq '{bot_id}'",
+    )
+    return normalize_components(raw_components)
+
+
 def fetch_all(env_url, token, bot_id, components=None):
     """Fetch components, template configs, and workflows from Dataverse.
 
@@ -127,13 +146,7 @@ def fetch_all(env_url, token, bot_id, components=None):
     # --- Fetch components ---
     if components is None:
         print("Fetching agent components...")
-        raw_components = query_all(
-            env_url, token,
-            entity_set="botcomponents",
-            select="botcomponentid,name,schemaname,componenttype,data,_parentbotcomponentid_value",
-            filter_expr=f"_parentbotid_value eq '{bot_id}'",
-        )
-        components = normalize_components(raw_components)
+        components = fetch_components(env_url, token, bot_id)
         print(f"  {len(components)} components fetched.\n")
 
     # --- Fetch template configs (full records) ---
@@ -227,7 +240,7 @@ def save_temp_files(components, template_configs, workflows):
 
 
 def _resolve_refresh_target(args, config):
-    """Resolve the (env, bot, name, schema, managed) target for a refresh.
+    """Resolve the (env URL/ID, bot, name, schema, managed) refresh target.
 
     Explicit CLI overrides win over the stored config so ``--refresh`` can
     retarget an agent to a second environment. Without ``--url`` this is a
@@ -241,15 +254,34 @@ def _resolve_refresh_target(args, config):
     agent = config.get("agent", {})
     retargeting = bool(args.url)
     env_url = args.url.rstrip("/") if args.url else config["dataverseEndpoint"]
+    if retargeting:
+        # Retargeting to a different environment: the stored environment ID
+        # belongs to the PREVIOUS target, so falling back to it would persist a
+        # mismatched URL/ID pair that evaluation runs (which trust the cached
+        # ID first) later execute against the wrong environment. Require an
+        # explicit ID for the new environment instead.
+        if not args.environment_id:
+            raise ValueError(
+                "--refresh --url retargets to a different environment; pass "
+                "--environment-id for the new environment. Refusing to reuse "
+                "the stored environment ID from the previous target."
+            )
+        environment_id = args.environment_id
+    else:
+        environment_id = (
+            args.environment_id
+            or agent.get("environmentId")
+            or config.get("environmentId")
+        )
     bot_id = args.bot_id or agent.get("botId")
     name = args.name or agent.get("name")
     schema = args.schema or agent.get("schemaName")
     managed = args.managed if retargeting else agent.get("isManaged", False)
-    return env_url, bot_id, name, schema, managed
+    return env_url, environment_id, bot_id, name, schema, managed
 
 
-def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
-              paths, extra_flags=None):
+def run_setup(env_url, environment_id, args_bot_id, args_name, args_schema,
+              args_managed, paths, extra_flags=None):
     """Run setup.py with the given temp file paths."""
     print("\nRunning setup...\n")
     cmd = [
@@ -260,6 +292,8 @@ def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
         "--schema", args_schema,
         "--components", paths["components"],
     ]
+    if environment_id:
+        cmd.extend(["--environment-id", environment_id])
     if args_managed:
         cmd.append("--managed")
     if "template_configs" in paths:
@@ -279,6 +313,10 @@ def main():
     parser.add_argument("--url",
                         help="Power Platform environment URL "
                              "(e.g. https://org.crm.dynamics.com)")
+    parser.add_argument(
+        "--environment-id",
+        help="Power Platform environment ID selected during discovery",
+    )
     parser.add_argument("--bot-id",
                         help="Bot ID (GUID) from Dataverse")
     parser.add_argument("--name",
@@ -295,8 +333,18 @@ def main():
     # retarget to a different env/bot (see _resolve_refresh_target) ---
     if args.refresh:
         config = load_config()
-        env_url, bot_id, name, schema, managed = _resolve_refresh_target(
-            args, config)
+        try:
+            (
+                env_url,
+                environment_id,
+                bot_id,
+                name,
+                schema,
+                managed,
+            ) = _resolve_refresh_target(
+                args, config)
+        except ValueError as exc:
+            parser.error(str(exc))
 
         if args.url:
             print(f"Retargeting refresh to {env_url} (bot {bot_id})")
@@ -319,8 +367,16 @@ def main():
             print(e.format_for_terminal())
             sys.exit(1)
         paths = save_temp_files(components, template_configs, workflows)
-        rc = run_setup(env_url, bot_id, name, schema, managed,
-                       paths, extra_flags=["--refresh"])
+        rc = run_setup(
+            env_url,
+            environment_id,
+            bot_id,
+            name,
+            schema,
+            managed,
+            paths,
+            extra_flags=["--refresh"],
+        )
         sys.exit(rc)
 
     # --- Normal mode: requires all arguments ---
@@ -349,8 +405,15 @@ def main():
         print(e.format_for_terminal())
         sys.exit(1)
     paths = save_temp_files(components, template_configs, workflows)
-    rc = run_setup(env_url, args.bot_id, args.name, args.schema,
-                   args.managed, paths)
+    rc = run_setup(
+        env_url,
+        args.environment_id,
+        args.bot_id,
+        args.name,
+        args.schema,
+        args.managed,
+        paths,
+    )
     sys.exit(rc)
 
 

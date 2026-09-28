@@ -39,6 +39,7 @@ from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
+from ..agent_scope import resolve_agent_directory
 from .infrastructure import (
     _infra_003_directive,
     _infra_003_probe_layer_note,
@@ -122,6 +123,10 @@ _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 #   d6081: Context Generic User (ISU - context)  [full / legacy only]
 SIMPLIFIED_REF_SUFFIXES = frozenset({"ff0df"})
 LEGACY_REF_SUFFIXES = frozenset({"ff0df", "0786a", "d6081"})
+WORKDAY_RUNTIME_PACKAGE = "msdyn_EssWorkdayRuntime"
+WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedworkdaysoap_workdayruntime"
+)
 
 # Human-readable role labels for diagnostics.
 _REF_SUFFIX_ROLES = {
@@ -394,6 +399,19 @@ def _ref_key_label(key: str) -> str:
     return _WD_REF_KEY_LABELS.get(key, key)
 
 
+def _runner_agent_slug(runner) -> str:
+    """Resolve the agent selected for this FlightCheck invocation."""
+    config = getattr(runner, "config", {}) or {}
+    agents = config.get("agents") or []
+    return str(
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or (agents[0].get("slug") if agents else "")
+        or ""
+    )
+
+
 def _extract_requested_reference_keys(topic_data: str) -> set[str]:
     """Reference keys a topic actually REQUESTS from GetReferenceData — the
     literal ``referenceDataKey: KEY`` input it passes on each call."""
@@ -415,14 +433,7 @@ def _wd_studio_link(runner) -> str:
     """
     try:
         from .local_files import _studio_link_md
-        config = getattr(runner, "config", {}) or {}
-        agents = config.get("agents") or []
-        slug = (
-            config.get("activeAgent")
-            or (config.get("agent") or {}).get("slug")
-            or (agents[0].get("slug") if agents else "")
-            or ""
-        )
+        slug = _runner_agent_slug(runner)
         return _studio_link_md(runner, slug, "the agent in Copilot Studio")
     except Exception:  # noqa: BLE001 — never let link-building break the check
         return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
@@ -1123,7 +1134,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
     WD-CONN-012 doesn't have to re-query).
 
     The verdict is one of:
-      * ``simplified`` — exact match on {ff0df}
+      * ``simplified`` — exact match on {ff0df}, or the Workday Runtime ref
       * ``full``       — exact match on {ff0df, 0786a, d6081}
       * ``none``       — no Workday refs at all (no Workday integration)
       * ``partial``    — strict non-empty subset of LEGACY_REF_SUFFIXES that
@@ -1175,16 +1186,30 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    workday_refs = [r for r in refs if _is_workday_soap_connector(r.get("connectorid"))]
+    workday_refs = [
+        r
+        for r in refs
+        if _is_workday_soap_connector(r.get("connectorid"))
+        and not _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
     runner._workday_connection_refs = workday_refs
 
     # Classify each Workday row's suffix (some may not match the
     # _<5hex> pattern — surface those rather than silently dropping them).
     known_suffixes: set[str] = set()
+    runtime_refs: list[dict] = []
     unknown_format_names: list[str] = []
     unknown_suffixes: set[str] = set()
     for r in workday_refs:
         logical = r.get("connectionreferencelogicalname")
+        if (
+            str(logical or "").casefold()
+            == WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+        ):
+            runtime_refs.append(r)
+            continue
         suffix = _extract_ref_suffix(logical)
         if suffix is None:
             unknown_format_names.append(logical or "<missing>")
@@ -1210,7 +1235,35 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 2. Exact simplified match.
+    # 2. Exact Workday Runtime match. Runtime uses the same OBO/no-legacy-ISU
+    # behavior as the existing simplified package, so preserve the established
+    # flavor value consumed by downstream gates.
+    if (
+        len(runtime_refs) == 1
+        and not known_suffixes
+        and not unknown_suffixes
+        and not unknown_format_names
+    ):
+        runner._workday_package_flavor = "simplified"
+        flow_note = ""
+        if not wd_flows:
+            flow_note = (
+                " No Workday flows are deployed yet in this environment "
+                "— the package is present but downstream flows have not run."
+            )
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=(
+                f"Detected {WORKDAY_RUNTIME_PACKAGE} reference shape "
+                "(1 Workday Runtime OBO connection reference)." + flow_note
+            ),
+            doc_link=doc_simplified,
+        ))
+        return results
+
+    # 3. Exact simplified match.
     if known_suffixes == SIMPLIFIED_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
         runner._workday_package_flavor = "simplified"
         # The `{ff0df}` suffix is shared between simplified and full
@@ -1238,7 +1291,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 3. Exact full / legacy match.
+    # 4. Exact full / legacy match.
     if known_suffixes == LEGACY_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
         runner._workday_package_flavor = "full"
         flow_note = ""
@@ -1259,8 +1312,8 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 4. Strict non-empty subset of legacy suffixes -> partial install.
-    if known_suffixes and not unknown_suffixes and not unknown_format_names \
+    # 5. Strict non-empty subset of legacy suffixes -> partial install.
+    if not runtime_refs and known_suffixes and not unknown_suffixes and not unknown_format_names \
             and known_suffixes < LEGACY_REF_SUFFIXES:
         runner._workday_package_flavor = "partial"
         missing = LEGACY_REF_SUFFIXES - known_suffixes
@@ -1285,13 +1338,18 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 5. Anything else: unrecognized suffix(es) and/or malformed
+    # 6. Anything else: mixed runtime/legacy refs, unrecognized suffix(es),
+    #    and/or malformed
     #    logicalname(s) on Workday-connector rows.
     runner._workday_package_flavor = "unknown"
     diagnostics: list[str] = []
     if known_suffixes:
         diagnostics.append(
             "recognized: " + ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
+        )
+    if runtime_refs:
+        diagnostics.append(
+            f"{WORKDAY_RUNTIME_PACKAGE} references: {len(runtime_refs)}"
         )
     if unknown_suffixes:
         diagnostics.append("unrecognized suffixes: " + ", ".join(sorted(unknown_suffixes)))
@@ -1359,23 +1417,38 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
             ),
         )]
 
-    expected = SIMPLIFIED_REF_SUFFIXES if flavor == "simplified" else LEGACY_REF_SUFFIXES
-
-    # Map suffix -> ref dict so we can check each expected role.
-    by_suffix: dict[str, dict] = {}
-    for r in refs:
-        suffix = _extract_ref_suffix(r.get("connectionreferencelogicalname"))
-        if suffix in expected:
-            by_suffix[suffix] = r
+    runtime_refs = [
+        r
+        for r in refs
+        if str(r.get("connectionreferencelogicalname") or "").casefold()
+        == WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+    ]
+    if flavor == "simplified" and runtime_refs:
+        expected_rows = [("Workday Runtime (OBO)", runtime_refs[0])]
+    else:
+        expected = (
+            SIMPLIFIED_REF_SUFFIXES
+            if flavor == "simplified"
+            else LEGACY_REF_SUFFIXES
+        )
+        by_suffix: dict[str, dict] = {}
+        for r in refs:
+            suffix = _extract_ref_suffix(
+                r.get("connectionreferencelogicalname")
+            )
+            if suffix in expected:
+                by_suffix[suffix] = r
+        expected_rows = [
+            (_REF_SUFFIX_ROLES.get(suffix, suffix), by_suffix.get(suffix))
+            for suffix in expected
+        ]
 
     unbound: list[str] = []
     inactive: list[str] = []
     missing: list[str] = []
     bound_roles: list[str] = []
 
-    for suffix in expected:
-        role = _REF_SUFFIX_ROLES.get(suffix, suffix)
-        row = by_suffix.get(suffix)
+    for role, row in expected_rows:
         if row is None:
             # Shouldn't normally happen — WD-PKG-001 already classified
             # the install as matching `expected`. Guard anyway.
@@ -1409,7 +1482,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday package connection-reference binding completeness",
             result=(
-                f"All {len(expected)} Workday connection reference(s) expected "
+                f"All {len(expected_rows)} Workday connection reference(s) expected "
                 f"for the {flavor} install are bound to active connections "
                 f"({', '.join(sorted(bound_roles))})."
             ),
@@ -2694,9 +2767,27 @@ def _select_active_workday_cert(
     return (active, others)
 
 
-def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+def _format_preferred_thumbprint(preferred_thumbprint: str | None) -> str | None:
+    """Format Graph's colon-free SHA-1 preferred signing thumbprint."""
+    normalized = (preferred_thumbprint or "").strip().replace(":", "")
+    if not re.fullmatch(r"[0-9A-Fa-f]{40}", normalized):
+        return None
+    return ":".join(
+        normalized[index:index + 2].upper()
+        for index in range(0, len(normalized), 2)
+    )
+
+
+def _format_cert_detail_line(
+    cert: dict,
+    now: datetime,
+    *,
+    thumbprint_override: str | None = None,
+) -> str:
     """Render one cert group as a one-line summary for result text."""
-    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    display = thumbprint_override
+    if display is None:
+        display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
     end = cert["end"]
     if end is None:
         expiry_str = "NotAfter=(unknown)"
@@ -2950,7 +3041,19 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             (c["end"] is not None and c["end"] < now) for c in cert_groups
         )
 
-        cert_line = _format_cert_detail_line(active, now)
+        preferred_display = _format_preferred_thumbprint(
+            sp.get("preferredTokenSigningKeyThumbprint")
+        )
+        # Graph tenants can surface a non-SHA-1 customKeyIdentifier even though
+        # preferredTokenSigningKeyThumbprint is the authoritative SHA-1 value.
+        # With one logical certificate there is no ambiguity, so show the
+        # preferred thumbprint rather than incorrectly calling the key malformed.
+        active_thumbprint = preferred_display if len(cert_groups) == 1 else None
+        cert_line = _format_cert_detail_line(
+            active,
+            now,
+            thumbprint_override=active_thumbprint,
+        )
         rollover_lines = [
             f"      rollover: {_format_cert_detail_line(c, now)}"
             for c in others
@@ -5030,16 +5133,23 @@ def _scan_topic_for_workday_refs(
 
 def _discover_customer_workday_scenarios(
     workspace_root: Path = Path("workspace/agents"),
+    agent_slug: str = "",
 ) -> list[dict]:
-    """Walk every agent under workspace_root and return all Workday
-    scenario references (Pattern A + Pattern B). Returns [] when the
-    workspace doesn't exist (callers should treat that as SKIPPED, not
-    PASSED — see _check_custom_workflow_inventory).
+    """Return Workday scenario references for the selected agent.
+
+    Without an agent slug, retain the broad inventory behavior and walk every
+    agent. Returns [] when the workspace or selected agent doesn't exist
+    (callers should treat that as SKIPPED, not PASSED — see
+    _check_custom_workflow_inventory).
     """
     if not workspace_root.exists():
         return []
+    if agent_slug:
+        agent_dirs = [resolve_agent_directory(workspace_root, agent_slug)]
+    else:
+        agent_dirs = sorted(workspace_root.iterdir())
     discovered: list[dict] = []
-    for agent_dir in sorted(workspace_root.iterdir()):
+    for agent_dir in agent_dirs:
         if not agent_dir.is_dir() or agent_dir.name.startswith("."):
             continue
         topics_dir = agent_dir / "topics"
@@ -5076,7 +5186,10 @@ def _get_unknown_workday_scenarios(runner) -> list[dict]:
     if cached is not None:
         return cached
     workspace_root_str = "workspace/agents"
-    discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
+    discovered = _discover_customer_workday_scenarios(
+        Path(workspace_root_str),
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
     if not discovered:
         runner._workday_unknown_scenarios = []
@@ -5230,7 +5343,10 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     # Discover Workday refs from topics first — no catalog needed for
     # this step. If there are none, we can SKIP cleanly without even
     # touching Dataverse.
-    discovered = _discover_customer_workday_scenarios(workspace_root)
+    discovered = _discover_customer_workday_scenarios(
+        workspace_root,
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
 
     if not discovered:

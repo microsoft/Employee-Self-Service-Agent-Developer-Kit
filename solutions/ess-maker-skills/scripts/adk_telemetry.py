@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 # Reuse the OneCollector transport + helpers from the FlightCheck emitter.
@@ -71,10 +72,14 @@ from flightcheck import telemetry as _fc  # noqa: E402
 
 # --- Spec constants -------------------------------------------------------
 # 1.1.0: added derived ``tenant_class`` (internal vs customer) — ADO 7558661.
-# 1.2.0: adds ``adk.client.event`` and its fixed ``client_*`` field set,
-#        including ``client_level``, the ``client_properties`` JSON string,
-#        and ``client_prop_dropped_count``.
-SCHEMA_VERSION = "1.2.0"
+# 1.3.0: defines the Vorpal bridge schema-v2 ``client_*`` field projection,
+#        including batch, source chronology, host context, and operation IDs.
+# 1.4.0: added ``toolkit_git_sha`` + ``toolkit_git_branch`` common
+#        dimensions for precise upgrade-posture reporting and CA-vs-DA
+#        attribution — ADO 7943642.
+# 1.5.0: added derived ``connector`` (workday|servicenow|"") on
+#        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
+SCHEMA_VERSION = "1.5.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -94,7 +99,7 @@ EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 EVENT_CLIENT = "adk.client.event"
 
-CLIENT_EVENTS_SCHEMA_VERSION = 1
+CLIENT_EVENTS_SCHEMA_VERSION = 2
 # An out-of-memory guard set well above client batcher sizes, so client-side
 # batch-size changes can ship independently of ADK.
 CLIENT_EVENTS_MAX_BATCH_EVENTS = 1000
@@ -135,20 +140,31 @@ _CLIENT_EVENTS_REJECTED_REASONS = frozenset(
         CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE,
     }
 )
-# Correlation identifiers are emitted verbatim for event stitching. Apply the
-# bounded ASCII format to the whole value; field names distinguish each id's
-# purpose independently of the producer's prefix convention.
+# Batch, mount, and tool-call identifiers are emitted verbatim for event
+# stitching. Apply the bounded ASCII format to the whole value; field names
+# distinguish each id's purpose independently of the producer's prefix.
 _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
-# Type" donut value-list are all kept in sync with it. When you add a
-# capability here, also add it to that Aria cube dimension value-list (see the
-# telemetry dashboards story, ADO #7532631) so the new slice renders.
+# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage
+# by Type" donut are all kept in sync with it.
 #
-# One capability per real maker-facing ADK skill / entry point:
+# The Aria "Capability Usage by Type" tiles filter the ``adk Capability``
+# dimension with ``not in <blank>``, so every value emitted from here shows
+# up on the donut automatically — no dashboard change is required when a
+# new capability is added below. (Historical: the tiles used to pin an
+# explicit ``in {value-list}`` filter, which meant new capabilities would
+# silently drop off the donut until the filter was updated. The
+# ``not in <blank>`` change landed 2026-09-22; see the telemetry dashboards
+# story, ADO #7532631, for context.)
+#
+# One capability per real maker-facing ADK skill / entry point. The taxonomy
+# is intentionally granular: every distinct command a maker can run has its
+# own donut slice, so we can see which specific action drove a change in
+# usage. Umbrella labels (a single "evaluations" or "publishing" wedge
+# covering multiple commands) hide that signal, so we split them apart.
 #   setup                   -> first-run environment setup + discovery
 #                              (discover / list_environments are sub-steps of
 #                              this flow and do NOT emit their own capability;
@@ -156,14 +172,25 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #                              tracked separately by the "Agents Created" KPI and
 #                              is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
-#   topic_*                 -> topic authoring (create / update / delete)
-#   workflow_*              -> workflow authoring (create / update / delete)
-#   evaluations             -> eval test-set authoring + validation runs
+#   topic_create            -> author a new topic
+#   topic_update            -> modify an existing topic
+#   topic_delete            -> delete a topic
+#   topic_review            -> advisory conformance review of a topic
+#   topic_test              -> debug-and-validate loop for a topic
+#   workflow_create         -> author a new workflow
+#   workflow_update         -> modify an existing workflow
+#   workflow_delete         -> delete a workflow
+#   workflow_test           -> debug a workflow via run history
+#   evaluation_create       -> author eval test cases
+#   evaluation_update       -> modify eval test cases
+#   evaluation_delete       -> delete eval test cases
+#   evaluation_validate     -> quality-score generated eval sets
 #   cleanup                 -> error scan / fix pass
 #   troubleshoot            -> connectivity / auth diagnosis
 #   backup_template_configs -> Workday template-config backup
 #   restore_template_configs-> Workday template-config restore
-#   publishing              -> push / deploy to Copilot Studio
+#   push                    -> upload local changes to Dataverse (staging)
+#   publishing              -> publish so pushed changes go live in runtime
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
     "setup",
@@ -171,14 +198,21 @@ ADK_CAPABILITIES = (
     "topic_create",
     "topic_update",
     "topic_delete",
+    "topic_review",
+    "topic_test",
     "workflow_create",
     "workflow_update",
     "workflow_delete",
-    "evaluations",
+    "workflow_test",
+    "evaluation_create",
+    "evaluation_update",
+    "evaluation_delete",
+    "evaluation_validate",
     "cleanup",
     "troubleshoot",
     "backup_template_configs",
     "restore_template_configs",
+    "push",
     "publishing",
     "flightcheck",
 )
@@ -202,6 +236,55 @@ def normalize_capability(capability: str) -> str:
         return ""
     c = str(capability).strip().lower()
     return c if c in _CAPABILITY_SET else CAPABILITY_UNKNOWN
+
+
+# --- Connector taxonomy (ADO 7943641) -------------------------------------
+# Attribute Connect + FlightCheck usage to the specific backend HR system so
+# Workday vs ServiceNow adoption / reliability can be reported separately
+# instead of collapsed under a single generic "connect" wedge. Bounded enum
+# keeps the dashboard dimension controlled (cardinality never grows).
+#
+# Values:
+#   workday    -> Workday connect flow, Workday-scope FlightCheck runs,
+#                 checks in the Workday / Workday Tenant / Workday Extension
+#                 categories.
+#   servicenow -> ServiceNow connect flow, ServiceNow-scope FlightCheck runs,
+#                 checks in the ServiceNow category.
+#   legacy     -> Explicit label for older events that emitted the generic
+#                 "connect" capability WITHOUT a connector arg. Emitted by
+#                 emit_capability.py when the caller passed no --connector
+#                 flag AND the capability is one that a future maker MIGHT
+#                 have connector context for (today: "connect"). Keeps the
+#                 pre-attribution corpus queryable as its own bucket rather
+#                 than double-counted against a real connector.
+#   unknown    -> Out-of-taxonomy value provided by the caller (typo,
+#                 future-connector name not yet in the enum).
+#   ""         -> Legitimately not connector-scoped (most capabilities,
+#                 checks in Environment / Authentication / Prerequisites /
+#                 Local Files categories, "full"-scope FlightCheck runs
+#                 that span multiple connectors).
+CONNECTORS = ("workday", "servicenow")
+_CONNECTOR_SET = frozenset(CONNECTORS)
+CONNECTOR_LEGACY = "legacy"
+CONNECTOR_UNKNOWN = "unknown"
+
+
+def normalize_connector(connector: str) -> str:
+    """Normalize a ``connector`` value to the canonical enum.
+
+    Empty stays empty (event is not connector-scoped).
+    Non-empty inputs are lower-cased / stripped and mapped to themselves if
+    they are in :data:`CONNECTORS`, to :data:`CONNECTOR_LEGACY` if the caller
+    explicitly passed that sentinel, else to :data:`CONNECTOR_UNKNOWN`.
+    """
+    if not connector:
+        return ""
+    c = str(connector).strip().lower()
+    if c in _CONNECTOR_SET:
+        return c
+    if c == CONNECTOR_LEGACY:
+        return CONNECTOR_LEGACY
+    return CONNECTOR_UNKNOWN
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -277,6 +360,8 @@ def set_identity(
     tenant_id: str | None = None,
     instance_id: str | None = None,
     tenant_name: str | None = None,
+    *,
+    local_dir: str | None = None,
 ) -> dict[str, str]:
     """Record the install + tenant identity for all subsequent events.
 
@@ -330,13 +415,44 @@ def set_identity(
     # emit_capability.py shim launched from a SKILL.md step) — which never
     # calls set_identity itself — can still stamp the tenant on its events.
     if _IDENTITY["tenant_id"]:
-        _fc.cache_tenant_id(_IDENTITY["tenant_id"])
+        if local_dir is None:
+            _fc.cache_tenant_id(_IDENTITY["tenant_id"])
+        else:
+            _fc.cache_tenant_id(_IDENTITY["tenant_id"], local_dir=local_dir)
     # Persist the tenant name so ADK events emitted later in a *different*
     # process (which only has a Dataverse/BAP token and can't resolve it)
     # can reuse it. Only cache when both fields are present.
     if _IDENTITY["tenant_name"] and _IDENTITY["tenant_id"]:
-        _fc.cache_tenant_name(_IDENTITY["tenant_id"], _IDENTITY["tenant_name"])
+        if local_dir is None:
+            _fc.cache_tenant_name(
+                _IDENTITY["tenant_id"],
+                _IDENTITY["tenant_name"],
+            )
+        else:
+            _fc.cache_tenant_name(
+                _IDENTITY["tenant_id"],
+                _IDENTITY["tenant_name"],
+                local_dir=local_dir,
+            )
     return dict(_IDENTITY)
+
+
+def initialize_tenant_identity(
+    tenant_id: str,
+    *,
+    local_dir: str = ".local",
+) -> dict[str, str]:
+    """Initialize telemetry from an authenticated tenant and its cached name."""
+    normalized_tenant_id = _sanitize_tenant_id(tenant_id)
+    tenant_name = _fc.get_cached_tenant_name(
+        normalized_tenant_id,
+        local_dir=local_dir,
+    )
+    return set_identity(
+        tenant_id=normalized_tenant_id,
+        tenant_name=tenant_name or None,
+        local_dir=local_dir,
+    )
 
 
 # --- Consent / opt-out ----------------------------------------------------
@@ -503,6 +619,8 @@ def common_dimensions(
         "session_id": session_id,
         "surface": surface,
         "adk_version": _fc.get_adk_version(),
+        "toolkit_git_sha": _fc.get_toolkit_git_sha(),
+        "toolkit_git_branch": _fc.get_toolkit_git_branch(),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
 
@@ -720,30 +838,45 @@ def _valid_client_string(value: Any, *, allow_empty: bool = False) -> bool:
     return isinstance(value, str) and (allow_empty or bool(value))
 
 
-def _valid_client_identifier(value: Any) -> bool:
-    """True when ``value`` is an identifier-shaped ephemeral correlation id.
+def _valid_bounded_client_string(value: Any, *, allow_empty: bool = False) -> bool:
+    """Validate a raw projected string without mutating its supplied value."""
+    return _valid_client_string(value, allow_empty=allow_empty) and len(value) <= CLIENT_EVENTS_MAX_STRING_LENGTH
 
-    Required correlation and mount ids must match the bounded ASCII format.
+
+def _valid_client_identifier(value: Any) -> bool:
+    """True when ``value`` is an identifier-shaped ephemeral client id.
+
+    Required batch and mount ids must match the bounded ASCII format.
     They retain their exact values for event stitching: applying ``_scrub``
-    to ``corr-<uuid>`` would collapse distinct ids to ``corr-<guid>``.
+    to an embedded UUID would collapse distinct ids to ``<guid>``.
     The envelope validator rejects invalid required ids and omits invalid
     optional tool-call ids.
     """
     return isinstance(value, str) and bool(_CLIENT_EVENTS_IDENTIFIER_RE.match(value))
 
 
-CLIENT_EVENTS_INVALID_TIME_SENTINEL = -1
+def _valid_client_number(value: Any) -> bool:
+    return _is_finite_number(value) and value >= 0
 
 
-def _client_time_since_app_start(event: dict[str, Any]) -> Any:
-    """Return a finite timing or the invalid-timing sentinel.
+def _valid_client_timestamp(value: Any) -> bool:
+    """Validate a timezone-aware ISO-8601 timestamp without rewriting it."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
 
-    ``-1`` is unambiguous: ``performance.now()`` is non-negative, and ``0`` is a
-    valid bootloader timing. Missing or non-finite timings affect only this
-    metric; the event remains eligible for emission.
-    """
-    value = event.get("timeSinceAppStart")
-    return value if _is_finite_number(value) else CLIENT_EVENTS_INVALID_TIME_SENTINEL
+
+def _valid_client_sequence_number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _valid_client_operation_id(value: Any) -> bool:
+    """Validate Vorpal's canonical, hyphenated generated-operation UUID."""
+    return isinstance(value, str) and bool(_GUID_RE.fullmatch(value))
 
 
 def _scrub_client_scalar(value: Any) -> Any:
@@ -850,9 +983,14 @@ def _rejection(reason: str) -> dict[str, Any]:
 def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[dict[str, Any]]]:
     if not isinstance(envelope, dict):
         return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
-    if envelope.get("schemaVersion") != CLIENT_EVENTS_SCHEMA_VERSION:
+    schema_version = envelope.get("schemaVersion")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != CLIENT_EVENTS_SCHEMA_VERSION
+    ):
         return CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION, []
-    if not _valid_client_identifier(envelope.get("correlationId")):
+    if not _valid_client_identifier(envelope.get("batchId")):
         return CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID, []
     if not _valid_client_identifier(envelope.get("mountId")):
         return CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID, []
@@ -860,11 +998,17 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
         return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
     if not _valid_client_string(envelope.get("buildEnvironment")):
         return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
-    if not _valid_client_string(envelope.get("buildNumber"), allow_empty=True):
+    if not _valid_bounded_client_string(envelope.get("buildNumber"), allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    platform = envelope.get("platform")
+    if platform is not None and not _valid_bounded_client_string(platform, allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    user_agent = envelope.get("userAgent")
+    if user_agent is not None and not _valid_bounded_client_string(user_agent, allow_empty=True):
         return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
     tool_call_id = envelope.get("toolCallId")
     # The host supplies this optional diagnostic id. Omit incompatible values;
-    # correlationId and mountId provide the identifiers required for stitching.
+    # batchId and mountId provide the identifiers required for stitching.
     if tool_call_id is not None and not _valid_client_identifier(tool_call_id):
         tool_call_id = None
 
@@ -883,8 +1027,28 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
         # are scrubbed and bounded during emission.
         if not _valid_client_string(event.get("eventName")):
             return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        level = event.get("level")
+        if not isinstance(level, str) or level not in {"info", "error"}:
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_timestamp(event.get("eventTimestamp")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_number(event.get("timeSinceMount")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_sequence_number(event.get("sequenceNumber")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
         locale = event.get("locale")
         if locale is not None and not _valid_client_string(locale):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        display_mode = event.get("displayMode")
+        if display_mode is not None and not _valid_bounded_client_string(display_mode):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        theme_name = event.get("themeName")
+        if theme_name is not None and (
+            not isinstance(theme_name, str) or theme_name not in {"light", "dark"}
+        ):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        operation_id = event.get("operationId")
+        if operation_id is not None and not _valid_client_operation_id(operation_id):
             return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
 
     # ``get_session`` mutates ~/.adk/session.json (it mints a fresh id once the
@@ -894,25 +1058,38 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
     sid, _ = get_session(SURFACE_CLI)
     for event in events:
         locale = event.get("locale")
+        display_mode = event.get("displayMode")
+        theme_name = event.get("themeName")
+        operation_id = event.get("operationId")
         row = common_dimensions(SURFACE_CLI, session_id=sid)
         row.update(
             {
                 "client_event_name": _scrub_client_scalar(event["eventName"]),
-                "client_correlation_id": envelope["correlationId"],
+                "client_batch_id": envelope["batchId"],
                 "client_mount_id": envelope["mountId"],
                 "client_app_name": _scrub_client_scalar(envelope["appName"]),
                 "client_build_environment": _scrub_client_scalar(envelope["buildEnvironment"]),
-                "client_build_number": _scrub_client_scalar(envelope["buildNumber"]),
-                "client_time_since_app_start_ms": _client_time_since_app_start(event),
+                "client_build_number": envelope["buildNumber"],
+                "client_level": event["level"],
+                "client_event_timestamp": event["eventTimestamp"],
+                "client_time_since_mount_ms": event["timeSinceMount"],
+                "client_sequence_number": event["sequenceNumber"],
             }
         )
         if tool_call_id is not None:
             row["client_tool_call_id"] = tool_call_id
+        if platform is not None:
+            row["client_platform"] = platform
+        if user_agent is not None:
+            row["client_user_agent"] = user_agent
         if locale is not None:
             row["client_locale"] = _scrub_client_scalar(locale)
-        level = event.get("level")
-        if isinstance(level, str):
-            row["client_level"] = _scrub_client_scalar(level)
+        if display_mode is not None:
+            row["client_display_mode"] = display_mode
+        if theme_name is not None:
+            row["client_theme_name"] = theme_name
+        if operation_id is not None:
+            row["client_operation_id"] = operation_id
         blob, dropped = _client_properties_blob(event.get("properties"))
         row["client_properties"] = blob
         row["client_prop_dropped_count"] = dropped
@@ -1145,11 +1322,16 @@ def emit_api_call(
 
 
 def emit_capability_use(
-    adk_capability: str, *, surface: str = SURFACE_CLI, block: bool = False
+    adk_capability: str,
+    *,
+    connector: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
     data["adk_capability"] = normalize_capability(adk_capability)
+    data["connector"] = normalize_connector(connector)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
 
 
@@ -1157,6 +1339,7 @@ def emit_flightcheck_run(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     surface: str = SURFACE_CLI,
     block: bool = False,
@@ -1166,6 +1349,7 @@ def emit_flightcheck_run(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
     })
     return _emit(EVENT_FLIGHTCHECK_RUN, data, block=block)
@@ -1175,6 +1359,7 @@ def emit_flightcheck_result(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     result: str = "pass",
     duration_ms: int = 0,
@@ -1186,6 +1371,7 @@ def emit_flightcheck_result(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
         "result": result,
         "duration_ms": int(duration_ms),
@@ -1196,6 +1382,7 @@ def emit_flightcheck_result(
 def emit_flightcheck_error(
     *,
     agent_id: str = "",
+    connector: str = "",
     error_code: str = "",
     error_category: str = "runtime",
     error_message: str = "",
@@ -1204,7 +1391,10 @@ def emit_flightcheck_error(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data.update({"agent_id": agent_id})
+    data.update({
+        "agent_id": agent_id,
+        "connector": normalize_connector(connector),
+    })
     _apply_error_fields(data, "server_error", error_code, error_message, error_category)
     return _emit(EVENT_FLIGHTCHECK_ERROR, data, block=block)
 

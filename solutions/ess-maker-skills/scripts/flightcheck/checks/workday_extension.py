@@ -58,6 +58,7 @@ import sys
 from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
+from ..agent_scope import resolve_agent_directory, validate_agent_slug
 
 # scripts/auth.py is on sys.path via cli.py at runtime (tests add it too); this
 # mirrors checks/environment.py's top-level import so query_all is patchable as
@@ -88,15 +89,22 @@ _NOT_CAPTURED = "\u2014 not captured yet"
 # ---- Microsoft-shipped simplified extension-pack fingerprints ----
 # The Workday OAuthUser (SOAP) connection reference the simplified pack ships.
 _WORKDAY_AUTH_REF_SUFFIX = "ff0df"
+_WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedworkdaysoap_workdayruntime"
+)
 # The Dataverse connection reference the simplified pack ships.
 _DATAVERSE_CONNECTOR_SUFFIX = "/apis/shared_commondataserviceforapps"
 _DATAVERSE_REF_SUFFIX = "92b66"
+_DATAVERSE_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedcommondataserviceforapps_workdayruntime"
+)
 _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 
 # ---- Local user-context topic (WD-REST-002) ----
 _AGENTS_ROOT = "workspace/agents"
+_INSTALLED_AGENTS_ROOT = ".local/agents"
 _USER_CONTEXT_FILE = "user-context-setup.mcs.yml"
-_USER_CONTEXT_TOPIC_V2 = "WorkdaySystemGetUserContextV2"
+_SCHEMA_NAME_RE = re.compile(r"(?m)^\s*schemaName:\s*['\"]?([^'\"\s]+)")
 
 _CONN_AUTH_DESC = (
     "Workday connection authentication type is Microsoft Entra ID Integrated"
@@ -114,7 +122,7 @@ _REDIRECT_REMEDIATION = (
     "Wire the user-context redirect: save a rollback checkpoint "
     "(scripts/checkpoint.py), then set the agent's "
     "topics/user-context-setup.mcs.yml OnRedirect to a BeginDialog that calls "
-    f"the Workday '{_USER_CONTEXT_TOPIC_V2}' system topic, and push "
+    "the installed Workday user-context system topic, and push "
     "(scripts/push.py). See the connect skill step 3 (§3.5d)."
 )
 
@@ -122,6 +130,43 @@ _REDIRECT_REMEDIATION = (
 # ─────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────
+
+
+def _selected_agent_slug(runner) -> str:
+    config = getattr(runner, "config", None) or {}
+    slug = (
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+    )
+    return validate_agent_slug(str(slug)) if slug else ""
+
+
+def _installed_user_context_dialogs(agent_slug: str) -> list[str]:
+    agent_dir = resolve_agent_directory(
+        Path(_INSTALLED_AGENTS_ROOT),
+        agent_slug,
+    )
+    topics_dir = agent_dir / "topics"
+    if not topics_dir.is_dir():
+        return []
+
+    dialogs: set[str] = set()
+    for topic_file in sorted(topics_dir.glob("*.mcs.yml")):
+        try:
+            text = topic_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = _SCHEMA_NAME_RE.search(text)
+        dialog = (
+            match.group(1)
+            if match
+            else topic_file.name.removesuffix(".mcs.yml")
+        )
+        normalized = re.sub(r"[^a-z0-9]", "", dialog.casefold())
+        if "workday" in normalized and "usercontext" in normalized:
+            dialogs.add(dialog)
+    return sorted(dialogs)
 
 
 def _fmt(config, key: str) -> str:
@@ -139,6 +184,22 @@ def _ref_suffix(logical_name) -> str | None:
         return None
     match = _REF_SUFFIX_RE.search(str(logical_name))
     return match.group(1) if match else None
+
+
+def _is_workday_auth_ref(logical_name) -> bool:
+    normalized = str(logical_name or "").casefold()
+    return (
+        _ref_suffix(logical_name) == _WORKDAY_AUTH_REF_SUFFIX
+        or normalized == _WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+    )
+
+
+def _is_dataverse_runtime_ref(logical_name) -> bool:
+    normalized = str(logical_name or "").casefold()
+    return (
+        _ref_suffix(logical_name) == _DATAVERSE_REF_SUFFIX
+        or normalized == _DATAVERSE_RUNTIME_REF_LOGICAL_NAME.casefold()
+    )
 
 
 def _host_of(url: str) -> str:
@@ -266,15 +327,18 @@ def run_workday_extension_checks(runner) -> list[CheckResult]:
 
 def _check_connection_auth(runner) -> list[CheckResult]:
     refs = getattr(runner, "_workday_connection_refs", None) or []
-    auth_ref = next(
-        (
-            r for r in refs
-            if _ref_suffix(r.get("connectionreferencelogicalname"))
-            == _WORKDAY_AUTH_REF_SUFFIX
-        ),
-        None,
-    )
+    auth_refs = [
+        r
+        for r in refs
+        if _is_workday_auth_ref(r.get("connectionreferencelogicalname"))
+    ]
+    auth_ref = auth_refs[0] if len(auth_refs) == 1 else None
     connection_id = auth_ref.get("connectionid") if auth_ref else None
+    auth_ref_name = (
+        str(auth_ref.get("connectionreferencelogicalname"))
+        if auth_ref
+        else f"\u2026_{_WORKDAY_AUTH_REF_SUFFIX}"
+    )
 
     observed_auth = None
     owner = None
@@ -286,7 +350,15 @@ def _check_connection_auth(runner) -> list[CheckResult]:
             observed_auth = param_set.get("name")
             owner = _resolve_owner(props)
 
-    if observed_auth:
+    if len(auth_refs) > 1:
+        result = (
+            "Confirm in the portal — multiple Workday connection references "
+            "match the runtime and legacy package fingerprints, so FlightCheck "
+            "cannot determine which connection is active. Remove the obsolete "
+            "package references, then verify the remaining connection uses "
+            "'Microsoft Entra ID Integrated'."
+        )
+    elif observed_auth:
         result = (
             "Confirm in the portal — verify the Workday connection's "
             "authentication type. Observed connection auth parameter set: "
@@ -302,14 +374,15 @@ def _check_connection_auth(runner) -> list[CheckResult]:
         )
         result = (
             "Confirm in the portal — the Workday connection reference "
-            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX}) is present, but its auth type "
+            f"({auth_ref_name}) is present, but its auth type "
             f"could not be read from the Power Platform admin API{detail}. "
             "Verify the connection uses 'Microsoft Entra ID Integrated'."
         )
     else:
         result = (
             "Confirm in the portal — the Workday connection reference "
-            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX}) was not found in the cached "
+            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX} or "
+            f"{_WORKDAY_RUNTIME_REF_LOGICAL_NAME}) was not found in the cached "
             "Dataverse connection references, so the auth type could not be "
             "read. Verify the Workday connection uses 'Microsoft Entra ID "
             "Integrated'."
@@ -349,17 +422,39 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             ),
         )]
 
-    dv_ref = next(
-        (
-            r for r in refs
-            if str(r.get("connectorid") or "").lower().endswith(
-                _DATAVERSE_CONNECTOR_SUFFIX
+    dv_refs = [
+        r
+        for r in refs
+        if str(r.get("connectorid") or "").lower().endswith(
+            _DATAVERSE_CONNECTOR_SUFFIX
+        )
+        and _is_dataverse_runtime_ref(
+            r.get("connectionreferencelogicalname")
+        )
+    ]
+    if len(dv_refs) > 1:
+        names = ", ".join(
+            sorted(
+                str(ref.get("connectionreferencelogicalname") or "(unnamed)")
+                for ref in dv_refs
             )
-            and _ref_suffix(r.get("connectionreferencelogicalname"))
-            == _DATAVERSE_REF_SUFFIX
-        ),
-        None,
-    )
+        )
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="DV-CONN-001", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_DV_CONN_DESC,
+            result=(
+                "Multiple ESS Dataverse connection references match the "
+                f"runtime and legacy package fingerprints: {names}. "
+                "FlightCheck cannot determine which reference is active."
+            ),
+            remediation=(
+                "Remove obsolete Workday package references, then rerun "
+                "FlightCheck against the remaining Dataverse binding."
+            ),
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+    dv_ref = dv_refs[0] if dv_refs else None
 
     if dv_ref is None:
         return [CheckResult(roles=_MAKER_ROLES,
@@ -380,6 +475,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             doc_link=_DOC_SIMPLIFIED,
         )]
 
+    dv_ref_name = str(dv_ref.get("connectionreferencelogicalname"))
     connection_id = dv_ref.get("connectionid")
     statuscode = dv_ref.get("statuscode")
 
@@ -390,7 +486,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             description=_DV_CONN_DESC,
             result=(
                 "The ESS Dataverse connection reference "
-                f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is unbound "
+                f"({dv_ref_name}) is unbound "
                 "(connectionid=null)."
             ),
             remediation=(
@@ -408,7 +504,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             description=_DV_CONN_DESC,
             result=(
                 "The ESS Dataverse connection reference "
-                f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is bound but inactive "
+                f"({dv_ref_name}) is bound but inactive "
                 f"(statuscode={statuscode})."
             ),
             remediation=(
@@ -434,7 +530,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
         description=_DV_CONN_DESC,
         result=(
             "The ESS Dataverse connection reference "
-            f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is bound to an active "
+            f"({dv_ref_name}) is bound to an active "
             "connection." + owner_note
         ),
         doc_link=_DOC_SIMPLIFIED,
@@ -513,6 +609,21 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             ),
         )]
 
+    agent_slug = _selected_agent_slug(runner)
+    if not agent_slug:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value,
+            status=Status.NOT_CONFIGURED.value,
+            description=_REDIRECT_DESC,
+            result="No active agent was selected for user-context validation.",
+            remediation=(
+                "Select the target agent and rerun this checkpoint with its "
+                "--agent-slug value."
+            ),
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+
     agents_root = Path(_AGENTS_ROOT)
     if not agents_root.is_dir():
         return [CheckResult(roles=_MAKER_ROLES,
@@ -526,63 +637,81 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             ),
         )]
 
-    agent_dirs = sorted(
-        d for d in agents_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
+    agent_dir = resolve_agent_directory(agents_root, agent_slug)
+    topic_file = agent_dir / "topics" / _USER_CONTEXT_FILE
+    if not topic_file.is_file():
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_REDIRECT_DESC,
+            result=(
+                f"No {_USER_CONTEXT_FILE} found for selected agent "
+                f"'{agent_slug}' under {_AGENTS_ROOT}/{agent_slug}/topics/."
+            ),
+            remediation=_REDIRECT_REMEDIATION,
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+
+    installed_dialogs = _installed_user_context_dialogs(agent_slug)
+    if not installed_dialogs:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_REDIRECT_DESC,
+            result=(
+                "No installed Workday user-context system topic was found for "
+                f"selected agent '{agent_slug}' under "
+                f"{_INSTALLED_AGENTS_ROOT}/{agent_slug}/topics/."
+            ),
+            remediation=_REDIRECT_REMEDIATION,
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+
+    try:
+        text = topic_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-002", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_REDIRECT_DESC,
+            result=(
+                f"The selected agent's {_USER_CONTEXT_FILE} could not be read: "
+                f"{e}"
+            ),
+            remediation=_REDIRECT_REMEDIATION,
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+
+    matched_dialog = next(
+        (
+            dialog
+            for dialog in installed_dialogs
+            if "BeginDialog" in text and dialog in text
+        ),
+        None,
     )
-    topic_files = [
-        (d.name, d / "topics" / _USER_CONTEXT_FILE)
-        for d in agent_dirs
-        if (d / "topics" / _USER_CONTEXT_FILE).is_file()
-    ]
-
-    if not topic_files:
+    if not matched_dialog:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-002", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REDIRECT_DESC,
             result=(
-                f"No {_USER_CONTEXT_FILE} found under any "
-                f"{_AGENTS_ROOT}/*/topics/ — the user-context redirect has not "
-                "been wired."
+                f"The selected agent '{agent_slug}' user-context topic does "
+                "not redirect to any installed Workday user-context system "
+                f"topic. Installed candidate(s): {', '.join(installed_dialogs)}."
             ),
             remediation=_REDIRECT_REMEDIATION,
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    unwired: list[str] = []
-    for name, path in topic_files:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as e:
-            unwired.append(f"{name} (unreadable: {e})")
-            continue
-        if "BeginDialog" in text and _USER_CONTEXT_TOPIC_V2 in text:
-            continue
-        unwired.append(name)
-
-    if unwired:
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-002", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.FAILED.value,
-            description=_REDIRECT_DESC,
-            result=(
-                "The user-context redirect to the Workday "
-                f"'{_USER_CONTEXT_TOPIC_V2}' system topic is missing for: "
-                + ", ".join(unwired) + "."
-            ),
-            remediation=_REDIRECT_REMEDIATION,
-            doc_link=_DOC_SIMPLIFIED,
-        )]
-
-    wired_names = ", ".join(name for name, _ in topic_files)
     return [CheckResult(roles=_MAKER_ROLES,
         checkpoint_id="WD-REST-002", category=_CATEGORY,
         priority=Priority.HIGH.value, status=Status.PASSED.value,
         description=_REDIRECT_DESC,
         result=(
             "The user-context topic redirects to the Workday "
-            f"'{_USER_CONTEXT_TOPIC_V2}' system topic ({wired_names})."
+            f"'{matched_dialog}' system topic for selected agent "
+            f"'{agent_slug}'."
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]

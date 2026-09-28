@@ -1,13 +1,54 @@
 # Changelog
 
-## 0.4.26 (POC)
+## 0.4.29 (POC)
 
 - Added **Post an announcement** to Quick Actions. The setup-gated action opens
   a guided Copilot chat for announcements in the selected deployed ESS agent.
 - Current and archived announcement limits apply per tenant and agent, not
   across every agent in the organization.
-- Bumped the package version so the in-extension update check can prompt
-  existing 0.4.25 installs to reinstall and receive the new Quick Action.
+- Bumped the package version so existing 0.4.28 installs can receive the new
+  Quick Action.
+
+## 0.4.28 (POC)
+
+- **Mode prompt lives in the installer CLI.** The consolidated installer
+  (`setup/Install-EssAdk.ps1` on Windows, `setup/install-ess-adk.sh` on
+  macOS) asks the Maker/Developer question in the terminal before it
+  launches VS Code, and writes the resolved mode to `essMaker.mode` in
+  `settings.json`. The extension trusts that value: blank / `prompt`
+  values silently default to Maker on first activation, so a stray VS
+  Code window that never went through the installer still lands
+  deterministically without any first-launch modal.
+
+## 0.4.27 (POC)
+
+- **Modes renamed: Lite -> Maker (default), Standard -> Developer.**
+  User research showed "Lite" undersold the mode (it is a full,
+  streamlined chat-first UX, not a cut-down one) and "Standard" was not
+  really standard (it still opens Copilot Chat and runs `/setup` on
+  first launch). A new `setup/bootstrap-dev.ps1` shortcut mirrors the
+  existing `bootstrap-lite.ps1`. The `essMaker.mode` setting accepts
+  the new values (`maker`, `developer`) and still accepts the legacy
+  values (`lite`, `standard`) so pinned CI, docs, and previously-
+  installed users are not disrupted; legacy values are normalized on
+  read at the top of `firstInstallDispatch`. The
+  `essMaker.restoreStandardLayout` command ID is preserved (its
+  user-facing title is now "Restore Developer Layout"). The persisted
+  on-disk key `essMaker.liteMode.v1` is likewise preserved so existing
+  users do not lose their layout preference. macOS gets a matching
+  `bootstrap-dev-mac.sh` shortcut; `bootstrap-lite-mac.sh` continues
+  to work and pins Maker mode. The installer emits an additional
+  `installMode` telemetry dimension (maker | developer | prompt, or
+  legacy lite | standard).
+
+## 0.4.26 (POC)
+
+- **Windows installer consolidation.** One `bootstrap.ps1` drives both
+  experiences (see ADO #7895603) and forwards the chosen mode into the
+  extension via the `essMaker.mode` global setting so subsequent
+  launches skip any prompt. Legacy invocations that pin
+  `essMaker.mode` to `lite` or `standard` (including the back-compat
+  `bootstrap-lite.ps1` shim) bypass the terminal prompt.
 
 ## 0.4.25 (POC)
 

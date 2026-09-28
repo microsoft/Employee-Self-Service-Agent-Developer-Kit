@@ -11,6 +11,7 @@ which register their connection differently and would spuriously show NOT READY
 mapped flow.
 """
 
+import pytest
 import validate
 
 
@@ -64,6 +65,20 @@ class TestSelectValidateFlows:
         flows, _ = validate._select_validate_flows(cmap, on_disk)
         assert flows == [("workflows/x/workflow.json", "xxx",
                           "workflows/x/workflow.json")]
+
+
+def test_da_validation_stops_before_dataverse_configuration(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(validate, "is_connect_ready", lambda: True)
+    monkeypatch.setattr("sys.argv", ["validate.py"])
+
+    with pytest.raises(SystemExit) as error:
+        validate.main()
+
+    assert error.value.code == 1
+    assert "no Dataverse request was attempted" in capsys.readouterr().out
 
 
 class TestValidateIsGating:

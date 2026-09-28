@@ -183,7 +183,7 @@ def test_create_command_gives_explicit_evaluation_intent_precedence():
 
     assert evaluation_rule < topic_rule
     assert "Do this even" in prompt
-    assert "when the request also contains evaluation file paths" in prompt
+    assert "also contains evaluation file paths" in prompt
     assert "create a **topic from these evals**" in prompt
     assert "**evaluation test set**" in prompt
 

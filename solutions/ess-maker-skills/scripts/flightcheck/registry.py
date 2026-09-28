@@ -45,12 +45,15 @@ from typing import Callable, Optional
 from flightcheck.runner import Priority, Role
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.environment import (
+    run_capacity_check,
     run_environment_checks,
     run_preferred_solution_check,
 )
+from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -69,7 +72,19 @@ PVA = "pva"
 # BAP admin client (PP_ADMIN). Used to read per-environment Copilot Studio
 # message-capacity allocation (ENV-CAPACITY-001).
 POWERPLATFORM = "powerplatform"
-ALL_CLIENTS = frozenset({GRAPH, DATAVERSE, PP_ADMIN, PVA, POWERPLATFORM})
+AGENTBUILDER = "agentbuilder"
+CONNECTIVITY = "connectivity"
+ALL_CLIENTS = frozenset(
+    {
+        GRAPH,
+        DATAVERSE,
+        PP_ADMIN,
+        PVA,
+        POWERPLATFORM,
+        AGENTBUILDER,
+        CONNECTIVITY,
+    }
+)
 
 
 # Canonical category execution order, mirroring cli.py's FULL_SCOPE. When a
@@ -82,12 +97,14 @@ CATEGORY_ORDER = [
     "Prerequisites",
     "Infrastructure",
     "Environment",
+    "Native Agent",
     "Solution",
     "Authentication",
     "Entra App",
     "Workday Tenant",
     "External Systems",
     "Workday",
+    "Workday DA",
     "Workday Extension",
     "Workday Topics",
     "Graph Connector KB",
@@ -172,19 +189,54 @@ _SPECS: list[CheckpointSpec] = [
     ),
     # ---- Environment (skill-1 net-new) ----
     # ENV-CAPACITY-001: Copilot Studio message capacity provisioned for the
-    # environment. Reads the per-env allocation via the Power Platform Licensing
-    # client (POWERPLATFORM), with PP_ADMIN deriving the env id. Not queryable =>
-    # MANUAL attestation row (never a silent pass).
+    # environment. Reads the per-env allocation directly by environment ID via
+    # the Power Platform Licensing client (POWERPLATFORM).
     CheckpointSpec(
         key="ENV-CAPACITY-001",
-        category_fn=run_environment_checks,
+        category_fn=run_capacity_check,
         category_label="Environment",
-        clients=frozenset({PP_ADMIN, POWERPLATFORM}),
+        clients=frozenset({POWERPLATFORM}),
         requires_config=False,
-        requires_dataverse_endpoint=True,
-        prereqs=("ENV-001",),
+        requires_dataverse_endpoint=False,
         priority=Priority.CRITICAL.value,
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
+    ),
+    # ---- Native AgentBuilder readiness ----
+    CheckpointSpec(
+        key="DA-AGENT-001",
+        category_fn=run_native_agent_checks,
+        category_label="Native Agent",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="DA-CONTENT-001",
+        category_fn=run_native_agent_checks,
+        category_label="Native Agent",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("DA-AGENT-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="DA-CONN",
+        category_fn=run_native_agent_checks,
+        category_label="Native Agent",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("DA-CONTENT-001",),
+        priority=Priority.HIGH.value,
+        roles=(
+            Role.ESS_MAKER.value,
+            Role.POWER_PLATFORM_ADMIN.value,
+        ),
+        is_family=True,
     ),
     CheckpointSpec(
         key="ENV-009",
@@ -209,6 +261,23 @@ _SPECS: list[CheckpointSpec] = [
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,
         category_label="Solution",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("ENV-002",),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
+    # (DA) flavor of ESS is installed in the target env. Queries the
+    # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
+    # child package. Fully independent of ESS-SOLN-001 / WD-PKG-001, which
+    # only recognize the CEA solution family.
+    CheckpointSpec(
+        key="WD-DA-PKG-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
@@ -582,6 +651,7 @@ OWNED_PREFIXES: tuple = (
     "ENV-CAPACITY",
     "ESS-SOLN",
     "WD-PKG",
+    "WD-DA-PKG",
     "WD-CONN",
     "WD-RUN",
     "WD-FLOW",

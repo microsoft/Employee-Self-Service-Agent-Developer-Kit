@@ -27,7 +27,7 @@ except ImportError:
     sys.exit(1)
 
 
-CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 # 96ff4394-9197-43aa-b393-6a41652e21f8 is the well-known Power Virtual Agents
 # first-party app ID, used as the token audience for the Island Gateway API.

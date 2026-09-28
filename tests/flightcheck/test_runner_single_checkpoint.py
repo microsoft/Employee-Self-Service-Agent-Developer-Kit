@@ -144,11 +144,10 @@ class TestErrSentinelRetention:
         assert "kaboom" in sentinel.result
 
     def test_err_only_run_is_not_ready_but_not_failed(self) -> None:
-        """Pins the aggregation the CLI exit code depends on: a raised
-        category function counts as an ERROR (``RunResult.errors``), NOT a
-        FAILED (``RunResult.failed``). ``_run_single_checkpoint`` exits with
-        ``1 if result.failed > 0 else 0``, so an error-only run exits 0 while
-        still reporting NOT_READY in the summary/verdict."""
+        """A raised category function is an ERROR, not a FAILED result.
+
+        Both CLI modes treat either count as a nonzero exit.
+        """
         runner = FlightCheckRunner(
             scope="checkpoint:WD-FLOW-001",
             target_matcher=lambda cid: cid == "WD-FLOW-001",

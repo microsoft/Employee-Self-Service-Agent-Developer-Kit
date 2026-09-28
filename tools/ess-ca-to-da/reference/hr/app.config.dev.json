@@ -1,0 +1,19 @@
+{
+  "formatVersion": "1.0",
+  "realm": "dev",
+  "values": {
+    "botName": "Employee Self-Service HR (Preview)",
+    "gptDisplayName": "Employee Self-Service HR (Preview)"
+  },
+  "connections": {
+    "gptagent_copilotforemployeeselfservicehr.a1f4c28d-6b7c-49b9-a32e-55d8f19c7a03.shared_service-now": {
+      "connectorId": "/providers/Microsoft.PowerApps/apis/shared_service-now",
+      "connectionId": null
+    }
+  },
+  "flows": {
+    "3164dae9-3a2b-5843-98dd-e62bb5123324": "3164dae9-3a2b-5843-98dd-e62bb5123324",
+    "eab2ffdb-27cb-588b-a640-c2693acce57e": "eab2ffdb-27cb-588b-a640-c2693acce57e"
+  },
+  "secrets": {}
+}

@@ -11,6 +11,25 @@ troubleshooting, and any message that asks the maker to perform UI actions.
 - Distinguish destinations, UI controls, selected values, and product names.
 - Use known context instead of asking the maker to translate generic guidance.
 
+## Current-state language
+
+No historicity means maker-facing text describes only a current observed fact,
+a decision the maker must make, an action the maker must take, or a supported
+outcome. Authoring rationale and UX meta-intentions remain instruction-only:
+response cadence, narration strategy, template selection, render policy, and
+commentary about what the conversation will or will not say.
+
+Resolve a UX concern by defining the positive response at its owning boundary:
+
+- successful internal work continues to the next defined maker interaction;
+- a required decision uses its defined question and choices;
+- a blocked operation states the observed blocker and one supported recovery;
+- a completed path uses its defined final handoff.
+
+Terms such as "chatter," "noise," "narration," "render point," "surface,"
+"template," "maker-facing," and "UX" describe authoring policy. They are not
+setup status, evidence, or instructions for the maker.
+
 ## Formatting semantics
 
 Use formatting consistently according to what the text represents:
@@ -44,6 +63,27 @@ known environment as `ESS combined`, for example, rather than "the target
 environment." Never show unresolved placeholders such as
 `{ENVIRONMENT_NAME}` to the maker.
 
+## Progress checklists
+
+Render a maker-facing progress snapshot as an ordinary, single-level Markdown
+bullet list. Every item begins with exactly one status emoji in the same
+position so completed, current, blocked, and pending stages retain one
+consistent visual shape:
+
+```text
+- ✅ Completed stage
+- 🔄 Current stage
+- ⛔ Blocked stage
+- ⬜ Pending stage
+```
+
+Keep the full ordered list in every snapshot. The Markdown list is the
+maker-facing progress surface.
+
+Send each progress snapshot as its own complete chat message. Finish that
+message before opening the next question or interactive control. The next
+control begins with its own decision prompt, explanation, and choices.
+
 ## Authoring pattern
 
 Compose UI guidance from the runtime context rather than copying a stored
@@ -74,6 +114,7 @@ document.
 - Formatting every noun for emphasis.
 - Internal implementation terms, state paths, tool names, or placeholders in
   maker-facing messages.
+- Authoring rationale or UX-policy language presented as setup progress.
 
 ## Accessibility and resilience
 

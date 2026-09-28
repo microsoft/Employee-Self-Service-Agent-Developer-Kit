@@ -37,6 +37,9 @@ import adk_telemetry  # type: ignore  # noqa: E402  # pylint: disable=import-err
 
 DEFAULT_WIDGET_ORIGIN = "https://workforceinsights.m365.cloud.microsoft"
 WIDGET_MIME_TYPE = "text/html;profile=mcp-app"
+SOLUTION_LOCAL_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", ".local")
+)
 
 ACCENT_COLOR_RESOURCE_URI = "ui://widget/accent-color/AccentColor.html"
 QUICK_LINKS_RESOURCE_URI = "ui://widget/quick-links/QuickLinks.html"
@@ -162,6 +165,10 @@ def get_client() -> AgentConfigClient:
     global _client
     if _client is None:
         _client = AgentConfigClient()
+        adk_telemetry.initialize_tenant_identity(
+            _client.tenant_id,
+            local_dir=SOLUTION_LOCAL_DIR,
+        )
     return _client
 
 
@@ -427,11 +434,13 @@ async def open_starter_prompts(
 )
 async def report_client_events(
     schemaVersion: Any = None,
-    correlationId: Any = None,
+    batchId: Any = None,
     mountId: Any = None,
     appName: Any = None,
     buildEnvironment: Any = None,
     buildNumber: Any = None,
+    platform: Any = None,
+    userAgent: Any = None,
     events: Any = None,
     toolCallId: Any = None,
 ) -> CallToolResult:
@@ -447,11 +456,13 @@ async def report_client_events(
     """
     envelope: dict[str, Any] = {
         "schemaVersion": schemaVersion,
-        "correlationId": correlationId,
+        "batchId": batchId,
         "mountId": mountId,
         "appName": appName,
         "buildEnvironment": buildEnvironment,
         "buildNumber": buildNumber,
+        "platform": platform,
+        "userAgent": userAgent,
         "events": events,
     }
     if toolCallId is not None:

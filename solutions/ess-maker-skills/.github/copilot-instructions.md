@@ -3,44 +3,224 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json` and `.local/config.json`.**
+reading tool to try to read `.local/setup/config.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read both files FIRST, then decide what
+the user first. Do NOT list capabilities. Read this file FIRST, then decide what
 to do based on the result.
 
-### If foundation setup is missing or not ready
+### If setup is missing or not ready
 
-Foundation setup is ready only when `.local/setup/config.json` exists and
-`connect_ready` is `true`.
+DA setup is ready only when `.local/setup/config.json` has `schema_version`
+equal to `4` and its `agents` entry matching `.local/config.json`'s
+`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
+that per-agent marker only after all eight foundation steps for that agent have
+reached `done`.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
 Do not list your capabilities. Do not greet the user with a menu of options.
 Do not say "hello" or introduce yourself.
 
-Respond with ONLY this exact message and nothing else:
+Use this setup-required Message block and finish the request:
 
-> Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+**Message:**
 
-**The ONLY exception**: If the user typed `/setup` or explicitly asked to run
-setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
+Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
+environment. Type `/setup` to get started — it only takes a couple minutes.
 
-**This gate applies to ALL user messages** — including "hello", "hi", "help",
+**End message.**
+
+**Exceptions:**
+
+- If the user typed `/setup` or explicitly asked to run setup, proceed with
+  setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
+- If the user typed `/planner` or asked to **plan a rollout / plan an ESS
+  deployment / set up ESS for the first time / where do I start / how do I get
+  started / "what am I assigned?"**, proceed with planning — read
+  `src/skills/planner/SKILL.md` and follow it. The planner is allowed to run
+  before setup because it defines the greenfield deployment and emits setup as
+  the first task. Do not route these requests directly to setup.
+- If the user explicitly asks to create or generate evaluation test sets,
+  proceed without setup — read
+  `src/skills/evaluations/dispatcher/SKILL.md` and follow it. This exception is
+  for creating test sets.
+- If the user explicitly asks to update, edit, modify, or change evaluation
+  test sets or individual test cases, proceed without setup — read
+  `src/skills/evaluations/update/SKILL.md` and follow it. This includes natural
+  requests such as "edit the testsets" and "change an expected response." That
+  skill discovers workspace-level sets without setup and agent-owned sets when
+  configuration is available. Deleting deployed sets still requires setup.
+- If the user typed `/flightcheck` or explicitly asked to validate setup or
+  environment readiness, follow the **FlightCheck entry contract** below.
+- If the user typed `/connect` or `/connect-workday`, allow the command after
+  **local workspace materialization**, even when runtime `connect_ready` is
+  false. Require
+  `schema_version: 4`, resolve `.local/config.json` `activeAgent` to the
+  canonical agent whose `agent.workspace_slug` matches, and require canonical
+  workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
+  is intentionally not a prerequisite because `/connect` is the workflow that
+  resolves product-extension connection gaps. If materialization is incomplete,
+  use the setup-required Message block above and finish the request.
+
+**Except for the cases above, this gate applies to ALL user messages** —
+including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready, and the user didn't say `/setup`,
-show ONLY the welcome message above. No other text. No capabilities list. No greeting.
+If foundation setup isn't ready and no exception above applies,
+use the setup-required Message block above and finish the request.
 
-### If foundation is ready but the local workspace is not initialized
+#### FlightCheck entry contract
 
-If `.local/config.json` does not exist or its `setup` value is not `"complete"`,
-apply the same gate above. `/setup` resumes at the local onboarding bootstrap
-through `src/skills/foundation-setup/SKILL.md`.
+Read `.local/config.json` and resolve its `activeAgent` to the canonical agent
+whose `agent.workspace_slug` matches. Apply the first matching state:
+Message blocks contain the exact maker-facing copy. Replace their template
+values with resolved evidence and render only the block contents.
 
-### If foundation and local workspace setup are complete
+1. **Standalone FlightCheck:** local config has `flightCheckOnly: true`.
+   Proceed with `src/skills/flightcheck/SKILL.md`.
+2. **Canonical setup ready:** canonical state has `schema_version: 4`, the
+   matching agent exists, and its `connect_ready` is `true`. Proceed with
+   `src/skills/flightcheck/SKILL.md`.
+3. **Setup readiness outstanding:** canonical state has `schema_version: 4`,
+   the matching agent has `workspace.folder`, `workspace.agent_path`, and
+   `steps.SETUP-07.state: "done"`, and canonical readiness is outstanding
+   (`connect_ready` is false or absent). Build `{READINESS_ISSUES}` from
+   canonical setup evidence and use the readiness-outstanding Message block
+   below.
+4. **Workspace preparation required:** use the workspace-preparation Message
+   block below for every remaining state.
 
-Read its contents to get the agent folder, schema name, and configuration.
-Then proceed normally with the user's request.
+Build `{READINESS_ISSUES}` as follows:
+
+1. Collect every non-empty `failure_causes` entry from every step whose `state`
+   is `blocked`, combining exact duplicates.
+2. Preserve the recorded service or readiness check, exception cause, status,
+   error code, request ID, and supported remediation. Translate
+   implementation-specific exception names into plain language while retaining
+   their diagnostic meaning.
+3. Map each step to its maker-facing label:
+   - `SETUP-01` — **Target environment**
+   - `SETUP-02.1` — **Agent access**
+   - `SETUP-02.2` — **Environment capacity**
+   - `SETUP-03` — **Editable Dev agent**
+   - `SETUP-05` — **Connections**
+   - `SETUP-06` — **Agent content**
+   - `SETUP-07` — **Local workspace**
+   Present the bold labels in maker-facing text and keep the canonical setup
+   IDs internal.
+4. Render each collected cause with this readiness issue template:
+
+   - **{READINESS_ITEM}:** {READINESS_DETAIL}
+
+5. When the recorded blocked-cause collection is empty, render one line for
+   the first incomplete step. Set `{READINESS_DETAIL}` to
+   `/setup` will run this readiness check.
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Some setup items still
+require attention:
+
+{READINESS_ISSUES}
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to return to Setup now?",
+    "options": [
+      {
+        "label": "Return to Setup",
+        "description": "Continue Setup and work through these readiness items",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Use the following Message block for workspace preparation:
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Setup needs to prepare the
+local agent workspace.
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to run Setup now?",
+    "options": [
+      {
+        "label": "Run Setup",
+        "description": "Prepare the local agent workspace",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+When the maker selects **Return to Setup** or **Run Setup**, treat the selection
+as a `/setup` invocation and read `src/skills/foundation-setup/SKILL.md`. The
+selection already confirms setup intent. Carry forward the active agent,
+environment, and canonical setup state resolved by this contract. Do not ask
+the maker to select **Resume setup for this agent** or otherwise reconfirm the
+same known target. Start at the first setup decision or operation not already
+established by that context. If no usable target identity was resolved, follow
+the normal target-selection flow. When the maker selects **Not now** or
+dismisses the question, finish the request with canonical setup state
+unchanged.
+
+### If canonical setup is ready
+
+Read `.local/config.json` to get the agent folder, schema name, and
+configuration, then proceed normally with the user's request. This file is
+operational workspace configuration, not a setup-completion signal. If it is
+missing or invalid, report the configuration error instead of routing back to
+`/setup`.
+
+If the user invokes `/setup` with a supplied agent URL, do not compare its agent
+ID with the canonical local Dev agent before following the foundation setup
+skill. A Prod source and its related Dev agent have different IDs by design.
+Classify the supplied URL first and use its server-reported ALM relationship
+before announcing a mismatch, workspace switch, or refresh.
+
+## DA-GA Command Availability
+
+After canonical DA setup is complete:
+
+- local authoring, review, scan, and browser-based topic driving remain
+  available;
+- Dataverse push and server-backed validation are permitted in this
+  workspace; run the push pipeline when the maker asks to push local changes;
+- `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
+  unsupported products or agent verticals must stop at their explicit routing
+  boundary;
+- `/backup-template-configs` and `/restore-template-configs` are no longer
+  supported because they belonged to the retired Dataverse-based agent model;
+- `/flightcheck` may run only its local-files scope.
+
+Do not infer availability from a missing Dataverse endpoint and do not add
+capability fields to setup state.
 
 ## Persona Boundary
 
@@ -111,7 +291,7 @@ wins for this kit. Cite which file you used so the user can verify.
 
 Employee Self-Service (ESS) is a Microsoft Copilot Studio agent that helps enterprise employees with HR questions. It connects to ServiceNow (HRSD), Workday (HCM/Payroll/Absence), ADP, and other systems to handle requests like time off, pay information, case management, and org lookups.
 
-The agent is deployed in a Power Platform environment and accessed through Teams, web, or other channels. Customers connect to their environment via the Dataverse MCP server to discover, query, and customize their agent in VS Code.
+The agent is deployed in a Power Platform environment and accessed through Teams, web, or other channels. Customers connect this kit to an editable DA Dev agent through the native AgentBuilder API and customize its supported local components in VS Code.
 
 ## Component Model
 
@@ -145,13 +325,13 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 
 ### What customers CAN do (with this kit)
 - Create new topics with trigger phrases and conversation flows
-- Create new template configurations in Dataverse automatically via the Dataverse MCP server (the agent pattern-matches existing configs and inserts new records)
 - Add adaptive cards for structured user input
 - Modify existing topic messages, triggers, and conversation logic
 - Fix compile errors in cloned agents
+- Review and scan supported local agent components
 
 ### What requires admin/portal access
-- Publishing the agent after changes
+- Publishing the agent to make changes live in the portal
 - Adding new connector types or configuring authentication
 - Managing knowledge sources
 - Changing AI settings or authentication mode
@@ -162,37 +342,15 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 
 ### Architecture: Template Config + Shared Flow (ESS-native pattern)
 
-ESS uses **template configurations** and **shared orchestrator cloud flows**. Each
-supported integration (ServiceNow, Workday, SAP SuccessFactors) ships with
-**one shared flow**, pre-installed as part of the extension pack. All scenarios
-for that integration route through the same shared flow. The flow reads a
-template config record from Dataverse by `ScenarioName` and executes the
-appropriate API call. **Customers never create or modify these flows.**
+Installed ESS product extensions may use **template configurations** and
+**shared orchestrator cloud flows**. Each supported integration (ServiceNow,
+Workday, SAP SuccessFactors) supplies its own runtime contract.
 
-**This is the primary extensibility pattern.** To add a new scenario for an
-existing integration:
-
-1. Create a **template configuration** record in Dataverse (`msdyn_employeeselfservicetemplateconfigs`) that defines the request/response mapping for the external system API
-2. Create a **topic** (YAML) that collects user input and calls the shared system topic (e.g., `ServiceNowHRSDSystemCommonExecution` for ServiceNow, `WorkdaySystemGetCommonExecution` for Workday), passing the `scenarioName` and `parameters`
-3. The shared flow reads the template config, executes the API call, and returns the response
-
-**Customers only touch two things: template configs and topics.** The flow is
-already installed and handles all CRUD operations for that integration. Adding
-a new scenario means adding a new template config row + a new topic — no
-new flow required.
-
-This pattern provides:
-- Consistent UX with out-of-the-box topics (same execution pipeline, official source badges, error handling)
-- Reuse of the existing connector/auth setup — no new connection references needed
-- Compatibility when ESS ships updates
-- Centralized scenario management in Dataverse
-
-The kit automates template config creation using the **Dataverse MCP server**.
-During `/setup`, the agent discovers existing template configs from the customer's
-environment. During `/create`, it pattern-matches the discovered records to generate
-new template config content and inserts the record via `create_record`. If the
-Dataverse MCP is unavailable, it falls back to guiding manual creation in the
-Power Platform Maker portal.
+The current DA-GA release does not install or configure those extensions and
+does not write their Dataverse template configurations. When the corresponding
+extension already exists, use its extracted system topics as structural
+reference for local topic authoring. Do not invent an integration contract or
+fall back to direct Dataverse writes.
 
 See `src/reference/ess-docs/customization/customize.md` for the full customization
 reference.
@@ -222,9 +380,9 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says... | Pattern | What to create |
 |-----------------|---------|---------------|
-| "I need to look up X from ServiceNow/Workday" | Template Config + Topic | Template config in Dataverse + Topic that calls the shared system flow |
-| "I need to create a ticket/case/request" | Template Config + Topic | Template config (CREATE operation) + Topic with adaptive card for input |
-| "I need to show the user their X data" | Template Config + Topic | Template config (READ operation) + Topic + Adaptive Card for display |
+| "I need to look up X from ServiceNow/Workday" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
+| "I need to create a ticket/case/request" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
+| "I need to show the user their X data" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
 | "I need to call a non-ESS system (Jira, custom API)" | Standalone Topic + Workflow | Topic + new cloud flow (only for connectors without a shared orchestrator) |
 | "I need to add a step to an existing flow" | Modify topic | Edit the existing topic YAML |
 | "I need to change how the agent responds to X" | Modify topic | Update trigger phrases, messages, or conditions |
@@ -235,64 +393,37 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 ## Connector Guidance
 
 ### ServiceNow
-- Uses the `shared_service-now` Power Platform connector via a **shared flow installed with the HRSD/ITSM extension pack**
-- New scenarios only need a **template config** in Dataverse + a **topic** — do NOT create new flows
-- Topics call the shared system topic (`ServiceNowHRSDSystemCommonExecution`) which routes through the shared flow
-- The shared flow reads the template config by `scenarioName`, determines the operation (Create/Get/List/Update), and calls the ServiceNow API
-- Common tables: `incident`, `sn_hr_core_case`, `cmdb_ci`, `sys_user`, `sc_cat_item`
+- Requires the corresponding DA-GA HRSD or ITSM product extension.
+- Do not configure the connector or write template configs through the retired Dataverse path.
 - See `src/reference/ess-docs/integrations/servicenow.md` for connector setup
 - See `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for HRSD/ITSM details
 
 ### Workday
-- Uses the `shared_workdaysoap` Power Platform connector via a **shared flow installed with the Workday extension pack**
-- New scenarios only need a **template config** in Dataverse (XML SOAP template) + a **topic** — do NOT create new flows
-- Topics call the shared system topic (`WorkdaySystemGetCommonExecution`) which routes through the shared flow
-- The shared flow reads the template config by `scenarioName` and executes the Workday SOAP API call
-- **Entra SSO is mandatory.** The OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` — it authenticates to Workday AS the employee. This applies to both install paths.
-- **Two install paths.** Microsoft ships a **simplified** install (OAuthUser `ff0df` + Dataverse only; no ISU accounts, security groups, or RaaS report — user context comes from the REST `/workers/me` endpoint) and a **legacy** install (the older 4-connection setup where `d6081` and `0786a` use Basic auth with ISU service accounts). Fresh installs default to simplified; existing legacy installs stay supported. See the connect skill step1.md/step3.md for detection and the exact connection mapping.
+- Requires the corresponding DA-GA Workday product extension.
+- Do not configure the connector or write template configs through the retired Dataverse path.
 - See `src/reference/ess-docs/integrations/workday.md` for connector setup
 - See `src/reference/ess-docs/integrations/workday-extensibility.md` for extensibility patterns
 
 ### Other Connectors
-- Dataverse (`shared_commondataserviceforapps`) — built-in, used for template configs and internal data
-- HTTP — for generic REST API calls to custom endpoints
-- Any Power Platform connector can be added through the Copilot Studio portal
+- Connector installation and authentication are configured outside this
+  release's setup flow.
 
 ## Agent Development Lifecycle (CRITICAL)
 
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
-deployed in Copilot Studio. They are NOT the live agent. Every mutation
-(create, update, delete) follows the same pipeline:
+deployed in Copilot Studio. They are NOT the live agent.
 
-```
-Checkpoint → Local edit → Scan → Dry run → Push → Verify
-```
-
-**NEVER stop after a local-only change.** If you create a file, edit a file,
-or delete a file without pushing, the live agent in Copilot Studio is
-unchanged. The user's request is not complete until `push.py` has run
-successfully.
-
-### The pipeline for ALL mutations
+For the current DA-GA AgentBuilder workspace, authoring follows this local
+pipeline:
 
 | Step | What | How |
 |------|------|-----|
 | 1. Checkpoint | Save a backup | `python scripts/checkpoint.py "{reason}"` |
 | 2. Local edit | Create, modify, or delete files in `workspace/agents/{slug}/` | File tools |
 | 3. Scan | Check for compile errors | Diagnostics tool on agent folder |
-| 4. Dry run | Preview what will be pushed | `python scripts/push.py --dry-run` |
-| 5. Push | Sync to Copilot Studio | `python scripts/push.py` (interactive confirmation - do NOT pass `--yes`; see `push.prompt.md`) |
-| 6. Verify | Confirm success, link to Copilot Studio | Link to `https://copilotstudio.microsoft.com/` |
 
-### How push.py works
-
-`push.py` compares the local working files against `.baseline/` (a snapshot of
-the last-known environment state). It detects:
-- **Modified files** → updates the Dataverse record
-- **New files** → creates a new Dataverse record
-- **Deleted files** → deletes the Dataverse record
-
-After a successful push, `.baseline/` is updated to match the new state.
+Always state clearly that local authoring does not change the live agent until
+pushed. Run the push pipeline when the maker asks to push local changes.
 
 ### Skill routing for CRUD operations
 
@@ -311,16 +442,14 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Test/debug a workflow | `src/skills/workflows/test/SKILL.md` |
 | Run pre-deployment readiness check | `src/skills/flightcheck/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
-| Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
+| Generate evaluation test sets | `src/skills/evaluations/dispatcher/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
 | Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
 | Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
-| Back up Workday HCM template configs before an ESS package update | `src/skills/backup-template-configs/SKILL.md` |
-| Save / capture / snapshot Workday reference-data customisations | `src/skills/backup-template-configs/SKILL.md` |
-| Restore Workday HCM template configs after a package update | `src/skills/restore-template-configs/SKILL.md` |
-| Re-apply / put back Workday reference-data customisations | `src/skills/restore-template-configs/SKILL.md` |
+| Back up or save hybrid Workday HCM template configs | `src/skills/backup-template-configs/SKILL.md` |
+| Restore or re-apply hybrid Workday HCM template configs | `src/skills/restore-template-configs/SKILL.md` |
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md` |
 | Invoke any tool from the `ess-landing-page-config` MCP server | `src/skills/landing-page-config/SKILL.md` |
 | Create, edit, republish, archive, or manage organization announcements or bulletins | `src/skills/org-announcements/SKILL.md` |
@@ -369,22 +498,25 @@ summary. Generating a helper script here is a bug — it leaks raw terminal outp
 and internal process into chat instead of the clean formatted result.
 
 **Quality validation invocation:** When quality validation is requested on
-eval files — at step 4.3 of the eval create flow, step 4 of the eval
-update flow, OR step 5 of the eval delete flow (single test case deletion
-only) — invoke `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
+eval files — at step 4.3 of the topic-grounded eval create flow, step 6 of the
+catalogue-grounded eval generate flow, step 4 of the eval update flow, OR step
+5 of the eval delete flow (single test case deletion only) — invoke
+`runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
 `src/skills/evaluations/validate/SKILL.md` as its first action, passing the
-paths of the newly written eval files and the agent folder path. Wait for
+paths of the newly written eval files and the exact evaluation-set folder.
+This requirement applies whether or not the requested scenario matched a
+configured topic. Wait for
 the subagent to return with its quality report before continuing. If fixes
 are applied, re-invoke the subagent and wait for the updated report
-before continuing. Do NOT proceed to review and push until the subagent
-has returned. Do NOT invoke the validate subagent after entire test set
-delete operations or after deleting the last remaining case in a category.
+before continuing. Do NOT complete local authoring until the subagent has
+returned. Do NOT invoke the validate subagent after entire test set delete
+operations or after deleting the last remaining case in a category.
 
 **Topic review invocation:** When the maker runs `/create` or `/update`
 **directly**, at step 6 of the corresponding eval-driven topic flow
 (`src/skills/topics/create-eval-driven/SKILL.md` or
 `src/skills/topics/update-eval-driven/SKILL.md`) — after the scan and before
-the dry run/push — invoke `runSubagent` (the VS Code
+completion — invoke `runSubagent` (the VS Code
 Copilot Chat tool) pointing the subagent to read
 `src/skills/topics/review/SKILL.md` as its first action, scoped to the **single
 single topic just created or updated (pass the agent slug from
@@ -393,36 +525,22 @@ topic stem — the filename without `.mcs.yml`) and asking it to present the
 **maker-facing report**. Running this review is **mandatory** in the direct
 eval-driven `/create` and `/update` flows: wait for the subagent to return,
 then paste its full report
-verbatim into the chat. Do NOT proceed to the dry run or push until the review
-has returned and its report is shown. The findings themselves are **advisory**
-— they never block the push; when findings exist, pause and let the maker
-choose to fix now (via `/update`) or push anyway. If the subagent or its
-detector scripts cannot run, say the review was skipped and continue — a review
-failure never blocks the push.
-
-**Do NOT invoke this step-6.5 review when the create-topic skill is running as
-the Workday setup flow's P6.1 authoring delegation**
-(`src/skills/setup/workday/create-new-topic.md`). At P6.1 the tenant reference
-IDs are not wired yet (P6.2 does that), so a review there would false-flag
-unresolved placeholders — there is **no** topic review at S6.1/P6.1. The Workday
-setup flow performs its **one and only** topic review later, at its **step P6.5
-(checklist row S6.3)** — *after* the `TOPIC-TRIGGER-*` and `TOPIC-INTEGRATION-*`
-checkpoints (S6.1, S6.2) pass and the topic is fully wired. That review uses the
-same invocation (`runSubagent` → `src/skills/topics/review/SKILL.md`, single
-topic, maker-facing report, displayed verbatim) and is `advisory` (row S6.3
-completes once the report is shown — it never blocks setup).
+verbatim into the chat. Do NOT complete local authoring until the review has
+returned and its report is shown. The findings themselves are **advisory**.
+When findings exist, pause and let the maker choose whether to fix them now.
+If the subagent or its detector scripts cannot run, say the review was skipped
+and continue.
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
-component, ALWAYS load and follow the corresponding skill file.** The skill
-contains the full checkpoint→edit→scan→push pipeline. Do NOT improvise a
-partial workflow.
+component, ALWAYS load and follow the corresponding skill file.** The
+supported pipeline includes pushing local changes via the push pipeline
+after the local scan.
 
 ## Testing and Deployment
 
-1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors
-2. **Push changes**: Run `python scripts/push.py` to push changes to your environment
-3. **Test in Copilot Studio**: Open [Copilot Studio](https://copilotstudio.microsoft.com/) to test conversations
-4. **Publish**: Publish the agent in the Copilot Studio portal to make changes live
+1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors.
+2. **Push when asked**: When the maker asks to push, run the push pipeline to upsert local changes to the agent.
+3. **Test existing runtime behavior**: Browser-based topic driving may test the currently deployed agent, but it does not include unpublished local changes.
 
 ## Code Quality Rules
 
@@ -465,7 +583,9 @@ support burden when they 404. A missing link is always better than a broken one.
 
 ## User Config
 
-The file `.local/config.json` stores the user's setup state and agent details:
+The file `.local/config.json` stores active workspace and agent details. Its
+`setup` property is retained as operational metadata; setup admission is based
+only on `.local/setup/config.json`.
 
 ```json
 {

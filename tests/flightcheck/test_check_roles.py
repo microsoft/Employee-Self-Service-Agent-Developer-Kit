@@ -150,6 +150,22 @@ def test_terminal_summary_shows_roles_on_action_rows(capsys):
     assert "X-004" in out
 
 
+def test_terminal_summary_does_not_count_skipped_as_passed(capsys):
+    from flightcheck.runner import RunResult
+    from flightcheck.cli import _print_prioritized_summary
+
+    rr = RunResult(scope="full", started="2026-01-01T00-00-00", overall="READY")
+    rr.results = [_result("X-SKIP", "Skipped", [])]
+    rr.total = 1
+    rr.skipped = 1
+
+    _print_prioritized_summary(rr)
+
+    out = capsys.readouterr().out
+    assert "SKIPPED (1)" in out
+    assert "PASSED (0)" in out
+
+
 def test_publishing_checks_all_carry_roles():
     """Every result from a real check module must declare at least one role."""
     from flightcheck.checks.publishing import run_publishing_checks

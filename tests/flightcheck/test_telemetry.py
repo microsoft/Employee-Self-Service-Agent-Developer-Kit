@@ -72,8 +72,14 @@ def _clean_env(monkeypatch):
         "ESS_FLIGHTCHECK_ARIA_ENV",
         "ESS_FLIGHTCHECK_ARIA_IKEY",
         "ESS_ADK_VERSION",
+        "ESS_ADK_GIT_SHA",
+        "ESS_ADK_GIT_BRANCH",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Toolkit git-sha/branch are ``@lru_cache``d — clear so the env
+    # override the individual test sets is picked up.
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
     # resolve_ikey() now also honors the unified `adk telemetry off` opt-out
     # (adk_telemetry.telemetry_enabled). Pin it ON so these tests don't depend
     # on the developer's real ~/.adk/config; the opt-out test overrides this.
@@ -137,6 +143,238 @@ def test_build_events_shape_and_required_fields():
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"
+    # Precise upgrade-posture + CA/DA-attribution dimensions ride on the
+    # run event (ADO #7943642). Best-effort: they resolve to "unknown"
+    # outside a git clone. The dedicated tests below cover the resolution
+    # code paths.
+    assert "toolkitGitSha" in run_data
+    assert "toolkitGitBranch" in run_data
+
+
+def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "1234567")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1234567"
+
+
+def test_get_toolkit_git_sha_override_validates_and_shortens(monkeypatch):
+    # Overrides go through the same validation as repo-derived values so
+    # a full-length or lowercased override lands in the same telemetry
+    # bucket as ``git rev-parse HEAD`` on the same commit.
+    monkeypatch.setenv(
+        "ESS_ADK_GIT_SHA", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    )
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
+
+
+def test_get_toolkit_git_sha_override_non_hex_returns_unknown(monkeypatch):
+    # A stray non-SHA value ("release-2026-06" etc.) must NOT propagate to
+    # the emitted event as a distinct bucket — that would let anything
+    # end up in the SHA dimension.
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "release-2026-06")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+
+
+def test_get_toolkit_git_branch_override_classifies(monkeypatch):
+    # Overrides must go through the bounded classifier, same as
+    # repo-derived values, so CI can't sneak a personal name into the
+    # emitted dimension.
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "main-ca")
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_branch_override_personal_name_becomes_other(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "amilandin/some-feature")
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_branch() == "other"
+
+
+def test_get_toolkit_git_sha_reads_unpacked_ref(tmp_path, monkeypatch):
+    """Fabricate a .git dir the sha helper can walk without git installed."""
+    git_dir = tmp_path / ".git"
+    refs_heads = git_dir / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (refs_heads / "main").write_text(
+        "abcdef0123456789abcdef0123456789abcdef01\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
+    assert telemetry.get_toolkit_git_branch() == "main"
+
+
+def test_get_toolkit_git_sha_reads_packed_refs(tmp_path, monkeypatch):
+    """After ``git gc`` the ref file moves into ``packed-refs``."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main-ca\n", encoding="utf-8")
+    (git_dir / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "1111111222222223333333344444444555555556 refs/heads/main-ca\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1111111"
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_sha_detached_head(tmp_path, monkeypatch):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text(
+        "abcdef0123456789abcdef0123456789abcdef01\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
+    # Detached HEAD reports "detached", not the SHA (the SHA already lives
+    # in toolkit_git_sha; splitting the concerns keeps dashboards tidy).
+    assert telemetry.get_toolkit_git_branch() == "detached"
+
+
+def test_get_toolkit_git_sha_no_repo_returns_unknown(monkeypatch):
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: "")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+    assert telemetry.get_toolkit_git_branch() == "unknown"
+
+
+def test_get_toolkit_git_sha_gitdir_file_indirection(tmp_path, monkeypatch):
+    """A worktree checkout has ``.git`` as a text file pointing at the real dir."""
+    real_git = tmp_path / "real-git"
+    refs_heads = real_git / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (real_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (refs_heads / "main").write_text(
+        "cafebabecafebabecafebabecafebabecafebabe\n", encoding="utf-8"
+    )
+    fake_git_file = tmp_path / "worktree" / ".git"
+    fake_git_file.parent.mkdir()
+    fake_git_file.write_text(f"gitdir: {real_git}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(fake_git_file))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "cafebab"
+    assert telemetry.get_toolkit_git_branch() == "main"
+
+
+def test_get_toolkit_git_sha_real_linked_worktree_layout(tmp_path, monkeypatch):
+    """Real ``git worktree add`` stores per-worktree HEAD in ``.git/worktrees/<name>/``
+    while refs and ``packed-refs`` stay in the common directory. The per-worktree
+    dir has a ``commondir`` file pointing at the shared admin dir.
+
+    This test models the real linked-worktree layout that the pre-fix code
+    missed — searching for refs / packed-refs inside the per-worktree dir
+    only resolved SHA correctly because the old test fixture put refs
+    there. On a real linked worktree the SHA silently became ``unknown``.
+    """
+    common = tmp_path / "main-clone" / ".git"
+    refs_heads = common / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (refs_heads / "feature-x").write_text(
+        "deadbee0000000000000000000000000000000ff\n", encoding="utf-8"
+    )
+    # Per-worktree admin dir: has its own HEAD but points at common for refs.
+    wt_admin = common / "worktrees" / "feature-x"
+    wt_admin.mkdir(parents=True)
+    (wt_admin / "HEAD").write_text("ref: refs/heads/feature-x\n", encoding="utf-8")
+    (wt_admin / "commondir").write_text("../..\n", encoding="utf-8")
+    # And the linked worktree's checkout has a ``.git`` file pointing at wt_admin.
+    linked_wt = tmp_path / "wt-feature-x"
+    linked_wt.mkdir()
+    linked_dot_git = linked_wt / ".git"
+    linked_dot_git.write_text(f"gitdir: {wt_admin}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(linked_dot_git))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "deadbee"
+    # feature-x is a topic branch, not a shipping branch, so it collapses
+    # to "other" — never leaks the actual name.
+    assert telemetry.get_toolkit_git_branch() == "other"
+
+
+def test_get_toolkit_git_sha_real_linked_worktree_packed_refs(tmp_path, monkeypatch):
+    """Same as above but the ref lives in the common ``packed-refs`` file
+    (after ``git gc`` on the common dir)."""
+    common = tmp_path / "main-clone" / ".git"
+    common.mkdir(parents=True)
+    (common / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "12345670000000000000000000000000000000ab refs/heads/main-ca\n",
+        encoding="utf-8",
+    )
+    wt_admin = common / "worktrees" / "ca-branch"
+    wt_admin.mkdir(parents=True)
+    (wt_admin / "HEAD").write_text("ref: refs/heads/main-ca\n", encoding="utf-8")
+    (wt_admin / "commondir").write_text("../..\n", encoding="utf-8")
+    linked_wt = tmp_path / "wt-ca"
+    linked_wt.mkdir()
+    linked_dot_git = linked_wt / ".git"
+    linked_dot_git.write_text(f"gitdir: {wt_admin}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(linked_dot_git))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1234567"
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_sha_malformed_head_returns_unknown(tmp_path, monkeypatch):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("garbage\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+    # A malformed HEAD (not a ``ref:`` line, not a valid SHA) must NOT
+    # report ``branch=detached`` alongside ``sha=unknown``: that lies
+    # about the checkout state. Return unknown for both.
+    assert telemetry.get_toolkit_git_branch() == "unknown"
+
+
+def test_classify_branch_privacy_bounded():
+    """The classifier must collapse anything outside the allowed set to
+    a fixed vocabulary — raw branch names are not permitted in telemetry.
+
+    Rationale (see CONTRIBUTING.md privacy contract): branch names can
+    carry aliases, personal names, customer labels, or free-form tokens.
+    Emitting them raw would violate the documented "no developer
+    identifier" guarantee.
+    """
+    # Allowed shipping branches pass through.
+    assert telemetry._classify_branch("main") == "main"
+    assert telemetry._classify_branch("main-ca") == "main-ca"
+    # Special reserved values pass through.
+    assert telemetry._classify_branch("detached") == "detached"
+    assert telemetry._classify_branch("unknown") == "unknown"
+    # Everything else — including anything that could carry identity —
+    # collapses to "other".
+    for personal in [
+        "amilandin/some-feature",
+        "nkemms/fix-bug",
+        "customer-contoso/pilot",
+        "release-2026-06",
+        "hotfix",
+        "wip",
+        "some-random-label",
+    ]:
+        assert telemetry._classify_branch(personal) == "other", personal
+    # Empty is "unknown", not "other" (nothing to classify).
+    assert telemetry._classify_branch("") == "unknown"
+
+
+def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
+    """Version-gate the new dimensions so dashboards can pin on schema 1.3."""
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"
 
 
 def test_derive_run_outcome_precedence():
@@ -332,3 +570,128 @@ def test_emit_noop_when_disabled(monkeypatch, tmp_path):
     assert out["sent"] is False
     assert out["reason"] == "disabled"
     assert called["n"] == 0
+
+
+# --- connector derivation (ADO 7943641) -----------------------------------
+@pytest.mark.parametrize("scope,expected", [
+    ("workday", "workday"),
+    ("workdaytenant", "workday"),
+    ("workdayextension", "workday"),
+    # ADO 7943641 review — SCOPE_MAP also defines these Workday-only scopes;
+    # earlier revisions left them attributing to "" which under-counted real
+    # Workday runs on the connector-adoption rollups.
+    ("workdayda", "workday"),
+    ("topics", "workday"),          # SCOPE_MAP label: "Workday Topics"
+    ("Workday", "workday"),
+    (" workday ", "workday"),
+    ("WORKDAYDA", "workday"),       # case-insensitive
+    (" topics ", "workday"),        # whitespace-tolerant
+    ("servicenow", "servicenow"),
+    ("ServiceNow", "servicenow"),
+])
+def test_derive_connector_from_scope_known(scope, expected):
+    assert telemetry.derive_connector_from_scope(scope) == expected
+
+
+@pytest.mark.parametrize("scope", [
+    "full",                    # cross-connector run: per-check attribution wins
+    "authentication",
+    "environment",
+    "external",
+    "local",
+    "publishing",
+    "entraapp",
+    "",
+    None,
+])
+def test_derive_connector_from_scope_non_connector_is_empty(scope):
+    assert telemetry.derive_connector_from_scope(scope) == ""
+
+
+@pytest.mark.parametrize("category,expected", [
+    ("Workday", "workday"),
+    ("Workday Tenant", "workday"),
+    ("Workday Extension", "workday"),
+    ("Workday Workflows", "workday"),
+    ("workday", "workday"),
+    ("ServiceNow", "servicenow"),
+    ("ServiceNow HRSD", "servicenow"),
+    ("servicenow", "servicenow"),
+])
+def test_derive_connector_from_category_known(category, expected):
+    assert telemetry.derive_connector_from_category(category) == expected
+
+
+@pytest.mark.parametrize("category", [
+    "Environment", "Authentication", "Prerequisites", "Local Files",
+    "Publishing", "External Systems", "Licensing", "Solution", "Topics",
+    "Configuration", "", None,
+])
+def test_derive_connector_from_category_cross_cutting_is_empty(category):
+    # Cross-cutting checks intentionally do not attribute to a connector so
+    # per-connector rollups aren't inflated by shared prerequisites.
+    assert telemetry.derive_connector_from_category(category) == ""
+
+
+def test_run_event_carries_connector_from_scope():
+    events = telemetry.build_events(
+        FakeRun(),
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="workday",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    assert events[0]["data"]["connector"] == "workday"
+
+
+def test_run_event_connector_empty_for_full_scope():
+    events = telemetry.build_events(
+        FakeRun(),
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    # "full" scope leaves the run-level connector empty — per-check
+    # categories give the finer split downstream.
+    assert events[0]["data"]["connector"] == ""
+
+
+def test_check_events_carry_connector_from_category():
+    run = FakeRun(results=[
+        FakeCheck(checkpoint_id="WD-1", category="Workday Tenant"),
+        FakeCheck(checkpoint_id="SN-1", category="ServiceNow HRSD"),
+        FakeCheck(checkpoint_id="AUTH-1", category="Authentication"),
+    ], total=3, passed=3, failed=0)
+    events = telemetry.build_events(
+        run,
+        env="dev",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        tenant_name="Contoso",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+        run_id="r",
+    )
+    check_events = [e for e in events if e["name"] == telemetry.EVENT_CHECK]
+    connectors = [e["data"]["connector"] for e in check_events]
+    assert connectors == ["workday", "servicenow", ""]
+
+
+def test_schema_version_bump_records_connector_dim():
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"

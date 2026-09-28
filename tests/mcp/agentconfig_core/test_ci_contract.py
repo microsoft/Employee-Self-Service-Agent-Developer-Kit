@@ -14,8 +14,9 @@ def test_ci_accepts_only_upstream_targets():
         (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
         Loader=yaml.BaseLoader,
     )
-    assert workflow["on"]["push"]["branches"] == ["main", "release/**"]
-    assert workflow["on"]["pull_request"]["branches"] == ["main", "release/**"]
+    expected_branches = ["main", "main-ca", "release/**"]
+    assert workflow["on"]["push"]["branches"] == expected_branches
+    assert workflow["on"]["pull_request"]["branches"] == expected_branches
     assert workflow["on"]["pull_request"]["types"] == [
         "opened", "synchronize", "reopened", "edited",
     ]

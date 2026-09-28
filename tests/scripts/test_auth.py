@@ -14,6 +14,7 @@ Tenant discovery supports quoted challenges and optional resource IDs.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import responses
@@ -22,6 +23,89 @@ from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
 
 require_validated_mock(dv)
+
+
+def test_da_setup_completion_uses_active_agents_canonical_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "agent-1": {
+                        "agent": {"workspace_slug": "employee-self-service"},
+                        "connect_ready": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "employee-self-service"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert auth.is_connect_ready()
+
+
+def test_da_setup_completion_is_scoped_to_active_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "ready": {
+                        "agent": {"workspace_slug": "ready-agent"},
+                        "connect_ready": True,
+                    },
+                    "active": {
+                        "agent": {"workspace_slug": "active-agent"},
+                        "connect_ready": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "active-agent"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert not auth.is_connect_ready()
+
+
+def test_da_setup_completion_ignores_operational_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    config_path = tmp_path / ".local" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"setup": "complete"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert not auth.is_connect_ready()
 
 
 @pytest.fixture
@@ -216,6 +300,61 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     assert (local / ".token_cache.bin").read_text(
         encoding="utf-8"
     ) == "refreshed"
+
+
+def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
+    import adk_telemetry
+    import auth
+    from flightcheck import graph_client
+
+    selected_accounts = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return [
+                {"username": "other@example.com"},
+                {"username": "Maker@Example.com"},
+            ]
+
+        def acquire_token_silent(self, scopes, account):
+            selected_accounts.append(account)
+            return {
+                "access_token": "preferred-token",
+                "id_token_claims": {"tid": "tenant-id"},
+            }
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("cached preferred account should be reused")
+
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: "tenant-id")
+    monkeypatch.setattr(
+        auth,
+        "_dataverse_accepts_token",
+        lambda _url, _token: True,
+    )
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(auth, "_persist_token_cache", lambda *_args: None)
+    monkeypatch.setattr(
+        graph_client,
+        "resolve_tenant_display_name_silent",
+        lambda _tenant: None,
+    )
+    monkeypatch.setattr(adk_telemetry, "start_session", lambda **_kwargs: None)
+
+    token = auth.authenticate(
+        "https://example.crm.dynamics.com",
+        preferred_username="maker@example.com",
+    )
+
+    assert token == "preferred-token"
+    assert selected_accounts == [{"username": "Maker@Example.com"}]
 
 
 def test_authenticate_resolves_tenant_name_before_start_session(

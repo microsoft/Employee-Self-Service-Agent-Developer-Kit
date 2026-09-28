@@ -5,13 +5,12 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-**Setup-state check.** Read `.local/config.json`.
-If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Follow the **FlightCheck entry contract** in
+`.github/copilot-instructions.md`. Continue here only for its **Standalone
+FlightCheck** and **Canonical setup ready** states.
 
-> Welcome to the ESS Maker Kit. Before running this command, type `/setup` 
-> to set up your environment.
-
-and STOP. Otherwise proceed.
+For an accepted entry state, use the scope selection supported by the active
+configuration in `src/skills/flightcheck/SKILL.md`.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.

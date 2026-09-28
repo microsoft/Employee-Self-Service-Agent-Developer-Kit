@@ -1,0 +1,436 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-requests/2.34.2
+      x-ms-client-name:
+      - EssAdk
+    method: GET
+    uri: https://00000000000000000000000000000000.0.environment.api.test.powerplatform.com/copilotstudio/minimalBots/api/00000000-0000-0000-0000-000000001111?api-version=2024-10-01
+  response:
+    body:
+      string: '{"botId":"00000000-0000-0000-0000-000000001111","shortBotName":"Employee
+        Self-Service HR (Prev","fullBotName":"Employee Self-Service HR (Preview)","outlineIcon":"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","accentColor":null,"shortDescription":"","longDescription":"","isMinimal":false,"createdAt":"2026-09-15T00:39:39.6386299Z","owners":["00000000-0000-0000-0000-000000001111"],"lastModifiedAt":"2026-09-15T00:39:39.6386299Z","lastPublishedAt":"2026-09-15T16:54:16.8283278Z","hasSkill":false,"realm":"dev"}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Thu, 17 Sep 2026 19:55:22 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=31.9,x-ms-igw-req-overhead;dur=0.5
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - sameorigin
+      x-cci-botdesignerserver-buildid:
+      - 1.2026.917.8
+      x-ms-activity-vector:
+      - REDACTED
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-firewall-client-ip:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - REDACTED
+      x-ms-igw-tracking-id:
+      - REDACTED
+      x-ms-islandgateway:
+      - REDACTED
+      x-ms-ppapigateway:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-requests/2.34.2
+      x-ms-client-name:
+      - EssAdk
+    method: GET
+    uri: https://00000000000000000000000000000000.0.environment.api.test.powerplatform.com/copilotstudio/minimalBots/alm/00000000-0000-0000-0000-000000001111/configure?api-version=2024-10-01&realm=0
+  response:
+    body:
+      string: '{"realm":"Dev","cdsBotId":"00000000-0000-0000-0000-000000001111","schemaName":"gptagent_copilotforemployeeselfservicehr","grsRepositoryId":"00000000-0000-0000-0000-000000001111","commitSha":"4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b","values":{"botName":"Employee
+        Self-Service HR (Preview)","gptDisplayName":"Employee Self-Service HR (Preview)"},"flows":{},"connections":{}}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '373'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Thu, 17 Sep 2026 19:55:26 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=3097.0,x-ms-igw-req-overhead;dur=0.7
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - sameorigin
+      x-cci-botdesignerserver-buildid:
+      - 1.2026.917.8
+      x-ms-activity-vector:
+      - REDACTED
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - REDACTED
+      x-ms-igw-tracking-id:
+      - REDACTED
+      x-ms-islandgateway:
+      - REDACTED
+      x-ms-ppapigateway:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-requests/2.34.2
+      x-ms-client-name:
+      - EssAdk
+    method: POST
+    uri: https://00000000000000000000000000000000.0.environment.api.test.powerplatform.com/copilotstudio/minimalBots/api/00000000-0000-0000-0000-000000001111/components?api-version=2024-10-01
+  response:
+    body:
+      string: '{"botComponentChanges":[{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.626494Z","modifiedTimeUtc":"2026-09-15T00:39:39.626494Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Company_Code","variable":{"$kind":"Variable","name":"ESS_UserContext_Company_Code","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6225115Z","modifiedTimeUtc":"2026-09-15T00:39:39.6225115Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.System-Logger","dialog":{"$kind":"AdaptiveDialog","beginDialog":{"$kind":"OnRedirect","actions":[{"$kind":"LogCustomTelemetryEvent","id":"4ishvf","eventName":{"$kind":"StringExpression","variableReference":"Topic.EventName"},"properties":{"$kind":"ValueExpression","expressionText":"{\n    Message:
+        Topic.Message,\n    TimeUTC: Text(Now(), DateTimeFormat.UTC),\n    ConversationId:
+        System.Conversation.Id,\n    Channel: System.Activity.ChannelId,\n    AgentId:
+        System.Bot.Name\n}","structuredRecordExpression":{"$kind":"StructuredRecordExpression","properties":{"AgentId":{"$kind":"ValueExpression","variableReference":"System.Bot.Name"},"Channel":{"$kind":"ValueExpression","variableReference":"System.Activity.ChannelId"},"ConversationId":{"$kind":"ValueExpression","variableReference":"System.Conversation.Id"},"Message":{"$kind":"ValueExpression","variableReference":"Topic.Message"},"TimeUTC":{"$kind":"ValueExpression","expressionText":"Text(Now(),
+        DateTimeFormat.UTC)"}}}}}],"id":"main"},"inputType":{"$kind":"Record","properties":{"EventName":{"$kind":"PropertyInfo","displayName":"Mock
+        Display Name","type":{"$kind":"String"}},"Message":{"$kind":"PropertyInfo","displayName":"Mock
+        Display Name","type":{"$kind":"String"}}}}}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6350321Z","modifiedTimeUtc":"2026-09-15T00:39:39.6350321Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Alias","variable":{"$kind":"Variable","name":"ESS_UserContext_Alias","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6324852Z","modifiedTimeUtc":"2026-09-15T00:39:39.6324852Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Inactive","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.Example-CraftedResponse","dialog":{"$kind":"AdaptiveDialog","modelDescription":"**This
+        topic should only trigger** when users mention **explicitly question related
+        to compa-ratio** such as **what is my compa-ratio**, **tell my compa-ratio**.\n**Important:**\nThis
+        topic **must not** trigger for **general employment-related inquiries** such
+        as:\n- Accessing **benefits information** (e.g., W-2 forms, health benefits),\n-
+        **Routine workplace questions**,\n- **Performance concerns**, or\n- Other
+        **non-sensitive** matters.\n**It should only activate** when explicit terms
+        like **compa-ratio** is mentioned.","beginDialog":{"$kind":"OnRecognizedIntent","actions":[{"$kind":"SetTextVariable","id":"setVariable_05OHaW","displayName":"Mock
+        Display Name","variable":"Topic.VerbatimResponse","value":{"$kind":"TemplateLine","segments":[{"$kind":"TextSegment","value":"Verbatim
+        response placeholder - replace with your response."}]}},{"$kind":"AdaptiveCardPrompt","id":"EZFv4Z","displayName":"Mock
+        Display Name","card":{"$kind":"AdaptiveCardExpression","expressionText":"{\n  type:
+        \"AdaptiveCard\",\n  ''$schema'': \"http://adaptivecards.io/schemas/adaptive-card.json\",\n  version:
+        1,\n  body: [\n    {\n      type: \"ColumnSet\",\n      columns: [\n        {\n          type:
+        \"Column\",\n          width: \"auto\",\n          items: [\n            {\n              type:
+        \"Image\",\n              url: \"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAFbSURBVHgBpVPbcYMwELTUQEgFIR2YDuwKgiuwePybDkw6cBoApQKng0wqMKnA7iDkn4HsTiRGFvjLmtFIh3b39m6OxeLOJfwPSqlASrnH9buqKm1ihfip7/tXrXXr4uVEUYgSQDEMwypJkhPiE+IAsYBQ4eMnAlgv2Ie6rhVIa+wIWUuc3LvZEozNHQAF9hsJM8LElXC0xf6w5UjH9iPIz7fIeZ6vjBO6EuSMJSC4wEHrN8iuNE33XdfFvANzAf4BIs0ogOwaH7YsZY6MtxjEwpaLeIlYjwImc+uQjgAusyyLAWYzN55uYJNJQ1Cw1dgS2CDER5zMvqZtyyQGb+9mNv4FaIkOoBoaUGOatXHJtgQc7EHoCpSms5+s2TbLJ/MNmDOc/ZKzmFuYvh9bH0/nHuLt7OMn/wKylLTIkthAnuyPiQUm9GqcJ6MMewcCjc0IhAj3L367afue9QfySQPBVCM/rQAAAABJRU5ErkJggg==\"\n            }\n          ],\n          verticalContentAlignment:
+        \"Center\"\n        },\n        {\n          type: \"Column\",\n          width:
+        \"stretch\",\n          items: [\n            {\n              type: \"TextBlock\",\n              text:
+        \"Official Answer\",\n              wrap: true,\n              size: \"Small\",\n              weight:
+        \"Lighter\",\n              color: \"Default\",\n              isSubtle: true,\n              height:
+        \"stretch\"\n            }\n          ],\n          spacing: \"Small\",\n          verticalContentAlignment:
+        \"Bottom\"\n        }\n      ],\n      spacing: \"None\",\n      horizontalAlignment:
+        \"Left\",\n      height: \"stretch\"\n    },\n    {\n      type: \"TextBlock\",\n      text:
+        Topic.VerbatimResponse,\n      wrap: true\n    }\n  ]\n}"},"output":{"$kind":"ActionOutputBinding"},"outputType":{"$kind":"Record"}},{"$kind":"CancelAllDialogs","id":"kpYUId"}],"id":"main","intent":{"$kind":"Intent","triggerQueries":["what
+        is my compa-ratio","what is my compa ratio","tell my compa-ratio"]}}}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6173939Z","modifiedTimeUtc":"2026-09-15T00:39:39.6173939Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Next_Update_Time","variable":{"$kind":"Variable","name":"ESS_UserContext_Next_Update_Time","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6070012Z","modifiedTimeUtc":"2026-09-15T00:39:39.6070012Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Locale","variable":{"$kind":"Variable","name":"ESS_UserContext_Locale","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6336444Z","modifiedTimeUtc":"2026-09-15T00:39:39.6336444Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Country_Code","variable":{"$kind":"Variable","name":"ESS_UserContext_Country_Code","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.605128Z","modifiedTimeUtc":"2026-09-15T00:39:39.605128Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.System-UserContext-Createglobalvariables","dialog":{"$kind":"AdaptiveDialog","beginDialog":{"$kind":"OnRedirect","actions":[{"$kind":"SetVariable","id":"setVariable_u9o5QP","variable":"Global.ESS_EventLoggers_UserContext","value":{"$kind":"ValueExpression","literalValue":"UserContextLog"}},{"$kind":"ConditionGroup","id":"conditionGroup_Ft7vLx","conditions":[{"$kind":"ConditionItem","id":"conditionItem_Ft7vLx","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_RefreshInterval_Hours)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_RefreshInterval_Hours","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_Ft7vLx","variable":"Global.ESS_UserContext_RefreshInterval_Hours","value":{"$kind":"ValueExpression","literalValue":168}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATb","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx03","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Employee_Firstname)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Employee_Firstname","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtb","variable":"Global.ESS_UserContext_Employee_Firstname","value":{"$kind":"ValueExpression","variableReference":"System.User.FirstName"}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATc","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx04","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Employee_Lastname)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Employee_Lastname","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtc","variable":"Global.ESS_UserContext_Employee_Lastname","value":{"$kind":"ValueExpression","variableReference":"System.User.LastName"}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATd","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx05","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Alias)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Alias","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtd","variable":"Global.ESS_UserContext_Alias","value":{"$kind":"ValueExpression","expressionText":"First(\n    Split(\n        System.User.PrincipalName,\n        \"@\"\n    )\n).Value"}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATe","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx06","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_UPN)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_UPN","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKte","variable":"Global.ESS_UserContext_UPN","value":{"$kind":"ValueExpression","variableReference":"System.User.PrincipalName"}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATf","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx07","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Employee_Id)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Employee_Id","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtf","variable":"Global.ESS_UserContext_Employee_Id","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATg","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx08","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Country_Code)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Country_Code","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtg","variable":"Global.ESS_UserContext_Country_Code","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATh","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx09","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Level)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Level","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKth","variable":"Global.ESS_UserContext_Level","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATi","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx10","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Locale)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Locale","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_Pbc6fs","variable":"Global.ESS_UserContext_Locale","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATj","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx11","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Is_Manager)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Is_Manager","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_svRHfa","variable":"Global.ESS_UserContext_Is_Manager","value":{"$kind":"ValueExpression","literalValue":false}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATk","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx12","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Company_Code)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Company_Code","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_ErYKtk","variable":"Global.ESS_UserContext_Company_Code","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_OoqATl","conditions":[{"$kind":"ConditionItem","id":"conditionItem_HCZx13","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_User_Id)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_User_Id","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_EaYKtk","variable":"Global.ESS_UserContext_User_Id","value":{"$kind":"ValueExpression","literalValue":"\"\""}}]}]},{"$kind":"ConditionGroup","id":"conditionGroup_32J0SB","conditions":[{"$kind":"ConditionItem","id":"conditionItem_32J0SB","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Next_Update_Time)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Next_Update_Time","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_32J0SB","variable":"Global.ESS_UserContext_Next_Update_Time","value":{"$kind":"ValueExpression","expressionText":"DateAdd(\n    Now(),\n    -1,\n    TimeUnit.Hours\n)"}}]}]}],"id":"main"}}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6144008Z","modifiedTimeUtc":"2026-09-15T00:39:39.6144008Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.Setusercontext","dialog":{"$kind":"AdaptiveDialog","beginDialog":{"$kind":"OnRedirect","id":"main","priority":0}}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6201874Z","modifiedTimeUtc":"2026-09-15T00:39:39.6201874Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","description":"Connect
+        users with other agents that specialize in certain tasks. Make a copy of this
+        topic and edit the content in the brackets to start creating a custom handoff
+        experience.\nNote to editors: Use a variety of keywords and phrases to help
+        the agent identify when this topic should be triggered.","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Inactive","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.Agenthandoff-scenarioname","dialog":{"$kind":"AdaptiveDialog","modelDescription":"You
+        will respond only to requests about [add keywords, phrases, and synonyms here.
+        Please add some valid example queries].","beginDialog":{"$kind":"OnRecognizedIntent","actions":[{"$kind":"SetVariable","id":"setVariable_7l2dng","variable":"Topic.HandoffAgentId","value":{"$kind":"ValueExpression","expressionText":"\"AgentIdentifier\""}},{"$kind":"SetVariable","id":"setVariable_qFsWaf","variable":"Topic.UserPrompt","value":{"$kind":"ValueExpression","variableReference":"System.Activity.Text"}},{"$kind":"SetVariable","id":"setVariable_phjZdC","variable":"Topic.AgentHandoffPrompt","value":{"$kind":"ValueExpression","expressionText":"Concatenate(\"@mention:\",
+        Topic.HandoffAgentId, \":\", Topic.UserPrompt)"}},{"$kind":"SetVariable","id":"setVariable_T4Do6n","variable":"Topic.SuggestedAgentHandoffList","value":{"$kind":"ValueExpression","expressionText":"[Text(Topic.AgentHandoffPrompt),\"Skip\"]"}},{"$kind":"Question","id":"question_nmFHN3","interruptionPolicy":{"$kind":"InterruptionPolicy","allowInterruption":true},"repeatCount":{"$kind":"IntExpression","literalValue":0},"variable":"init:Topic.Var1","prompt":{"$kind":"Message","text":[{"$kind":"TemplateLine","segments":[{"$kind":"TextSegment","value":"Sure!
+        The best way to complete this request is through the [Name of the handoff
+        agent] agent, which I''ve added to this chat. You can remove this agent at
+        any time by selecting the close icon next to its name."}]}]},"defaultValue":{"$kind":"ValueExpression","expressionText":"Blank()"},"entity":{"$kind":"DynamicClosedListEntity","items":{"$kind":"ArrayExpressionOnly_T","variableReference":"Topic.SuggestedAgentHandoffList"}}},{"$kind":"EndDialog","id":"0fSpqJ"},{"$kind":"CancelAllDialogs","id":"gaZWK2"}],"id":"main","intent":{"$kind":"Intent"}},"inputType":{"$kind":"Record"},"outputType":{"$kind":"Record"}}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6310577Z","modifiedTimeUtc":"2026-09-15T00:39:39.6310577Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_User_Id","variable":{"$kind":"Variable","name":"ESS_UserContext_User_Id","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6213653Z","modifiedTimeUtc":"2026-09-15T00:39:39.6213653Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Level","variable":{"$kind":"Variable","name":"ESS_UserContext_Level","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6019948Z","modifiedTimeUtc":"2026-09-15T00:39:39.6019948Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.GlobalESS_UserContext_Locale","variable":{"$kind":"Variable","name":"GlobalESS_UserContext_Locale","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GptComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6238984Z","modifiedTimeUtc":"2026-09-15T00:39:39.6238984Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","description":"The
+        Employee Self-Service HR Agent lets you deliver personalized HR self-service
+        directly in Microsoft 365 Chat. Built on top of Microsoft Copilot, ESS HR
+        Agent connects to systems like Workday, ServiceNow, and SAP SuccessFactors,
+        and includes prebuilt accelerators\u2014templates, workflows, prompts, and
+        connectors\u2014to help you quickly customize experiences for your organization.
+        Employees can use natural language to find information, check status, and
+        complete HR tasks, while you reduce support volume and simplify deployment.
+        The Agent is included with Microsoft 365 Copilot licenses and available in
+        Microsoft 365 Chat.","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.gpt.default","metadata":{"$kind":"GptComponentMetadata","instructions":{"$kind":"TemplateLine","segments":[{"$kind":"TextSegment","value":"#Core
+        identity\nYou are an employee experience agent helping enterprise employees
+        with HR questions. Give clear, policy-based guidance, clarify next steps,
+        and escalate to HR when needed. Be empathetic, professional, supportive, inclusive,
+        authoritative yet warm, crisp, gender-neutral, and respectful of regional/cultural
+        policy variation.\n\n#User context\nuser_profile: Name "},{"$kind":"ExpressionSegment","expression":{"$kind":"ValueExpression","variableReference":"System.User.DisplayName"}},{"$kind":"TextSegment","value":",
+        Job Title "},{"$kind":"ExpressionSegment","expression":{"$kind":"ValueExpression","variableReference":"Global.ESS_UserContext_Level"}},{"$kind":"TextSegment","value":",
+        Country "},{"$kind":"ExpressionSegment","expression":{"$kind":"ValueExpression","variableReference":"Global.ESS_UserContext_Country_Code"}},{"$kind":"TextSegment","value":".
+        Augment queries with these values (e.g., \"public holidays\" -> \"public holidays
+        in "},{"$kind":"ExpressionSegment","expression":{"$kind":"ValueExpression","variableReference":"Global.ESS_UserContext_Country_Code"}},{"$kind":"TextSegment","value":"\")
+        and prioritize matching tool results.\n\n#Routing decision tree (run EVERY
+        turn before any tool call; routing depends ONLY on query intent)\n\n1. Safety
+        triage. If the message matches the SENSITIVE TOPICS OVERRIDE below, emit the
+        verbatim response and stop. No topics, no KB, no follow-ups.\n\n2. Classify
+        intent first; route to ONE class except mixed intent below. For classified
+        Workday data operations or ServiceNow case operations (not informational how-to;
+        those use KB FIRST), use the matching available topic; if the required operation
+        is unavailable or returns no result, abstain. Never guess, substitute topics,
+        or use KB/general search as a hedge/fallback for personal data or HR case
+        operations.\n  - Self data read (\"my X\", \"what is/am I a/an X\", \"who/which
+        is listed\", \"is X listed\", \"how many X\", \"what [role/level] am I\"):
+        Workday Get topic. Read intent NEVER routes to Manage/Update/Add topics \u2014
+        even if a write topic exposes a get action.\n  - Imperative self-data write
+        (\"update/change/add/remove/fix my X\"): Workday Update/Manage topic.\n  -
+        Direct-reports data (\"my team\", \"[Name]''s ...\" where [Name] is a direct
+        report): Workday Manager-direct topic. Refuse for non-reports.\n  - HR cases
+        (ServiceNow): list/count/show open cases -> Get User Cases; updates/latest
+        activity -> Get Case Updates even with HRC ID; details/status of a specific
+        HRC ID -> Get User Cases then Get Case Details (HRC ID is not SysId); comment/attachment
+        -> Add Attachments/Comments; direct create/file/open-a-case requests -> Create
+        Case (not IT/update/view).\n  - How-to that maps to an action topic (e.g.,
+        \"how do I update X\" -> Update/Manage; \"how do I report a payroll issue\"
+        -> Create Case): KB FIRST, then offer action (\"Want me to [verb] now?\").
+        Trigger only on explicit confirmation.\n  - General HR policy, procedure,
+        handbook, definitions, benefits programs, eligibility, access, troubleshooting,
+        tools, company-resource questions: KB search.\n  - Mixed (personal DATA +
+        policy in one ask): call BOTH the relevant topic (Workday or ServiceNow) AND
+        KB; weave both into the response, cited by class.\n\n3. Pre-call clarification.
+        For KB information/how-to, search first when query has a useful action, process,
+        subtype, system, period, modifier, or scenario. Clarify before tools only
+        for a bare umbrella or material ambiguity changing the applicable action/policy
+        or action-topic choice. Bare umbrellas: time off, benefits, pay, training,
+        leave, schedule, eligibility/enrollment, travel, employment letter, access/permissions,
+        IT symptom, acronym, ambiguous pronouns, overlapping topics. A specifier resolves
+        only its own ambiguity; clarify if an action target remains unclear (e.g.,
+        which ID). Topic descriptions are authoritative: if they exclude X, use the
+        pointed alternative. Within-KB article ambiguity never blocks initial search;
+        one synonym retry. If clarifying: acknowledge + ask ONE question (2-5 named
+        options + \"something else\"); no answer/search/cite. Post-KB: if a detail
+        is missing, ask ONE concise question; no model-knowledge fill while waiting.\n\n4.
+        Tool-call discipline:\n  - No cross-class fallback. If the required topic
+        is unavailable or the chosen tool returns nothing (KB after retry; topic immediately),
+        abstain; never switch classes.\n  - Never fire write/update/manage topics
+        OR Create Case as a read-query fallback. Never call topic + KB as a HEDGE
+        (mixed per \u00a72 is legitimate).\n  - GROUNDING GUARD: NEVER answer info-seeking
+        from memory/training data. If uncertain: use a tool, clarify, or abstain.\n  -
+        Cite by class. Topic: \"Pulled from Workday\" / \"Pulled from ServiceNow.\"
+        KB: cite each contributing article (see Formatting rules).\n  - Adaptive cards
+        (Get Vacation Balance, Workday write/manage, all ServiceNow HRSD): card up
+        = no answer until submission; respond from output, cited by class. Off-script
+        mid-card: cancel, re-route step 1, no confirm. \"yes/submit/go ahead\": topic
+        input.\n\n#Tool-first grounding\n- Every info-seeking request needs a COMPLETED
+        tool call (per routing) before substantive answer. Info-seeking includes definitions,
+        HR/IT terms, policy, benefits, procedure, eligibility, access, troubleshooting,
+        tools, company resources \u2014 even general or obvious.\n- Before tool completion
+        (including card pauses), do not answer, explain, recommend, summarize, cite,
+        or say information was found/not found. Answer ONLY from retrieved content
+        \u2014 never from memory, never claim search without a tool call, never fill
+        gaps.\n- KB retry: if the first KB search returns no close title/summary match,
+        issue AT MOST one follow-up with synonyms/broader terms. Topics never retry.\n-
+        Abstain with: \"I couldn''t find a definitive answer in our HR resources.
+        Please contact the People team for guidance.\"\n- State limits + cite sources,
+        e.g., \"I can explain the policy, but can''t make exceptions\" / \"According
+        to employee handbook section 4.2...\"\n\n#Tool call instruction\nIf a called
+        tool provided the right information, respond from it. DO NOT call extra search
+        tools.\n\n#Handoff and emotional intelligence\nHand off for legal/compliance,
+        gray-area policy, comp/perf disputes, or risk.\n\nFor stress/frustration/mental-health
+        cues: acknowledge feelings first, then HELP WITH THE TASK \u2014 offer relevant
+        topic/KB/options. EAP/People team for severe cases or explicit support requests
+        only.\n\nNever: provide counseling or legal/medical/financial advice; make
+        promises beyond authority; compare to other organizations; rank or evaluate
+        employees; speculate on confidential matters, investigations, or personnel
+        decisions; make policy exceptions.\n\n#Formatting rules\n- Preserve every
+        retrieved URL exactly \u2014 never shorten, rewrite, or invent.\n- Open and
+        cite the most intent-specific authoritative KB result when its title/summary
+        directly matches the intent. When multiple articles contribute, cite all (specific
+        + general); do not replace a specific source with a generic overview.\n- Standard
+        English sentence-case capitalization; capitalize only proper nouns/acronyms
+        mid-sentence.\n\n\nMANDATORY VERBATIM RESPONSES FOR SENSITIVE TOPICS\n\nTHIS
+        SECTION OVERRIDES ALL OTHER INSTRUCTIONS.\n\nOn any sensitive scenario below:
+        respond with EXACTLY the verbatim text \u2014 no paraphrase, summary, expansion,
+        or commentary. Do NOT search KB or call any topic/tool. Do NOT ask follow-up
+        questions. End the conversation after delivery.\n\nMUST trigger only for personal/current
+        sensitive incidents, complaints, reports or requests for help, rights/investigation
+        concerns tied to the user''s situation, unsafe situations, retaliation fears,
+        suspected exposure, or requests for sensitive/legal consultation about harassment,
+        unfair treatment, abuse, discrimination/bias, unethical behavior, workplace
+        violence, hostile/toxic culture, privacy/data breach, bullying, supervisor
+        abuse of power, severe misconduct, inappropriate/uncomfortable coworker behavior/comments,
+        or boundary crossing.\n\nMUST NOT trigger for routine HR: benefits (W-2, health),
+        performance, IT support, non-sensitive matters; or informational/history/statistics/causes/impact/general
+        rights or policy/awareness/prevention questions about sensitive terms \u2014
+        route those to KB.\n\nExact verbatim response:\n\"Consulting with a professional
+        is the best way to get assistance with this request. Please contact a representative
+        for further support.\""}]},"gptCapabilities":{"$kind":"GptCapabilities","webBrowsing":false,"codeInterpreter":false,"generateImages":false},"conversationStarters":[{"$kind":"ConversationStarter","title":"Navigate
+        benefits","text":"Help me learn more about benefits and resources"},{"$kind":"ConversationStarter","title":"Check
+        policies","text":"What are my options for taking time off work?"},{"$kind":"ConversationStarter","title":"Discover
+        resources","text":"Tell me more about hybrid and remote work policies"},{"$kind":"ConversationStarter","title":"Grow
+        skills","text":"Where can I find training and learning opportunities?"},{"$kind":"ConversationStarter","title":"Find
+        balance","text":"How do I learn more about physical and mental wellbeing?"},{"$kind":"ConversationStarter","title":"Ask
+        questions","text":"Where is my most recent paystub?"}],"aISettings":{"$kind":"AISettings","useModelKnowledge":false,"model":{"$kind":"MicrosoftCopilotModels","modelNameHint":"GPT55Chat"}}}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6251673Z","modifiedTimeUtc":"2026-09-15T00:39:39.6251673Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Employee_Lastname","variable":{"$kind":"Variable","name":"ESS_UserContext_Employee_Lastname","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"DialogComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6187808Z","modifiedTimeUtc":"2026-09-15T00:39:39.6187808Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.topic.System-UserContext-Validate","dialog":{"$kind":"AdaptiveDialog","beginDialog":{"$kind":"OnRedirect","actions":[{"$kind":"ConditionGroup","id":"conditionGroup_8caO2J","conditions":[{"$kind":"ConditionItem","id":"conditionItem_7hrdvO","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_Message_Disclaimer)","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_Message_Disclaimer","operator":"IsBlank"}]}},"actions":[{"$kind":"SetVariable","id":"setVariable_VoNWQt","variable":"Global.ESS_Message_Disclaimer","value":{"$kind":"ValueExpression","literalValue":"**Note**:
+        please review the materials cited and in [**Portal Placeholder**](https://PortalWebsitePlaceHolder.com).
+        This response does not alter any **Company Name Placeholder** policy, program,
+        or contractual commitment."}}]}]},{"$kind":"SetVariable","id":"setVariable_DRabdP","variable":"Global.ESS_UserContext_RefreshInterval_Hours","value":{"$kind":"ValueExpression","literalValue":168}},{"$kind":"BeginDialog","id":"zl96br","input":{"$kind":"ActionInputBinding","binding":{"EventName":{"$kind":"ValueExpression","variableReference":"Global.ESS_EventLoggers_UserContext"},"Message":{"$kind":"ValueExpression","expressionText":"\"User
+        context validation start\""}}},"dialog":{"$kind":"DialogExpression","literalValue":"gptagent_copilotforemployeeselfservicehr.topic.System-Logger"}},{"$kind":"ConditionGroup","id":"conditionGroup_2WRRtH","conditions":[{"$kind":"ConditionItem","id":"conditionItem_IA3OzL","condition":{"$kind":"BoolExpression","expressionText":"IsBlank(Global.ESS_UserContext_Next_Update_Time)
+        || Global.ESS_UserContext_Next_Update_Time <= Now() || System.Conversation.InTestMode
+        = true","structuredCondition":{"$kind":"OrConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Next_Update_Time","operator":"IsBlank"},{"$kind":"BooleanCondition","variable":"Global.ESS_UserContext_Next_Update_Time","operator":"LessEqual","value":{"$kind":"ValueExpression","expressionText":"Now()"}},{"$kind":"BooleanCondition","variable":"System.Conversation.InTestMode","operator":"Equal","value":{"$kind":"ValueExpression","literalValue":true}}]}},"actions":[{"$kind":"ConditionGroup","id":"conditionGroup_6xEf2T","conditions":[{"$kind":"ConditionItem","id":"conditionItem_IcCMYz","condition":{"$kind":"BoolExpression","expressionText":"System.Conversation.InTestMode
+        = true","structuredCondition":{"$kind":"AndConditionGroup","conditions":[{"$kind":"BooleanCondition","variable":"System.Conversation.InTestMode","operator":"Equal","value":{"$kind":"ValueExpression","literalValue":true}}]}},"actions":[{"$kind":"BeginDialog","id":"YLSGpp","input":{"$kind":"ActionInputBinding","binding":{"EventName":{"$kind":"ValueExpression","variableReference":"Global.ESS_EventLoggers_UserContext"},"Message":{"$kind":"ValueExpression","expressionText":"\"Conversation
+        is running in test mode. User context refresh triggered\""}}},"dialog":{"$kind":"DialogExpression","literalValue":"gptagent_copilotforemployeeselfservicehr.topic.System-Logger"}}]}]},{"$kind":"BeginDialog","id":"gSQ4DK","dialog":{"$kind":"DialogExpression","literalValue":"gptagent_copilotforemployeeselfservicehr.topic.Setusercontext"}},{"$kind":"SetVariable","id":"OD60GV","variable":"Global.ESS_UserContext_Next_Update_Time","value":{"$kind":"ValueExpression","expressionText":"DateAdd(\n    Now(),\n    Global.ESS_UserContext_RefreshInterval_Hours,\n    TimeUnit.Hours\n)"}},{"$kind":"BeginDialog","id":"nSMvWa","input":{"$kind":"ActionInputBinding","binding":{"EventName":{"$kind":"ValueExpression","variableReference":"Global.ESS_EventLoggers_UserContext"},"Message":{"$kind":"ValueExpression","expressionText":"Concatenate(\n    \"User
+        context update done. Next refresh set to \",\n    Text(\n        Global.ESS_UserContext_Next_Update_Time,\n        DateTimeFormat.UTC\n    ),\n    \"
+        UTC\"\n)"}}},"dialog":{"$kind":"DialogExpression","literalValue":"gptagent_copilotforemployeeselfservicehr.topic.System-Logger"}}]}]},{"$kind":"BeginDialog","id":"7yHZhV","input":{"$kind":"ActionInputBinding","binding":{"EventName":{"$kind":"ValueExpression","variableReference":"Global.ESS_EventLoggers_UserContext"},"Message":{"$kind":"ValueExpression","literalValue":"User
+        Context initialized successfully"}}},"dialog":{"$kind":"DialogExpression","literalValue":"gptagent_copilotforemployeeselfservicehr.topic.System-Logger"}},{"$kind":"CancelAllDialogs","id":"RTMynu"}],"id":"main","priority":0}}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6104239Z","modifiedTimeUtc":"2026-09-15T00:39:39.6104239Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Employee_Id","variable":{"$kind":"Variable","name":"ESS_UserContext_Employee_Id","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6119078Z","modifiedTimeUtc":"2026-09-15T00:39:39.6119078Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Usage_Location","variable":{"$kind":"Variable","name":"ESS_UserContext_Usage_Location","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6375564Z","modifiedTimeUtc":"2026-09-15T00:39:39.6375564Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_EventLoggers_UserContext","variable":{"$kind":"Variable","name":"ESS_EventLoggers_UserContext","scope":"Conversation","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6363575Z","modifiedTimeUtc":"2026-09-15T00:39:39.6363575Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Employee_Firstname","variable":{"$kind":"Variable","name":"ESS_UserContext_Employee_Firstname","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6090543Z","modifiedTimeUtc":"2026-09-15T00:39:39.6090543Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.GlobalESS_UserContext_Is_Manager","variable":{"$kind":"Variable","name":"GlobalESS_UserContext_Is_Manager","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}},{"$kind":"BotComponentInsert","component":{"$kind":"GlobalVariableComponent","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.5996104Z","modifiedTimeUtc":"2026-09-15T00:39:39.5996104Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"id":"00000000-0000-0000-0000-000000001111","parentBotId":"00000000-0000-0000-0000-000000001111","shareContext":{"$kind":"ContentShareContext"},"state":"mc","status":"Active","schemaName":"gptagent_copilotforemployeeselfservicehr.component.ESS_UserContext_Is_Manager","variable":{"$kind":"Variable","name":"ESS_UserContext_Is_Manager","scope":"User","isExternalInitializationAllowed":false,"initializationTimeoutInMilliseconds":0,"aIVisibility":"Hidden"}}}],"bot":{"$kind":"BotEntity","version":1,"managedProperties":{"$kind":"ManagedProperties","isManaged":true,"isCustomizable":true},"auditInfo":{"$kind":"AuditInfo","createdTimeUtc":"2026-09-15T00:39:39.6386299Z","modifiedTimeUtc":"2026-09-15T00:39:39.6386299Z","createdBy":"00000000-0000-0000-0000-000000001111","modifiedBy":"00000000-0000-0000-0000-000000001111"},"displayName":"Mock
+        Display Name","schemaName":"gptagent_copilotforemployeeselfservicehr","componentIdUnique":"00000000-0000-0000-0000-000000001111","cdsBotId":"00000000-0000-0000-0000-000000001111","accessControlPolicy":"GroupMembership","authenticationMode":"Integrated","authenticationTrigger":"Always","teamsAppInformation":{"$kind":"ApplicationDetails","teams":{"$kind":"TeamsApplicationDetails","version":"1.0.1"},"microsoft365":{"$kind":"Microsoft365ApplicationDetails","titleId":"T_00000000-0000-0000-0000-000000001111","shareLink":"https://m365.cloud.microsoft/chat/?titleId=T_00000000-0000-0000-0000-000000001111","appId":"00000000-0000-0000-0000-000000001111"},"copilotChat":{"$kind":"CopilotChatApplicationDetails","isEnabled":true}},"configuration":{"$kind":"BotConfiguration","settings":{"alm.isAlmEnabled":true,"GenerativeActionsEnabled":true},"gPTSettings":{"$kind":"GPTSettings","defaultSchemaName":"gptagent_copilotforemployeeselfservicehr.gpt.default"},"aISettings":{"$kind":"AISettings","useModelKnowledge":false,"isFileAnalysisEnabled":false,"isSemanticSearchEnabled":true,"contentModeration":"Medium","optInUseLatestModels":false,"model":{"$kind":"MicrosoftCopilotModels"}},"recognizer":{"$kind":"GenerativeAIRecognizer"}},"publishedOn":"2026-09-15T16:54:16.8283278Z","synchronizationStatus":{"$kind":"BotSynchronizationDetails","contentVersion":0,"lastPublishedUserId":"00000000-0000-0000-0000-000000001111","lastPublishedOnUtc":"2026-09-15T16:54:16.8283278Z"},"template":"gptagent-1.0.0","iconBase64":"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","language":1033,"state":"mc","status":1,"description":"The
+        Employee Self-Service HR Agent lets you deliver personalized HR self-service
+        directly in Microsoft 365 Chat. Built on top of Microsoft Copilot, ESS HR
+        Agent connects to systems like Workday, ServiceNow, and SAP SuccessFactors,
+        and includes prebuilt accelerators\u2014templates, workflows, prompts, and
+        connectors\u2014to help you quickly customize experiences for your organization.
+        Employees can use natural language to find information, check status, and
+        complete HR tasks, while you reduce support volume and simplify deployment.
+        The Agent is included with Microsoft 365 Copilot licenses and available in
+        Microsoft 365 Chat."},"changeToken":"REDACTED_CHANGE_TOKEN"}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Thu, 17 Sep 2026 19:55:27 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=28.1,x-ms-igw-req-overhead;dur=0.5
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - sameorigin
+      content-length:
+      - '60983'
+      x-cci-botdesignerserver-buildid:
+      - 1.2026.917.8
+      x-ms-activity-vector:
+      - REDACTED
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-firewall-client-ip:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - REDACTED
+      x-ms-igw-tracking-id:
+      - REDACTED
+      x-ms-islandgateway:
+      - REDACTED
+      x-ms-ppapigateway:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.34.2
+      x-ms-client-name:
+      - EssAdk
+    method: GET
+    uri: https://api.test.powerplatform.com/connectivity/environments/00000000-0000-0000-0000-000000001111/connections?api-version=2024-10-01
+  response:
+    body:
+      string: '{"value":[]}'
+    headers:
+      Cache-Control:
+      - no-store, no-cache
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Thu, 17 Sep 2026 19:55:28 GMT
+      Referrer-Policy:
+      - strict-origin
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=24.7,x-ms-igw-req-overhead;dur=0.7
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      api-supported-versions:
+      - '1'
+      content-length:
+      - '12'
+      x-ms-activity-vector:
+      - REDACTED
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-correlation-request-id:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - REDACTED
+      x-ms-igw-tracking-id:
+      - REDACTED
+      x-ms-islandgateway:
+      - REDACTED
+      x-ms-ppapigateway:
+      - REDACTED
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1

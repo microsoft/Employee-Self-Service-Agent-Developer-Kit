@@ -45,6 +45,17 @@ from auth import (
     load_config,
     AuthExpiredError,
 )
+from evaluation_review import (
+    REVIEW_FILENAME,
+    ReviewMetadataError,
+    metadata_description,
+    parse_review_metadata,
+)
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
+)
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 EXCLUDE_FILES = {"snapshot.md", "_meta.json"}
@@ -501,6 +512,8 @@ def _botcomponent_recreate_payload(entry, content, bot_id):
     }
     if entry.get("componenttype") is not None:
         payload["componenttype"] = entry["componenttype"]
+    if entry.get("description"):
+        payload["description"] = entry["description"]
     if entry.get("parentbotcomponentid"):
         payload["ParentBotComponentId@odata.bind"] = \
             f"/botcomponents({entry['parentbotcomponentid']})"
@@ -593,9 +606,41 @@ def classify_path(filepath):
         if parts[-1] == "metadata.yml":
             return "workflow-meta"
         return None
+    if parts[0] == "evaluations" and parts[-1] == REVIEW_FILENAME:
+        return "evaluation-review"
     if filepath.endswith(".mcs.yml"):
         return "botcomponent"
     return None
+
+
+def _evaluation_parent_path(review_path, component_map, working_files):
+    """Resolve an evaluations/<set>/review.json file to its parent YAML."""
+    folder = review_path.replace("\\", "/").rsplit("/", 1)[0]
+    prefix = f"{folder}/"
+    mapped = [
+        path for path, entry in component_map.items()
+        if path.startswith(prefix)
+        and entry.get("componenttype") == 19
+        and not entry.get("parentbotcomponentid")
+    ]
+    if len(mapped) == 1:
+        return mapped[0]
+
+    local = [
+        path for path, content in working_files.items()
+        if path.startswith(prefix)
+        and path.endswith(".mcs.yml")
+        and "kind: EvaluationSet" in content
+    ]
+    return local[0] if len(local) == 1 else None
+
+
+def _review_description_for_create(parent_path, working_files):
+    """Return a tagged description when a new parent has review.json."""
+    folder = parent_path.replace("\\", "/").rsplit("/", 1)[0]
+    review_path = f"{folder}/{REVIEW_FILENAME}"
+    content = working_files.get(review_path)
+    return metadata_description(content) if content is not None else None
 
 
 def collect_files(root_dir):
@@ -1074,6 +1119,139 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
+def _warn_minimalbot_non_eval_changes(agent_dir):
+    """Report pending non-evaluation changes the MinimalBot push cannot deploy.
+
+    MinimalBot (Dataverse-free) push handles evaluation components only. Rather
+    than silently dropping topic/workflow/template-config edits, surface them so
+    the maker knows they still require a Dataverse-backed environment.
+    """
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        return
+    try:
+        changed, new, deleted = compute_diff(
+            collect_files(baseline_dir), collect_files(agent_dir))
+    except OSError:
+        return
+    non_eval = sorted({
+        f for f in (*changed, *new, *deleted)
+        if classify_path(f)
+        and not f.replace("\\", "/").startswith("evaluations/")
+    })
+    if not non_eval:
+        return
+    print(
+        "WARNING: the following non-evaluation change(s) will NOT be pushed "
+        "(Dataverse-free agents support evaluation components only):"
+    )
+    for path in non_eval[:20]:
+        print(f"  - {path}")
+    if len(non_eval) > 20:
+        print(f"  ... and {len(non_eval) - 20} more")
+
+
+def _minimalbot_push(
+    config,
+    *,
+    dry_run=False,
+    force_delete=False,
+    repair_mode=False,
+    only_globs=None,
+    auto_yes=False,
+):
+    """Push evaluation sets to a Dataverse-free MinimalBot agent.
+
+    Uses the Power Platform MinimalBot components API on the agent's ring (see
+    :mod:`minimalbot_evaluation`). Only evaluation components are supported for
+    MinimalBot agents today; other component types (topics, workflows) still
+    require a Dataverse-backed environment. Destructive/scoped/repair flags are
+    rejected or honoured rather than silently ignored, so a ``--force-delete``
+    never turns into a duplicate insert and a scoped ``--only`` never expands
+    into an every-set push.
+
+    The script-level confirmation gate (a second safety layer the ``/push``
+    prompt relies on) is enforced here before any component insert, mirroring
+    the classic Dataverse path: ``--yes`` bypasses it and dry runs never mutate.
+    """
+    agent_dir = config["agent"]["folder"]
+    if not os.path.exists(agent_dir):
+        print(f"ERROR: Agent folder not found: {agent_dir}")
+        sys.exit(1)
+
+    if repair_mode:
+        print(
+            "ERROR: --repair applies to Dataverse flow registration and is not "
+            "supported for Dataverse-free (MinimalBot) agents. No request was "
+            "made."
+        )
+        sys.exit(1)
+    if force_delete:
+        print(
+            "ERROR: --force-delete is not supported for Dataverse-free "
+            "(MinimalBot) agents; evaluation components cannot be deleted "
+            "through this path yet. No request was made."
+        )
+        sys.exit(1)
+
+    _warn_minimalbot_non_eval_changes(agent_dir)
+
+    print("MinimalBot agent detected (Dataverse-free).")
+    if only_globs:
+        print(f"(Scoped push — {len(only_globs)} filter(s) active)")
+
+    client = MinimalBotEvaluationClient.from_config(config)
+
+    # Build the plan offline first (no auth, no mutation) so the change set can
+    # be shown and confirmed BEFORE any component insert. Honouring only_globs
+    # here is a correctness requirement: each push mints fresh component IDs, so
+    # a scoped update that silently pushed every set would duplicate all of them.
+    try:
+        plan = client.push_agent_evaluations(
+            agent_dir, dry_run=True, only_globs=only_globs)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    print(f"\nWould push {len(plan['sets'])} evaluation set(s), "
+          f"{plan['componentCount']} component(s):")
+    for entry in plan["sets"]:
+        print(f"  • {entry['displayName']}  (cases: {entry['cases']})")
+
+    if dry_run:
+        print("\n(Dry run — no changes pushed)")
+        return
+
+    # Confirmation gate — the second safety layer preserved by /push. --yes
+    # covers it (matching the classic path); dry runs return above, never here.
+    if not auto_yes:
+        response = input(
+            "\nPush these changes to Copilot Studio? (yes/no): "
+        ).strip().lower()
+        if response not in ("yes", "y"):
+            print("Push cancelled.")
+            return
+
+    print("Pushing evaluations via the Power Platform MinimalBot API...")
+    try:
+        client.authenticate()
+        result = client.push_agent_evaluations(
+            agent_dir, dry_run=False, only_globs=only_globs)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if client.signed_in_username:
+        print(f"Signed in as: {client.signed_in_username}")
+    print(f"\n✅ Pushed {len(result['sets'])} evaluation set(s), "
+          f"{result['verifiedComponents']} component(s) verified:")
+    for entry in result["sets"]:
+        print(f"  • {entry['displayName']}")
+        print(f"      testSetId: {entry['testSetId']}  (cases: {entry['cases']})")
+    print("\nRun a set with:")
+    print("  python scripts/evaluation_runs.py run --test-set-id <testSetId>")
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
@@ -1087,6 +1265,20 @@ def main():
     only_globs = parse_only_globs(sys.argv[1:])
 
     config = load_config()
+
+    # Dataverse-free MinimalBot agents cannot use the Dataverse Web API below.
+    # Route evaluation pushes through the Power Platform MinimalBot components
+    # API on the agent's ring instead (see scripts/minimalbot_evaluation.py).
+    if is_minimalbot(config):
+        return _minimalbot_push(
+            config,
+            dry_run=dry_run,
+            force_delete=force_delete,
+            repair_mode=repair_mode,
+            only_globs=only_globs,
+            auto_yes=auto_yes,
+        )
+
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
@@ -1130,6 +1322,11 @@ def main():
         changed = [f for f in changed if matches_only(f, only_globs)]
         new = [f for f in new if matches_only(f, only_globs)]
         deleted = [f for f in deleted if matches_only(f, only_globs)]
+
+    destructive_deletes = [
+        path for path in deleted
+        if classify_path(path) != "evaluation-review"
+    ]
 
     if not changed and not new and not deleted:
         if only_globs:
@@ -1187,11 +1384,17 @@ def main():
                 yaml.safe_load(content)
             except yaml.YAMLError as exc:
                 parse_errors.append(f"  YAML parse error in {filepath}: {exc}")
-        elif ctype == "workflow":
+        elif ctype in ("workflow", "evaluation-review"):
             try:
                 json.loads(content)
             except json.JSONDecodeError as exc:
                 parse_errors.append(f"  JSON parse error in {filepath}: {exc}")
+            if ctype == "evaluation-review":
+                try:
+                    parse_review_metadata(content)
+                except ReviewMetadataError as exc:
+                    parse_errors.append(
+                        f"  Review metadata error in {filepath}: {exc}")
         elif ctype == "template-config":
             # Either JSON or XML; only validate JSON, XML may be templated.
             stripped = content.lstrip()
@@ -1217,18 +1420,21 @@ def main():
     # Separate confirmation for destructive operations. --yes covers
     # creates and updates; deletes additionally require --force-delete
     # OR an interactive 'delete' confirmation.
-    if deleted and not force_delete:
+    if destructive_deletes and not force_delete:
         if auto_yes:
             print(
-                f"\nERROR: Refusing to delete {len(deleted)} component(s) without"
+                f"\nERROR: Refusing to delete {len(destructive_deletes)} "
+                "component(s) without"
                 " --force-delete. Re-run with --force-delete (alongside --yes)"
                 " if you really want to delete these:"
             )
-            for d in deleted:
+            for d in destructive_deletes:
                 print(f"  - {d}")
             sys.exit(2)
-        print(f"\nWARNING: this will DELETE {len(deleted)} component(s):")
-        for d in deleted:
+        print(
+            f"\nWARNING: this will DELETE {len(destructive_deletes)} "
+            "component(s):")
+        for d in destructive_deletes:
             print(f"  - {d}")
         confirm = input("\nType 'delete' to confirm deletion, or anything else to abort: ").strip().lower()
         if confirm != "delete":
@@ -1253,7 +1459,7 @@ def main():
     try:
         import adk_telemetry
 
-        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="publishing")
+        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="push")
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
 
@@ -1272,6 +1478,48 @@ def main():
     pending_meta_writes: list = []  # list[(meta_full_path, meta_data_dict)]
     pending_renames: dict = {}     # filepath -> new name (workflow-meta
                                    # rename mutations staged for the gate)
+    pending_descriptions: dict = {}  # parent filepath -> Dataverse description
+
+    # Stage review metadata independently from EvaluationSet YAML. Existing
+    # parents receive their description PATCH only after every component
+    # mutation succeeds; new parents consume review.json during the evaluation
+    # parent-create pass below.
+    review_changes = [
+        path for path in changed + new + deleted
+        if classify_path(path) == "evaluation-review"
+    ]
+    for review_path in review_changes:
+        parent_path = _evaluation_parent_path(
+            review_path, component_map, working_files)
+        if parent_path is None:
+            print(f"  ❌ Failed: {review_path}: evaluation parent not found")
+            errors += 1
+            continue
+        if parent_path in deleted:
+            # The component deletion removes the description with the record;
+            # avoid a redundant status PATCH immediately before deleting it.
+            continue
+        parent_entry = component_map.get(parent_path, {})
+        parent_id = parent_entry.get("botcomponentid")
+        if not parent_id:
+            if parent_path in new and review_path in new:
+                continue
+            print(f"  ❌ Failed: {review_path}: parent has no component ID")
+            errors += 1
+            continue
+
+        try:
+            if review_path in deleted:
+                metadata = parse_review_metadata(baseline_files[review_path])
+                description = metadata["baseDescription"]
+            else:
+                description = metadata_description(
+                    working_files[review_path])
+            pending_descriptions[parent_path] = description
+            print(f"  ⏳ Staged review status: {parent_path}")
+        except ReviewMetadataError as exc:
+            print(f"  ❌ Failed: {review_path}: {exc}")
+            errors += 1
 
     # Push modified files
     for filepath in changed:
@@ -1279,6 +1527,8 @@ def main():
         entry = component_map.get(filepath)
         content = working_files[filepath]
 
+        if ctype == "evaluation-review":
+            continue
         if ctype == "botcomponent":
             if not entry or not entry.get("botcomponentid"):
                 print(f"  SKIP {filepath}: no component ID in map")
@@ -1465,6 +1715,8 @@ def main():
     eval_new = []
     non_eval_new = []
     for filepath in new:
+        if classify_path(filepath) == "evaluation-review":
+            continue
         parts = filepath.replace("\\", "/").split("/")
         if parts[0] == "evaluations":
             eval_new.append(filepath)
@@ -1664,6 +1916,8 @@ def main():
                 "schemaname": schema,
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
+            review_description = _review_description_for_create(
+                filepath, working_files)
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token,
@@ -1674,8 +1928,15 @@ def main():
                     "schemaname": schema,
                     "componenttype": 19,
                     "name": record_data["name"],
+                    "description": "",
                 }
                 eval_parent_ids[filepath] = new_id
+                # Defer the review marker until every evaluation mutation
+                # (including the child cases created below) succeeds, so a
+                # failed child upload never leaves an incomplete remote set
+                # tagged for review. Mirrors the existing-parent staging path.
+                if review_description is not None:
+                    pending_descriptions[filepath] = review_description
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -1837,6 +2098,8 @@ def main():
 
     for filepath in ordered_deleted:
         ctype = classify_path(filepath)
+        if ctype == "evaluation-review":
+            continue
         entry = component_map.get(filepath)
 
         if ctype == "botcomponent":
@@ -1999,6 +2262,34 @@ def main():
         registration_incomplete.extend(
             _register_flow(auth, env_url, schema_name, wf_id, wf_json))
 
+    # Publish staged review descriptions only after all evaluation mutations
+    # succeed. This prevents review_completed from becoming visible remotely
+    # while the reviewed YAML is stale or only partially updated.
+    if errors == 0:
+        for parent_path, description in pending_descriptions.items():
+            # New parents aren't merged into component_map until the atomic
+            # persist below, so fall back to pending_creates to resolve their
+            # freshly-minted component ID.
+            parent_entry = (
+                component_map.get(parent_path)
+                or pending_creates.get(parent_path, {})
+            )
+            parent_id = parent_entry.get("botcomponentid")
+            if not parent_id:
+                print(f"  ❌ Failed review status: {parent_path}: "
+                      "parent has no component ID")
+                errors += 1
+                continue
+            try:
+                _call_with_refresh(
+                    auth, update_record, env_url, auth.token,
+                    "botcomponents", parent_id, {"description": description})
+                print(f"  ✅ Updated review status: {parent_path}")
+                success += 1
+            except Exception as exc:
+                print(f"  ❌ Failed review status: {parent_path}: {exc}")
+                errors += 1
+
     # Apply pending state mutations atomically with the baseline + map save.
     # The full-success gate is the contract: if everything pushed, persist
     # the new component_map (with creates merged in and deletes removed),
@@ -2038,6 +2329,9 @@ def main():
         for path, new_name in pending_renames.items():
             if path in component_map:
                 component_map[path]["name"] = new_name
+        for path, description in pending_descriptions.items():
+            if path in component_map:
+                component_map[path]["description"] = description
 
         # Phase 2: stage every write to a .tmp sibling.
         map_path = os.path.join(agent_dir, ".component-map.json")
@@ -2177,11 +2471,11 @@ def main():
                 "error_message": _error_message,
             }
         adk_telemetry.emit_build_complete(
-            agent_id=bot_id, adk_capability="publishing",
+            agent_id=bot_id, adk_capability="push",
             outcome=_outcome, duration_ms=_duration_ms, **_err_kwargs,
         )
         adk_telemetry.emit_agent_deploy(
-            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="publishing",
+            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="push",
             outcome=("server_error" if _failed else "success"),
             duration_ms=_duration_ms,
             **({"error_code": ("DEPLOY_PARTIAL_FAILURE" if errors
@@ -2189,6 +2483,7 @@ def main():
                 "error_category": "runtime",
                 "error_message": _error_message} if _failed else {}),
         )
+        adk_telemetry.emit_capability_use("push", block=False)
         adk_telemetry.flush(timeout=5)
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
