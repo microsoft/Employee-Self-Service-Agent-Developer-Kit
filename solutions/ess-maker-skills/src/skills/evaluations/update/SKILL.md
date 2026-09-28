@@ -137,8 +137,8 @@ When Flow R1 is entered from the curator maker review gate, accept the exact
 generated workspace set folders as already preselected. Do not run
 `evaluation_review.py --list-all`, display unrelated sets, or ask the maker to
 select the sets again. Continue at the status update in step 5 for every
-preselected set, then follow step 6 and the normal configuration, promotion,
-scoped dry-run, push, cleanup, and post-push lifecycle semantics below.
+preselected set, then follow the curator-specific branch in step 6 to enter
+Step 7 exactly once.
 
 1. For a generic request such as **"tag testsets for review"**, run:
 
@@ -161,8 +161,13 @@ scoped dry-run, push, cleanup, and post-push lifecycle semantics below.
    python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_requested
    ```
 
-6. Explain that the tag is local until pushed. Continue through the normal
-   configuration check, promotion when needed, dry run, and push flow.
+6. Explain that the tag is local until pushed.
+   - For a curator-originated preselected-set handoff, enter Step 7 exactly
+     once after recording and explaining the local `review_requested` state.
+     Do not run configuration, promotion, dry-run, or push actions before that
+     Step 7 handoff.
+   - For every other Flow R1 entry, continue through the normal configuration
+     check, promotion when needed, dry run, and push flow.
 
 The pushed parent description contains:
 

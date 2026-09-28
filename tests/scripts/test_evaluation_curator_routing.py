@@ -215,16 +215,30 @@ def test_dispatcher_delegates_required_agent_instructions_collection():
 
 
 def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
-    update = _normalized("src/skills/evaluations/update/SKILL.md")
-
-    assert "When Flow R1 is entered from the curator maker review gate" in update
-    assert "exact generated workspace set folders as already preselected" in update
-    assert "Do not run `evaluation_review.py --list-all`" in update
-    assert "ask the maker to select the sets again" in update
-    assert (
-        "normal configuration, promotion, scoped dry-run, push, cleanup, and post-push lifecycle semantics"
-        in update
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    flow_r1 = " ".join(
+        _section(
+            update_text,
+            "### Flow R1 — Tag selected test sets for review",
+            "The pushed parent description contains:",
+        ).split()
     )
+
+    assert "When Flow R1 is entered from the curator maker review gate" in flow_r1
+    assert "exact generated workspace set folders as already preselected" in flow_r1
+    assert "Do not run `evaluation_review.py --list-all`" in flow_r1
+    assert "ask the maker to select the sets again" in flow_r1
+    status_update = flow_r1.index("--status review_requested")
+    curator_handoff = flow_r1.index(
+        "For a curator-originated preselected-set handoff, enter Step 7 exactly once"
+    )
+    assert status_update < curator_handoff
+    assert (
+        "Do not run configuration, promotion, dry-run, or push actions before that "
+        "Step 7 handoff"
+        in flow_r1
+    )
+    assert "For every other Flow R1 entry" in flow_r1
 
 
 def test_run_skill_is_referenced_only_after_successful_push():
