@@ -461,7 +461,7 @@ def test_common_dimensions_shape():
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
         "session_id", "surface", "adk_version",
-        "toolkit_git_sha", "toolkit_git_branch",
+        "toolkit_git_sha", "toolkit_git_branch", "agent_type",
         "timestamp",
     ):
         assert key in dims
@@ -492,6 +492,19 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["toolkit_git_sha"] == "abcdef0"
     assert dims["toolkit_git_branch"] == "other"
+    assert dims["agent_type"] == adk.AGENT_TYPE_UNKNOWN
+
+
+def test_common_dimensions_agent_type_maps_from_branch(monkeypatch):
+    for branch, expected in (
+        ("main-ca", adk.AGENT_TYPE_CUSTOM),
+        ("main", adk.AGENT_TYPE_DECLARATIVE),
+        ("other", adk.AGENT_TYPE_UNKNOWN),
+    ):
+        monkeypatch.setenv("ESS_ADK_GIT_BRANCH", branch)
+        _fc.get_toolkit_git_branch.cache_clear()
+        dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+        assert dims["agent_type"] == expected
 
 
 def test_build_event_is_common_schema_4_0():
@@ -2173,8 +2186,9 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
     assert captured_post[0][1][0]["data"]["connector"] == "workday"
 
 
-def test_schema_version_bump_records_connect_lifecycle_event():
-    assert adk.SCHEMA_VERSION == "1.6.0"
+def test_schema_version_bump_records_agent_type_dim():
+    # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
+    assert adk.SCHEMA_VERSION == "1.7.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------

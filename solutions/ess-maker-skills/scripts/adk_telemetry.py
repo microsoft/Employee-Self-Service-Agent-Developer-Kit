@@ -80,7 +80,9 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.5.0: added derived ``connector`` (workday|servicenow|"") on
 #        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
 # 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
-SCHEMA_VERSION = "1.6.0"
+# 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
+#        declarative_agent | unknown) — ADO 7830949.
+SCHEMA_VERSION = "1.7.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -711,8 +713,16 @@ def common_dimensions(
         "adk_version": _fc.get_adk_version(),
         "toolkit_git_sha": _fc.get_toolkit_git_sha(),
         "toolkit_git_branch": _fc.get_toolkit_git_branch(),
+        "agent_type": _fc.classify_agent_type(_fc.get_toolkit_git_branch()),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
+
+
+# Re-export the closed taxonomy for scripts and tests that import this module.
+AGENT_TYPE_CUSTOM = _fc.AGENT_TYPE_CUSTOM
+AGENT_TYPE_DECLARATIVE = _fc.AGENT_TYPE_DECLARATIVE
+AGENT_TYPE_UNKNOWN = _fc.AGENT_TYPE_UNKNOWN
+AGENT_TYPES = _fc.AGENT_TYPES
 
 
 def _scrub(text: str, limit: int = 200) -> str:
