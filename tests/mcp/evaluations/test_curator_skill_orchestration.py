@@ -146,6 +146,18 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
     last_write_index = max(
         index for index, call in enumerate(calls) if call.name == "write_file"
     )
+    maker_attempts = [
+        (index, call)
+        for index, call in enumerate(calls)
+        if call.validator_type == "maker_kit"
+    ]
+    assert maker_attempts, "Missing Maker Kit validation attempt."
+    ordering_violations = backend.maker_validation_ordering_violations()
+    assert not ordering_violations, (
+        "Maker Kit validation was attempted before every generated set had current "
+        "successful structural validation after its final write: "
+        f"{ordering_violations}"
+    )
 
     validations = [
         (index, call)
@@ -183,9 +195,7 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         )
         validations_by_set[matching_folder].append((index, call))
 
-    first_maker_kit_index = next(
-        index for index, call in validations if call.kind == "maker_kit_validation"
-    )
+    first_maker_kit_index = maker_attempts[0][0]
     for folder in generated_folders:
         final_set_write = max(
             index
@@ -365,8 +375,10 @@ def test_synthetic_validators_reject_unrelated_generated_set() -> None:
     )
 
     assert structural.failed
+    assert structural.validator_type == "structural"
     assert "generated evaluation set" in structural.result["stderr"]
     assert quality.failed
+    assert quality.validator_type == "maker_kit"
     assert "generated evaluation set" in quality.result["stderr"]
 
 
@@ -480,7 +492,11 @@ def test_maker_validation_waits_for_all_generated_sets_to_pass_structure() -> No
     )
 
     assert before_all_structural.failed
+    assert before_all_structural.validator_type == "maker_kit"
     assert "every generated evaluation set" in before_all_structural.result["stderr"]
+    premature_violations = backend.maker_validation_ordering_violations()
+    assert len(premature_violations) == 1
+    assert "workspace/evaluations/benefits" in premature_violations[0]
 
     backend.invoke(
         "run_command",
@@ -508,6 +524,7 @@ def test_maker_validation_waits_for_all_generated_sets_to_pass_structure() -> No
     assert not leave_quality.failed
     assert benefits_quality.kind == "maker_kit_validation"
     assert not benefits_quality.failed
+    assert backend.maker_validation_ordering_violations() == premature_violations
 
 
 def test_maker_validation_requires_skill_read_before_initial_validation() -> None:

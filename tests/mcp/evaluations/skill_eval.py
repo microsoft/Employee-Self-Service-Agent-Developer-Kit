@@ -157,6 +157,7 @@ class RecordedCall:
     result: Any
     failed: bool = False
     kind: str = "other"
+    validator_type: str | None = None
 
 
 @dataclass
@@ -270,13 +271,10 @@ class FakeEvaluationWorkspace:
                 kind="preflight",
             )
 
-        if (
-            self._matching_token_index(cleaned, STRUCTURAL_VALIDATOR_PATH) is not None
-            and self._evaluation_folder_from_tokens(cleaned) is not None
-        ):
+        if self._matching_token_index(cleaned, STRUCTURAL_VALIDATOR_PATH) is not None:
             evaluation_folder, error = self._validated_evaluation_folder(cleaned)
             if error is not None:
-                return self._validation_failure(arguments, error)
+                return self._validation_failure(arguments, error, "structural")
             return self._record(
                 "run_command",
                 arguments,
@@ -286,15 +284,13 @@ class FakeEvaluationWorkspace:
                     "evaluationFolder": evaluation_folder,
                 },
                 kind="structural_validation",
+                validator_type="structural",
             )
 
-        if (
-            self._matching_token_index(cleaned, "scripts/evaluate_evals.py") is not None
-            and self._evaluation_folder_from_tokens(cleaned) is not None
-        ):
+        if self._matching_token_index(cleaned, "scripts/evaluate_evals.py") is not None:
             evaluation_folder, error = self._validated_evaluation_folder(cleaned)
             if error is not None:
-                return self._validation_failure(arguments, error)
+                return self._validation_failure(arguments, error, "maker_kit")
             validator_read_index = self._last_matching_read_index(
                 MAKER_VALIDATOR_SKILL_PATH
             )
@@ -302,6 +298,7 @@ class FakeEvaluationWorkspace:
                 return self._validation_failure(
                     arguments,
                     "Maker validator skill must be read before Maker Kit validation.",
+                    "maker_kit",
                 )
             last_write_index = self._last_set_write_index(evaluation_folder)
             structural_index = self._last_structural_validation_index(
@@ -314,6 +311,7 @@ class FakeEvaluationWorkspace:
                     arguments,
                     "Maker Kit validation requires structural validation for the "
                     "same evaluation set after its final write.",
+                    "maker_kit",
                 )
             missing_structural = [
                 generated_folder
@@ -326,6 +324,7 @@ class FakeEvaluationWorkspace:
                     "Maker Kit validation requires successful structural validation "
                     "for every generated evaluation set after its latest write; "
                     f"missing {missing_structural}.",
+                    "maker_kit",
                 )
             return self._record(
                 "run_command",
@@ -342,6 +341,7 @@ class FakeEvaluationWorkspace:
                     "evaluationFolder": evaluation_folder,
                 },
                 kind="maker_kit_validation",
+                validator_type="maker_kit",
             )
 
         if self._matching_token_index(cleaned, "scripts/push.py") is not None:
@@ -525,6 +525,38 @@ class FakeEvaluationWorkspace:
             last_write_index is None or structural_index > last_write_index
         )
 
+    def maker_validation_ordering_violations(self) -> list[str]:
+        generated_folders = sorted(self.generated_set_folders())
+        final_write_indices = {
+            folder: self._last_set_write_index(folder) for folder in generated_folders
+        }
+        violations: list[str] = []
+        for attempt_index, call in enumerate(self.calls):
+            if call.validator_type != "maker_kit":
+                continue
+            missing_structural = [
+                folder
+                for folder in generated_folders
+                if not any(
+                    structural_index < attempt_index
+                    and structural_call.validator_type == "structural"
+                    and not structural_call.failed
+                    and structural_call.result.get("evaluationFolder") == folder
+                    and (
+                        final_write_indices[folder] is None
+                        or structural_index > final_write_indices[folder]
+                    )
+                    for structural_index, structural_call in enumerate(self.calls)
+                )
+            ]
+            if missing_structural:
+                violations.append(
+                    "Maker Kit validation attempt at call "
+                    f"{attempt_index} occurred before current structural validation "
+                    f"for every generated set; missing {missing_structural}."
+                )
+        return violations
+
     def _last_matching_read_index(self, expected_key: str) -> int | None:
         return next(
             (
@@ -540,7 +572,7 @@ class FakeEvaluationWorkspace:
         )
 
     def _validation_failure(
-        self, arguments: dict[str, Any], message: str
+        self, arguments: dict[str, Any], message: str, validator_type: str
     ) -> RecordedCall:
         return self._record(
             "run_command",
@@ -548,6 +580,7 @@ class FakeEvaluationWorkspace:
             {"exitCode": 2, "stderr": message},
             failed=True,
             kind="validation",
+            validator_type=validator_type,
         )
 
     def _record(
@@ -558,6 +591,7 @@ class FakeEvaluationWorkspace:
         *,
         failed: bool = False,
         kind: str = "other",
+        validator_type: str | None = None,
     ) -> RecordedCall:
         call = RecordedCall(
             self.turn,
@@ -566,6 +600,7 @@ class FakeEvaluationWorkspace:
             deepcopy(result),
             failed,
             kind,
+            validator_type,
         )
         self.calls.append(call)
         return call
