@@ -13,9 +13,15 @@ named-scenario catalogue generation.
 
 ## Step 1: Require both inputs
 
-If either required input is missing, ask exactly one question for the missing
-knowledge source or agent instructions, then wait. Do not infer a path, continue
-with one input, or combine the inputs.
+Collect missing inputs one at a time:
+
+1. If the local knowledge source is missing, ask exactly one question for it,
+   then wait.
+2. After the knowledge source is available, if the agent-instructions file is
+   missing, ask exactly one question for the agent instructions, then wait.
+
+Do not infer a path, continue with one input, combine the questions, or ask for
+a scenario instead.
 
 ## Step 2: Run the curator preflight
 
@@ -34,9 +40,15 @@ JSON is invalid, `available` is not `true`, or the contract is missing or
 incompatible, show the returned error message and stop. Do not attempt a
 fallback implementation.
 
-Read `skillPath` and `structuralValidatorPath` from the successful result.
-**Read the returned curator skill in full** before taking any curation action.
-Treat the returned paths as authoritative and do not guess submodule paths.
+Require `supportsHostOutputOverride` and `supportsHostLifecycleHandoff`; both
+capability flags are exactly `true`. If either capability flag is false or
+missing, explain that this is an incompatible curator contract and stop before
+reading or invoking `skillPath`.
+
+Only after all preflight checks pass, read `skillPath` and
+`structuralValidatorPath` from the successful result. **Read the returned curator skill in full**
+before taking any curation action. Treat the returned paths as authoritative
+and do not guess submodule paths.
 
 ## Step 3: Run the hosted curator flow
 
@@ -57,7 +69,7 @@ curator's generation rules. After receiving its structured hosted handoff, skip
 the curator local-only wrap-up because the Maker Kit owns the remaining
 lifecycle.
 
-## Step 4: Hand each set to the Maker Kit lifecycle
+## Step 4: Validate, then hand off to one authoritative lifecycle
 
 For each generated set in the curator handoff:
 
@@ -65,11 +77,15 @@ For each generated set in the curator handoff:
    validation for the exact returned set folder.
 2. Follow `src/skills/evaluations/quality-fix-flow.md` for any required or
    user-selected fixes.
-3. After validation passes, use the existing Maker Kit review, keep-local, and
-   push choices. Do not duplicate their review or push implementation here.
-4. For configured-agent promotion or scoped push, read
-   `src/skills/evaluations/update/SKILL.md` and enter its workspace-set flow
-   using the generated folder under `workspace/evaluations/`.
+3. After validation passes for all generated sets, read
+   `src/skills/evaluations/update/SKILL.md` and hand the exact generated
+   workspace set folders to **Step 7 onward** as explicitly preselected sets.
+
+The update skill is the one authoritative flow for all post-validation
+review/keep-local/push behavior. It owns decline/keep-local, optional review
+tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
+status. Do not duplicate any of those commands, questions, or behaviors in
+this wrapper.
 
 Failed or partial validation stays local and blocks lifecycle handoff,
 promotion, push, and run. A missing or incompatible curator submodule also

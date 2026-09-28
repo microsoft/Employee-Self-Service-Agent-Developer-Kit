@@ -477,6 +477,19 @@ validation; completion requires the user's explicit choice in an active review.
 
 ## Step 7: Ask whether to push
 
+This section is the authoritative post-validation lifecycle for generated
+workspace sets. When another skill hands off already-generated and
+quality-validated workspace sets, treat the exact handed-off folders as
+explicitly preselected and enter Step 7 directly. Do not repeat Steps 1 through
+6 or rediscover/reselect those sets. For this handoff, the curator's completed
+generation preview and Maker Kit quality validation satisfy the prerequisites
+for entering Step 7.
+
+From this point onward, this skill owns decline/keep-local, optional review
+tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
+status. The calling skill must not duplicate these questions, commands, or
+behaviors.
+
 Only after the update, CSV synchronization, validation, file review, and any
 required Step 6a review-completion gate are complete, ask for every selected
 set:

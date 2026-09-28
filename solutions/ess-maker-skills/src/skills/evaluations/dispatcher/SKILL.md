@@ -19,18 +19,22 @@ generates, edits, or pushes evaluation files itself.
 Extract the scenario, goal, or capability the user wants to evaluate, such as
 compensation, employee ID, HR policy lookup, or IT ticketing.
 
-Before topic discovery, identify whether the user explicitly supplied a local
-knowledge source (one or more files or a folder) and asked to generate or
-curate evaluations grounded in those documents.
+Before topic discovery or asking the scenario question, identify explicit
+curation intent. This includes selecting or saying **"curate from a knowledge
+source"**, asking to curate knowledge-grounded evaluations, or explicitly
+asking for document-grounded evaluation creation.
 
 ### Local knowledge-source route
 
-When the request explicitly combines a local knowledge source with document-
-grounded evaluation creation, require a separate agent-instructions file. If
-the user did not provide one, ask for the agent-instructions file and wait.
+Route immediately to `src/skills/evaluations/curate/SKILL.md` when the user
+expresses that explicit curation intent, even when neither required path was
+supplied. The curator wrapper owns collecting the missing local knowledge
+source and agent-instructions file one at a time; do not fall through to the
+scenario question.
 
-When both inputs are available, read
-`src/skills/evaluations/curate/SKILL.md` and follow it. This route occurs before
+Also route immediately when the request explicitly combines a supplied local
+knowledge source (one or more files or a folder) with document-grounded
+evaluation creation. This explicit document grounding route occurs before
 configured-topic search, even when a configured topic covers the same subject.
 
 Do not choose this route for a plain named scenario with no documents. A plain

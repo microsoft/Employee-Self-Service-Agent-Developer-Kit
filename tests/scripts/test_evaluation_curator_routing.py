@@ -18,12 +18,17 @@ def test_dispatcher_routes_local_knowledge_before_topic_matching():
     normalized = " ".join(dispatcher.split()).lower()
 
     assert "src/skills/evaluations/curate/SKILL.md" in dispatcher
+    assert '"curate from a knowledge source"' in normalized
+    assert "even when neither required path was supplied" in normalized
+    assert "route immediately" in normalized
     assert "local knowledge source" in normalized
     assert "agent-instructions file" in normalized
     assert dispatcher.index("src/skills/evaluations/curate/SKILL.md") < (
         dispatcher.index("### Matching topic found")
     )
-    assert "ask for the agent-instructions file" in normalized
+    assert dispatcher.index("src/skills/evaluations/curate/SKILL.md") < (
+        dispatcher.index("Which scenario or goal should I create evaluation tests for?")
+    )
 
 
 def test_dispatcher_preserves_topic_and_catalogue_routes():
@@ -55,6 +60,11 @@ def test_curator_wrapper_uses_submodule_contract_without_duplication():
     assert "skillPath" in wrapper
     assert "Read the returned curator skill in full" in wrapper
     assert "structuralValidatorPath" in wrapper
+    assert "supportsHostOutputOverride" in wrapper
+    assert "supportsHostLifecycleHandoff" in wrapper
+    assert "both capability flags are exactly `true`" in normalized
+    assert "before reading or invoking `skillPath`" in normalized
+    assert "incompatible curator contract" in normalized_lower
     assert "never duplicate the curator instructions" in normalized_lower
     assert "active GitHub Copilot session" in wrapper
 
@@ -83,8 +93,28 @@ def test_curator_wrapper_hands_off_to_maker_kit_lifecycle():
     assert "src/skills/evaluations/update/SKILL.md" in wrapper
     assert "for each generated set" in normalized_lower
     assert "skip the curator local-only wrap-up" in normalized_lower
+    assert "step 7 onward" in normalized_lower
+    assert "explicitly preselected" in normalized_lower
+    assert "one authoritative flow" in normalized_lower
     assert "do not duplicate" in normalized_lower
-    assert "workspace-set flow" in wrapper
+
+
+def test_update_step_7_accepts_prevalidated_curator_handoff():
+    update = _read("src/skills/evaluations/update/SKILL.md")
+    normalized = " ".join(update.split()).lower()
+
+    assert "authoritative post-validation lifecycle" in normalized
+    assert "generated workspace sets" in normalized
+    assert "explicitly preselected" in normalized
+    assert "enter step 7 directly" in normalized
+    assert "do not repeat steps 1 through 6" in normalized
+    assert "decline/keep-local" in normalized
+    assert "optional review tagging" in normalized
+    assert "setup check" in normalized
+    assert "promotion" in normalized
+    assert "scoped dry-run and push" in normalized
+    assert "cleanup" in normalized
+    assert "final status" in normalized
 
 
 def test_curator_wrapper_blocks_on_missing_input_or_failed_validation():
