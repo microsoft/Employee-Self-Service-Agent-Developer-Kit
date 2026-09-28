@@ -126,8 +126,12 @@ def test_curator_wrapper_requires_maker_choice_before_step_7_handoff():
 
 def test_update_authorizes_every_curator_preselected_set_entry():
     wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
-    update = _normalized("src/skills/evaluations/update/SKILL.md")
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    update = " ".join(update_text.split())
     update_lower = update.lower()
+    rules = " ".join(
+        _section(update_text, "## Rules", "## Review-intent routing").split()
+    ).lower()
 
     for choice in (
         "Edit the test sets myself",
@@ -142,6 +146,9 @@ def test_update_authorizes_every_curator_preselected_set_entry():
     assert "enter Flow R1 with the exact preselected sets" in update
     assert "enter Step 7 directly with the exact preselected sets" in update
     assert "without rediscovering or reselecting those sets" in update_lower
+    assert "for normal update entries, always discover sets" in rules
+    assert "curator-originated preselected-set handoffs are exempt" in rules
+    assert "use only the exact folders supplied by the curator skill" in rules
 
 
 def test_curator_edit_path_returns_to_mandatory_maker_gate():

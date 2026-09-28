@@ -20,7 +20,9 @@ available in this workspace.
 
 ## Rules
 
-- Always discover sets from both locations when they are available.
+- For normal update entries, always discover sets from both locations when they
+  are available. Curator-originated preselected-set handoffs are exempt from
+  rediscovery; use only the exact folders supplied by the curator skill.
 - Do not require setup to update a workspace-level set.
 - Require a complete `.local/config.json` only for discovering or pushing
   configured-agent sets.
