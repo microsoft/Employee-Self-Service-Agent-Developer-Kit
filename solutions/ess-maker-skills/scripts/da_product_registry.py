@@ -292,17 +292,13 @@ def observe_product_mapping(
     )
     observations = load_product_observations(kit_root)
     product = observation["productKey"].casefold()
-    package = observation["packageId"].casefold()
     environment = observation["environmentId"].casefold()
     observed_ring = observation["ring"]
     observations = [
         item
         for item in observations
         if not (
-            (
-                item["productKey"].casefold() == product
-                or item["packageId"].casefold() == package
-            )
+            item["productKey"].casefold() == product
             and item["environmentId"].casefold() == environment
             and item["ring"] == observed_ring
         )
@@ -330,31 +326,56 @@ def resolve_product_identity(
     environment = str(environment_id or "").strip().casefold()
     normalized_ring = str(ring or "").strip().casefold()
     if kit_root is not None:
-        exact_matches: list[tuple[dict[str, Any], list[str]]] = []
-        catalog_matches: list[tuple[dict[str, Any], list[str]]] = []
-        for observation in reversed(load_product_observations(kit_root)):
-            matched_by = []
-            if package and observation["packageId"].casefold() == package:
-                matched_by.append("workspace-package-id")
-            if (
-                schema
-                and observation["agentSchemaName"].casefold() == schema
-            ):
-                matched_by.append("workspace-agent-schema-name")
-            if matched_by:
-                exact_matches.append((observation, matched_by))
-            elif (
-                catalog
-                and observation["catalogName"].casefold() == catalog
-            ):
-                catalog_matches.append(
+        observations = list(reversed(load_product_observations(kit_root)))
+        match_tiers: list[
+            list[tuple[dict[str, Any], list[str]]]
+        ] = []
+        if package and catalog:
+            match_tiers.append(
+                [
+                    (
+                        observation,
+                        [
+                            "workspace-package-id",
+                            "workspace-catalog-name",
+                        ],
+                    )
+                    for observation in observations
+                    if observation["packageId"].casefold() == package
+                    and observation["catalogName"].casefold() == catalog
+                ]
+            )
+        if package:
+            match_tiers.append(
+                [
+                    (observation, ["workspace-package-id"])
+                    for observation in observations
+                    if observation["packageId"].casefold() == package
+                ]
+            )
+        if schema:
+            match_tiers.append(
+                [
+                    (observation, ["workspace-agent-schema-name"])
+                    for observation in observations
+                    if observation["agentSchemaName"].casefold() == schema
+                ]
+            )
+        if catalog:
+            match_tiers.append(
+                [
                     (observation, ["workspace-catalog-name"])
-                )
-        matches = exact_matches
-        if not matches and len(
-            {item[0]["productKey"] for item in catalog_matches}
-        ) == 1:
-            matches = catalog_matches
+                    for observation in observations
+                    if observation["catalogName"].casefold() == catalog
+                ]
+            )
+        matches: list[tuple[dict[str, Any], list[str]]] = []
+        for tier in match_tiers:
+            if not tier:
+                continue
+            if len({item[0]["productKey"] for item in tier}) == 1:
+                matches = tier
+            break
         selected = next(
             (
                 match

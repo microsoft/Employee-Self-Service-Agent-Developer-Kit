@@ -724,6 +724,45 @@ def test_list_agents_emits_unverified_http_response(
     assert response == {"error": {"message": "not visible"}}
 
 
+def test_list_agents_keeps_partial_inventory_after_agent_lookup_500(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingLookupClient(FakeClient):
+        def get_agent(self, agent_id: str) -> dict[str, Any]:
+            if agent_id == AGENT_ID:
+                response = SimpleNamespace(
+                    text='{"error":{"message":"service unavailable"}}',
+                    json=lambda: {
+                        "error": {"message": "service unavailable"}
+                    },
+                )
+                raise setup_existing_da.AgentBuilderHTTPError(
+                    "Agent inspection",
+                    500,
+                    error_code="ServerError",
+                    request_id="request-500",
+                    response=response,
+                )
+            return super().get_agent(agent_id)
+
+    result = setup_existing_da.inspect_listed_agents(
+        FailingLookupClient()
+    )
+    captured = capsys.readouterr()
+
+    assert result["devAgents"] == []
+    assert len(result["prodAgents"]) == 1
+    assert result["realmNotEstablishedAgents"] == [
+        {
+            "listedId": AGENT_ID,
+            "name": "Employee Self-Service HR",
+            "verificationErrorType": "AgentBuilderHTTPError",
+            "verificationHttpStatus": 500,
+        }
+    ]
+    assert "DA_AGENT_LIST_WARNING_RESPONSE_JSON:" in captured.out
+
+
 def test_list_agents_keeps_dev_agent_when_product_identity_is_unavailable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -750,6 +789,62 @@ def test_list_agents_keeps_dev_agent_when_product_identity_is_unavailable(
     assert result["productIdentityUnavailableCount"] == 1
     assert "product identity" in captured.err
     assert "DA_AGENT_LIST_PRODUCT_WARNING_RESPONSE_JSON:" in captured.out
+
+
+def test_list_agents_keeps_dev_agent_after_configuration_500(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingConfigurationClient(FakeClient):
+        def get_dev_configuration(
+            self,
+            _agent_id: str,
+        ) -> dict[str, Any]:
+            response = SimpleNamespace(
+                text='{"error":{"message":"service unavailable"}}',
+                json=lambda: {
+                    "error": {"message": "service unavailable"}
+                },
+            )
+            raise setup_existing_da.AgentBuilderHTTPError(
+                "Dev realm configuration",
+                500,
+                error_code="ServerError",
+                request_id="request-config-500",
+                response=response,
+            )
+
+    result = setup_existing_da.inspect_listed_agents(
+        FailingConfigurationClient()
+    )
+    captured = capsys.readouterr()
+
+    assert len(result["devAgents"]) == 1
+    assert "schemaName" not in result["devAgents"][0]
+    assert len(result["prodAgents"]) == 1
+    assert result["productIdentityUnavailableCount"] == 1
+    assert "DA_AGENT_LIST_PRODUCT_WARNING_RESPONSE_JSON:" in captured.out
+
+
+def test_list_agents_classifies_failed_dev_confirmation_as_unresolved(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = setup_existing_da.inspect_listed_agents(
+        FakeClient(configuration_realm="Prod")
+    )
+    captured = capsys.readouterr()
+
+    assert result["devAgents"] == []
+    assert len(result["prodAgents"]) == 1
+    assert result["realmNotEstablishedAgents"] == [
+        {
+            "listedId": AGENT_ID,
+            "name": "Employee Self-Service HR",
+            "realm": "dev",
+            "verificationErrorType": "ExistingDASetupError",
+        }
+    ]
+    assert result["productIdentityUnavailableCount"] == 0
+    assert "Dev validation" in captured.err
 
 
 def test_print_exception_includes_type_and_notes(

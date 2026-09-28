@@ -1345,8 +1345,6 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
         try:
             metadata = client.get_agent(normalized_agent_id)
         except AgentBuilderHTTPError as exc:
-            if exc.status_code not in (403, 404):
-                raise
             print(
                 f"WARNING: Agent {normalized_agent_id}: "
                 f"{type(exc).__name__}: {exc}",
@@ -1372,8 +1370,6 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
                     normalized_agent_id
                 )
             except AgentBuilderHTTPError as exc:
-                if exc.status_code not in (403, 404):
-                    raise
                 print(
                     f"WARNING: Agent {normalized_agent_id} product identity: "
                     f"{type(exc).__name__}: {exc}",
@@ -1384,13 +1380,40 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
                     marker="DA_AGENT_LIST_PRODUCT_WARNING",
                 )
                 product_identity_unavailable += 1
-            else:
+                enriched_agent.pop("schemaName", None)
+                dev_agents.append(enriched_agent)
+                continue
+            except ExistingDASetupError as exc:
+                print(
+                    f"WARNING: Agent {normalized_agent_id} product identity: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                product_identity_unavailable += 1
+                enriched_agent.pop("schemaName", None)
+                dev_agents.append(enriched_agent)
+                continue
+            try:
                 schema_name, _ = _confirm_dev(
                     normalized_agent_id,
                     enriched_agent,
                     configuration,
                 )
-                enriched_agent["schemaName"] = schema_name
+            except ExistingDASetupError as exc:
+                print(
+                    f"WARNING: Agent {normalized_agent_id} Dev validation: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                realm_not_established_agents.append(
+                    _safe_listed_agent(
+                        enriched_agent,
+                        realm=metadata.get("realm"),
+                        verification_error_type=type(exc).__name__,
+                    )
+                )
+                continue
+            enriched_agent["schemaName"] = schema_name
             dev_agents.append(enriched_agent)
         elif realm == "test":
             test_agents.append({**listed_agent, **metadata})

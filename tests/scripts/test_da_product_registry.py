@@ -101,6 +101,50 @@ def test_observe_product_mapping_preserves_distinct_same_name_products(
     assert ambiguous is None
 
 
+def test_observe_product_mapping_preserves_distinct_shared_package_products(
+    tmp_path,
+) -> None:
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="product-one",
+        package_id="shared-package",
+        catalog_name="Product One",
+        agent_schema_name="schema-one",
+        source="first observation",
+        environment_id="environment-1",
+        ring="test",
+    )
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="product-two",
+        package_id="shared-package",
+        catalog_name="Product Two",
+        agent_schema_name="schema-two",
+        source="second observation",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    observations = da_product_registry.load_product_observations(tmp_path)
+    assert [item["productKey"] for item in observations] == [
+        "product-one",
+        "product-two",
+    ]
+    product_one = da_product_registry.resolve_product_identity(
+        package_id="shared-package",
+        catalog_name="Product One",
+        kit_root=tmp_path,
+    )
+    ambiguous = da_product_registry.resolve_product_identity(
+        package_id="shared-package",
+        kit_root=tmp_path,
+    )
+
+    assert product_one is not None
+    assert product_one["productKey"] == "product-one"
+    assert ambiguous is None
+
+
 def test_write_observations_closes_descriptor_when_fdopen_fails(
     tmp_path,
     monkeypatch,
