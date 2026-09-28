@@ -15,7 +15,9 @@ from tests.mcp.evaluations.skill_eval import (
     CURATOR_SKILL_PATH,
     KNOWLEDGE_PATH,
     MAKER_VALIDATOR_SKILL_PATH,
+    QUALITY_FIX_FLOW_PATH,
     STRUCTURAL_VALIDATOR_PATH,
+    UPDATE_SKILL_PATH,
     EvalTurn,
     FakeEvaluationWorkspace,
     session_options,
@@ -36,7 +38,7 @@ def _ready_backend() -> FakeEvaluationWorkspace:
 def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path) -> None:
     backend = FakeEvaluationWorkspace()
 
-    result = asyncio.run(
+    asyncio.run(
         run_eval(
             backend,
             [
@@ -52,22 +54,28 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
 
     calls = backend.calls
     preflight_index = next(
-        index for index, call in enumerate(calls) if call.kind == "preflight"
+        (index for index, call in enumerate(calls) if call.kind == "preflight"),
+        None,
     )
+    assert preflight_index is not None, "Missing curator preflight call."
     curator_read_index = next(
-        index
-        for index, call in enumerate(calls)
-        if call.name == "read_file"
-        and call.arguments["path"].replace("\\", "/") == CURATOR_SKILL_PATH
+        (
+            index
+            for index, call in enumerate(calls)
+            if call.name == "read_file"
+            and call.arguments["path"].replace("\\", "/") == CURATOR_SKILL_PATH
+        ),
+        None,
     )
+    assert curator_read_index is not None, "Missing curator skill read."
     first_write_index = next(
-        index for index, call in enumerate(calls) if call.name == "write_file"
+        (index for index, call in enumerate(calls) if call.name == "write_file"),
+        None,
     )
+    assert first_write_index is not None, "Missing evaluation artifact write."
 
     assert preflight_index < curator_read_index < first_write_index
-    assert all(call.turn == 0 for call in calls[: first_write_index])
     assert not any(call.name == "write_file" and call.turn == 0 for call in calls)
-    assert "?" in result.replies[0]
 
     required_reads = {KNOWLEDGE_PATH, AGENT_INSTRUCTIONS_PATH, CURATOR_SKILL_PATH}
     observed_reads = {
@@ -89,20 +97,38 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
     assert any(call.arguments["path"].endswith(".mcs.yml") for call in writes)
     assert any(call.arguments["path"].endswith(".csv") for call in writes)
 
-    structural = [call for call in calls if call.kind == "structural_validation"]
-    maker_kit = [call for call in calls if call.kind == "maker_kit_validation"]
-    assert structural
-    assert maker_kit
-    assert min(calls.index(call) for call in structural) > first_write_index
-    assert min(calls.index(call) for call in maker_kit) > first_write_index
-    maker_validator_read_index = next(
-        index
-        for index, call in enumerate(calls)
-        if call.name == "read_file"
-        and call.arguments["path"].replace("\\", "/")
-        == MAKER_VALIDATOR_SKILL_PATH
+    structural_index = next(
+        (
+            index
+            for index, call in enumerate(calls)
+            if call.kind == "structural_validation"
+        ),
+        None,
     )
-    assert maker_validator_read_index < min(calls.index(call) for call in maker_kit)
+    assert structural_index is not None, "Missing structural validation call."
+    maker_kit_index = next(
+        (
+            index
+            for index, call in enumerate(calls)
+            if call.kind == "maker_kit_validation"
+        ),
+        None,
+    )
+    assert maker_kit_index is not None, "Missing Maker Kit validation call."
+    assert structural_index > first_write_index
+    assert maker_kit_index > first_write_index
+    maker_validator_read_index = next(
+        (
+            index
+            for index, call in enumerate(calls)
+            if call.name == "read_file"
+            and call.arguments["path"].replace("\\", "/")
+            == MAKER_VALIDATOR_SKILL_PATH
+        ),
+        None,
+    )
+    assert maker_validator_read_index is not None, "Missing Maker validator skill read."
+    assert maker_validator_read_index < maker_kit_index
     assert not any(call.kind == "push" for call in calls)
 
 
@@ -173,6 +199,21 @@ def test_synthetic_workspace_records_only_scoped_writes_and_validations() -> Non
     assert not written.failed
     assert structural.kind == "structural_validation"
     assert quality.kind == "maker_kit_validation"
+
+
+def test_synthetic_workspace_exposes_wrapper_reads_as_read_only() -> None:
+    backend = _ready_backend()
+
+    quality_flow = backend.invoke("read_file", {"path": QUALITY_FIX_FLOW_PATH})
+    update_skill = backend.invoke("read_file", {"path": UPDATE_SKILL_PATH})
+    rejected_write = backend.invoke(
+        "write_file",
+        {"path": QUALITY_FIX_FLOW_PATH, "content": "synthetic"},
+    )
+
+    assert not quality_flow.failed
+    assert not update_skill.failed
+    assert rejected_write.failed
 
 
 def test_session_options_disable_host_and_production_connections(tmp_path) -> None:

@@ -32,12 +32,20 @@ REAL_CURATOR_PATH = (
 VALIDATOR_SKILL_PATH = (
     SOLUTION_ROOT / "src" / "skills" / "evaluations" / "validate" / "SKILL.md"
 )
+QUALITY_FIX_FLOW_FILE = (
+    SOLUTION_ROOT / "src" / "skills" / "evaluations" / "quality-fix-flow.md"
+)
+UPDATE_SKILL_FILE = (
+    SOLUTION_ROOT / "src" / "skills" / "evaluations" / "update" / "SKILL.md"
+)
 
 CURATOR_SKILL_PATH = "vendor/evals-curator/skills/curate-evals/SKILL.md"
 STRUCTURAL_VALIDATOR_PATH = "vendor/evals-curator/scripts/check_eval_artifacts.py"
 KNOWLEDGE_PATH = "fixtures/knowledge/leave-policy.md"
 AGENT_INSTRUCTIONS_PATH = "fixtures/agent/instructions.md"
 MAKER_VALIDATOR_SKILL_PATH = "src/skills/evaluations/validate/SKILL.md"
+QUALITY_FIX_FLOW_PATH = "src/skills/evaluations/quality-fix-flow.md"
+UPDATE_SKILL_PATH = "src/skills/evaluations/update/SKILL.md"
 DEFAULT_MODEL = "gpt-5.4"
 MAX_CALLS = 40
 TURN_TIMEOUT = 120
@@ -148,6 +156,8 @@ class FakeEvaluationWorkspace:
                 MAKER_VALIDATOR_SKILL_PATH: VALIDATOR_SKILL_PATH.read_text(
                     encoding="utf-8"
                 ),
+                QUALITY_FIX_FLOW_PATH: QUALITY_FIX_FLOW_FILE.read_text(encoding="utf-8"),
+                UPDATE_SKILL_PATH: UPDATE_SKILL_FILE.read_text(encoding="utf-8"),
             }
         )
 
