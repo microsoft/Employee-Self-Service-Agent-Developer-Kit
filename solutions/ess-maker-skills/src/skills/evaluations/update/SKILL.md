@@ -753,10 +753,11 @@ eligible for Run or View actions in this interaction. If no set was
 successfully pushed, do not offer the next-action question.
 
 For **Run an evaluation**, read `src/skills/evaluations/run/SKILL.md` and enter
-Flow A. For **View results**, read the same skill and enter Flow B. Preserve
-all mandatory selection gates in that skill: choosing a next action does not
-select a test set or run, and discovery and selection must remain separate
-user turns.
+Flow A with the exact successfully pushed set names and IDs as the eligible-set
+scope. For **View results**, read the same skill and enter Flow B with that same
+eligible-set scope. Preserve all mandatory selection gates in that skill:
+choosing a next action does not select a test set or run, and discovery and
+selection must remain separate user turns.
 
 Do not offer **Run an evaluation** as immediately available when the set was
 kept local, setup is incomplete, only a dry run completed, or the push failed

@@ -13,6 +13,20 @@ Commands run from the `solutions/ess-maker-skills/` directory.
 - Do not invoke the local evaluation quality validator. This skill executes
   deployed test cases against the configured Copilot Studio agent.
 
+### Eligible-set handoff from the update skill
+
+When `src/skills/evaluations/update/SKILL.md` enters Flow A or Flow B after a
+mixed-outcome push, accept its exact successfully pushed test-set names and IDs
+as the eligible-set scope for this interaction.
+
+- In Flow A, still run the normal `list-sets` discovery command, but display and
+  allow selection only for returned sets whose name or ID is in that scope.
+- In Flow B, still run the normal `list-runs` discovery command, but display and
+  allow selection only for runs whose test-set name or `testSetId` is in that
+  scope.
+- Do not widen the scope to unrelated deployed sets or runs. Preserve every
+  separate-turn discovery and selection gate below.
+
 ## Flow A: Start an evaluation run
 
 ### Mandatory user-selection gate

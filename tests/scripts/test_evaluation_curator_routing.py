@@ -249,7 +249,15 @@ def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
 def test_run_skill_is_referenced_only_after_successful_push():
     wrapper = _read("src/skills/evaluations/curate/SKILL.md")
     update = _read("src/skills/evaluations/update/SKILL.md")
+    run = _read("src/skills/evaluations/run/SKILL.md")
     normalized = " ".join(update.split())
+    run_handoff = " ".join(
+        _section(
+            run,
+            "### Eligible-set handoff from the update skill",
+            "## Flow A: Start an evaluation run",
+        ).split()
+    )
 
     assert "src/skills/evaluations/run/SKILL.md" not in wrapper
     success_gate = normalized.index(
@@ -262,9 +270,18 @@ def test_run_skill_is_referenced_only_after_successful_push():
     assert "**View results**" in update
     assert "**Finish**" in update
     assert "Wait for the user's response" in normalized
+    assert "exact successfully pushed set names and IDs" in normalized
+    assert "eligible-set scope" in normalized
     assert "choosing a next action does not select a test set or run" in normalized
     assert "discovery and selection must remain separate user turns" in normalized
     assert "Do not offer **Run an evaluation** as immediately available" in update
+    assert "mixed-outcome push" in run_handoff
+    assert "only for returned sets whose name or ID is in that scope" in run_handoff
+    assert (
+        "only for runs whose test-set name or `testSetId` is in that scope"
+        in run_handoff
+    )
+    assert "Do not widen the scope to unrelated deployed sets or runs" in run_handoff
 
 
 def test_update_step_7_is_direct_curator_handoff_not_only_curator_entry():
