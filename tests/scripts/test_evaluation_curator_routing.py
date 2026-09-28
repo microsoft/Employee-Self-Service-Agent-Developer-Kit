@@ -13,6 +13,10 @@ def _normalized(relative_path: str) -> str:
     return " ".join(_read(relative_path).split())
 
 
+def _read_repo(relative_path: str) -> str:
+    return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
 def _section(text: str, start: str, end: str) -> str:
     return text[text.index(start) : text.index(end)]
 
@@ -444,3 +448,50 @@ def test_update_owns_concrete_workspace_push_and_cleanup_gates():
     assert "do not perform cleanup" in step_9
     assert "workspace source remains available for retry" in step_9
     assert "must not duplicate these questions, commands, or behaviors" in update
+
+
+def test_maker_readme_documents_all_evaluation_generation_sources():
+    readme = " ".join(_read("README.md").split()).lower()
+
+    assert "configured agent topics" in readme
+    assert "behavior already present in the active agent" in readme
+    assert "local knowledge source" in readme
+    assert "agent instructions" in readme
+    assert "grounded knowledge" in readme
+    assert "instruction-adherence" in readme
+    assert "pinned curator" in readme
+    assert "bundled ess catalogue" in readme
+    assert "without configured topics or documents" in readme
+    assert "native `.mcs.yml`" in readme
+    assert "csv" in readme
+    assert "review, push, run, and results lifecycle" in readme
+
+
+def test_evaluation_docs_preserve_generation_skill_boundaries():
+    generate = " ".join(
+        _read("src/skills/evaluations/generate/SKILL.md").split()
+    ).lower()
+    create = " ".join(_read("src/skills/evaluations/create/SKILL.md").split()).lower()
+
+    assert "bundled-catalogue-only" in generate
+    assert "must not handle user-supplied document folders" in generate
+    assert "configured-topic-grounded" in create
+    assert "must not absorb" in create
+    assert "document-grounding" in create
+    assert "curator workflow" in create
+
+
+def test_setup_readme_documents_local_only_curator_submodule_recovery():
+    setup = " ".join(_read_repo("setup/README.md").split()).lower()
+
+    assert "git submodule sync --recursive" in setup
+    assert "git submodule update --init --recursive" in setup
+    assert "manual clone" in setup
+    assert "omitted submodules" in setup
+    assert "pinned curator dependency" in setup
+    assert "local-only" in setup
+    assert "private" in setup
+    assert "requires access" in setup
+    assert "public installer" in setup
+    assert "ci" in setup
+    assert "intentionally does not initialize" in setup

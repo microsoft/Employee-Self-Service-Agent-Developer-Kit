@@ -18,6 +18,23 @@ Once complete, the installer asks in the terminal which experience you want — 
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
+### Troubleshooting a manual clone
+
+The knowledge-source evaluation curator is a pinned submodule used by the
+local-only prototype. This workflow requires access to its private, user-owned
+remote. If a manual clone omitted submodules, restore the pinned curator
+dependency from the repository root:
+
+```powershell
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+This workflow is currently local-only. The private remote is not suitable for
+the public installer or CI. Public installer/CI intentionally does not
+initialize it. These commands do not grant access, and public users should not
+expect to fetch the curator dependency.
+
 ## Maker Mode (Chat-First Layout) and Developer Mode
 
 The one-shot installer (`bootstrap.ps1` / `bootstrap-mac.sh`) asks you to choose between **Maker** and **Developer** in the terminal before VS Code launches, so mode selection is a one-line choice from the main installer — no separate command needed. Maker was previously called "Lite" and Developer was previously called "Standard"; the old names still work for pinned scripts and previously-installed users.

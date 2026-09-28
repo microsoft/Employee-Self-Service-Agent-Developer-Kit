@@ -10,6 +10,11 @@ Generate and validate evaluation files locally, then push them when the user
 asks, following the dry-run, push, and deployment-verification steps.
 Evaluation push is available in this workspace.
 
+> **Scope boundary:** This skill remains **configured-topic-grounded**. It must not absorb the
+> document-grounding/curator workflow or read user-supplied document folders.
+> Route that request to the dedicated curator path instead; do not duplicate
+> curator rules here.
+
 ## Rules
 
 - ALWAYS read `.local/config.json` to get the agent folder name and slug.

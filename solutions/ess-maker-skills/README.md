@@ -99,10 +99,23 @@ Catch and fix compile errors before they reach production. The `/scan` command a
 
 ### 📊 Generate Evaluation Test Sets
 
-Create Copilot Studio-native evaluation sets from configured agent topics, or
-generate catalogue-grounded starter sets for named ESS scenarios before an
-agent is configured. Each set produces synchronized `.mcs.yml` and CSV
-artifacts from the same test cases.
+Create evaluation test sets from three sources:
+
+- **Configured agent topics** — validate behavior already present in the active
+  agent.
+- **Local knowledge source + agent instructions** — curate grounded knowledge
+  and instruction-adherence tests through the pinned curator dependency.
+- **Bundled ESS catalogue** — seed tests for a named ESS scenario without
+  configured topics or documents.
+
+All three sources produce native `.mcs.yml` plus CSV artifacts and use the
+existing review, push, run, and results lifecycle.
+
+> **Local-only prototype:** Knowledge-source curation currently requires access
+> to a private, user-owned curator remote. That remote is not suitable for the
+> public installer or CI, so those paths intentionally do not initialize it.
+> This workflow is available only in local clones whose users already have
+> access; public users should not expect the dependency to be fetchable.
 
 - **Topic Triggering** — Verifies each topic fires on its trigger phrases plus paraphrased variants
 - **Responsible AI** — Standard guardrail tests for harmful, adversarial, and policy-bypass prompts
@@ -112,11 +125,10 @@ artifacts from the same test cases.
 - **Integration Data** — Validates external system data retrieval with placeholder-based expected responses
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
-Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
-agent sets live under the agent's `evaluations/` folder. The lifecycle supports
-quality validation, optional SME review, promotion into the configured agent,
-scoped push, execution, run history, and results analysis. Run `/evaluate` to
-create or manage sets, and `/run` to execute a pushed set or inspect results.
+Catalogue-grounded and knowledge-source-curated sets are staged under
+`workspace/evaluations/`; configured agent sets live under the agent's
+`evaluations/` folder. Run `/evaluate` to create or manage sets, and `/run` to
+execute a pushed set or inspect results.
 
 ### 🚀 Local-First Authoring
 

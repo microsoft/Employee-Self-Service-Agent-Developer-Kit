@@ -16,6 +16,10 @@ It produces two artifacts per set from the same cases:
 > **Scope of this skill.** It only *generates* test-set artifacts. Whether/where
 > they are pushed or deployed is the **host's** concern, not this skill's — this
 > skill never pushes and has no dependency on any other skill.
+>
+> This skill remains **bundled-catalogue-only**. It must not handle user-supplied document folders.
+> Document-grounded generation belongs to the separate curator workflow; do not
+> duplicate that workflow or its rules here.
 
 ## Rules
 
