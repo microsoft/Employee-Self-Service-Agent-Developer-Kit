@@ -120,6 +120,53 @@ def test_curator_wrapper_requires_maker_choice_before_step_7_handoff():
     assert "without implementing any mutation" in normalized
 
 
+def test_update_authorizes_every_curator_preselected_set_entry():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+    update = _normalized("src/skills/evaluations/update/SKILL.md")
+    update_lower = update.lower()
+
+    for choice in (
+        "Edit the test sets myself",
+        "Send them to a judge or SME for feedback",
+        "Keep them unchanged",
+    ):
+        assert choice in wrapper
+        assert f"**{choice}**" in update
+
+    assert "exact generated workspace set folders already preselected" in update
+    assert "enter the edit path at Step 2" in update
+    assert "enter Flow R1 with the exact preselected sets" in update
+    assert "enter Step 7 directly with the exact preselected sets" in update
+    assert "without rediscovering or reselecting those sets" in update_lower
+
+
+def test_curator_edit_path_returns_to_mandatory_maker_gate():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+    update = _normalized("src/skills/evaluations/update/SKILL.md")
+
+    assert "Steps 2 through 6" in wrapper
+    assert "return to this maker review gate" in wrapper
+    assert "enter the edit path at Step 2" in update
+    assert (
+        "After Step 6 completes, return control to the curator skill's mandatory maker review gate"
+        in update
+    )
+    assert "Do not fall through to Step 6a or Step 7" in update
+
+
+def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
+    update = _normalized("src/skills/evaluations/update/SKILL.md")
+
+    assert "When Flow R1 is entered from the curator maker review gate" in update
+    assert "exact generated workspace set folders as already preselected" in update
+    assert "Do not run `evaluation_review.py --list-all`" in update
+    assert "ask the maker to select the sets again" in update
+    assert (
+        "normal configuration, promotion, scoped dry-run, push, cleanup, and post-push lifecycle semantics"
+        in update
+    )
+
+
 def test_run_skill_is_referenced_only_after_successful_push():
     wrapper = _read("src/skills/evaluations/curate/SKILL.md")
     update = _read("src/skills/evaluations/update/SKILL.md")
@@ -127,7 +174,7 @@ def test_run_skill_is_referenced_only_after_successful_push():
 
     assert "src/skills/evaluations/run/SKILL.md" not in wrapper
     success_gate = normalized.index(
-        "Only after `push.py --yes` completes successfully"
+        "If one or more selected sets completed `push.py --yes` successfully"
     )
     run_reference = normalized.index("src/skills/evaluations/run/SKILL.md")
 
@@ -141,18 +188,23 @@ def test_run_skill_is_referenced_only_after_successful_push():
     assert "Do not offer **Run an evaluation** as immediately available" in update
 
 
-def test_update_step_7_accepts_only_prevalidated_curator_handoff():
+def test_update_step_7_is_direct_curator_handoff_not_only_curator_entry():
     update = _read("src/skills/evaluations/update/SKILL.md")
     normalized = " ".join(update.split()).lower()
 
     assert "authoritative post-validation lifecycle" in normalized
     assert "src/skills/evaluations/curate/SKILL.md" in update
-    assert "preselected generated workspace set folders" in normalized
+    assert "one of several authorized curator entries" in normalized
+    assert "step 2 edit path or flow r1" in normalized
+    assert "exact generated workspace set folders" in normalized
     assert (
-        "curator validation and maker kit validation have both completed successfully"
+        "curator structural validation and maker kit quality validation both complete successfully"
         in normalized
     )
-    assert "only this curator handoff may bypass steps 1 through 6" in normalized
+    assert "a direct step 7 handoff is allowed only from" in normalized
+    assert "keep them unchanged" in normalized
+    assert "judge or sme path has completed flow r1 as applicable" in normalized
+    assert "only this curator handoff may bypass steps 1 through 6" not in normalized
     assert "enter step 7 directly" in normalized
     assert "do not repeat steps 1 through 6" in normalized
     assert "another skill" not in normalized
@@ -163,6 +215,22 @@ def test_update_step_7_accepts_only_prevalidated_curator_handoff():
     assert "scoped dry-run and push" in normalized
     assert "cleanup" in normalized
     assert "final status" in normalized
+
+
+def test_mixed_push_outcomes_limit_run_and_view_to_successful_sets():
+    update = _normalized("src/skills/evaluations/update/SKILL.md")
+
+    assert "For mixed multi-set outcomes" in update
+    assert "available only for the sets whose push succeeded" in update
+    assert (
+        "Identify those eligible sets before asking the next-action question" in update
+    )
+    assert "retain the mandatory local-only reminder and resume-push guidance" in update
+    assert "they are not eligible for Run or View actions in this interaction" in update
+    assert (
+        "If no set was successfully pushed, do not offer the next-action question"
+        in update
+    )
 
 
 def test_curator_wrapper_blocks_on_missing_input_or_failed_validation():

@@ -74,6 +74,27 @@ Review state and review activity are separate:
 Never route a normal or resumed push into review completion merely because its
 local `review.json` contains `review_requested`.
 
+### Curator-originated preselected-set handoffs
+
+`src/skills/evaluations/curate/SKILL.md` may enter this skill with the exact
+generated workspace set folders already preselected after structural and
+Maker Kit quality validation. Accept each of its three named handoffs without
+rediscovering or reselecting those sets:
+
+- **Edit the test sets myself** — enter the edit path at Step 2, then complete
+  Steps 2 through 6, including YAML/CSV synchronization and quality validation.
+  After Step 6 completes, return control to the curator skill's mandatory maker
+  review gate. Do not fall through to Step 6a or Step 7.
+- **Send them to a judge or SME for feedback** — enter Flow R1 with the exact
+  preselected sets as described below. Do not list all sets or ask the maker to
+  select them again.
+- **Keep them unchanged** — enter Step 7 directly with the exact preselected
+  sets, subject to the Step 7 entry requirements.
+
+These curator handoffs waive only the discovery or reselection steps explicitly
+identified above. They do not weaken mutation, synchronization, validation,
+review-state, promotion, dry-run, push, cleanup, or post-push requirements.
+
 ### Review-state reconciliation
 
 Before showing any review-related next action, run
@@ -104,6 +125,13 @@ Before asking the user to tag a set, explain:
 > reviewer, judge, or SME to inspect and provide feedback, suggestions, or
 > recommendations. The maker remains responsible for editing the test set. The
 > tag must be pushed to Copilot Studio before it is shared with other users.
+
+When Flow R1 is entered from the curator maker review gate, accept the exact
+generated workspace set folders as already preselected. Do not run
+`evaluation_review.py --list-all`, display unrelated sets, or ask the maker to
+select the sets again. Continue at the status update in step 5 for every
+preselected set, then follow step 6 and the normal configuration, promotion,
+scoped dry-run, push, cleanup, and post-push lifecycle semantics below.
 
 1. For a generic request such as **"tag testsets for review"**, run:
 
@@ -478,13 +506,17 @@ validation; completion requires the user's explicit choice in an active review.
 ## Step 7: Ask whether to push
 
 This section is the authoritative post-validation lifecycle for generated
-workspace sets. A Step 7 handoff is allowed only when
-`src/skills/evaluations/curate/SKILL.md` provides preselected generated
-workspace set folders and confirms that curator validation and Maker Kit
-validation have both completed successfully. Only this curator handoff may
-bypass Steps 1 through 6. Treat the exact handed-off folders as explicitly
-preselected and enter Step 7 directly. Do not repeat Steps 1 through 6 or
-rediscover/reselect those sets.
+workspace sets. It is also one of several authorized curator entries into this
+skill; the curator may instead enter the Step 2 edit path or Flow R1 as defined
+above.
+
+A direct Step 7 handoff is allowed only from
+`src/skills/evaluations/curate/SKILL.md`, with the exact generated workspace set
+folders explicitly preselected after curator structural validation and Maker
+Kit quality validation both complete successfully. Enter Step 7 directly only
+after the maker chooses **Keep them unchanged**, or after the curator's judge
+or SME path has completed Flow R1 as applicable. Do not repeat Steps 1 through
+6 or rediscover/reselect those sets.
 
 From this point onward, this skill owns decline/keep-local, optional review
 tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
@@ -672,8 +704,8 @@ SMEs. Instead state:
 > ✅ Review completed and pushed successfully. You can now run this test set or
 > view its evaluation run history.
 
-Only after `push.py --yes` completes successfully, use the structured choice
-control to ask:
+If one or more selected sets completed `push.py --yes` successfully, use the
+structured choice control after the per-set summary to ask:
 
 > What would you like to do next?
 
@@ -684,6 +716,14 @@ Offer:
 3. **Finish**
 
 Wait for the user's response.
+
+For mixed multi-set outcomes, make **Run an evaluation** and **View results**
+available only for the sets whose push succeeded. Identify those eligible sets
+before asking the next-action question. Sets that were kept local, are waiting
+for setup, completed only a dry run, or had a failed or cancelled push retain
+the mandatory local-only reminder and resume-push guidance; they are not
+eligible for Run or View actions in this interaction. If no set was
+successfully pushed, do not offer the next-action question.
 
 For **Run an evaluation**, read `src/skills/evaluations/run/SKILL.md` and enter
 Flow A. For **View results**, read the same skill and enter Flow B. Preserve
