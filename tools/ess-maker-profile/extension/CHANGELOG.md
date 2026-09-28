@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.30 (POC)
+## 0.4.31 (POC)
 
 - **Rail + walkthrough UX overhaul.** The **Quick start** panel is now a simple
   tree (matching Customization and Help) with **Tutorial** then **Start setup**;
