@@ -13,6 +13,10 @@ def _normalized(relative_path: str) -> str:
     return " ".join(_read(relative_path).split())
 
 
+def _section(text: str, start: str, end: str) -> str:
+    return text[text.index(start) : text.index(end)]
+
+
 def test_dispatcher_routes_local_knowledge_before_topic_matching():
     dispatcher = _read("src/skills/evaluations/dispatcher/SKILL.md")
     normalized = " ".join(dispatcher.split()).lower()
@@ -141,12 +145,52 @@ def test_update_authorizes_every_curator_preselected_set_entry():
 
 
 def test_curator_edit_path_returns_to_mandatory_maker_gate():
-    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
-    update = _normalized("src/skills/evaluations/update/SKILL.md")
+    wrapper_text = _read("src/skills/evaluations/curate/SKILL.md")
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    wrapper = " ".join(wrapper_text.split())
+    update = " ".join(update_text.split())
+    wrapper_gate = " ".join(
+        _section(
+            wrapper_text,
+            "## Step 4: Validate, then ask for maker review",
+            "Failed or partial validation",
+        ).split()
+    )
+    curator_handoffs = " ".join(
+        _section(
+            update_text,
+            "### Curator-originated preselected-set handoffs",
+            "### Review-state reconciliation",
+        ).split()
+    ).lower()
+    step_2 = " ".join(
+        _section(
+            update_text,
+            "## Step 2: Identify the requested changes",
+            "## Step 3:",
+        ).split()
+    )
 
     assert "Steps 2 through 6" in wrapper
     assert "return to this maker review gate" in wrapper
+    assert "This curator gate has already selected the edit path" in wrapper_gate
+    assert "skip its generic Edit/SME/Keep continuation question" in wrapper_gate
     assert "enter the edit path at Step 2" in update
+    assert "the curator gate already selected the edit path" in curator_handoffs
+    assert "show the current csv preview and cases" in curator_handoffs
+    assert "skip step 2's generic continuation question" in curator_handoffs
+    assert "proceed directly to selecting and editing cases" in curator_handoffs
+    assert (
+        step_2.index("regenerate its CSV")
+        < step_2.index("curator gate already selected")
+        < step_2.index("mandatory structured question")
+    )
+    assert "do not ask this question again" in step_2
+    assert "For every non-curator entry" in step_2
+    assert "How would you like to continue with **{set name}**?" in step_2
+    assert "**Edit the test set myself**" in step_2
+    assert "**Send it to a judge or SME for feedback**" in step_2
+    assert "**Keep it unchanged**" in step_2
     assert (
         "After Step 6 completes, return control to the curator skill's mandatory maker review gate"
         in update
@@ -190,7 +234,8 @@ def test_run_skill_is_referenced_only_after_successful_push():
 
 def test_update_step_7_is_direct_curator_handoff_not_only_curator_entry():
     update = _read("src/skills/evaluations/update/SKILL.md")
-    normalized = " ".join(update.split()).lower()
+    step_7 = _section(update, "## Step 7: Ask whether to push", "## Step 8:")
+    normalized = " ".join(step_7.split()).lower()
 
     assert "authoritative post-validation lifecycle" in normalized
     assert "src/skills/evaluations/curate/SKILL.md" in update
@@ -204,7 +249,18 @@ def test_update_step_7_is_direct_curator_handoff_not_only_curator_entry():
     assert "a direct step 7 handoff is allowed only from" in normalized
     assert "keep them unchanged" in normalized
     assert "judge or sme path has completed flow r1 as applicable" in normalized
-    assert "only this curator handoff may bypass steps 1 through 6" not in normalized
+    assert "normal update entry" in normalized
+    assert "curator direct-handoff entry" in normalized
+    assert (
+        normalized.index("normal update entry")
+        < normalized.index("curator direct-handoff entry")
+        < normalized.index("the generic normal-update prerequisite")
+    )
+    assert "exact generated workspace set folders are preselected" in normalized
+    assert "maker gate choice is **keep them unchanged**" in normalized
+    assert "flow r1 has completed" in normalized
+    assert "exempt from the generic normal-update prerequisite" in normalized
+    assert "ready locally" in normalized
     assert "enter step 7 directly" in normalized
     assert "do not repeat steps 1 through 6" in normalized
     assert "another skill" not in normalized

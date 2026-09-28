@@ -96,9 +96,12 @@ Route the response through the update skill without implementing any mutation,
 synchronization, review metadata, or push behavior in this wrapper:
 
 - **Edit the test sets myself** — hand the exact generated workspace set
-  folders to the update skill as explicitly preselected sets. Enter its
-  edit, YAML/CSV synchronization, and validation path in Steps 2 through 6,
-  without rediscovery or reselection. When that path completes, return to this
+  folders to the update skill as explicitly preselected sets. This curator
+  gate has already selected the edit path, so update Step 2 must show the
+  relevant preview and cases, skip its generic Edit/SME/Keep continuation
+  question, and proceed directly to case selection and editing. Complete Steps
+  2 through 6, including YAML/CSV synchronization and validation, without
+  rediscovery or set reselection. When that path completes, return to this
   maker review gate and wait for another choice.
 - **Send them to a judge or SME for feedback** — hand the exact generated
   workspace set folders to update **Flow R1** as explicitly preselected sets.

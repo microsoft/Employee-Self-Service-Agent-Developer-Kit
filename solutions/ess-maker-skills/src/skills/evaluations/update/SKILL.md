@@ -83,8 +83,11 @@ rediscovering or reselecting those sets:
 
 - **Edit the test sets myself** — enter the edit path at Step 2, then complete
   Steps 2 through 6, including YAML/CSV synchronization and quality validation.
-  After Step 6 completes, return control to the curator skill's mandatory maker
-  review gate. Do not fall through to Step 6a or Step 7.
+  The curator gate already selected the edit path: show the current CSV preview
+  and cases, skip Step 2's generic continuation question, and proceed directly
+  to selecting and editing cases. After Step 6 completes, return control to the
+  curator skill's mandatory maker review gate. Do not fall through to Step 6a
+  or Step 7.
 - **Send them to a judge or SME for feedback** — enter Flow R1 with the exact
   preselected sets as described below. Do not list all sets or ask the maker to
   select them again.
@@ -303,8 +306,13 @@ Then continue with the existing detailed edit experience and show its cases:
 Read both `input` and `expectedOutput` from every EvaluationData file before
 presenting the cases. The expected response is required context, not optional.
 
-Unless the user already supplied a specific edit, follow the case display with
-this mandatory structured question:
+If this Step 2 entry came from the curator gate's **Edit the test sets myself**
+handoff, the curator gate already selected edit. After showing the preview and
+cases, do not ask this question again; proceed directly to selecting and
+editing cases.
+
+For every non-curator entry, unless the user already supplied a specific edit,
+follow the case display with this mandatory structured question:
 
 > How would you like to continue with **{set name}**?
 
@@ -510,24 +518,34 @@ workspace sets. It is also one of several authorized curator entries into this
 skill; the curator may instead enter the Step 2 edit path or Flow R1 as defined
 above.
 
+Step 7 has two prerequisite alternatives:
+
+- **Normal update entry** — the update, CSV synchronization, validation, file
+  review, and any required Step 6a review-completion gate are complete.
+- **Curator direct-handoff entry** — the exact generated workspace set folders
+  are preselected, curator structural validation and Maker Kit quality
+  validation both complete successfully, and either the maker gate choice is
+  **Keep them unchanged** or Flow R1 has completed for the judge or SME path.
+  This authorized curator entry is exempt from the generic normal-update
+  prerequisite because unchanged sets have no edit or file-review steps to
+  complete and Flow R1 owns its required review-state work. Enter Step 7
+  directly. Do not repeat Steps 1 through 6 or rediscover or reselect those
+  sets.
+
 A direct Step 7 handoff is allowed only from
-`src/skills/evaluations/curate/SKILL.md`, with the exact generated workspace set
-folders explicitly preselected after curator structural validation and Maker
-Kit quality validation both complete successfully. Enter Step 7 directly only
-after the maker chooses **Keep them unchanged**, or after the curator's judge
-or SME path has completed Flow R1 as applicable. Do not repeat Steps 1 through
-6 or rediscover/reselect those sets.
+`src/skills/evaluations/curate/SKILL.md` under the curator alternative above:
+the maker chose **Keep them unchanged**, or the curator's judge or SME path has
+completed Flow R1 as applicable.
 
 From this point onward, this skill owns decline/keep-local, optional review
 tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
 status. The curator skill must not duplicate these questions, commands, or
 behaviors.
 
-Only after the update, CSV synchronization, validation, file review, and any
-required Step 6a review-completion gate are complete, ask for every selected
+After either prerequisite alternative is satisfied, ask for every selected
 set:
 
-> The **{set name}** evaluation set is updated locally. Would you like to
+> The **{set name}** evaluation set is ready locally. Would you like to
 > **push it to Copilot Studio now**?
 
 Ask this even for workspace-level sets and even when no agent is currently
