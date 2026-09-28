@@ -14,6 +14,8 @@ import stat
 import sys
 from typing import Any
 
+import evaluation_csv
+
 
 class CuratorHandoffError(RuntimeError):
     """An expected malformed or unsafe curator handoff error."""
@@ -130,7 +132,7 @@ def _validate_set_folder(
     solution_root: Path,
     output_root: Path,
     value: object,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, list[str], list[dict[str, str]]]:
     supplied = _require_string(
         value,
         error_code="invalid_set_folder",
@@ -182,13 +184,27 @@ def _validate_set_folder(
             "Set folder must contain exactly one EvaluationSet parent and "
             "one or more EvaluationData .mcs.yml artifacts.",
         )
-    return folder, case_count
+    try:
+        headers, rows = evaluation_csv.evaluation_csv_table(folder)
+    except evaluation_csv.EvaluationCSVError as exc:
+        raise CuratorHandoffError(
+            "invalid_set_folder",
+            "Set folder artifacts could not be converted to an evaluation CSV.",
+        ) from exc
+    if len(rows) != case_count:
+        raise CuratorHandoffError(
+            "invalid_set_folder",
+            "Each EvaluationData artifact must contain exactly one export row.",
+        )
+    return folder, case_count, headers, rows
 
 
 def _validate_set_csv(
     solution_root: Path,
     output_root: Path,
     value: object,
+    expected_headers: list[str],
+    expected_rows: list[dict[str, str]],
 ) -> tuple[Path, int]:
     supplied = _require_string(
         value,
@@ -219,25 +235,39 @@ def _validate_set_csv(
         )
     try:
         with csv_path.open(encoding="utf-8", newline="") as csv_file:
-            reader = csv.reader(csv_file)
+            reader = csv.DictReader(csv_file)
+            fieldnames = reader.fieldnames
             rows = list(reader)
     except (OSError, UnicodeError, csv.Error) as exc:
         raise CuratorHandoffError(
             "invalid_set_csv",
             "Set CSV could not be read as CSV.",
         ) from exc
-    expected_header = [
-        "Prompt",
-        "Expected response",
-        "Test Method Type",
-        "Passing Score",
-    ]
-    if not rows or rows[0] != expected_header or len(rows) < 2:
+    if (
+        fieldnames is None
+        or len(fieldnames) != len(expected_headers)
+        or set(fieldnames) != set(expected_headers)
+        or not rows
+        or any(
+            None in row
+            or any(row.get(header) is None for header in expected_headers)
+            for row in rows
+        )
+    ):
         raise CuratorHandoffError(
             "invalid_set_csv",
             "Set CSV must use the curator export header and contain data rows.",
         )
-    return csv_path, len(rows) - 1
+    normalized_rows = [
+        {header: row[header] for header in expected_headers}
+        for row in rows
+    ]
+    if normalized_rows != expected_rows:
+        raise CuratorHandoffError(
+            "mismatched_set_csv",
+            "Set CSV rows do not match the supplied EvaluationData artifacts.",
+        )
+    return csv_path, len(rows)
 
 
 def validate_handoff(
@@ -349,7 +379,12 @@ def validate_handoff(
             error_code="invalid_handoff",
             field_name=f"Set entry {index} name",
         )
-        folder, yaml_case_count = _validate_set_folder(
+        (
+            folder,
+            yaml_case_count,
+            expected_headers,
+            expected_rows,
+        ) = _validate_set_folder(
             solution_root,
             logical_output_root,
             entry.get("folder"),
@@ -358,6 +393,8 @@ def validate_handoff(
             solution_root,
             logical_output_root,
             entry.get("csv"),
+            expected_headers,
+            expected_rows,
         )
         case_count = entry.get("caseCount")
         quality_score = entry.get("qualityScore")
