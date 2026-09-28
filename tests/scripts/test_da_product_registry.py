@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 
 import da_product_registry
+import pytest
 
 
 def test_observe_product_mapping_upserts_newest_workspace_value(tmp_path) -> None:
@@ -45,6 +47,85 @@ def test_observe_product_mapping_upserts_newest_workspace_value(tmp_path) -> Non
     assert result["path"] == (
         ".local/setup/da-product-observations.json"
     )
+
+
+def test_observe_product_mapping_preserves_distinct_same_name_products(
+    tmp_path,
+) -> None:
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="product-one",
+        package_id="pkg-one",
+        catalog_name="Shared catalog name",
+        agent_schema_name="schema-one",
+        source="first observation",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="product-two",
+        package_id="pkg-two",
+        catalog_name="Shared catalog name",
+        agent_schema_name="schema-two",
+        source="second observation",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    observations = da_product_registry.load_product_observations(tmp_path)
+    assert [item["productKey"] for item in observations] == [
+        "product-one",
+        "product-two",
+    ]
+    product_one = da_product_registry.resolve_product_identity(
+        package_id="pkg-one",
+        catalog_name="Shared catalog name",
+        kit_root=tmp_path,
+    )
+    product_two = da_product_registry.resolve_product_identity(
+        package_id="pkg-two",
+        catalog_name="Shared catalog name",
+        kit_root=tmp_path,
+    )
+    ambiguous = da_product_registry.resolve_product_identity(
+        catalog_name="Shared catalog name",
+        kit_root=tmp_path,
+    )
+
+    assert product_one is not None
+    assert product_one["productKey"] == "product-one"
+    assert product_two is not None
+    assert product_two["productKey"] == "product-two"
+    assert ambiguous is None
+
+
+def test_write_observations_closes_descriptor_when_fdopen_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    closed_handles = []
+    original_close = os.close
+
+    def fail_fdopen(*_args, **_kwargs):
+        raise OSError("fdopen failed")
+
+    def record_close(handle):
+        closed_handles.append(handle)
+        original_close(handle)
+
+    monkeypatch.setattr(os, "fdopen", fail_fdopen)
+    monkeypatch.setattr(os, "close", record_close)
+
+    with pytest.raises(OSError, match="fdopen failed"):
+        da_product_registry._write_observations(
+            tmp_path / "observations.json",
+            [],
+        )
+
+    assert len(closed_handles) == 1
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_workspace_observation_precedes_checked_in_seed(tmp_path) -> None:

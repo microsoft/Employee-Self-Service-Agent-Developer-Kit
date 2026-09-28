@@ -9,8 +9,5 @@
   },
   "files.associations": {
     "*.mcs.yml": "yaml"
-  },
-  "chat.tools.terminal.autoApprove": {
-    "py": true
   }
 }

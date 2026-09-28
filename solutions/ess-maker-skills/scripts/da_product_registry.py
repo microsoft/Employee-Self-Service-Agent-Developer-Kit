@@ -231,7 +231,17 @@ def _write_observations(
     )
     temporary_path = Path(temporary)
     try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="") as stream:
+        try:
+            stream = os.fdopen(
+                handle,
+                "w",
+                encoding="utf-8",
+                newline="",
+            )
+        except BaseException:
+            os.close(handle)
+            raise
+        with stream:
             json.dump(
                 {
                     "schemaVersion": 1,
@@ -281,8 +291,8 @@ def observe_product_mapping(
         }
     )
     observations = load_product_observations(kit_root)
+    product = observation["productKey"].casefold()
     package = observation["packageId"].casefold()
-    catalog = observation["catalogName"].casefold()
     environment = observation["environmentId"].casefold()
     observed_ring = observation["ring"]
     observations = [
@@ -290,8 +300,8 @@ def observe_product_mapping(
         for item in observations
         if not (
             (
-                item["packageId"].casefold() == package
-                or item["catalogName"].casefold() == catalog
+                item["productKey"].casefold() == product
+                or item["packageId"].casefold() == package
             )
             and item["environmentId"].casefold() == environment
             and item["ring"] == observed_ring
@@ -320,20 +330,31 @@ def resolve_product_identity(
     environment = str(environment_id or "").strip().casefold()
     normalized_ring = str(ring or "").strip().casefold()
     if kit_root is not None:
-        matches: list[tuple[dict[str, Any], list[str]]] = []
+        exact_matches: list[tuple[dict[str, Any], list[str]]] = []
+        catalog_matches: list[tuple[dict[str, Any], list[str]]] = []
         for observation in reversed(load_product_observations(kit_root)):
             matched_by = []
             if package and observation["packageId"].casefold() == package:
                 matched_by.append("workspace-package-id")
-            if catalog and observation["catalogName"].casefold() == catalog:
-                matched_by.append("workspace-catalog-name")
             if (
                 schema
                 and observation["agentSchemaName"].casefold() == schema
             ):
                 matched_by.append("workspace-agent-schema-name")
             if matched_by:
-                matches.append((observation, matched_by))
+                exact_matches.append((observation, matched_by))
+            elif (
+                catalog
+                and observation["catalogName"].casefold() == catalog
+            ):
+                catalog_matches.append(
+                    (observation, ["workspace-catalog-name"])
+                )
+        matches = exact_matches
+        if not matches and len(
+            {item[0]["productKey"] for item in catalog_matches}
+        ) == 1:
+            matches = catalog_matches
         selected = next(
             (
                 match
