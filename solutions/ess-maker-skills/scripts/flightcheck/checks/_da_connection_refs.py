@@ -99,13 +99,26 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
             raise ValueError(
                 "Component fetch returned a malformed connectionReference entry."
             )
+        # A dict that parses but lacks its identity fields is just as
+        # misleading as a non-dict (PR #304 review F-1): a row with a
+        # null/blank connectionReferenceLogicalName or connectorId gets
+        # silently skipped or misclassified by downstream consumers,
+        # recreating the confident "not found" verdict this reader exists to
+        # prevent. The validated payload always supplies both as non-empty
+        # strings; only connectionId may legitimately be null (an unbound
+        # reference), so require the two identity fields and raise on absence.
+        logical_name = _require_identity_field(
+            item.get("connectionReferenceLogicalName"),
+            "connectionReferenceLogicalName",
+        )
+        connector_id = _require_identity_field(
+            item.get("connectorId"), "connectorId"
+        )
         refs.append(
             {
                 "botid": bot_id,
-                "connectionreferencelogicalname": item.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": item.get("connectorId"),
+                "connectionreferencelogicalname": logical_name,
+                "connectorid": connector_id,
                 "connectionid": item.get("connectionId"),
                 "sharedconnectionparameters": item.get(
                     "sharedConnectionParameters"
@@ -113,6 +126,21 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
             }
         )
     return refs
+
+
+def _require_identity_field(value: Any, field_name: str) -> str:
+    """Return ``value`` as a non-empty string, or raise ``ValueError``.
+
+    A connection reference's identity fields (``connectionReferenceLogicalName``,
+    ``connectorId``) must be present and non-blank; a null/blank/non-string
+    value is a malformed payload, not a legitimate absence.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"Component fetch returned a connectionReference with a missing or "
+            f"malformed {field_name}."
+        )
+    return value
 
 
 def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:
