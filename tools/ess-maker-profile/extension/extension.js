@@ -1,4 +1,4 @@
-// ESS Maker POC extension — chat-only layout.
+// ESS Maker POC extension — guided rail layout.
 //
 // Goal: the customer sees Copilot Chat in the center, a column of big
 // buttons on the right, and nothing else. No file explorer, no editor
@@ -25,6 +25,12 @@ const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
 // rename; renaming the storage key would silently reset everyone to the default.
 const LITE_MODE_KEY = 'essMaker.liteMode.v1';
 const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
+// One-time migration flag: users upgrading from the pre-0.4.29 chat-only
+// layout had global chrome (menus, status bar, tabs, title bar, …) hidden.
+// The guided layout only manages the activity bar + startup editor, so we run
+// a versioned migration once to restore those legacy overrides before applying
+// the minimal guided layout.
+const GUIDED_MIGRATION_KEY = 'essMaker.guidedLayoutMigration.v1';
 
 // --- Auto-update nudge (ADO 7569528 / 7569530) ------------------------------
 // The kit is delivered as a git clone; installers pull `main`, but users who
@@ -854,6 +860,56 @@ async function restoreStandardLayout() {
     }
 }
 
+// One-time migration for users upgrading from the pre-0.4.29 chat-only layout.
+// That layout globally hid menus, the status bar, tabs, the title bar, and more
+// — chrome the new guided layout does not manage. Without this, upgraders keep
+// those surfaces hidden even though they are now on the guided experience. We
+// restore every chat-only override to the user's pre-chat-only value (from the
+// saved backup, or clear the override when there was none), then drop the stale
+// backup so the guided layout re-snapshots the now-restored originals. Runs at
+// most once, guarded by GUIDED_MIGRATION_KEY, and only touches settings when a
+// chat-only layout is actually still in effect.
+async function migrateLegacyChatOnlyLayout(context) {
+    if (!context || context.globalState.get(GUIDED_MIGRATION_KEY)) return;
+    try {
+        const cfg = vscode.workspace.getConfiguration();
+        // Signature settings that the chat-only layout forced but the guided
+        // layout never touches. If any is still globally set to its chat-only
+        // value, a legacy chat-only layout is active for this user.
+        const signatureKeys = [
+            'window.menuBarVisibility',
+            'workbench.statusBar.visible',
+            'workbench.editor.showTabs',
+            'window.customTitleBarVisibility',
+        ];
+        const legacyActive = signatureKeys.some((k) => {
+            const ins = cfg.inspect(k);
+            return ins && ins.globalValue !== undefined && ins.globalValue === CHAT_ONLY_LAYOUT[k];
+        });
+        if (legacyActive) {
+            const backup = context.globalState.get(SETTINGS_BACKUP_KEY, {}) || {};
+            for (const key of Object.keys(CHAT_ONLY_LAYOUT)) {
+                try {
+                    if (key in backup) {
+                        await cfg.update(key, backup[key], vscode.ConfigurationTarget.Global);
+                    } else {
+                        await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
+                    }
+                } catch (err) {
+                    _log(`migrateLegacyChatOnlyLayout: could not restore ${key}: ${err && err.message}`);
+                }
+            }
+            // The backup belonged to the chat-only layout; drop it so the guided
+            // layout snapshots the restored originals rather than chat-only values.
+            await context.globalState.update(SETTINGS_BACKUP_KEY, undefined);
+            _log('migrateLegacyChatOnlyLayout: restored pre-chat-only chrome settings');
+        }
+    } catch (err) {
+        _log(`migrateLegacyChatOnlyLayout: ${err && err.message}`);
+    }
+    await context.globalState.update(GUIDED_MIGRATION_KEY, true);
+}
+
 // Apply the guided extension layout: activity bar visible, the Agent Developer
 // Kit rail focused on the left, the getting-started walkthrough in the center,
 // and Copilot Chat on the right. On first run we open the walkthrough + chat;
@@ -1543,8 +1599,6 @@ function activate(context) {
     _helpProvider = new HelpTreeProvider();
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('essMaker.applyMakerLayout', () => applyChatOnlyLayout()),
-        vscode.commands.registerCommand('essMaker.startChatOnly', () => applyChatOnlyLayout()),
         vscode.commands.registerCommand('essMaker.restoreStandardLayout', () => restoreStandardLayout()),
         vscode.commands.registerCommand('essMaker.focusActions', () =>
             tryRun('workbench.view.extension.essMakerActions').then(() => tryRun('essMaker.actionsView.focus'))
@@ -1587,66 +1641,52 @@ function activate(context) {
     // (e.g. .local/setup/config.json for setup, workspace/flightcheck/results.json).
     startPrereqWatcher(context);
 
-    // First-run vs subsequent runs:
-    // - First run: resolve installer mode from the essMaker.mode VS Code
-    //   setting the terminal installer wrote. Canonical values are 'maker'
-    //   and 'developer'; legacy 'lite'/'standard' are normalized via
-    //   normalizeInstallerMode(); blank/"prompt" defaults to maker.
-    //   Maker mode: applies our guided layout (rail + walkthrough + chat).
-    //   Developer mode: the installer already ran `code chat /setup` before
-    //   VS Code launched, so the extension only adds the README preview.
-    // - Subsequent maker activations: silently re-apply the guided layout.
-    // - Subsequent developer activations: re-show the README preview AND
-    //   re-send /setup (the installer does not re-run on later reopens).
+    // Dispatch on the CURRENT essMaker.mode every activation (see below):
+    // - Maker mode: apply the guided layout (rail + walkthrough + chat) on
+    //   first run, and silently ensure the rail is reachable on later runs.
+    // - Developer mode: no guided layout — just (re)show the rendered README
+    //   preview. /setup is user-driven in both modes; neither the installer
+    //   nor the extension ever runs it automatically.
+    // Mode resolution happens on EVERY activation, not just first run: the
+    // installer writes the current choice to the global `essMaker.mode` setting,
+    // so re-running it in another mode (or opening with a different resolved
+    // mode) must take effect immediately. Global state is used only for
+    // first-run tracking (APPLIED_KEY) and legacy back-compat (LITE_MODE_KEY),
+    // never as the source of truth for which experience to show.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
-    const userWantsMakerLayout = context.globalState.get(LITE_MODE_KEY, true); // default to maker layout
     const installerMode = vscode.workspace.getConfiguration().get('essMaker.mode', '');
+    const resolvedMode = normalizeInstallerMode(installerMode) || 'maker';
+    const isDeveloperMode = resolvedMode === 'developer';
+    // Keep the legacy flag in sync so any historical reader still agrees with
+    // the current setting; it is no longer consulted for dispatch.
+    context.globalState.update(LITE_MODE_KEY, !isDeveloperMode);
 
-    _log(`activate: alreadyApplied=${alreadyApplied}, userWantsMakerLayout=${userWantsMakerLayout}, installerMode="${installerMode}", workspaceFolders=${vscode.workspace.workspaceFolders?.length || 0}`);
+    _log(`activate: alreadyApplied=${alreadyApplied}, installerMode="${installerMode}", resolvedMode="${resolvedMode}", isDeveloperMode=${isDeveloperMode}, workspaceFolders=${vscode.workspace.workspaceFolders?.length || 0}`);
 
     if (vscode.workspace.workspaceFolders?.length) {
-        if (!alreadyApplied) {
-            // First install. Resolve installer mode to canonical maker/developer
-            // (legacy lite/standard normalized; blank/"prompt" → maker).
-            const resolvedMode = normalizeInstallerMode(installerMode);
-            const isDeveloperMode = resolvedMode === 'developer';
-            _log(`activate: first install, resolvedMode="${resolvedMode}", isDeveloperMode=${isDeveloperMode}`);
-            context.globalState.update(LITE_MODE_KEY, !isDeveloperMode);
-
-            // Check if the user already has a config file (returning user
-            // who re-ran the installer). Skip /setup if already configured.
-            checkPrerequisites().then(met => {
-                const alreadyConfigured = met.has('setup');
-                _log(`activate: alreadyConfigured=${alreadyConfigured}`);
-
-                if (isDeveloperMode) {
-                    // Developer mode: no guided layout, just the rendered
-                    // README preview. /setup is user-driven — neither the
-                    // installer nor the extension runs it automatically.
-                    context.globalState.update(APPLIED_KEY, true);
-                    _log('activate: developer mode — README preview; /setup is user-driven');
-                    setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
-                } else {
-                    // Maker (guided) mode: activity bar + rail visible,
-                    // walkthrough in the center, Copilot Chat on the right.
-                    // Setup is user-driven from the walkthrough / rail, so we
-                    // do not auto-inject /setup here.
-                    applyGuidedLayout({ silent: false, firstRun: true })
-                        .then(() => context.globalState.update(APPLIED_KEY, true))
-                        .catch(() => {});
-                }
-            }).catch(err => _log(`activate: checkPrerequisites error: ${err && err.message}`));
-        } else if (userWantsMakerLayout) {
-            // Subsequent maker-mode launch: settings persist, so just make
-            // sure the rail is reachable without re-opening walkthrough/chat.
-            setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
-        } else {
-            // Subsequent developer-mode launch: re-show the rendered README
-            // preview. /setup is user-driven (run it manually in Copilot Chat
-            // or via the guided rail), so the extension never auto-injects it.
-            setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
-        }
-        // If userWantsMakerLayout is false (developer mode), skip re-applying.
+        // Restore any legacy chat-only chrome before applying/settling a layout,
+        // then dispatch on the current mode. Layout work is chained after the
+        // migration so the guided layout snapshots clean, restored settings.
+        migrateLegacyChatOnlyLayout(context).then(() => {
+            if (isDeveloperMode) {
+                // Developer mode: no guided layout, just the rendered README
+                // preview on first launch and every reopen. /setup is
+                // user-driven — neither the installer nor the extension runs it.
+                if (!alreadyApplied) context.globalState.update(APPLIED_KEY, true);
+                setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
+            } else if (!alreadyApplied) {
+                // First maker launch: activity bar + rail visible, walkthrough
+                // in the center, Copilot Chat on the right. Setup is user-driven
+                // from the walkthrough / rail, so we do not auto-inject /setup.
+                applyGuidedLayout({ silent: false, firstRun: true })
+                    .then(() => context.globalState.update(APPLIED_KEY, true))
+                    .catch(() => {});
+            } else {
+                // Subsequent maker launch: settings persist, so just make sure
+                // the rail is reachable without re-opening walkthrough/chat.
+                setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
+            }
+        }).catch((err) => _log(`activate: migration/dispatch error: ${err && err.message}`));
 
         // Auto-update nudge (ADO 7569528 / 7569530): check whether the local
         // clone is behind origin/main and, if so, offer a one-click pull.

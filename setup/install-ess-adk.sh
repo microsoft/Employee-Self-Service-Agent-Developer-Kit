@@ -5,8 +5,8 @@
 # Installs the full ESS Maker Kit toolchain on macOS:
 #   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 runtime,
 #   NuGet, Copilot extensions, pip and Object Model dependencies, clones
-#   the repo, launches VS Code, and auto-requests /setup in Copilot Chat
-#   (requires VS Code 1.102+).
+#   the repo, and launches VS Code. /setup is user-driven — run it yourself
+#   in Copilot Chat when ready (requires VS Code 1.102+).
 #
 # Usage (full maker kit):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
@@ -66,9 +66,9 @@ if [[ "$INSTALL_MODE" == "prompt" ]]; then
         echo ""
         echo "==> Choose your ESS Maker experience"
         echo "  [1] Maker (recommended)"
-        echo "      Chat-first layout; hides file tree, tabs, and status bar;"
-        echo "      big-button Quick Actions rail. Best if you mostly work in"
-        echo "      chat and want a focused HR/IT admin surface."
+        echo "      Guided rail layout: a focused activity-bar rail with a"
+        echo "      Getting started walkthrough and a Customization task list."
+        echo "      Best if you want a focused HR/IT admin surface."
         echo ""
         echo "  [2] Developer"
         echo "      Default VS Code layout with GitHub Copilot Chat in the"

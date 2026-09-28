@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.33 (POC)
+
+- **Honor the current installer mode on every activation.** The extension now
+  resolves `essMaker.mode` fresh on each activation and dispatches on it, so
+  re-running the installer in another mode (or opening a workspace with a
+  different selected mode) takes effect immediately. Global state is used only
+  for first-run tracking and legacy back-compat, never as the source of truth.
+- **Migrate legacy chat-only installs to the guided layout.** A one-time,
+  versioned migration silently restores the pre-chat-only chrome (menus, status
+  bar, tabs, title bar, etc.) that older Maker installs hid, then lets the
+  minimal guided layout re-snapshot the restored originals. Upgraders no longer
+  retain globally hidden chrome that contradicts the guided-layout contract.
+- **Removed obsolete chat-only commands.** `essMaker.applyMakerLayout` and
+  `essMaker.startChatOnly` are gone; the guided layout is applied via
+  `essMaker.openGuidedLayout`, and `essMaker.restoreStandardLayout` still
+  restores the default VS Code layout.
+- **Docs match the user-driven setup flow.** Installer scripts, `setup/README.md`,
+  the extension description, and this changelog no longer claim `/setup` is
+  requested automatically or describe the old chat-only toggle layout.
+
 ## 0.4.32 (POC)
 
 - **Rail + walkthrough UX overhaul.** The **Quick start** panel is now a simple
@@ -36,11 +56,10 @@
   normalized via `normalizeInstallerMode`) and dispatches Maker → guided
   layout, Developer → default VS Code + README preview. New commands:
   `essMaker.openGuidedLayout`, `essMaker.openIntroduction`,
-  `essMaker.showItemInfo`, `essMaker.openDocs`, `essMaker.runUpdate`.
-- **Developer mode README preview + /setup on reopen.** Developer mode opens
-  the rendered README preview on first launch (the installer runs `/setup`
-  via `code chat`), and on every later reopen re-shows the preview and
-  re-sends `/setup` into Copilot Chat, since the installer only runs once.
+  `essMaker.openDocs`, `essMaker.runUpdate`.
+- **Developer mode README preview.** Developer mode opens the rendered README
+  preview on first launch and re-shows it on every later reopen. `/setup` is
+  user-driven — neither the installer nor the extension runs or re-sends it.
 - **"New to VS Code?" onboarding** added to the root README with screenshots
   pointing to the rocket icon and the guided view.
 

@@ -505,7 +505,7 @@ Test 'bootstrap-dev-mac.sh exists and pins INSTALL_MODE=developer' {
 
 Test 'bootstrap-lite-mac.sh pins INSTALL_MODE=maker (back-compat shim)' {
     $liteMacSrc = Get-Content (Join-Path $PSScriptRoot 'bootstrap-lite-mac.sh') -Raw
-    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the chat-first experience' }
+    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the guided rail experience' }
 }
 
 foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1', 'bootstrap-dev.ps1')) {

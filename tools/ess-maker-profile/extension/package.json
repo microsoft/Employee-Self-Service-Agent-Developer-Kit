@@ -1,8 +1,8 @@
 {
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
-  "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.32",
+  "description": "Guided, plain-English experience for customizing your Employee Self-Service agent. POC.",
+  "version": "0.4.33",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -43,11 +43,6 @@
         "category": "ESS Maker"
       },
       {
-        "command": "essMaker.applyMakerLayout",
-        "title": "ESS Maker: Apply Maker Layout",
-        "category": "ESS Maker"
-      },
-      {
         "command": "essMaker.restoreStandardLayout",
         "title": "ESS Maker: Restore Developer Layout",
         "category": "ESS Maker"
@@ -60,11 +55,6 @@
       {
         "command": "essMaker.focusActions",
         "title": "ESS Maker: Show Action Buttons",
-        "category": "ESS Maker"
-      },
-      {
-        "command": "essMaker.startChatOnly",
-        "title": "ESS Maker: Start Chat-Only Layout",
         "category": "ESS Maker"
       },
       {
@@ -151,7 +141,7 @@
           "type": "string",
           "enum": ["maker", "developer", "lite", "standard", ""],
           "default": "",
-          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the chat-first guided layout; 'developer' (was 'standard') uses the default VS Code layout with a rendered README preview. In both modes /setup is user-driven — the extension never auto-runs it. Empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and normalized to 'maker'/'developer' so existing users keep their choice after the rename."
+          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the guided rail layout; 'developer' (was 'standard') uses the default VS Code layout with a rendered README preview. In both modes /setup is user-driven — the extension never auto-runs it. Empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and normalized to 'maker'/'developer' so existing users keep their choice after the rename."
         },
         "essMaker.autoUpdateCheck": {
           "type": "boolean",

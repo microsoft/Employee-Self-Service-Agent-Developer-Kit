@@ -16,8 +16,9 @@
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
          location (default: $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit).
-      6. Opens the ess-maker-skills workspace in VS Code and automatically
-         requests `/setup` in Copilot Chat (requires VS Code 1.102+).
+      6. Opens the ess-maker-skills workspace in VS Code. `/setup` is
+         user-driven — run it yourself in Copilot Chat when ready
+         (requires VS Code 1.102+).
 
     The script is idempotent: re-run to repair a partial install.
 
@@ -54,9 +55,9 @@
     .local/config.json so FlightCheck can authenticate without running /setup.
 
 .PARAMETER InstallMode
-    Selects the VS Code experience: 'maker' (chat-first, hidden developer
-    chrome - was 'lite'), 'developer' (default VS Code layout with /setup
-    injection - was 'standard'), or 'prompt' (default: this installer
+    Selects the VS Code experience: 'maker' (guided rail layout - was
+    'lite'), 'developer' (default VS Code layout with the rendered README
+    - was 'standard'), or 'prompt' (default: this installer
     asks the maker in the terminal, defaulting to 'maker' under a
     non-interactive shell). The ESS Maker Profile extension is installed
     in every mode; only the layout and /setup delivery differ. Explicit
@@ -100,7 +101,7 @@ param(
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
-# switch was the only way to say "no chat-first layout".
+# switch was the only way to say "no guided rail layout".
 if ($SkipMakerProfile) { $InstallMode = 'developer' }
 
 # Back-compat: legacy value aliases from the pre-rename installer
@@ -126,9 +127,9 @@ if ($InstallMode -eq 'prompt') {
         Write-Host ""
         Write-Host "==> Choose your ESS Maker experience" -ForegroundColor Cyan
         Write-Host "  [1] Maker (recommended)"
-        Write-Host "      Chat-first layout; hides file tree, tabs, and status bar;"
-        Write-Host "      big-button Quick Actions rail. Best if you mostly work in"
-        Write-Host "      chat and want a focused HR/IT admin surface."
+        Write-Host "      Guided rail layout: a focused activity-bar rail with a"
+        Write-Host "      Getting started walkthrough and a Customization task list."
+        Write-Host "      Best if you want a focused HR/IT admin surface."
         Write-Host ""
         Write-Host "  [2] Developer"
         Write-Host "      Default VS Code layout with GitHub Copilot Chat in the"
@@ -1026,10 +1027,10 @@ if (-not $FlightCheckOnly) {
 }
 
 # ---------------------------------------------------------------------------
-# 5c. ESS Maker Profile (chat-first VS Code layout)
+# 5c. ESS Maker Profile (guided rail VS Code layout)
 # ---------------------------------------------------------------------------
-# The bundled extension at tools/ess-maker-profile/extension/ hides developer
-# chrome and surfaces a big-button "Quick actions" rail tied to the kit's
+# The bundled extension at tools/ess-maker-profile/extension/ applies a guided
+# rail layout and surfaces a "Customization" task list tied to the kit's
 # slash commands. We install it from the cloned repo (not the marketplace -
 # this is a POC build that isn't published) so it auto-activates the next
 # time `code` launches. When the profile is installed, the extension reads
