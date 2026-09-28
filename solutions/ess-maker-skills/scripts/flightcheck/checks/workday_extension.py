@@ -59,7 +59,6 @@ from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
-from ._da_connection_refs import read_active_agent_connection_references
 
 # scripts/auth.py is on sys.path via cli.py at runtime (tests add it too); this
 # mirrors checks/environment.py's top-level import so query_all is patchable as
