@@ -1063,11 +1063,7 @@ class CustomizationTreeProvider {
         if (element) return [];
         return CUSTOMIZATION_ITEMS.map((meta) => {
             const item = new vscode.TreeItem(meta.label, vscode.TreeItemCollapsibleState.None);
-            item._adkId = meta.id;
-            item._adkInfo = `${meta.label}: ${meta.desc}`;
-            // Trailing info icon on the row; hovering it (or the row) shows the
-            // option description via the rich tooltip below.
-            item.contextValue = 'adkInfo:' + meta.id;
+            // Hovering the option row reveals its description via this tooltip.
             item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
             item.iconPath = new vscode.ThemeIcon(meta.icon);
             item.command = { command: meta.run, title: meta.label };
@@ -1076,13 +1072,15 @@ class CustomizationTreeProvider {
     }
 }
 
-// The "complete setup first" nudge is a free-standing tree message (muted,
-// wrapped text above the items), not a fake option. The trailing newlines add
-// breathing room between the message and the first option. Cleared once setup
-// is done.
-const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.\n\u00A0';
+// The Customization view message. The "complete setup first" nudge clears once
+// setup is done; the "hover to learn more" hint always stays. Trailing blank
+// lines add breathing room between the message and the first option.
+const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
+const CUSTOMIZATION_HOVER_HINT = 'Hover on each option to learn more about it.';
 function customizationMessageFor(context) {
-    return getCompleted(context).has('setup') ? undefined : CUSTOMIZATION_NUDGE;
+    const done = getCompleted(context).has('setup');
+    const lines = done ? [CUSTOMIZATION_HOVER_HINT] : [CUSTOMIZATION_NUDGE, CUSTOMIZATION_HOVER_HINT];
+    return lines.join('\n') + '\n\u00A0\n\u00A0';
 }
 
 class HelpTreeProvider {
@@ -1572,9 +1570,6 @@ function activate(context) {
         ),
         vscode.commands.registerCommand('essMaker.openIntroduction', () =>
             openGettingStarted('overview')
-        ),
-        vscode.commands.registerCommand('essMaker.showItemInfo', (item) =>
-            vscode.window.showInformationMessage(item && item._adkInfo ? item._adkInfo : 'Agent Developer Kit')
         ),
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
