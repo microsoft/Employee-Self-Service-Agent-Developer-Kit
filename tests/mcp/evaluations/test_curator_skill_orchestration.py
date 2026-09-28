@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 
@@ -141,75 +141,94 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
     )
     assert any(call.arguments["path"].endswith(".mcs.yml") for call in writes)
     assert any(call.arguments["path"].endswith(".csv") for call in writes)
-    generated_folders = {
-        "/".join(
-            PurePosixPath(call.arguments["path"].replace("\\", "/")).parts[:3]
-        )
-        for call in writes
-    }
-    assert len(generated_folders) == 1, (
-        "Expected writes for exactly one generated evaluation set; "
-        f"found {sorted(generated_folders)}."
-    )
-    generated_folder = next(iter(generated_folders))
+    generated_folders = backend.generated_set_folders()
+    assert generated_folders, "Expected at least one generated evaluation set."
     last_write_index = max(
         index for index, call in enumerate(calls) if call.name == "write_file"
     )
 
-    structural_index = next(
-        (
-            index
-            for index, call in enumerate(calls)
-            if call.kind == "structural_validation"
-        ),
-        None,
+    validations = [
+        (index, call)
+        for index, call in enumerate(calls)
+        if call.kind in {"structural_validation", "maker_kit_validation"}
+    ]
+    assert validations, "Missing validation calls."
+    assert last_write_index < validations[0][0], (
+        "The curator flow writes all YAML and CSV artifacts before validation; "
+        f"got last_write={last_write_index}, first_validation={validations[0][0]}."
     )
-    assert structural_index is not None, "Missing structural validation call."
-    maker_kit_index = next(
-        (
-            index
-            for index, call in enumerate(calls)
-            if call.kind == "maker_kit_validation"
-        ),
-        None,
-    )
-    assert maker_kit_index is not None, "Missing Maker Kit validation call."
-    assert last_write_index < structural_index < maker_kit_index, (
-        "All writes must finish before structural and Maker Kit validation; "
-        f"got last_write={last_write_index}, structural={structural_index}, "
-        f"maker_kit={maker_kit_index}."
-    )
-    structural_folder = FakeEvaluationWorkspace.evaluation_folder_from_command(
-        calls[structural_index].arguments["command"]
-    )
-    maker_kit_folder = FakeEvaluationWorkspace.evaluation_folder_from_command(
-        calls[maker_kit_index].arguments["command"]
-    )
-    allowed_validation_folders = {
-        generated_folder,
-        str(SYNTHETIC_REPO_ROOT / generated_folder).replace("\\", "/"),
+
+    validations_by_set: dict[str, list[tuple[int, RecordedCall]]] = {
+        folder: [] for folder in generated_folders
     }
-    assert structural_folder in allowed_validation_folders, (
-        "Structural validator must target the generated evaluation set folder; "
-        f"expected={generated_folder}, got={structural_folder}."
-    )
-    assert maker_kit_folder in allowed_validation_folders, (
-        "Maker Kit validator must target the generated evaluation set folder; "
-        f"expected={generated_folder}, got={maker_kit_folder}."
+    for index, call in validations:
+        command_folder = FakeEvaluationWorkspace.evaluation_folder_from_command(
+            call.arguments["command"]
+        )
+        matching_folder = next(
+            (
+                folder
+                for folder in generated_folders
+                if command_folder
+                in {
+                    folder,
+                    str(SYNTHETIC_REPO_ROOT / folder).replace("\\", "/"),
+                }
+            ),
+            None,
+        )
+        assert matching_folder is not None, (
+            f"{call.kind} must target a generated evaluation set; "
+            f"got={command_folder}, generated={sorted(generated_folders)}."
+        )
+        validations_by_set[matching_folder].append((index, call))
+
+    for folder in generated_folders:
+        final_set_write = max(
+            index
+            for index, call in enumerate(calls)
+            if call.name == "write_file"
+            and call.arguments["path"].replace("\\", "/").startswith(f"{folder}/")
+            and call.arguments["path"].replace("\\", "/").endswith(".mcs.yml")
+        )
+        set_validations = validations_by_set[folder]
+        structural_index = next(
+            (
+                index
+                for index, call in set_validations
+                if call.kind == "structural_validation" and index > final_set_write
+            ),
+            None,
+        )
+        assert structural_index is not None, (
+            f"Missing structural validation after final write for {folder}."
+        )
+        maker_kit_index = next(
+            (
+                index
+                for index, call in set_validations
+                if call.kind == "maker_kit_validation"
+                and index > structural_index
+            ),
+            None,
+        )
+        assert maker_kit_index is not None, (
+            f"Missing Maker Kit validation after structural validation for {folder}."
+        )
+
+    first_maker_kit_index = next(
+        index for index, call in validations if call.kind == "maker_kit_validation"
     )
     maker_validator_read_index = _matching_read_index(
         calls,
         MAKER_VALIDATOR_SKILL_PATH,
-        after_index=last_write_index,
-        before_index=maker_kit_index,
+        before_index=first_maker_kit_index,
     )
     assert maker_validator_read_index is not None, "Missing Maker validator skill read."
-    assert last_write_index < maker_validator_read_index < maker_kit_index, (
-        "Maker validator skill must be read after generation and before Maker Kit "
-        "validation; "
-        f"last_write={last_write_index}, "
+    assert maker_validator_read_index < first_maker_kit_index, (
+        "Maker validator skill must be read before initial Maker Kit validation; "
         f"got validator_read={maker_validator_read_index}, "
-        f"maker_kit={maker_kit_index}."
+        f"maker_kit={first_maker_kit_index}."
     )
     assert not any(call.kind == "push" for call in calls)
 
@@ -246,7 +265,7 @@ def test_synthetic_preflight_exposes_valid_host_contract() -> None:
     assert payload["supportsHostLifecycleHandoff"] is True
 
 
-def test_synthetic_workspace_records_only_scoped_writes_and_validations() -> None:
+def test_synthetic_workspace_ignores_csv_exports_when_validating_set() -> None:
     backend = _ready_backend()
 
     rejected = backend.invoke(
@@ -264,6 +283,20 @@ def test_synthetic_workspace_records_only_scoped_writes_and_validations() -> Non
         {
             "path": "workspace/evaluations/leave/leave.mcs.yml",
             "content": "kind: EvaluationSet",
+        },
+    )
+    child = backend.invoke(
+        "write_file",
+        {
+            "path": "workspace/evaluations/leave/carryover.mcs.yml",
+            "content": "kind: EvaluationData",
+        },
+    )
+    exported = backend.invoke(
+        "write_file",
+        {
+            "path": "workspace/evaluations/exports/20260927_Leave.csv",
+            "content": "Prompt,Expected response,Test Method Type,Passing Score",
         },
     )
     structural = backend.invoke(
@@ -289,6 +322,9 @@ def test_synthetic_workspace_records_only_scoped_writes_and_validations() -> Non
     assert rejected.failed
     assert traversal.failed
     assert not written.failed
+    assert not child.failed
+    assert not exported.failed
+    assert backend.generated_set_folders() == {"workspace/evaluations/leave"}
     assert structural.kind == "structural_validation"
     assert quality.kind == "maker_kit_validation"
 
@@ -329,7 +365,7 @@ def test_synthetic_validators_reject_unrelated_generated_set() -> None:
     assert "generated evaluation set" in quality.result["stderr"]
 
 
-def test_synthetic_validators_reject_writes_across_multiple_sets() -> None:
+def test_synthetic_validators_accept_each_generated_set() -> None:
     backend = _ready_backend()
     for set_name in ("leave", "benefits"):
         backend.invoke(
@@ -339,8 +375,51 @@ def test_synthetic_validators_reject_writes_across_multiple_sets() -> None:
                 "content": "kind: EvaluationSet",
             },
         )
+    backend.invoke(
+        "write_file",
+        {
+            "path": "workspace/evaluations/exports/20260927_Leave.csv",
+            "content": "Prompt,Expected response,Test Method Type,Passing Score",
+        },
+    )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
 
-    structural = backend.invoke(
+    for set_name in ("leave", "benefits"):
+        structural = backend.invoke(
+            "run_command",
+            {
+                "command": (
+                    f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                    f'--evaluation-folder "workspace/evaluations/{set_name}"'
+                )
+            },
+        )
+        quality = backend.invoke(
+            "run_command",
+            {
+                "command": (
+                    "python scripts/evaluate_evals.py "
+                    f'--evaluation-folder "workspace/evaluations/{set_name}"'
+                )
+            },
+        )
+
+        assert structural.kind == "structural_validation"
+        assert quality.kind == "maker_kit_validation"
+
+
+def test_maker_validation_requires_structural_gate_for_same_set() -> None:
+    backend = _ready_backend()
+    for set_name in ("leave", "benefits"):
+        backend.invoke(
+            "write_file",
+            {
+                "path": f"workspace/evaluations/{set_name}/eval.mcs.yml",
+                "content": "kind: EvaluationSet",
+            },
+        )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    backend.invoke(
         "run_command",
         {
             "command": (
@@ -350,13 +429,22 @@ def test_synthetic_validators_reject_writes_across_multiple_sets() -> None:
         },
     )
 
-    assert structural.failed
-    assert "exactly one generated evaluation set" in structural.result["stderr"]
+    quality = backend.invoke(
+        "run_command",
+        {
+            "command": (
+                "python scripts/evaluate_evals.py "
+                '--evaluation-folder "workspace/evaluations/benefits"'
+            )
+        },
+    )
+
+    assert quality.failed
+    assert "same evaluation set" in quality.result["stderr"]
 
 
-def test_maker_validation_requires_post_generation_skill_read_and_structural_gate() -> None:
+def test_maker_validation_requires_skill_read_before_initial_validation() -> None:
     backend = _ready_backend()
-    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
     backend.invoke(
         "write_file",
         {
@@ -369,14 +457,59 @@ def test_maker_validation_requires_post_generation_skill_read_and_structural_gat
         '--evaluation-folder "workspace/evaluations/leave"'
     )
 
-    before_post_generation_read = backend.invoke("run_command", {"command": command})
-    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
-    before_structural = backend.invoke("run_command", {"command": command})
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                '--evaluation-folder "workspace/evaluations/leave"'
+            )
+        },
+    )
+    before_skill_read = backend.invoke("run_command", {"command": command})
 
-    assert before_post_generation_read.failed
-    assert "after generation" in before_post_generation_read.result["stderr"]
-    assert before_structural.failed
-    assert "structural validation" in before_structural.result["stderr"]
+    assert before_skill_read.failed
+    assert "must be read before Maker Kit validation" in before_skill_read.result[
+        "stderr"
+    ]
+
+
+def test_maker_validation_does_not_require_skill_reread_after_quality_fix() -> None:
+    backend = _ready_backend()
+    backend.invoke(
+        "write_file",
+        {
+            "path": "workspace/evaluations/leave/leave.mcs.yml",
+            "content": "kind: EvaluationSet",
+        },
+    )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    structural_command = (
+        f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+        '--evaluation-folder "workspace/evaluations/leave"'
+    )
+    backend.invoke("run_command", {"command": structural_command})
+    backend.invoke(
+        "write_file",
+        {
+            "path": "workspace/evaluations/leave/carryover.mcs.yml",
+            "content": "kind: EvaluationData",
+        },
+    )
+    quality_command = (
+        "python scripts/evaluate_evals.py "
+        '--evaluation-folder "workspace/evaluations/leave"'
+    )
+    stale_structural = backend.invoke(
+        "run_command", {"command": quality_command}
+    )
+    backend.invoke("run_command", {"command": structural_command})
+    quality = backend.invoke("run_command", {"command": quality_command})
+
+    assert stale_structural.failed
+    assert "after its final write" in stale_structural.result["stderr"]
+    assert quality.kind == "maker_kit_validation"
+    assert not quality.failed
 
 
 def test_synthetic_workspace_exposes_wrapper_reads_as_read_only() -> None:
@@ -437,12 +570,15 @@ def test_synthetic_workspace_accepts_absolute_contract_paths() -> None:
             "content": "kind: EvaluationSet",
         },
     )
+    evaluation_folder = (
+        SYNTHETIC_REPO_ROOT / "workspace" / "evaluations" / "leave"
+    )
     structural = backend.invoke(
         "run_command",
         {
             "command": (
                 f'python "{validator_path}" '
-                '--evaluation-folder "workspace/evaluations/leave"'
+                f'--evaluation-folder "{evaluation_folder}"'
             )
         },
     )
@@ -462,6 +598,7 @@ def test_path_matches_accepts_relative_key_and_exact_absolute_path() -> None:
     assert FakeEvaluationWorkspace.path_matches(
         str(exact_absolute), CURATOR_SKILL_PATH
     )
+    assert FakeEvaluationWorkspace.path_matches(repo_key, CURATOR_SKILL_PATH)
     assert FakeEvaluationWorkspace.path_matches(str(repo_absolute), repo_key)
 
 

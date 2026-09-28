@@ -66,18 +66,6 @@ SYNTHETIC_SOLUTION_PATH_KEYS = (
     "scripts/evaluate_evals.py",
     "scripts/push.py",
 )
-SYNTHETIC_ABSOLUTE_PATHS = {
-    **{
-        key: SYNTHETIC_SOLUTION_ROOT / key
-        for key in SYNTHETIC_SOLUTION_PATH_KEYS
-    },
-    **{
-        f"solutions/ess-maker-skills/{key}": (
-            SYNTHETIC_REPO_ROOT / "solutions" / "ess-maker-skills" / key
-        )
-        for key in SYNTHETIC_SOLUTION_PATH_KEYS
-    },
-}
 DEFAULT_MODEL = "gpt-5.4"
 MAX_CALLS = 40
 TURN_TIMEOUT = 120
@@ -307,24 +295,25 @@ class FakeEvaluationWorkspace:
             evaluation_folder, error = self._validated_evaluation_folder(cleaned)
             if error is not None:
                 return self._validation_failure(arguments, error)
-            last_write_index = self._last_call_index("write_file")
             validator_read_index = self._last_matching_read_index(
                 MAKER_VALIDATOR_SKILL_PATH
             )
-            if (
-                last_write_index is None
-                or validator_read_index is None
-                or validator_read_index < last_write_index
+            if validator_read_index is None:
+                return self._validation_failure(
+                    arguments,
+                    "Maker validator skill must be read before Maker Kit validation.",
+                )
+            last_write_index = self._last_set_write_index(evaluation_folder)
+            structural_index = self._last_structural_validation_index(
+                evaluation_folder
+            )
+            if structural_index is None or (
+                last_write_index is not None and structural_index < last_write_index
             ):
                 return self._validation_failure(
                     arguments,
-                    "Maker validator skill must be read after generation.",
-                )
-            structural_index = self._last_call_index("run_command", "structural_validation")
-            if structural_index is None or structural_index < last_write_index:
-                return self._validation_failure(
-                    arguments,
-                    "Maker Kit validation requires structural validation after generation.",
+                    "Maker Kit validation requires structural validation for the "
+                    "same evaluation set after its final write.",
                 )
             return self._record(
                 "run_command",
@@ -338,6 +327,7 @@ class FakeEvaluationWorkspace:
                             "flaggedCases": [],
                         }
                     ),
+                    "evaluationFolder": evaluation_folder,
                 },
                 kind="maker_kit_validation",
             )
@@ -367,16 +357,28 @@ class FakeEvaluationWorkspace:
     def path_matches(cls, path: str, expected_key: str) -> bool:
         normalized_path = cls._normalize(path)
         normalized_key = cls._normalize(expected_key)
+        repo_prefix = "solutions/ess-maker-skills/"
         if (
             ".." in PurePosixPath(normalized_path).parts
             or ".." in PurePosixPath(normalized_key).parts
         ):
             return False
-        allowed_path = SYNTHETIC_ABSOLUTE_PATHS.get(normalized_key)
-        if allowed_path is None:
+
+        solution_key = (
+            normalized_key.removeprefix(repo_prefix)
+            if normalized_key.startswith(repo_prefix)
+            else normalized_key
+        )
+        if solution_key not in SYNTHETIC_SOLUTION_PATH_KEYS:
             return False
-        allowed_absolute = cls._normalize(str(allowed_path))
-        return normalized_path in {normalized_key, allowed_absolute}
+        allowed_relative = {
+            solution_key,
+            f"{repo_prefix}{solution_key}",
+        }
+        allowed_absolute = cls._normalize(
+            str(SYNTHETIC_SOLUTION_ROOT / solution_key)
+        )
+        return normalized_path in allowed_relative | {allowed_absolute}
 
     def _matching_file_key(self, path: str) -> str | None:
         return next(
@@ -424,9 +426,18 @@ class FakeEvaluationWorkspace:
 
     def generated_set_folders(self) -> set[str]:
         folders: set[str] = set()
-        for path in self.files:
+        for call in self.calls:
+            if call.name != "write_file" or call.failed:
+                continue
+            path = self._normalize(call.arguments["path"])
+            if not path.endswith(".mcs.yml"):
+                continue
             parts = PurePosixPath(path).parts
-            if len(parts) >= 4 and parts[:2] == ("workspace", "evaluations"):
+            if (
+                len(parts) >= 4
+                and parts[:2] == ("workspace", "evaluations")
+                and parts[2] != "exports"
+            ):
                 folders.add("/".join(parts[:3]))
         return folders
 
@@ -440,30 +451,57 @@ class FakeEvaluationWorkspace:
             return None, "Evaluation folder cannot contain parent traversal."
 
         generated_folders = self.generated_set_folders()
-        if len(generated_folders) != 1:
+        matching_folder = next(
+            (
+                generated_folder
+                for generated_folder in generated_folders
+                if evaluation_folder
+                in {
+                    generated_folder,
+                    self._normalize(
+                        str(SYNTHETIC_REPO_ROOT / generated_folder)
+                    ),
+                }
+            ),
+            None,
+        )
+        if matching_folder is None:
             return (
                 None,
-                "Validation requires exactly one generated evaluation set; "
-                f"found {sorted(generated_folders)}.",
+                "Validator must target one of the generated evaluation set folders "
+                f"{sorted(generated_folders)}; got {evaluation_folder}.",
             )
-        generated_folder = next(iter(generated_folders))
-        allowed_absolute = self._normalize(str(SYNTHETIC_REPO_ROOT / generated_folder))
-        if evaluation_folder not in {generated_folder, allowed_absolute}:
-            return (
-                None,
-                "Validator must target the generated evaluation set folder "
-                f"{generated_folder}; got {evaluation_folder}.",
-            )
-        return generated_folder, None
+        return matching_folder, None
 
-    def _last_call_index(self, name: str, kind: str | None = None) -> int | None:
+    def _last_set_write_index(self, evaluation_folder: str) -> int | None:
+        folder_prefix = f"{evaluation_folder}/"
         return next(
             (
                 index
                 for index in range(len(self.calls) - 1, -1, -1)
-                if self.calls[index].name == name
-                and (kind is None or self.calls[index].kind == kind)
+                if self.calls[index].name == "write_file"
                 and not self.calls[index].failed
+                and self._normalize(
+                    self.calls[index].arguments["path"]
+                ).startswith(folder_prefix)
+                and self._normalize(
+                    self.calls[index].arguments["path"]
+                ).endswith(".mcs.yml")
+            ),
+            None,
+        )
+
+    def _last_structural_validation_index(
+        self, evaluation_folder: str
+    ) -> int | None:
+        return next(
+            (
+                index
+                for index in range(len(self.calls) - 1, -1, -1)
+                if self.calls[index].kind == "structural_validation"
+                and not self.calls[index].failed
+                and self.calls[index].result.get("evaluationFolder")
+                == evaluation_folder
             ),
             None,
         )
