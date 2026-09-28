@@ -243,6 +243,40 @@ Add `--preferred-solution <uniquename>` to scope the run to one unmanaged soluti
 `--snapshot out/customizations.json` to re-run the merge offline against an earlier
 `inspect`, which is also how the end-to-end tests work.
 
+### 3a. No Dataverse access? Migrate from an exported solution package
+
+Some customers cannot run the tool's Dataverse queries — no CLI access, a locked-down
+tenant, or a separation of duties where the person exporting is not the person
+migrating. They can still hand over an **exported customization solution** instead of
+a live connection. In make.powerapps.com, open **Solutions**, select the
+customization solution, choose **Export solution** (unmanaged is fine), and download
+the `.zip`.
+
+Point `inspect` or `migrate` at that `.zip` (or an already-unpacked folder) with
+`--from-package` instead of `--environment-url`. Everything else is identical — same
+detection, same classification, same package, same report:
+
+```powershell
+# Read-only: what did they customize?
+python -m essmig inspect --from-package .\EmployeeSelfServiceCustomization.zip
+
+# Produce the package + report from the export
+python -m essmig migrate --from-package .\EmployeeSelfServiceCustomization.zip --out out
+```
+
+`--from-package` and `--environment-url` are mutually exclusive (the export is the
+source). Omit `--vertical` and the tool detects which of Core/HR/IT the package
+carries, exactly as it does against a live environment. `--preferred-solution` is
+ignored — the export already *is* the set of components the customer chose to ship.
+
+Two limitations of the package path, both reported rather than silent:
+
+- The agent's shipped **Overview description** is not present in the vendored
+  baseline, so an *edited* description is surfaced for review rather than migrated
+  automatically. A renamed agent (display name) still migrates normally.
+- The export is read at the botcomponent level, so **cloud flows and environment
+  variables** the solution also contains are not carried into the package yet.
+
 ### 4. Deliver it into a target Declarative Agent
 
 By default `migrate` stops at the package and the customer imports it themselves
@@ -390,6 +424,7 @@ src/essmig/
   auth.py         MSAL public-client auth (in-memory cache only)
   dataverse.py    read-only Dataverse Web API client
   discovery.py    what did the customer change?
+  package_source.py read an exported CA solution package (--from-package) as a source
   reference.py    vendored base + theirs
   projection.py   CA botcomponent → agent.yml component shape
   merge.py        three-way merge + Overlays policy

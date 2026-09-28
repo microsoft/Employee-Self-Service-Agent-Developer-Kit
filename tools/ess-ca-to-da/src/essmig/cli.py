@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from essmig import customizations as customizations_module
+from essmig import package_source
 from essmig import reference as reference_module
 from essmig.assessment import Assessment, assess
 from essmig.auth import discover_tenant, provider_for, provider_for_target
@@ -145,6 +146,14 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
         help="Dataverse environment root, e.g. https://contoso.crm.dynamics.com",
     )
     parser.add_argument(
+        "--from-package",
+        type=Path,
+        help="read customizations from an exported CA solution package (a .zip from "
+        "make.powerapps.com > Solutions > Export, or an already-unpacked folder) "
+        "instead of connecting to Dataverse. Use this when the customer cannot run "
+        "the Dataverse queries; inspect/migrate behave identically either way.",
+    )
+    parser.add_argument(
         "--vertical",
         choices=TARGETS,
         default=None,
@@ -170,7 +179,8 @@ def _vendor(args: argparse.Namespace) -> int:
 
 
 def _inspect(args: argparse.Namespace) -> int:
-    client = _client(args)
+    _validate_source(args)
+    client = None if args.from_package else _client(args)
     auto = args.vertical is None
     verticals = _resolve_verticals(args, client)
     if auto:
@@ -185,10 +195,10 @@ def _inspect(args: argparse.Namespace) -> int:
 
 
 def _inspect_one(
-    client: DataverseClient, args: argparse.Namespace, vertical: str, out: Path
+    client: DataverseClient | None, args: argparse.Namespace, vertical: str, out: Path
 ) -> int:
-    result = discover(client, vertical, preferred_solution=args.preferred_solution)
     reference = reference_module.load(vertical)
+    result = _discover_one(client, args, vertical, reference)
     out.mkdir(parents=True, exist_ok=True)
     path = out / "customizations.json"
     path.write_text(json.dumps(_snapshot(result), indent=2), encoding="utf-8")
@@ -241,7 +251,8 @@ def _migrate(args: argparse.Namespace) -> int:
         vertical = args.vertical or _snapshot_vertical(args.snapshot)
         return _migrate_one(None, args, vertical, args.out)
 
-    client = _client(args)
+    _validate_source(args)
+    client = None if args.from_package else _client(args)
     auto = args.vertical is None
     verticals = _resolve_verticals(args, client)
     if auto:
@@ -264,13 +275,12 @@ def _migrate(args: argparse.Namespace) -> int:
 def _migrate_one(
     client: DataverseClient | None, args: argparse.Namespace, vertical: str, out: Path
 ) -> int:
+    reference = reference_module.load(vertical)
     if args.snapshot is not None:
         discovery = _load_snapshot(args.snapshot, vertical)
     else:
-        assert client is not None
-        discovery = discover(client, vertical, preferred_solution=args.preferred_solution)
+        discovery = _discover_one(client, args, vertical, reference)
 
-    reference = reference_module.load(vertical)
     interactive = not args.non_interactive and sys.stdin.isatty()
     if interactive:
         print(
@@ -354,16 +364,60 @@ def _print_import(result: ImportResult) -> None:
         print(f"  Track: {result.operation_url}")
 
 
+def _validate_source(args: argparse.Namespace) -> None:
+    """Enforce mutual exclusion of the source flags."""
+    if args.from_package is not None and args.environment_url:
+        raise ValueError(
+            "--from-package and --environment-url are mutually exclusive; the package "
+            "is the source. Drop one."
+        )
+    if getattr(args, "snapshot", None) is not None and args.from_package is not None:
+        raise ValueError("--from-package cannot be combined with --snapshot.")
+    if args.from_package is not None:
+        if not args.from_package.exists():
+            raise ValueError(f"--from-package path does not exist: {args.from_package}")
+        if args.preferred_solution:
+            print(
+                "note: --preferred-solution is ignored with --from-package; the exported "
+                "package already defines the scope.",
+                file=sys.stderr,
+            )
+
+
+def _discover_one(
+    client: DataverseClient | None,
+    args: argparse.Namespace,
+    vertical: str,
+    reference: reference_module.ReferenceSet,
+) -> DiscoveryResult:
+    if args.from_package is not None:
+        return package_source.discover_from_package(args.from_package, vertical, reference)
+    assert client is not None
+    return discover(client, vertical, preferred_solution=args.preferred_solution)
+
+
 def _client(args: argparse.Namespace) -> DataverseClient:
     if not args.environment_url:
         raise ValueError("--environment-url is required unless --snapshot is supplied.")
     return DataverseClient(args.environment_url, provider_for(args.environment_url))
 
 
-def _resolve_verticals(args: argparse.Namespace, client: DataverseClient) -> list[str]:
+def _resolve_verticals(
+    args: argparse.Namespace, client: DataverseClient | None
+) -> list[str]:
     """The agents this run will migrate: the named one, or every one installed."""
     if args.vertical is not None:
         return [args.vertical]
+    if args.from_package is not None:
+        found = package_source.package_targets(args.from_package)
+        if not found:
+            raise RuntimeError(
+                "No ESS Custom Engine Agent components (Core, HR or IT) were found in "
+                f"the exported package {args.from_package}. Check that this is an ESS CA "
+                "solution export, or name one explicitly with --vertical."
+            )
+        return found
+    assert client is not None
     found = installed_targets(client)
     if not found:
         raise RuntimeError(
