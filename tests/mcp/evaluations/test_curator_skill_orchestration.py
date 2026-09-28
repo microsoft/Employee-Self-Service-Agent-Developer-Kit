@@ -183,6 +183,9 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         )
         validations_by_set[matching_folder].append((index, call))
 
+    first_maker_kit_index = next(
+        index for index, call in validations if call.kind == "maker_kit_validation"
+    )
     for folder in generated_folders:
         final_set_write = max(
             index
@@ -203,6 +206,11 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
         assert structural_index is not None, (
             f"Missing structural validation after final write for {folder}."
         )
+        assert structural_index < first_maker_kit_index, (
+            "Every generated set must pass structural validation before initial "
+            f"Maker Kit validation; got set={folder}, "
+            f"structural={structural_index}, maker_kit={first_maker_kit_index}."
+        )
         maker_kit_index = next(
             (
                 index
@@ -216,9 +224,6 @@ def test_curator_confirms_topics_then_writes_and_validates_without_push(tmp_path
             f"Missing Maker Kit validation after structural validation for {folder}."
         )
 
-    first_maker_kit_index = next(
-        index for index, call in validations if call.kind == "maker_kit_validation"
-    )
     maker_validator_read_index = _matching_read_index(
         calls,
         MAKER_VALIDATOR_SKILL_PATH,
@@ -394,6 +399,9 @@ def test_synthetic_validators_accept_each_generated_set() -> None:
                 )
             },
         )
+        assert structural.kind == "structural_validation"
+
+    for set_name in ("leave", "benefits"):
         quality = backend.invoke(
             "run_command",
             {
@@ -404,7 +412,6 @@ def test_synthetic_validators_accept_each_generated_set() -> None:
             },
         )
 
-        assert structural.kind == "structural_validation"
         assert quality.kind == "maker_kit_validation"
 
 
@@ -441,6 +448,66 @@ def test_maker_validation_requires_structural_gate_for_same_set() -> None:
 
     assert quality.failed
     assert "same evaluation set" in quality.result["stderr"]
+
+
+def test_maker_validation_waits_for_all_generated_sets_to_pass_structure() -> None:
+    backend = _ready_backend()
+    for set_name in ("leave", "benefits"):
+        backend.invoke(
+            "write_file",
+            {
+                "path": f"workspace/evaluations/{set_name}/eval.mcs.yml",
+                "content": "kind: EvaluationSet",
+            },
+        )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                '--evaluation-folder "workspace/evaluations/leave"'
+            )
+        },
+    )
+    leave_quality_command = (
+        "python scripts/evaluate_evals.py "
+        '--evaluation-folder "workspace/evaluations/leave"'
+    )
+
+    before_all_structural = backend.invoke(
+        "run_command", {"command": leave_quality_command}
+    )
+
+    assert before_all_structural.failed
+    assert "every generated evaluation set" in before_all_structural.result["stderr"]
+
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                '--evaluation-folder "workspace/evaluations/benefits"'
+            )
+        },
+    )
+    leave_quality = backend.invoke(
+        "run_command", {"command": leave_quality_command}
+    )
+    benefits_quality = backend.invoke(
+        "run_command",
+        {
+            "command": (
+                "python scripts/evaluate_evals.py "
+                '--evaluation-folder "workspace/evaluations/benefits"'
+            )
+        },
+    )
+
+    assert leave_quality.kind == "maker_kit_validation"
+    assert not leave_quality.failed
+    assert benefits_quality.kind == "maker_kit_validation"
+    assert not benefits_quality.failed
 
 
 def test_maker_validation_requires_skill_read_before_initial_validation() -> None:

@@ -315,6 +315,18 @@ class FakeEvaluationWorkspace:
                     "Maker Kit validation requires structural validation for the "
                     "same evaluation set after its final write.",
                 )
+            missing_structural = [
+                generated_folder
+                for generated_folder in sorted(self.generated_set_folders())
+                if not self._has_current_structural_validation(generated_folder)
+            ]
+            if missing_structural:
+                return self._validation_failure(
+                    arguments,
+                    "Maker Kit validation requires successful structural validation "
+                    "for every generated evaluation set after its latest write; "
+                    f"missing {missing_structural}.",
+                )
             return self._record(
                 "run_command",
                 arguments,
@@ -504,6 +516,13 @@ class FakeEvaluationWorkspace:
                 == evaluation_folder
             ),
             None,
+        )
+
+    def _has_current_structural_validation(self, evaluation_folder: str) -> bool:
+        last_write_index = self._last_set_write_index(evaluation_folder)
+        structural_index = self._last_structural_validation_index(evaluation_folder)
+        return structural_index is not None and (
+            last_write_index is None or structural_index > last_write_index
         )
 
     def _last_matching_read_index(self, expected_key: str) -> int | None:
