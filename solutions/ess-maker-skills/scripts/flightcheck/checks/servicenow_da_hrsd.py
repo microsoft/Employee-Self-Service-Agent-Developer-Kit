@@ -17,6 +17,7 @@ from connect_servicenow_da import (
     summarize_components,
 )
 
+from ..agent_scope import validate_agent_slug
 from ..runner import CheckResult, Priority, Role, Status
 
 
@@ -43,15 +44,26 @@ def _result(
     )
 
 
-def _active_agent(config: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
-    slug = config.get("activeAgent") or (config.get("agent") or {}).get("slug")
+def _active_agent(runner) -> tuple[str, dict[str, Any]] | None:
+    config = getattr(runner, "config", {}) or {}
+    if not isinstance(config, dict):
+        return None
+    slug = (
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+    )
+    try:
+        slug = validate_agent_slug(str(slug))
+    except ValueError:
+        return None
     agents = config.get("agents")
-    if isinstance(slug, str) and isinstance(agents, list):
+    if isinstance(agents, list):
         for agent in agents:
             if isinstance(agent, dict) and agent.get("slug") == slug:
                 return slug, agent
     legacy = config.get("agent")
-    if isinstance(slug, str) and isinstance(legacy, dict):
+    if isinstance(legacy, dict) and legacy.get("slug") == slug:
         return slug, legacy
     return None
 
@@ -119,8 +131,7 @@ def _servicenow_connections(
 
 
 def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
-    config = getattr(runner, "config", {}) or {}
-    selected = _active_agent(config) if isinstance(config, dict) else None
+    selected = _active_agent(runner)
     if selected is None:
         return _all_unavailable(
             Status.FAILED.value,

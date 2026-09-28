@@ -112,14 +112,19 @@ drift — a connection can be removed, a topic redirect can be reverted outside
 this tool — and trusting a stale checkbox has already caused a real bug in
 this family of skills once; do not reintroduce it.
 
-For every phase the state file marks `done`, in contract order, before doing
-anything else:
+Walk the phases in contract order and re-verify only the contiguous prefix
+whose state is `done`. Stop the prefix scan at the first non-`done` phase;
+never re-run a later phase's action or checkpoints across that gap.
+
+For every phase in that contiguous `done` prefix:
 
 1. If the phase has `actionExecution: "every-invocation"`, execute its
    `actionDoc` first using L.4a without re-showing the plan. Run each such
-   action at most once per invocation. `cancelled` leaves the phase
-   `in-progress` and stops; `applied` or `recorded` updates `actionApplied`
-   and `lastActionAt` but does not complete the phase.
+   action at most once per invocation. If its gate stops, the action is
+   cancelled, or the action fails, set this phase to `in-progress`, reset
+   every later phase to `pending`, clear `actionApplied`/`lastActionAt` on the
+   current and later phases, persist, and stop. `applied` or `recorded`
+   updates `actionApplied` and `lastActionAt` but does not complete the phase.
 2. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
    steps — reuse that exact mechanism here, silently, without re-showing the
    up-front plan).
@@ -137,10 +142,12 @@ anything else:
    `NotConfigured`, and unacknowledged `Manual`/`Warning` results — not only
    `Failed`/`Error`. Set the phase to `blocked` for `Failed`/`Error`, otherwise
    set it to `in-progress`, and set **every phase after it** back to `pending`
-   (later phases may have depended on this one still holding). Persist the
-   current checkpoint results, render the result using L.4b, and stop. Do not
-   re-run a `"once"` action merely because a live re-check regressed;
-   mutation requires a fresh gate and rollback checkpoint.
+   (later phases may have depended on this one still holding). Clear
+   `actionApplied` and `lastActionAt` on this phase and every later phase so a
+   `"once"` action can run again through a fresh gate and fresh rollback
+   checkpoint. Persist the current checkpoint results, render the result
+   without executing L.4b rollback, and stop. A rollback checkpoint from an
+   earlier invocation must never be reused after drift.
 
 Once every previously-`done` phase is confirmed (or the loop stopped early on
 a regression), continue to L.3.

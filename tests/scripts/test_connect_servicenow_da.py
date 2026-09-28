@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 from pathlib import Path
@@ -1165,3 +1166,267 @@ def test_enable_all_topics_rolls_back_ambiguous_partial_mutation(
     transaction = next(iter(state["transactions"]["topics"].values()))
     assert transaction["status"] == "rolled-back"
     assert list(transaction["topics"].values()) == ["restored"]
+
+
+def test_topic_rollback_does_not_overwrite_concurrent_external_edit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    first = components["botComponentChanges"][0]["component"]
+    first["state"] = "Inactive"
+    first["status"] = "Inactive"
+    second = copy.deepcopy(first)
+    second["id"] = "00000000-0000-4000-8000-000000006666"
+    second["displayName"] = "ServiceNow HRSD Get Cases"
+    second["schemaName"] = (
+        f"{snow.HR_SCHEMA_NAME}.topic.ServiceNowHRSDGetCases"
+    )
+    components["botComponentChanges"].append(
+        {"$kind": "BotComponentInsert", "component": second}
+    )
+    updates: list[dict] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updates.append(json.loads(json.dumps(payload)))
+            first_update = payload["botComponentChanges"][0]["component"]
+            first.update(first_update)
+            first["version"] = int(first["version"]) + 1
+            first["externalConcurrentEdit"] = "must-survive"
+            components["changeToken"] = "token-2"
+            raise RuntimeError("ambiguous partial update")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="rollback is incomplete",
+    ):
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
+
+    assert len(updates) == 1
+    assert first["externalConcurrentEdit"] == "must-survive"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = next(iter(state["transactions"]["topics"].values()))
+    assert transaction["status"] == "rollback-incomplete"
+    assert transaction["topics"][first["id"]] == "conflict"
+
+
+def test_topic_rollback_treats_ambiguous_applied_restore_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    topic = components["botComponentChanges"][0]["component"]
+    preimage = copy.deepcopy(topic)
+    preimage["state"] = "Inactive"
+    preimage["status"] = "Inactive"
+    topic["state"] = "Active"
+    topic["status"] = "Active"
+    operation_id = "00000000-0000-4000-8000-000000007777"
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {},
+                "evidence": {},
+                "transactions": {
+                    "topics": {
+                        operation_id: {
+                            "operationId": operation_id,
+                            "status": "rollback-required",
+                            "targets": {
+                                topic["id"]: {
+                                    "component": preimage,
+                                    "changedByOperation": True,
+                                    "ownershipStatus": "owned",
+                                    "beforeContentHashExcludingVersion": (
+                                        snow._component_content_hash(preimage)
+                                    ),
+                                    "expectedPostContentHashExcludingVersion": (
+                                        snow._component_content_hash(topic)
+                                    ),
+                                }
+                            },
+                        }
+                    }
+                },
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeAgentBuilder:
+        calls = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            self.calls += 1
+            restored = payload["botComponentChanges"][0]["component"]
+            topic.update(restored)
+            topic["version"] = int(topic["version"]) + 1
+            components["changeToken"] = f"token-{self.calls + 1}"
+            if self.calls == 1:
+                raise RuntimeError("ambiguous rollback response")
+            return {}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    first = snow.rollback_topic_transaction(
+        _context(),
+        operation_id,
+        confirmed=True,
+    )
+    second = snow.rollback_topic_transaction(
+        _context(),
+        operation_id,
+        confirmed=True,
+    )
+
+    assert first["status"] == "rolled-back"
+    assert second["status"] == "rolled-back"
+    assert client.calls == 1
+    assert topic["state"] == "Inactive"
+    assert topic["status"] == "Inactive"
+
+
+def test_failed_post_update_refetch_does_not_claim_rollback_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    topic = components["botComponentChanges"][0]["component"]
+    topic["state"] = "Inactive"
+    topic["status"] = "Inactive"
+    fail_refetch = False
+    update_calls = 0
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            nonlocal fail_refetch
+            if fail_refetch:
+                fail_refetch = False
+                raise RuntimeError("post-update fetch failed")
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            nonlocal fail_refetch, update_calls
+            update_calls += 1
+            update = payload["botComponentChanges"][0]["component"]
+            topic.update(update)
+            topic["version"] = int(topic["version"]) + 1
+            components["changeToken"] = "token-2"
+            fail_refetch = True
+            return {}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="post-update refetch failed",
+    ):
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    operation_id, transaction = next(
+        iter(state["transactions"]["topics"].items())
+    )
+    assert transaction["status"] == "reconciliation-required"
+    target = transaction["targets"][topic["id"]]
+    assert "ownershipStatus" not in target
+
+    topic["externalConcurrentEdit"] = "must-survive"
+    result = snow.rollback_topic_transaction(
+        _context(),
+        operation_id,
+        confirmed=True,
+    )
+
+    assert result["status"] == "rollback-incomplete"
+    assert result["topics"][topic["id"]] == "conflict"
+    assert topic["externalConcurrentEdit"] == "must-survive"
+    assert update_calls == 1
+
+
+def test_enable_all_topics_rejects_missing_transaction_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    first = components["botComponentChanges"][0]["component"]
+    first["state"] = "Inactive"
+    first["status"] = "Inactive"
+    second = copy.deepcopy(first)
+    second["id"] = "00000000-0000-4000-8000-000000006666"
+    second["displayName"] = "ServiceNow HRSD Get Cases"
+    second["schemaName"] = (
+        f"{snow.HR_SCHEMA_NAME}.topic.ServiceNowHRSDGetCases"
+    )
+    components["botComponentChanges"].append(
+        {"$kind": "BotComponentInsert", "component": second}
+    )
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            second.update(payload["botComponentChanges"][1]["component"])
+            second["version"] = int(second["version"]) + 1
+            components["botComponentChanges"] = [
+                change
+                for change in components["botComponentChanges"]
+                if change["component"].get("id") != first["id"]
+            ]
+            components["changeToken"] = "token-2"
+            return {}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="rollback is incomplete",
+    ):
+        snow.enable_all_servicenow_topics(_context(), confirmed=True)
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = next(iter(state["transactions"]["topics"].values()))
+    assert transaction["status"] == "rollback-incomplete"
+    assert transaction["topics"][first["id"]] == "missing"
+    assert transaction["status"] != "committed"

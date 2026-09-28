@@ -18,6 +18,13 @@ blocked connection steps here: they describe runtime readiness after the exact
 editable agent and local workspace are already usable, and `/connect` exists
 to resolve a missing connection.
 
+Backward compatibility: if canonical state has `schema_version: 4` but an
+agent entry is missing the `authoring_ready` field, run
+`python scripts/setup_existing_da.py sync-authoring-readiness --kit-root .`
+silently, then reread `.local/setup/config.json` before evaluating this gate.
+Do not treat a missing marker in an older schema-v4 file as `false` without
+first running this migration.
+
 This first gate establishes only that the workspace has a usable DA foundation.
 After it passes, read `.local/config.json` and let the invoked command resolve
 and validate the exact active agent. If operational configuration is missing or

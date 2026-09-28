@@ -211,3 +211,39 @@ def test_hrsd_package_absence_is_not_configured(
     assert {
         result.status for result in results
     } == {Status.NOT_CONFIGURED.value}
+
+
+def test_hrsd_checks_prefer_explicit_agent_slug(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    requested_id = "00000000-0000-4000-8000-000000008888"
+    fetched: list[str] = []
+    runner = _runner(components)
+    runner.agent_slug = "requested-hr"
+    runner.config = {
+        "activeAgent": AGENT_SLUG,
+        "agents": [
+            {
+                "slug": AGENT_SLUG,
+                "botId": AGENT_ID,
+                "schemaName": snow.HR_SCHEMA_NAME,
+            },
+            {
+                "slug": "requested-hr",
+                "botId": requested_id,
+                "schemaName": snow.HR_SCHEMA_NAME,
+            },
+        ],
+    }
+    runner.agentbuilder = SimpleNamespace(
+        fetch_components=lambda agent_id: (
+            fetched.append(agent_id) or components
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+
+    run_servicenow_da_hrsd_checks(runner)
+
+    assert fetched == [requested_id]

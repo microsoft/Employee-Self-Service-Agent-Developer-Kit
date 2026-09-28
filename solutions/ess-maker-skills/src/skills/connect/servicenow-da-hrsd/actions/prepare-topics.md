@@ -10,8 +10,10 @@ topic inventory.
   `python scripts/connect_servicenow_da.py record-topic-choice --choice keep-current`
   and set `ACTION_RESULT = "applied"`.
 - For enable-all, show the inactive names, obtain explicit confirmation, run
-  `python scripts/connect_servicenow_da.py enable-all-topics --yes`, and set
-  `ACTION_RESULT = "applied"` only when the command commits or safely rolls
-  back its remote transaction.
+  `python scripts/connect_servicenow_da.py enable-all-topics --yes`. Set
+  `ACTION_RESULT = "applied"` only when the command reports `committed` or
+  `already-active`. A safely rolled-back update is still a failed action:
+  report its error, keep `actionApplied = false`, and stop so a later
+  invocation uses a fresh gate and transaction.
 - If the maker declines or is unavailable, set
   `ACTION_RESULT = "cancelled"`.

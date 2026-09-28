@@ -33,6 +33,22 @@ def test_da_servicenow_connect_routes_to_hrsd_lifecycle() -> None:
     assert "releaseLine" in router
     assert "emit_capability.py connect --connector servicenow" in router
 
+    interactive_router = (
+        _SOLUTION / "src" / "skills" / "connect" / "step1.md"
+    ).read_text(encoding="utf-8")
+    dispatch = interactive_router.index(
+        "src/skills/connect/servicenow-da-hrsd/SKILL.md"
+    )
+    legacy_read = interactive_router.index(
+        "Check if `.local/connect/servicenow/steps.md` exists."
+    )
+    assert dispatch < legacy_read
+    assert 'releaseLine: "da"' in interactive_router
+    assert "gptagent_copilotforemployeeselfservicehr" in interactive_router
+    assert "do not inspect or create `.local/connect/servicenow/` state" in (
+        interactive_router
+    )
+
 
 def test_global_gate_allows_connection_blocked_foundation() -> None:
     instructions = (
@@ -73,8 +89,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         encoding="utf-8"
     )
     test = (actions / "test-connection.md").read_text(encoding="utf-8")
+    topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")
     assert "record-agent-connection" in agent
     assert "ACTION_RESULT = \"cancelled\"" in agent
     assert "record-parameter-sharing --status enabled" in parameter
     assert "record-parameter-sharing --status not-exposed" in parameter
     assert 'ACTION_RESULT = "recorded"' in test
+    assert "safely rolled-back update is still a failed action" in topics
+    assert "committed" in topics
+    assert "already-active" in topics

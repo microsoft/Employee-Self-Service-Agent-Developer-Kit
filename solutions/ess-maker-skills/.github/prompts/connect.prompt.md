@@ -6,6 +6,10 @@ description: "Connect Workday or another supported integration"
 # Connect
 
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+If schema-v4 canonical state is present but the selected agent entry is
+missing `authoring_ready`, run
+`python scripts/setup_existing_da.py sync-authoring-readiness --kit-root .`
+and reread `.local/setup/config.json` before deciding admission.
 Resolve `.local/config.json`'s `activeAgent` slug to the matching object in its
 `agents` array, then use that object's `botId` to select the entry in
 `.local/setup/config.json`'s `agents` object. Continue when canonical state has

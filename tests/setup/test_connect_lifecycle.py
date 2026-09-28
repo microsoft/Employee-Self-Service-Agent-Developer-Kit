@@ -48,6 +48,10 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert '**`"cancelled"`**' in runner
     assert 'actionExecution: "every-invocation"' in runner
     assert "Non-mutating actions do not run a role" in runner
+    assert "contiguous prefix" in runner
+    assert "clear `actionApplied`/`lastActionAt`" in runner
+    assert "fresh gate and fresh rollback" in runner
+    assert "must never be reused after drift" in runner
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
 

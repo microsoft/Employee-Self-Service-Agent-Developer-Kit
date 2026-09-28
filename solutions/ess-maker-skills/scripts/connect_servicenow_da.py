@@ -1390,15 +1390,25 @@ def _rollback_topic_transaction(
     for topic_id, target in transaction.get("targets", {}).items():
         if not isinstance(target, dict):
             continue
-        if target.get("changedByOperation") is False:
-            statuses[topic_id] = "restored"
-            continue
         current_topic = current_topics.get(topic_id.casefold())
         if current_topic is None:
             statuses[topic_id] = "missing"
             continue
-        post_hash = target.get("postContentHashExcludingVersion")
-        if post_hash and _component_content_hash(current_topic) != post_hash:
+        current_hash = _component_content_hash(current_topic)
+        pre_hash = target.get("beforeContentHashExcludingVersion")
+        if pre_hash and current_hash == pre_hash:
+            statuses[topic_id] = "restored"
+            continue
+        if target.get("ownershipStatus") != "owned":
+            statuses[topic_id] = "conflict"
+            continue
+        expected_post_hash = target.get(
+            "expectedPostContentHashExcludingVersion"
+        )
+        if (
+            not expected_post_hash
+            or current_hash != expected_post_hash
+        ):
             statuses[topic_id] = "conflict"
             continue
         preimage = target.get("component")
@@ -1428,19 +1438,23 @@ def _rollback_topic_transaction(
         )
         _write_lifecycle_state(context, state)
         return transaction
+    rollback_error: Exception | None = None
     if changes:
         token = current.get("changeToken")
         if not isinstance(token, str) or not token:
             raise ServiceNowConnectError(
                 "Cannot roll back topics without a fresh change token."
             )
-        agentbuilder.update_components(
-            context["agent"]["id"],
-            {
-                "changeToken": token,
-                "botComponentChanges": changes,
-            },
-        )
+        try:
+            agentbuilder.update_components(
+                context["agent"]["id"],
+                {
+                    "changeToken": token,
+                    "botComponentChanges": changes,
+                },
+            )
+        except Exception as exc:
+            rollback_error = exc
     verified = agentbuilder.fetch_components(context["agent"]["id"])
     verified_topics = _servicenow_topic_components(verified)
     for topic_id, target in transaction.get("targets", {}).items():
@@ -1449,12 +1463,21 @@ def _rollback_topic_transaction(
         if (
             restored is None
             or not isinstance(preimage, dict)
-            or _component_content_hash(restored)
-            != _component_content_hash(preimage)
+        ):
+            statuses[topic_id] = "pending"
+        elif (
+            _component_content_hash(restored)
+            == _component_content_hash(preimage)
+        ):
+            statuses[topic_id] = "restored"
+        elif (
+            target.get("expectedPostContentHashExcludingVersion")
+            and _component_content_hash(restored)
+            == target["expectedPostContentHashExcludingVersion"]
         ):
             statuses[topic_id] = "pending"
         else:
-            statuses[topic_id] = "restored"
+            statuses[topic_id] = "conflict"
     transaction.update(
         {
             "status": (
@@ -1471,6 +1494,8 @@ def _rollback_topic_transaction(
             "Refetch the pending topics and retry rollback only when their "
             "current content still matches the provider-owned postimage."
         )
+        if rollback_error is not None:
+            transaction["rollbackError"] = type(rollback_error).__name__
     _write_lifecycle_state(context, state)
     return transaction
 
@@ -1532,6 +1557,20 @@ def enable_all_servicenow_topics(
                 "component": copy.deepcopy(
                     find_servicenow_topic(before, str(topic["id"]))
                 ),
+                "expectedPostContentHashExcludingVersion": (
+                    _component_content_hash(
+                        {
+                            **copy.deepcopy(
+                                find_servicenow_topic(
+                                    before,
+                                    str(topic["id"]),
+                                )
+                            ),
+                            "state": "Active",
+                            "status": "Active",
+                        }
+                    )
+                ),
             }
             for topic in inactive
         },
@@ -1546,29 +1585,81 @@ def enable_all_servicenow_topics(
             agentbuilder.update_components(context["agent"]["id"], payload)
         except Exception as exc:  # refetch decides whether rollback is needed
             update_error = exc
-    after = agentbuilder.fetch_components(context["agent"]["id"])
+        transaction.update(
+            {
+                "status": "reconciliation-required",
+                "mutationMayHaveOccurred": True,
+                "mutationAttemptedAt": _utc_now(),
+                "updateError": (
+                    type(update_error).__name__
+                    if update_error is not None
+                    else None
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+    try:
+        after = agentbuilder.fetch_components(context["agent"]["id"])
+    except Exception as exc:
+        transaction.update(
+            {
+                "status": "reconciliation-required",
+                "mutationMayHaveOccurred": bool(inactive),
+                "reconciliationError": type(exc).__name__,
+                "reconciliationFailedAt": _utc_now(),
+                "remediation": (
+                    "Refetch the agent components before any rollback. "
+                    "Ownership of the remote postimage is not established."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        raise ServiceNowConnectError(
+            "ServiceNow topic mutation may have occurred, but the required "
+            "post-update refetch failed. Do not roll back until ownership "
+            "can be established from a fresh component fetch."
+        ) from exc
     after_summary = summarize_components(after)
     after_topics = _servicenow_topic_components(after)
     for topic_id, target in transaction["targets"].items():
         postimage = after_topics.get(topic_id.casefold())
-        if postimage is not None:
-            target["postVersion"] = postimage.get("version")
-            target["postContentHashExcludingVersion"] = _component_content_hash(
-                postimage
-            )
-            target["changedByOperation"] = (
-                target["postContentHashExcludingVersion"]
-                != target["beforeContentHashExcludingVersion"]
-            )
+        if postimage is None:
+            target["ownershipStatus"] = "missing"
+            target["changedByOperation"] = None
+            continue
+        target["postVersion"] = postimage.get("version")
+        target["postContentHashExcludingVersion"] = _component_content_hash(
+            postimage
+        )
+        if (
+            target["postContentHashExcludingVersion"]
+            == target["expectedPostContentHashExcludingVersion"]
+        ):
+            target["ownershipStatus"] = "owned"
+            target["changedByOperation"] = True
+        elif (
+            target["postContentHashExcludingVersion"]
+            == target["beforeContentHashExcludingVersion"]
+        ):
+            target["ownershipStatus"] = "unchanged"
+            target["changedByOperation"] = False
+        else:
+            target["ownershipStatus"] = "conflict"
+            target["changedByOperation"] = None
     not_active = [
         topic
         for topic in after_summary["serviceNowTopics"]
         if topic.get("state") != "Active"
         or topic.get("status") != "Active"
     ]
-    if update_error is not None or not_active:
+    target_issues = [
+        topic_id
+        for topic_id, target in transaction["targets"].items()
+        if target.get("ownershipStatus") in {"missing", "conflict"}
+    ]
+    if update_error is not None or not_active or target_issues:
         changed = any(
-            target.get("changedByOperation") is True
+            target.get("ownershipStatus") in {"owned", "missing", "conflict"}
             for target in transaction["targets"].values()
         )
         if not changed:

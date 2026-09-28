@@ -410,6 +410,8 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     assert "let the invoked command resolve" in instructions
     assert "This is the only readiness marker" in instructions
     assert "Ignore `connect_ready`" in instructions
+    assert "sync-authoring-readiness --kit-root ." in instructions
+    assert "missing marker in an older schema-v4 file" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
     gated_prompts = (
@@ -445,6 +447,7 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     assert ".local/setup/config.json" in connect_prompt
     assert "schema_version: 4" in connect_prompt
     assert "`authoring_ready: true`" in connect_prompt
+    assert "sync-authoring-readiness --kit-root ." in connect_prompt
     assert "`connect_ready`" in connect_prompt
     assert 'steps.SETUP-07.state: "done"' in connect_prompt
     assert "Do not require\n`connect_ready: true`" in connect_prompt
