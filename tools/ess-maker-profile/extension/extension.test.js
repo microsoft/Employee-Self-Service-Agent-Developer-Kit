@@ -189,15 +189,14 @@ test('quick start view is a tree (no webview type)', () => {
     assert.strictEqual(view.id, 'essMaker.actionsView');
 });
 
-test('customization guidance is a webview sitting above the options tree', () => {
+test('customization view is a tree named Customization (no guidance webview)', () => {
     const views = pkg.contributes.views.essMakerActions;
-    const infoIdx = views.findIndex((v) => v.id === 'essMaker.customizationInfoView');
-    const optsIdx = views.findIndex((v) => v.id === 'essMaker.customizationView');
-    assert.ok(infoIdx >= 0, 'customizationInfoView missing');
-    assert.ok(optsIdx >= 0, 'customizationView missing');
-    assert.strictEqual(views[infoIdx].type, 'webview');
-    assert.strictEqual(views[optsIdx].type, undefined);
-    assert.ok(infoIdx < optsIdx, 'guidance webview must precede the options tree');
+    const opts = views.find((v) => v.id === 'essMaker.customizationView');
+    assert.ok(opts, 'customizationView missing');
+    assert.strictEqual(opts.type, undefined);
+    assert.strictEqual(opts.name, 'Customization');
+    assert.ok(!views.some((v) => v.id === 'essMaker.customizationInfoView'),
+        'customizationInfoView should be removed');
 });
 
 test('activates on startup finished', () => {

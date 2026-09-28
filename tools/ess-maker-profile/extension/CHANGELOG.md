@@ -12,10 +12,10 @@
   **Documentation** only. The three panels open at ~20% / 70% / 10% height. The
   getting-started walkthrough is reduced to two steps — **What ADK does** and
   **Getting started** — with clearer onboarding copy and prompt guidance.
-- **Customization guidance moved to a small webview** rendered directly above
-  the options, so the "complete setup first" nudge and "hover to learn more"
-  hint show as readable, muted paragraph text (foreground @ 0.75) — the tree
-  API's `message` cannot be recolored and muted description rows render too dim.
+- **Customization onboarding guidance moved to the Getting started walkthrough.**
+  The "complete setup first" and "hover to learn more" guidance now lives in the
+  Getting started step in the editor area, keeping the **Customization** panel a
+  clean list of options.
 - **Developer mode no longer auto-runs `/setup`.** `/setup` is now user-driven
   in both modes. The installer opens the workspace (no `code chat "/setup"`),
   and the extension no longer re-injects `/setup` on Developer-mode reopens —

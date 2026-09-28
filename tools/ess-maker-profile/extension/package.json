@@ -106,17 +106,10 @@
           "size": 20
         },
         {
-          "id": "essMaker.customizationInfoView",
-          "name": "Customization",
-          "type": "webview",
-          "contextualTitle": "Agent Developer Kit",
-          "size": 12
-        },
-        {
           "id": "essMaker.customizationView",
-          "name": "Options",
+          "name": "Customization",
           "contextualTitle": "Agent Developer Kit",
-          "size": 58
+          "size": 70
         },
         {
           "id": "essMaker.helpView",

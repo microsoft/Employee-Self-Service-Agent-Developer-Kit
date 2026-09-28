@@ -223,7 +223,6 @@ function startPrereqWatcher(context) {
             if (_actionsViewProvider) _actionsViewProvider.refresh();
             if (_customizationProvider) _customizationProvider.refresh();
             if (_quickStartProvider) _quickStartProvider.refresh();
-            if (_customizationInfoProvider) _customizationInfoProvider.refresh();
         }
     };
 
@@ -1072,73 +1071,6 @@ class CustomizationTreeProvider {
     }
 }
 
-// The Customization guidance shown in a small webview above the options. The
-// "complete setup first" nudge clears once setup is done; the "hover to learn
-// more" hint always stays. Rendered as muted (readable) paragraph text so we
-// control the color — matching the old Quick Start intro (foreground @ 0.75).
-const CUSTOMIZATION_NUDGE = 'To customize your ESS agent, make sure to complete setup first.';
-const CUSTOMIZATION_HOVER_HINT = 'Hover on each option to learn more about it.';
-function customizationGuidanceLines(context) {
-    const done = getCompleted(context).has('setup');
-    return done ? [CUSTOMIZATION_HOVER_HINT] : [CUSTOMIZATION_NUDGE, CUSTOMIZATION_HOVER_HINT];
-}
-
-function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-    ));
-}
-
-// Small webview rendered directly above the Customization options. It exists so
-// the guidance text can be a readable, muted paragraph (foreground @ 0.75) —
-// the tree API's `message` cannot be recolored, and muted `description` rows
-// render too dim to read.
-class CustomizationInfoViewProvider {
-    constructor(context) {
-        this._context = context;
-        this._view = null;
-    }
-    resolveWebviewView(webviewView) {
-        this._view = webviewView;
-        webviewView.webview.options = { enableScripts: false };
-        this.refresh();
-    }
-    refresh() {
-        if (!this._view) return;
-        try { this._view.webview.html = this._html(); } catch {}
-    }
-    _html() {
-        const paras = customizationGuidanceLines(this._context)
-            .map((t) => `<p>${escapeHtml(t)}</p>`)
-            .join('\n');
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
-<style>
-    body {
-        font-family: var(--vscode-font-family);
-        font-size: var(--vscode-font-size);
-        color: var(--vscode-foreground);
-        padding: 8px 12px 4px;
-        margin: 0;
-    }
-    p {
-        margin: 0 0 6px;
-        line-height: 1.4;
-        opacity: 0.75;
-    }
-    p:last-child { margin-bottom: 0; }
-</style>
-</head>
-<body>
-    ${paras}
-</body>
-</html>`;
-    }
-}
-
 class HelpTreeProvider {
     getTreeItem(item) { return item; }
     getChildren(element) {
@@ -1155,7 +1087,6 @@ class HelpTreeProvider {
 let _customizationProvider = null;
 let _helpProvider = null;
 let _quickStartProvider = null;
-let _customizationInfoProvider = null;
 
 // Standard mode ships no guided layout; instead it shows a rendered preview of
 // the workspace README (the "static README preview") alongside the Copilot Chat
@@ -1633,18 +1564,11 @@ function activate(context) {
         vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
 
-    // Customization options are a plain tree view. The guidance text above them
-    // lives in its own small webview (essMaker.customizationInfoView) so it can
-    // render as a readable, muted paragraph — see CustomizationInfoViewProvider.
+    // Customization options are a plain tree view (like Help). The onboarding
+    // guidance that used to sit above them now lives in the Getting started
+    // walkthrough step in the editor area.
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('essMaker.customizationView', _customizationProvider)
-    );
-    _customizationInfoProvider = new CustomizationInfoViewProvider(context);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(
-            'essMaker.customizationInfoView',
-            _customizationInfoProvider
-        )
     );
 
     // Quick start is a tree view (like Customization and Help). Use
