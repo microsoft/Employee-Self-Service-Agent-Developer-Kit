@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.29 (POC)
+
+- **Guided layout for Maker mode.** Maker mode now opens the "Agent
+  Developer Kit" activity-bar rail — a **Quick start** panel, a
+  **Customization** list of every skill, and a **Help** view — alongside a
+  native VS Code walkthrough (`essMaker.gettingStarted`) and Copilot Chat,
+  instead of the chat-only welcome rail. The terminal installer still owns
+  the Maker/Developer choice and writes `essMaker.mode`; the extension reads
+  the resolved value (canonical `maker`/`developer`, legacy `lite`/`standard`
+  normalized via `normalizeInstallerMode`) and dispatches Maker → guided
+  layout, Developer → default VS Code + README preview. New commands:
+  `essMaker.openGuidedLayout`, `essMaker.openIntroduction`,
+  `essMaker.showItemInfo`, `essMaker.openDocs`, `essMaker.runUpdate`.
+- **Developer mode README preview + /setup on reopen.** Developer mode opens
+  the rendered README preview on first launch (the installer runs `/setup`
+  via `code chat`), and on every later reopen re-shows the preview and
+  re-sends `/setup` into Copilot Chat, since the installer only runs once.
+- **"New to VS Code?" onboarding** added to the root README with screenshots
+  pointing to the rocket icon and the guided view.
+
 ## 0.4.28 (POC)
 
 - **Mode prompt lives in the installer CLI.** The consolidated installer

@@ -22,6 +22,18 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only, and Maker vs Developer mode selection. Prefer to clone and open the repo yourself? See the [maker kit quick start](solutions/ess-maker-skills/README.md#quick-start). A **GitHub Copilot subscription is required** for the in-editor maker experience.
 
+## New to VS Code?
+
+The installer opens VS Code for you. If this is your first time in VS Code, use the guided view for a friendlier way to navigate the kit. In the **activity bar** along the far-left edge of the window, click the **rocket icon**.
+
+![The rocket icon in the VS Code activity bar](docs/images/vscode-rocket-icon.png)
+
+That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab. To begin, open the **Help** tab and click **Tutorial** for a step-by-step walkthrough.
+
+![The guided view with the Help tab and Tutorial highlighted](docs/images/vscode-guided-navigation.png)
+
+Prefer to drive everything from chat? You can ignore the rocket view entirely and just type commands like `/setup` into Copilot Chat.
+
 ## Solutions
 
 | Folder | What it does | How to use |
@@ -31,68 +43,7 @@ See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only
 
 Additional solutions will be added under `solutions/` over time.
 
-## Samples
-
-Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
-
-## Repository structure
-
-```
-.github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
-solutions/
-  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
-  ess-flightcheck/      (planned) Standalone deployment-readiness validator
-samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
-LICENSE                 MIT
-SECURITY.md             Microsoft MSRC reporting path
-CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
-CONTRIBUTING.md         Contribution guide, maintenance, privacy posture, validation
-SUPPORT.md              Support model
-```
-
-## Telemetry
-
-The ESS Maker Skills CLI collects pseudonymous usage telemetry (enabled by
-default) to help improve the product. No developer identity, agent content, or
-personal data is collected.
-
-**To opt out**, run either of the following (both are persistent and take effect immediately):
-
-```bash
-# 1. From the solutions/ess-maker-skills directory:
-python scripts/adk_telemetry.py off
-
-# 2. Or set the ESS_ADK_TELEMETRY environment variable to off (any shell / CI).
-#    Syntax varies by shell — set it before running any ADK command.
-```
-
-Setting `ESS_ADK_TELEMETRY=off` inline before a command works in bash / zsh
-(`ESS_ADK_TELEMETRY=off python scripts/...`). To persist it, add it to your
-shell profile:
-
-```bash
-# bash / zsh (~/.bashrc, ~/.zshrc):
-export ESS_ADK_TELEMETRY=off
-```
-
-```powershell
-# PowerShell ($PROFILE) — persistent:
-$env:ESS_ADK_TELEMETRY = "off"
-# ...or for the current session only, run the same line at the prompt.
-```
-
-```cmd
-:: cmd.exe — current session only:
-set ESS_ADK_TELEMETRY=off
-:: For persistence use setx ESS_ADK_TELEMETRY off (takes effect in new shells).
-```
-
-The env var overrides the config-file setting.
-
-Re-enable later with `python scripts/adk_telemetry.py on` or by unsetting the
-env var. See
-[Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy)
-for the full data model and event catalog.
+For samples, repository structure, and telemetry details, see [REFERENCE.md](REFERENCE.md).
 
 ## Contributing
 

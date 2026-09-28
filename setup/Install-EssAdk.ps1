@@ -1512,7 +1512,7 @@ if (-not $SkipLaunch) {
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
-                Write-Host "The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes." -ForegroundColor Yellow
+                Write-Host "The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat." -ForegroundColor Yellow
                 Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
             }
         } finally { Pop-Location }

@@ -792,7 +792,7 @@ if [[ -n "$CODE_CMD" ]]; then
         step "Opening workspace in VS Code"
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
             ok "Launched VS Code at $WORKSPACE_PATH"
-            echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes.${NC}"
+            echo -e "    ${YELLOW}The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat.${NC}"
             echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
