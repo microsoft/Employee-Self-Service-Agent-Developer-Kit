@@ -527,6 +527,135 @@ def test_maker_validation_waits_for_all_generated_sets_to_pass_structure() -> No
     assert backend.maker_validation_ordering_violations() == premature_violations
 
 
+def test_maker_ordering_uses_set_state_at_each_attempt_after_rewrite() -> None:
+    backend = _ready_backend()
+    evaluation_folder = "workspace/evaluations/leave"
+    evaluation_path = f"{evaluation_folder}/eval.mcs.yml"
+    structural_command = (
+        f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+        f'--evaluation-folder "{evaluation_folder}"'
+    )
+    maker_command = (
+        "python scripts/evaluate_evals.py "
+        f'--evaluation-folder "{evaluation_folder}"'
+    )
+    backend.invoke(
+        "write_file",
+        {"path": evaluation_path, "content": "kind: EvaluationSet"},
+    )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    backend.invoke("run_command", {"command": structural_command})
+    first_maker = backend.invoke("run_command", {"command": maker_command})
+
+    backend.invoke(
+        "write_file",
+        {"path": evaluation_path, "content": "kind: EvaluationSet\nrevision: 2"},
+    )
+    backend.invoke("run_command", {"command": structural_command})
+    second_maker = backend.invoke("run_command", {"command": maker_command})
+
+    assert not first_maker.failed
+    assert not second_maker.failed
+    assert backend.maker_validation_ordering_violations() == []
+
+
+def test_maker_ordering_applies_new_set_barrier_only_to_later_attempts() -> None:
+    backend = _ready_backend()
+    leave_folder = "workspace/evaluations/leave"
+    benefits_folder = "workspace/evaluations/benefits"
+    leave_maker_command = (
+        "python scripts/evaluate_evals.py "
+        f'--evaluation-folder "{leave_folder}"'
+    )
+    backend.invoke(
+        "write_file",
+        {
+            "path": f"{leave_folder}/eval.mcs.yml",
+            "content": "kind: EvaluationSet",
+        },
+    )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                f'--evaluation-folder "{leave_folder}"'
+            )
+        },
+    )
+    first_maker = backend.invoke(
+        "run_command", {"command": leave_maker_command}
+    )
+
+    backend.invoke(
+        "write_file",
+        {
+            "path": f"{benefits_folder}/eval.mcs.yml",
+            "content": "kind: EvaluationSet",
+        },
+    )
+    premature_maker = backend.invoke(
+        "run_command", {"command": leave_maker_command}
+    )
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                f'--evaluation-folder "{benefits_folder}"'
+            )
+        },
+    )
+    retry_maker = backend.invoke(
+        "run_command", {"command": leave_maker_command}
+    )
+
+    violations = backend.maker_validation_ordering_violations()
+    assert not first_maker.failed
+    assert premature_maker.failed
+    assert not retry_maker.failed
+    assert len(violations) == 1
+    assert "call 5" in violations[0]
+    assert benefits_folder in violations[0]
+
+
+def test_maker_ordering_retains_premature_failure_after_successful_retry() -> None:
+    backend = _ready_backend()
+    evaluation_folder = "workspace/evaluations/leave"
+    maker_command = (
+        "python scripts/evaluate_evals.py "
+        f'--evaluation-folder "{evaluation_folder}"'
+    )
+    backend.invoke(
+        "write_file",
+        {
+            "path": f"{evaluation_folder}/eval.mcs.yml",
+            "content": "kind: EvaluationSet",
+        },
+    )
+    backend.invoke("read_file", {"path": MAKER_VALIDATOR_SKILL_PATH})
+    premature_maker = backend.invoke("run_command", {"command": maker_command})
+    premature_violations = backend.maker_validation_ordering_violations()
+
+    backend.invoke(
+        "run_command",
+        {
+            "command": (
+                f'python "{STRUCTURAL_VALIDATOR_PATH}" '
+                f'--evaluation-folder "{evaluation_folder}"'
+            )
+        },
+    )
+    retry_maker = backend.invoke("run_command", {"command": maker_command})
+
+    assert premature_maker.failed
+    assert not retry_maker.failed
+    assert len(premature_violations) == 1
+    assert "call 2" in premature_violations[0]
+    assert backend.maker_validation_ordering_violations() == premature_violations
+
+
 def test_maker_validation_requires_skill_read_before_initial_validation() -> None:
     backend = _ready_backend()
     backend.invoke(

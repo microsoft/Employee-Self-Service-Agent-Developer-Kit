@@ -436,9 +436,11 @@ class FakeEvaluationWorkspace:
                 return cls._normalize(cleaned.removeprefix(f"{option}="))
         return None
 
-    def generated_set_folders(self) -> set[str]:
+    def generated_set_folders(self, *, before_index: int | None = None) -> set[str]:
         folders: set[str] = set()
-        for call in self.calls:
+        for index, call in enumerate(self.calls):
+            if before_index is not None and index >= before_index:
+                break
             if call.name != "write_file" or call.failed:
                 continue
             path = self._normalize(call.arguments["path"])
@@ -485,12 +487,15 @@ class FakeEvaluationWorkspace:
             )
         return matching_folder, None
 
-    def _last_set_write_index(self, evaluation_folder: str) -> int | None:
+    def _last_set_write_index(
+        self, evaluation_folder: str, *, before_index: int | None = None
+    ) -> int | None:
         folder_prefix = f"{evaluation_folder}/"
+        search_end = len(self.calls) if before_index is None else before_index
         return next(
             (
                 index
-                for index in range(len(self.calls) - 1, -1, -1)
+                for index in range(search_end - 1, -1, -1)
                 if self.calls[index].name == "write_file"
                 and not self.calls[index].failed
                 and self._normalize(
@@ -504,12 +509,13 @@ class FakeEvaluationWorkspace:
         )
 
     def _last_structural_validation_index(
-        self, evaluation_folder: str
+        self, evaluation_folder: str, *, before_index: int | None = None
     ) -> int | None:
+        search_end = len(self.calls) if before_index is None else before_index
         return next(
             (
                 index
-                for index in range(len(self.calls) - 1, -1, -1)
+                for index in range(search_end - 1, -1, -1)
                 if self.calls[index].kind == "structural_validation"
                 and not self.calls[index].failed
                 and self.calls[index].result.get("evaluationFolder")
@@ -518,35 +524,32 @@ class FakeEvaluationWorkspace:
             None,
         )
 
-    def _has_current_structural_validation(self, evaluation_folder: str) -> bool:
-        last_write_index = self._last_set_write_index(evaluation_folder)
-        structural_index = self._last_structural_validation_index(evaluation_folder)
+    def _has_current_structural_validation(
+        self, evaluation_folder: str, *, before_index: int | None = None
+    ) -> bool:
+        last_write_index = self._last_set_write_index(
+            evaluation_folder, before_index=before_index
+        )
+        structural_index = self._last_structural_validation_index(
+            evaluation_folder, before_index=before_index
+        )
         return structural_index is not None and (
             last_write_index is None or structural_index > last_write_index
         )
 
     def maker_validation_ordering_violations(self) -> list[str]:
-        generated_folders = sorted(self.generated_set_folders())
-        final_write_indices = {
-            folder: self._last_set_write_index(folder) for folder in generated_folders
-        }
         violations: list[str] = []
         for attempt_index, call in enumerate(self.calls):
             if call.validator_type != "maker_kit":
                 continue
+            generated_folders = sorted(
+                self.generated_set_folders(before_index=attempt_index)
+            )
             missing_structural = [
                 folder
                 for folder in generated_folders
-                if not any(
-                    structural_index < attempt_index
-                    and structural_call.validator_type == "structural"
-                    and not structural_call.failed
-                    and structural_call.result.get("evaluationFolder") == folder
-                    and (
-                        final_write_indices[folder] is None
-                        or structural_index > final_write_indices[folder]
-                    )
-                    for structural_index, structural_call in enumerate(self.calls)
+                if not self._has_current_structural_validation(
+                    folder, before_index=attempt_index
                 )
             ]
             if missing_structural:
