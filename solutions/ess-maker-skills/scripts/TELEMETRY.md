@@ -58,7 +58,7 @@ Column casing differs by table family:
 | Table family | Casing | Example fields |
 |---|---|---|
 | `essmakerkit_flightcheck_run` / `_check` | camelCase | `tenantId`, `tenantName`, `instanceId`, `toolkitGitSha`, `toolkitGitBranch` |
-| `adk_session_start`, `adk_capability_use`, `adk_agent_create`, `adk_agent_deploy`, `adk_build_complete`, `adk_api_call` | snake_case | `tenant_id`, `tenant_name`, `instance_id`, `toolkit_git_sha`, `toolkit_git_branch` |
+| `adk_session_start`, `adk_capability_use`, `adk_agent_create`, `adk_agent_deploy`, `adk_build_complete`, `adk_api_call`, `adk_connect_lifecycle` | snake_case | `tenant_id`, `tenant_name`, `instance_id`, `toolkit_git_sha`, `toolkit_git_branch` |
 
 Time column on every table: `EventInfo_Time` (UTC).
 
@@ -74,6 +74,36 @@ Time column on every table: `EventInfo_Time` (UTC).
 | `toolkit_git_sha` / `toolkitGitSha` | 7-char hex SHA of the clone's local `HEAD` — the precise upgrade posture signal |
 | `toolkit_git_branch` / `toolkitGitBranch` | Bounded classification: `main`, `main-ca`, `detached`, `other`, `unknown` |
 | `agent_type` / `agentType` | Derived from branch: `custom_agent` (`main-ca`) / `declarative_agent` (`main`) / `unknown`. Present once PR #336 / #337 are merged. |
+
+`adk_connect_lifecycle` records privacy-safe provider lifecycle transitions.
+For Workday investigations, filter `connector == "workday"` and stitch one
+run using `correlation_id`. Its bounded dimensions include `lifecycle_event`,
+`phase`, `outcome`, `duration_ms`, `retry_count`, `resume_count`, and
+`blocker_category`. Employee-validation blockers can also carry the bounded
+`remediation_id` (`WD-E2E-NNN`). `agent_id` is emitted only when it is a
+canonical GUID. It does not contain free-form errors, URLs, connection
+identifiers, or employee data.
+
+`phase` is restricted to the six Workday phases (normalized with underscores)
+or `unknown`. `blocker_category` is restricted to `auth`, `permissions`,
+`connection`, `runtime`, `validation`, `state`, `timeout`, `platform`, or
+`unknown`. Arbitrary caller values are never slugged into dimensions.
+
+One `invoked` event is recorded per lifecycle when the controller's outer
+`status` boundary starts a `/connect` conversation, not for repeated progress
+refreshes or internal controller commands. If target reconciliation rotates
+the lifecycle, the invocation is carried to the new correlation.
+Blocking an active phase records `phase_paused` followed by `blocked`; a later
+retry records `phase_resumed`. `phase_completed.duration_ms` is cumulative
+active time across all paused/resumed segments for that phase.
+Use the lifecycle event's journal timestamp and `duration_ms` for transition
+analysis; asynchronous delivery means `EventInfo_Time` can be later.
+
+Changing an existing target environment, agent identity, Entra tenant, or
+Workday tenant starts a new correlation ID. An in-progress prior run records
+`abandoned` before rotation. Journal records retain their own correlation IDs,
+so bounded history can safely contain events from both the previous and current
+target without combining them in Kusto.
 
 ---
 

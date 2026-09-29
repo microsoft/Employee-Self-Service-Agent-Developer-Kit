@@ -11,11 +11,11 @@ The only writable lifecycle state is:
 writes, and phase transitions. Skills must use `scripts/workday_connect.py`;
 they must not edit this file directly or create a Markdown state mirror.
 
-## Schema version 5
+## Schema version 6
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "provider": "workday",
   "status": "in-progress",
   "scope": {},
@@ -23,6 +23,16 @@ they must not edit this file directly or create a Markdown state mirror.
   "endpoints": {},
   "operators": {},
   "tenantFoundation": null,
+  "lifecycle": {
+    "correlationId": "random UUID",
+    "startedAt": "UTC timestamp",
+    "retryCount": 0,
+    "resumeCount": 0,
+    "phaseDurationsMs": {},
+    "activePhaseStartedAt": {},
+    "eventMarkers": [],
+    "journal": []
+  },
   "phases": {},
   "migration": null,
   "updatedAt": "UTC timestamp"
@@ -37,6 +47,15 @@ they must not edit this file directly or create a Markdown state mirror.
 - `tenantFoundation` contains reusable Entra and Workday administrator
   evidence scoped to one exact Entra tenant, Workday tenant, application,
   signing certificate, and endpoint set.
+- `lifecycle` contains the bounded privacy-safe transition journal and its
+  random current correlation ID. Each journal record retains the correlation
+  ID active when that event occurred. Changing an existing target environment,
+  agent identity, Entra tenant, or Workday tenant rotates the current ID while
+  preserving bounded prior history. Cumulative phase durations, active segment
+  starts, and once-per-lifecycle markers are retained separately so trimming
+  the journal cannot change lifecycle behavior. Blocked events may retain a
+  bounded `WD-E2E-NNN` remediation ID. The journal never contains free-form
+  errors or customer data.
 - `phases` contains exactly the six controller phases.
 
 Each phase stores status, completed action keys, optional runtime approval,
@@ -70,8 +89,8 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2, schema-v3, schema-v4, or legacy row-based state is backed up to
-`config.pre-v5.json` before one-time migration. When Entra and Workday
+Schema-v2, schema-v3, schema-v4, schema-v5, or legacy row-based state is backed up to
+`config.pre-v6.json` before one-time migration. When Entra and Workday
 administrator phases were already complete, migration captures their evidence
 as the reusable tenant foundation. A previously complete runtime phase is
 reopened when it lacks live Workday topic activation evidence. Legacy Markdown

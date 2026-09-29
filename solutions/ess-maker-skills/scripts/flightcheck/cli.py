@@ -812,7 +812,7 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
 
-    if overlay.get("schemaVersion") in {2, 3, 4, 5}:
+    if overlay.get("schemaVersion") in {2, 3, 4, 5, 6}:
         scope = overlay.get("scope") or {}
         identifiers = overlay.get("identifiers") or {}
         endpoints = overlay.get("endpoints") or {}

@@ -95,6 +95,62 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
     assert "do not mark the passing outcome as recommended" in form_text
 
 
+def test_employee_validation_uses_stable_remediation_contract() -> None:
+    import workday_connect_contracts as contracts
+
+    text = (_WORKDAY_DA / "verify-connection.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
+    assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
+    documented_result_ids = dict(
+        re.findall(
+            r"\|\s*(Failed - [^|]+?)\s*\|\s*`(WD-E2E-\d{3})`\s*\|",
+            text,
+        )
+    )
+    assert documented_result_ids == contracts.EMPLOYEE_VALIDATION_RESULT_IDS
+    documented_surfaces = {
+        value
+        for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
+        if value in contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    }
+    assert documented_surfaces == set(
+        contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    )
+    surface_section = text.split(
+        '"header": "Failure surface"',
+        maxsplit=1,
+    )[1].split("Map those choices respectively to", maxsplit=1)[0]
+    surface_labels = re.findall(
+        r'\{ "label": "([^"]+)" \}',
+        surface_section,
+    )
+    documented_surface_choices = dict(
+        zip(
+            surface_labels,
+            re.findall(
+                r"`([a-z]+(?:-[a-z]+)*)`",
+                text.split("Map those choices respectively to", maxsplit=1)[1],
+            )[: len(surface_labels)],
+            strict=True,
+        )
+    )
+    assert (
+        documented_surface_choices
+        == contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES
+    )
+    assert "`failureCategory`" not in text
+    assert "Canonical `remediation`" not in text
+    assert "Do not invent a remediation ID" in normalized
+    assert "derives the safe category and canonical remediation" in normalized
+    assert "migrates existing three-field failure files" in normalized
+    assert "legacy free-form remediation text is discarded" in normalized
+    assert "cannot publish the agent, impersonate an employee" in normalized
+
+
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     import workday_connect as controller
 

@@ -45,6 +45,10 @@ from workday_connect_store import (
     WorkdayConnectStore,
     WorkdayConnectStoreError,
 )
+from workday_connect_telemetry import (
+    emit_lifecycle_event,
+    flush_lifecycle_telemetry,
+)
 
 
 RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
@@ -250,8 +254,21 @@ def _record_entra(
             "checks": result["evidence"]["checks"],
         },
     )
+    store.record_lifecycle_event(
+        "roles-attested",
+        phase="entra",
+        outcome="success",
+        once_per_lifecycle=True,
+    )
     store.set_phase_status("entra", "complete")
     _, reused = store.restore_workday_foundation()
+    if reused:
+        store.record_lifecycle_event(
+            "roles-attested",
+            phase="workday-admin",
+            outcome="success",
+            once_per_lifecycle=True,
+        )
     return {
         "verified": True,
         "tenantFoundationReused": reused,
@@ -281,6 +298,12 @@ def _record_workday_admin(
         "administrator-response-validated",
         evidence={"outcome": "verified", **result["evidence"]},
     )
+    store.record_lifecycle_event(
+        "roles-attested",
+        phase="workday-admin",
+        outcome="success",
+        once_per_lifecycle=True,
+    )
     store.set_phase_status("workday-admin", "complete")
     store.capture_tenant_foundation()
     return {
@@ -293,12 +316,14 @@ def _runtime_plan(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return run_runtime_operation(
+    result = run_runtime_operation(
         store.load(),
         apply=False,
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
+    store.record_lifecycle_event("plan-generated", phase="runtime")
+    return result
 
 
 def _runtime_apply(
@@ -510,19 +535,25 @@ def _record_validation_failure(
         "blocked",
         blocker={
             "operation": "record-validation-failure",
+            "remediationId": evidence["remediationId"],
             "errorType": evidence["failureCategory"],
+            "failureSurface": evidence["failureSurface"],
             "message": evidence["remediation"],
             "capturedAt": evidence["timestamp"],
         },
     )
-    return {"recorded": True, "status": store.status()}
+    return {
+        "recorded": True,
+        "remediationId": evidence["remediationId"],
+        "status": store.status(),
+    }
 
 
 def _preflight(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return run_preflight(
+    result = run_preflight(
         Path(args.root),
         dataverse_url=args.dataverse_url,
         maker_username=args.maker_username,
@@ -534,6 +565,9 @@ def _preflight(
             approved_hash,
         ),
     )
+    if result.get("requiresApproval"):
+        store.record_lifecycle_event("plan-generated", phase="preflight")
+    return result
 
 
 def _preflight_approve(
@@ -591,8 +625,16 @@ _COMMAND_PHASES = {
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    store = WorkdayConnectStore(Path(args.root))
+    store = WorkdayConnectStore(
+        Path(args.root),
+        event_sink=emit_lifecycle_event,
+    )
     try:
+        if args.command == "status":
+            store.record_lifecycle_event(
+                "invoked",
+                once_per_lifecycle=True,
+            )
         handler = _COMMAND_HANDLERS.get(args.command)
         if handler is None:
             parser.error(f"Unsupported command: {args.command}")
@@ -611,14 +653,27 @@ def main() -> None:
         blocker_persistence_error = None
         if phase_id:
             try:
+                blocker = {
+                    "operation": args.command,
+                    "errorType": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if phase_id == "employee-validation":
+                    existing_phase = (
+                        store.load().get("phases", {}).get(phase_id, {})
+                    )
+                    existing_blocker = existing_phase.get("blocker") or {}
+                    for key in (
+                        "remediationId",
+                        "failureSurface",
+                        "capturedAt",
+                    ):
+                        if key in existing_blocker:
+                            blocker[key] = existing_blocker[key]
                 store.set_phase_status(
                     phase_id,
                     "blocked",
-                    blocker={
-                        "operation": args.command,
-                        "errorType": type(exc).__name__,
-                        "message": str(exc),
-                    },
+                    blocker=blocker,
                 )
             except (
                 OSError,
@@ -643,6 +698,8 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
+    finally:
+        flush_lifecycle_telemetry()
 
 
 if __name__ == "__main__":

@@ -624,6 +624,12 @@ def run_preflight(
             "pacAccount": pac_identity,
         },
     )
+    state_store.record_lifecycle_event(
+        "roles-attested",
+        phase="preflight",
+        outcome="success",
+        once_per_lifecycle=True,
+    )
     final_state = state_store.set_phase_status("preflight", "complete")
     return {
         "scope": final_state["scope"],
