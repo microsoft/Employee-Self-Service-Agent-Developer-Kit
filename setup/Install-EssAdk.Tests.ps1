@@ -422,11 +422,21 @@ Test 'maker installer identity is instrumented (post-consolidation)' {
     # now a compat shim into the unified installer that passes -InstallMode maker,
     # the guard would drop all shim events. It must be gone.
     $old = $env:ESS_ADK_TELEMETRY
+    $oldSend = (Get-Command Send-EssTelEvent).ScriptBlock
     try {
-        $env:ESS_ADK_TELEMETRY = ''
+        $env:ESS_ADK_TELEMETRY = 'on'
+        Set-Item -Path Function:\Send-EssTelEvent -Value {
+            param([hashtable]$Envelope)
+            return 200
+        }
         Initialize-EssInstallTelemetry -Installer 'lite' -InstallMode 'maker'
         if (-not $script:EssTel.Ready) { throw 'legacy lite installer identity should be telemetry-ready after consolidation' }
-    } finally { $env:ESS_ADK_TELEMETRY = $old; $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
+    } finally {
+        Set-Item -Path Function:\Send-EssTelEvent -Value $oldSend
+        $env:ESS_ADK_TELEMETRY = $old
+        $script:EssTel.Ready = $false
+        $script:EssTel.Completed = $false
+    }
 }
 Test 'PowerShell emitter no longer guards out the legacy lite installer' {
     $emitterSrc = Get-Content $psEmitter -Raw

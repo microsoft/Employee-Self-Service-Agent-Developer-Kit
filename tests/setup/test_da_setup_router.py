@@ -1273,6 +1273,10 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
         "- Run `/landing-page` to configure branding and the content employees see."
         in completion_choices
     )
+    assert (
+        "- Run `/org-announcements` to create or manage announcements for this agent."
+        in completion_choices
+    )
     assert "- Run `/connect` to choose an integration." in completion_choices
     assert "- Type `/menu` to see all available capabilities." in completion_choices
     assert "What would you like to customize?" not in completion_choices

@@ -246,6 +246,7 @@ another setup completion summary. After the maker selects it, show:
 The {agent display name} agent is now active.
 
 - Run `/landing-page` to configure branding and the content employees see.
+- Run `/org-announcements` to create or manage announcements for this agent.
 - Run `/connect` to choose an integration.
 - Type `/menu` to see all available capabilities.
 

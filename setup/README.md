@@ -48,7 +48,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Maker mode is the same install as Developer mode plus the **ESS Maker Profile** extension applying:
 - A chat-only layout with all developer surfaces hidden
-- Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
+- Big-button "Quick Actions" rail for common tasks (Setup, Customize landing page, Post an announcement, Create, Scan, FlightCheck, Push)
 - A built-in tutorial explaining each button
 
 You can switch between Maker mode and Developer mode at any time using the toggle buttons in the Quick Actions panel.

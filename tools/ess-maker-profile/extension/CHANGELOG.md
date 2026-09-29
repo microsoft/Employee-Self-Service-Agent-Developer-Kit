@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.29 (POC)
+
+- Added **Post an announcement** to Quick Actions. The setup-gated action opens
+  a guided Copilot chat for announcements in the selected deployed ESS agent.
+- Current and archived announcement limits apply per tenant and agent, not
+  across every agent in the organization.
+- Bumped the package version so existing 0.4.28 installs can receive the new
+  Quick Action.
+
 ## 0.4.28 (POC)
 
 - **Mode prompt lives in the installer CLI.** The consolidated installer

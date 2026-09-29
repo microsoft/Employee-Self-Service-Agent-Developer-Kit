@@ -14,6 +14,7 @@ Here's what I can help you with:
 | Command | What it does |
 |---------|-------------|
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
+| `/org-announcements` | Create and manage announcements for the selected deployed ESS agent |
 | `/connect-workday` | Connect the active ESS HR agent to Workday |
 | `/connect` | Choose an available integration |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
