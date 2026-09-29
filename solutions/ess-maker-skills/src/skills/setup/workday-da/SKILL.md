@@ -128,6 +128,36 @@ resumed setup must still make its remaining administrator dependencies clear.
 > administrator with the exact steps and wait for verified evidence. The
 > environment isn't ready until the signed-in Workday scenario succeeds.
 
+After showing the briefing, use this exact `vscode_askQuestions` form before
+running any lifecycle command:
+
+```json
+[
+  {
+    "header": "Required access",
+    "question": "Are the people needed for every applicable role above available to help when their phase begins?",
+    "options": [
+      { "label": "Yes, required people are available" },
+      { "label": "No, someone is unavailable" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This is an availability self-attestation for
+planning, not proof that the signed-in account has a required role. The
+phase-specific permission checks and verified evidence remain authoritative.
+
+If the maker selects **No, someone is unavailable**, stop before running
+`status` or any phase command. Explain that no setup progress was changed and
+ask them to return when the required person can participate. Do not request
+the person's name, credentials, or other identifying information, and do not
+offer to bypass the role requirement.
+
+If the maker selects **Yes, required people are available**, continue with the
+status check below.
+
 Run:
 
 ```powershell

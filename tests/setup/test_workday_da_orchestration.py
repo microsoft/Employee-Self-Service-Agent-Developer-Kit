@@ -40,6 +40,33 @@ def test_orchestrator_resumes_from_controller_status() -> None:
     assert "controller status is `ready`" in text
 
 
+def test_role_availability_is_attested_before_lifecycle_execution() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+
+    briefing = skill.index("> Here's who may be needed")
+    attestation = skill.index('"header": "Required access"')
+    status = skill.index("python scripts/workday_connect.py status")
+
+    assert briefing < attestation < status
+    assert (
+        '"question": "Are the people needed for every applicable role above '
+        'available to help when their phase begins?"'
+    ) in skill
+    assert '"label": "Yes, required people are available"' in skill
+    assert '"label": "No, someone is unavailable"' in skill
+    assert '"allowFreeformInput": false' in skill
+    assert "Leave the selection unset" in skill
+    assert "availability self-attestation for\nplanning" in skill
+    assert "not proof that the signed-in account has a required role" in skill
+    assert "phase-specific permission checks and verified evidence remain" in skill
+    assert "stop before running\n`status` or any phase command" in skill
+    assert "no setup progress was changed" in skill
+    assert "do not\noffer to bypass the role requirement" in skill
+    assert "Do not add another availability confirmation in\nthis phase" in tenant
+    assert "lifecycle-level self-attestation already covers it" in tenant
+
+
 def test_every_controller_command_is_documented() -> None:
     import workday_connect as controller
 

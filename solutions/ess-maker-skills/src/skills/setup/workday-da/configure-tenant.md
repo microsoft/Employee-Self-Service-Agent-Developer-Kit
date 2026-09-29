@@ -22,8 +22,9 @@ Connections. Show only the affected Workday remediation step if a later
 connection or employee test proves that the stored foundation has drifted.
 
 When no matching foundation can be reused, guide the Workday administrator
-through these steps in order. Do not add a separate availability confirmation;
-if the administrator is not available, present the handoff and pause before
+through these steps in order. Do not add another availability confirmation in
+this phase; the lifecycle-level self-attestation already covers it. If the
+administrator becomes unavailable, present the handoff and pause before
 showing the response form.
 
 1. **Protect the existing federation.** In Workday, run **Edit Tenant Setup -
