@@ -13,6 +13,7 @@ import pytest
 import requests
 
 import agentbuilder
+import da_product_registry
 import setup_mos_starter as mos
 
 
@@ -217,6 +218,133 @@ def test_summarize_starter_packages_never_mutates_input() -> None:
 
     assert packages[0]["secretField"] == "keep"
     assert "secretField" not in result[0]
+
+
+def test_summarize_starter_packages_adds_only_exact_registered_product_key() -> None:
+    packages = [
+        {
+            "packageId": "pkg-hub",
+            "name": "Employee Self-Service",
+        },
+        {
+            "packageId": "pkg-hr",
+            "name": "Employee Self-Service (HR)",
+        },
+        {
+            "packageId": "pkg-unknown",
+            "name": "Employee Self-Service HR Preview",
+        },
+    ]
+
+    result = mos.summarize_starter_packages(packages)
+    by_package_id = {item["packageId"]: item for item in result}
+
+    assert by_package_id["pkg-hub"]["productKey"] == "employee-self-service-hub"
+    assert by_package_id["pkg-hr"]["productKey"] == "employee-self-service-hr"
+    assert "productKey" not in by_package_id["pkg-unknown"]
+
+
+def test_summarize_starter_packages_prefers_workspace_observation(
+    tmp_path: Path,
+) -> None:
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="workspace-hr",
+        package_id="pkg-hr",
+        catalog_name="Employee Self-Service (HR)",
+        agent_schema_name="workspace-schema",
+        source="runtime evidence",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    result = mos.summarize_starter_packages(
+        [
+            {
+                "packageId": "pkg-hr",
+                "name": "Employee Self-Service (HR)",
+            }
+        ],
+        kit_root=tmp_path,
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    assert result[0]["productKey"] == "workspace-hr"
+    assert result[0]["agentSchemaName"] == "workspace-schema"
+    assert result[0]["productIdentitySource"] == "workspace-observation"
+    assert result[0]["installed"] is True
+
+
+def test_summarize_starter_packages_does_not_cross_environment_installation(
+    tmp_path: Path,
+) -> None:
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="workspace-it",
+        package_id="pkg-it",
+        catalog_name="Employee Self-Service (IT)",
+        agent_schema_name="workspace-it-schema",
+        source="setup_mos_starter.py create collision",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    result = mos.summarize_starter_packages(
+        [
+            {
+                "packageId": "pkg-it",
+                "name": "Employee Self-Service (IT)",
+            }
+        ],
+        kit_root=tmp_path,
+        environment_id="environment-2",
+        ring="test",
+    )
+
+    assert result[0]["productKey"] == "workspace-it"
+    assert "installed" not in result[0]
+
+
+def test_catalog_retains_all_products_and_reflects_collision_installation(
+    tmp_path: Path,
+) -> None:
+    da_product_registry.observe_product_mapping(
+        tmp_path,
+        product_key="employee-self-service-it",
+        package_id="pkg-it",
+        catalog_name="Employee Self-Service (IT)",
+        agent_schema_name="gptagent_copilotforemployeeselfserviceit",
+        source="setup_mos_starter.py create collision",
+        environment_id="environment-1",
+        ring="test",
+    )
+
+    result = mos.summarize_starter_packages(
+        [
+            {
+                "packageId": "pkg-hub",
+                "name": "Employee Self-Service",
+            },
+            {
+                "packageId": "pkg-hr",
+                "name": "Employee Self-Service (HR)",
+            },
+            {
+                "packageId": "pkg-it",
+                "name": "Employee Self-Service (IT)",
+            },
+        ],
+        kit_root=tmp_path,
+        environment_id="environment-1",
+        ring="test",
+    )
+    by_package_id = {item["packageId"]: item for item in result}
+
+    assert set(by_package_id) == {"pkg-hub", "pkg-hr", "pkg-it"}
+    assert "installed" not in by_package_id["pkg-hub"]
+    assert "installed" not in by_package_id["pkg-hr"]
+    assert by_package_id["pkg-it"]["installed"] is True
 
 
 def test_catalog_warnings_reports_malformed_rows_with_safe_projection_only() -> None:

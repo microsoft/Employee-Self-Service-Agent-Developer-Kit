@@ -81,7 +81,7 @@ python scripts/setup_existing_da.py validate-agent \
 
 `inspect-agent` returns the service-owned route realm. `validate-agent` verifies one exact editable Dev agent without writing setup state or workspace files. Do not run `validate-agent` immediately before `attach` merely to create another visible step; `attach` performs its own exact validation.
 
-If the maker provides an environment URL without an agent ID, list visible Dev-realm candidates:
+If the maker provides an environment URL without an agent ID, list the environment's realm-classified agent inventory:
 
 ```text
 python scripts/setup_existing_da.py list-agents \
@@ -89,11 +89,16 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-When candidates are returned, show their display names and ask the maker to choose one. For an identity returned by this native list, run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or attachment. Validate only the selected candidate through `validate-agent` or `attach`.
+Parse `DA_AGENT_LIST_JSON:`. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices.
 
-When the list is empty, say:
+When supported candidates are returned, show their display names and realms and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
 
-> No visible editable Dev agents were listed in this environment. A directly addressable agent may still be available.
+- For a selected `devAgents` identity, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
+- For a selected `prodAgents` identity, do not require a Dev schema from the list result. Run the parent's exact `inspect-agent` route and continue through its existing `da-prod-to-dev.md` handoff. Do not validate or attach the Prod ID as though it were Dev.
+
+When both `devAgents` and `prodAgents` are empty, say:
+
+> No visible Dev or Prod setup-source agents were listed in this environment. A directly addressable agent may still be available.
 
 Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
 
@@ -199,21 +204,25 @@ After successful materialization and after the three setup-readiness checks and 
 
 Infer a concise user-friendly product name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
 
-Build the exact agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/bots/{AGENT_ID}/overview`, using the validated Copilot Studio origin for the selected service ring and the exact environment and agent IDs from setup evidence. Never link to the environment's agent-list page.
+Build the exact Classic Copilot Studio agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details?agentBackend=cosmos`, using the validated Copilot Studio origin for the selected service ring and the exact environment and agent IDs from setup evidence. Never link to the environment's agent-list page.
 
 **Message:**
 
-Your local workspace is ready for authoring. The remote agent is available at [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Microsoft Copilot Studio.
+Your local workspace is ready for authoring.
+
+> **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+For listing newer declarative agents, use the Classic experience. From the new experience, open the **…** menu beside your profile, select **Open classic experience**, then select **Skip feedback** or **Open in a new tab**.
 
 ### Runtime readiness
 
-| Check                | Status                          | Details                                  |
-| -------------------- | ------------------------------- | ---------------------------------------- |
-| Agent access         | {agent access status}           | {agent access evidence summary}          |
-| Environment capacity | {environment capacity status}   | {environment capacity evidence summary}  |
-| Connections          | {connections status}            | {connections evidence summary}           |
-| Agent content        | {agent content status}          | {agent content evidence summary}         |
-| **Overall**          | **{overall readiness status}**  | **{maker-facing readiness summary}**     |
+| Check                | Status                         | Details                                 |
+| -------------------- | ------------------------------ | --------------------------------------- |
+| Agent access         | {agent access status}          | {agent access evidence summary}         |
+| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |
+| Connections          | {connections status}           | {connections evidence summary}          |
+| Agent content        | {agent content status}         | {agent content evidence summary}        |
+| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |
 
 **End message.**
 

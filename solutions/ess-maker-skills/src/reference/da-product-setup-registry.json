@@ -1,6 +1,11 @@
 {
   "schemaVersion": 1,
   "products": {
+    "employee-self-service-hub": {
+      "catalogNames": ["Employee Self-Service"],
+      "agentSchemaNames": ["gptagent_copilotforemployeeselfservicecore"],
+      "requiredConnection": null
+    },
     "employee-self-service-hr": {
       "catalogNames": [
         "Employee Self-Service HR",
