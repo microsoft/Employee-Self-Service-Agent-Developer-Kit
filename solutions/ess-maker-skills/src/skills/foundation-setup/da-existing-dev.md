@@ -27,17 +27,19 @@ python scripts/setup_existing_da.py inspect-agent \
 ```
 
 Parse `DA_AGENT_ROUTE_JSON:`. Continue only when the current invocation has a
-service result reporting `realm: dev`. Do not infer the realm from the URL,
-agent name, environment metadata, canonical setup state, or conversation
-history. When `almEnrollment` is `not-enrolled`, preserve that the native agent
-exists, explain that it is not enrolled for ALM-based local authoring, and use
-the parent's alternate-agent, alternate-environment, and **Go back** recovery
-routes. If the service reports another realm, explain that this setup path
-requires an editable Dev agent and stop.
+service result reporting `routeStatus: resolved` and `realm: dev`. This route
+check does not require readable `/configure` state: an unpublished Dev agent can
+still be fetched and materialized for local authoring. Do not infer the realm
+from the URL, agent name, environment metadata, canonical setup state, or
+conversation history. When `routeStatus` is `not-found`, preserve that the
+native agent exists, explain that setup could not establish its authoring route,
+and use the parent's alternate-agent, alternate-environment, and **Go back**
+recovery routes. If the service reports another realm, explain that this setup
+path requires a Dev agent and stop.
 
 After a Dev result, show:
 
-> Editable Dev agent verified. Preparing its local authoring workspace...
+> Dev agent route verified. Preparing its local authoring workspace...
 
 Run:
 
