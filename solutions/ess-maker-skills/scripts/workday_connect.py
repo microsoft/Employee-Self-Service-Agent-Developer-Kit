@@ -45,6 +45,10 @@ from workday_connect_store import (
     WorkdayConnectStore,
     WorkdayConnectStoreError,
 )
+from workday_connect_telemetry import (
+    emit_lifecycle_event,
+    flush_lifecycle_telemetry,
+)
 
 
 RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
@@ -293,12 +297,14 @@ def _runtime_plan(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return run_runtime_operation(
+    result = run_runtime_operation(
         store.load(),
         apply=False,
         workday_connection_id=args.workday_connection_id,
         dataverse_connection_id=args.dataverse_connection_id,
     )
+    store.record_lifecycle_event("plan-generated", phase="runtime")
+    return result
 
 
 def _runtime_apply(
@@ -528,7 +534,7 @@ def _preflight(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return run_preflight(
+    result = run_preflight(
         Path(args.root),
         dataverse_url=args.dataverse_url,
         maker_username=args.maker_username,
@@ -540,6 +546,9 @@ def _preflight(
             approved_hash,
         ),
     )
+    if result.get("requiresApproval"):
+        store.record_lifecycle_event("plan-generated", phase="preflight")
+    return result
 
 
 def _preflight_approve(
@@ -597,8 +606,15 @@ _COMMAND_PHASES = {
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    store = WorkdayConnectStore(Path(args.root))
+    store = WorkdayConnectStore(
+        Path(args.root),
+        event_sink=emit_lifecycle_event,
+    )
     try:
+        store.record_lifecycle_event(
+            "invoked",
+            phase=_COMMAND_PHASES.get(args.command, ""),
+        )
         handler = _COMMAND_HANDLERS.get(args.command)
         if handler is None:
             parser.error(f"Unsupported command: {args.command}")
@@ -662,6 +678,8 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
+    finally:
+        flush_lifecycle_telemetry()
 
 
 if __name__ == "__main__":

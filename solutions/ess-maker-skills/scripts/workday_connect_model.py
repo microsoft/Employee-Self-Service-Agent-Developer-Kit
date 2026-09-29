@@ -13,11 +13,13 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Mapping
+import uuid
 
 
-STATE_SCHEMA_VERSION = 5
+STATE_SCHEMA_VERSION = 6
 CONTROLLER_CONTRACT_VERSION = 1
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
+LIFECYCLE_JOURNAL_MAX_EVENTS = 200
 
 
 class WorkdayConnectModelError(ValueError):
@@ -38,6 +40,25 @@ class PhaseStatus(str, Enum):
     ACTIVE = "active"
     BLOCKED = "blocked"
     COMPLETE = "complete"
+
+
+LIFECYCLE_EVENT_TYPES = frozenset(
+    {
+        "invoked",
+        "plan-generated",
+        "roles-attested",
+        "phase-started",
+        "phase-paused",
+        "phase-resumed",
+        "phase-completed",
+        "blocked",
+        "completed",
+        "abandoned",
+    }
+)
+LIFECYCLE_OUTCOMES = frozenset(
+    {"", "success", "blocked", "failure", "cancelled"}
+)
 
 
 @dataclass(frozen=True)
@@ -193,6 +214,11 @@ LEGACY_PHASE_ROWS = {
 }
 
 _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_CORRELATION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_BLOCKER_CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SECRET_KEYS = {
     "password",
     "clientsecret",
@@ -313,6 +339,16 @@ def default_phase_state() -> dict[str, Any]:
     }
 
 
+def default_lifecycle_state() -> dict[str, Any]:
+    return {
+        "correlationId": str(uuid.uuid4()),
+        "startedAt": utc_now(),
+        "retryCount": 0,
+        "resumeCount": 0,
+        "journal": [],
+    }
+
+
 def default_state() -> dict[str, Any]:
     return {
         "schemaVersion": STATE_SCHEMA_VERSION,
@@ -323,6 +359,7 @@ def default_state() -> dict[str, Any]:
         "endpoints": {},
         "operators": {},
         "tenantFoundation": None,
+        "lifecycle": default_lifecycle_state(),
         "phases": {
             definition.identifier.value: default_phase_state()
             for definition in PHASE_DEFINITIONS
@@ -330,6 +367,130 @@ def default_state() -> dict[str, Any]:
         "migration": None,
         "updatedAt": utc_now(),
     }
+
+
+def _validate_lifecycle_state(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise WorkdayConnectModelError(
+            "Workday lifecycle telemetry state must be an object."
+        )
+    required = {
+        "correlationId",
+        "startedAt",
+        "retryCount",
+        "resumeCount",
+        "journal",
+    }
+    missing = sorted(required - value.keys())
+    if missing:
+        raise WorkdayConnectModelError(
+            "Workday lifecycle telemetry state is missing: "
+            + ", ".join(missing)
+        )
+    correlation_id = value["correlationId"]
+    if (
+        not isinstance(correlation_id, str)
+        or not _CORRELATION_ID_RE.fullmatch(correlation_id)
+    ):
+        raise WorkdayConnectModelError(
+            "Workday lifecycle correlationId must be a UUID."
+        )
+    if not isinstance(value["startedAt"], str) or not value["startedAt"]:
+        raise WorkdayConnectModelError(
+            "Workday lifecycle startedAt is required."
+        )
+    for field in ("retryCount", "resumeCount"):
+        if (
+            not isinstance(value[field], int)
+            or isinstance(value[field], bool)
+            or value[field] < 0
+        ):
+            raise WorkdayConnectModelError(
+                f"Workday lifecycle {field} must be a non-negative integer."
+            )
+    journal = value["journal"]
+    if not isinstance(journal, list):
+        raise WorkdayConnectModelError(
+            "Workday lifecycle journal must be a list."
+        )
+    if len(journal) > LIFECYCLE_JOURNAL_MAX_EVENTS:
+        raise WorkdayConnectModelError(
+            "Workday lifecycle journal exceeds its bounded history."
+        )
+    previous_sequence = 0
+    for record in journal:
+        if not isinstance(record, dict):
+            raise WorkdayConnectModelError(
+                "Workday lifecycle journal must contain event objects."
+            )
+        event_required = {
+            "sequence",
+            "event",
+            "phase",
+            "outcome",
+            "blockerCategory",
+            "durationMs",
+            "retryCount",
+            "resumeCount",
+            "timestamp",
+        }
+        event_missing = sorted(event_required - record.keys())
+        if event_missing:
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event is missing: "
+                + ", ".join(event_missing)
+            )
+        sequence = record["sequence"]
+        if (
+            not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence <= previous_sequence
+        ):
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event sequences must increase."
+            )
+        previous_sequence = sequence
+        if record["event"] not in LIFECYCLE_EVENT_TYPES:
+            raise WorkdayConnectModelError(
+                f"Unknown Workday lifecycle event: {record['event']!r}."
+            )
+        if record["phase"] not in {"", *PHASE_BY_ID}:
+            raise WorkdayConnectModelError(
+                f"Unknown Workday lifecycle event phase: {record['phase']!r}."
+            )
+        if record["outcome"] not in LIFECYCLE_OUTCOMES:
+            raise WorkdayConnectModelError(
+                f"Unknown Workday lifecycle event outcome: {record['outcome']!r}."
+            )
+        blocker_category = record["blockerCategory"]
+        if blocker_category and (
+            not isinstance(blocker_category, str)
+            or not _BLOCKER_CATEGORY_RE.fullmatch(blocker_category)
+        ):
+            raise WorkdayConnectModelError(
+                "Workday lifecycle blockerCategory must be a bounded slug."
+            )
+        for field in ("durationMs", "retryCount", "resumeCount"):
+            if (
+                not isinstance(record[field], int)
+                or isinstance(record[field], bool)
+                or record[field] < 0
+            ):
+                raise WorkdayConnectModelError(
+                    f"Workday lifecycle event {field} must be non-negative."
+                )
+        if record["retryCount"] > value["retryCount"]:
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event retryCount exceeds the current count."
+            )
+        if record["resumeCount"] > value["resumeCount"]:
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event resumeCount exceeds the current count."
+            )
+        if not isinstance(record["timestamp"], str) or not record["timestamp"]:
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event timestamp is required."
+            )
 
 
 def _validate_phase_state(phase_id: str, value: Any) -> None:
@@ -540,6 +701,7 @@ def validate_state(state: Any) -> dict[str, Any]:
                 f"Workday connect state '{field}' must be an object."
             )
     _validate_tenant_foundation(state.get("tenantFoundation"))
+    _validate_lifecycle_state(state.get("lifecycle"))
     phases = state["phases"]
     if set(phases) != set(PHASE_BY_ID):
         raise WorkdayConnectModelError(

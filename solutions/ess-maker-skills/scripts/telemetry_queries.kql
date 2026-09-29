@@ -30,7 +30,8 @@
 //    essmakerkit_flightcheck_check  (1 per check; category + status)
 //    essmakerkit_installer_start / _complete
 //    adk_session_start, adk_capability_use, adk_agent_create, adk_agent_deploy,
-//    adk_build_complete, adk_api_call, adk_client_event   (ADK platform family)
+//    adk_build_complete, adk_api_call, adk_client_event,
+//    adk_connect_lifecycle                              (ADK platform family)
 //  Time column on every table: EventInfo_Time (UTC).
 // =============================================================================
 
@@ -433,3 +434,27 @@ essmakerkit_flightcheck_run
 | take 50
 // Take toolkitGitSha + toolkitGitBranch to the GitHub compare API to
 // determine how far behind the event's emitter was.
+
+
+// -----------------------------------------------------------------------------
+// 10) WORKDAY CONNECT LIFECYCLE — transitions, blockers, retries, and duration
+// -----------------------------------------------------------------------------
+adk_connect_lifecycle
+| where EventInfo_Time > ago(30d) and connector == "workday"
+| summarize Events = count(),
+            Runs = dcount(correlation_id),
+            MedianDurationMs = percentile(duration_ms, 50),
+            P95DurationMs = percentile(duration_ms, 95),
+            MaxRetryCount = max(retry_count),
+            MaxResumeCount = max(resume_count)
+    by lifecycle_event, phase, outcome, blocker_category
+| order by Events desc
+
+// Trace one lifecycle without relying on tenant names, URLs, or user identity:
+let correlationOfInterest = "<correlation-guid>";
+adk_connect_lifecycle
+| where correlation_id == correlationOfInterest
+| project EventInfo_Time, lifecycle_event, phase, outcome, duration_ms,
+          retry_count, resume_count, blocker_category, toolkit_git_sha,
+          toolkit_git_branch
+| order by EventInfo_Time asc

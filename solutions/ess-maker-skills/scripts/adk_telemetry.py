@@ -79,7 +79,8 @@ from flightcheck import telemetry as _fc  # noqa: E402
 #        attribution — ADO 7943642.
 # 1.5.0: added derived ``connector`` (workday|servicenow|"") on
 #        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
-SCHEMA_VERSION = "1.5.0"
+# 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
+SCHEMA_VERSION = "1.6.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -97,6 +98,7 @@ EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
+EVENT_CONNECT_LIFECYCLE = "adk.connect.lifecycle"
 EVENT_CLIENT = "adk.client.event"
 
 CLIENT_EVENTS_SCHEMA_VERSION = 2
@@ -268,6 +270,33 @@ _CONNECTOR_SET = frozenset(CONNECTORS)
 CONNECTOR_LEGACY = "legacy"
 CONNECTOR_UNKNOWN = "unknown"
 
+CONNECT_LIFECYCLE_EVENTS = (
+    "invoked",
+    "plan_generated",
+    "roles_attested",
+    "phase_started",
+    "phase_paused",
+    "phase_resumed",
+    "phase_completed",
+    "blocked",
+    "completed",
+    "abandoned",
+)
+_CONNECT_LIFECYCLE_EVENT_SET = frozenset(CONNECT_LIFECYCLE_EVENTS)
+CONNECT_LIFECYCLE_EVENT_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_OUTCOMES = (
+    "success",
+    "blocked",
+    "failure",
+    "cancelled",
+)
+_CONNECT_LIFECYCLE_OUTCOME_SET = frozenset(CONNECT_LIFECYCLE_OUTCOMES)
+CONNECT_LIFECYCLE_OUTCOME_UNKNOWN = "unknown"
+_CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
 
 def normalize_connector(connector: str) -> str:
     """Normalize a ``connector`` value to the canonical enum.
@@ -285,6 +314,33 @@ def normalize_connector(connector: str) -> str:
     if c == CONNECTOR_LEGACY:
         return CONNECTOR_LEGACY
     return CONNECTOR_UNKNOWN
+
+
+def normalize_connect_lifecycle_event(event: str) -> str:
+    normalized = str(event or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_EVENT_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_EVENT_UNKNOWN
+
+
+def normalize_connect_lifecycle_outcome(outcome: str) -> str:
+    normalized = str(outcome or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_OUTCOME_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_OUTCOME_UNKNOWN
+
+
+def _bounded_slug(value: str, limit: int = 64) -> str:
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(value or "").strip().lower(),
+    ).strip("_")
+    return normalized[:limit]
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -1333,6 +1389,45 @@ def emit_capability_use(
     data["adk_capability"] = normalize_capability(adk_capability)
     data["connector"] = normalize_connector(connector)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
+
+
+def emit_connect_lifecycle(
+    lifecycle_event: str,
+    *,
+    connector: str = "",
+    phase: str = "",
+    outcome: str = "",
+    duration_ms: int = 0,
+    retry_count: int = 0,
+    resume_count: int = 0,
+    blocker_category: str = "",
+    correlation_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    normalized_correlation = str(correlation_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_correlation):
+        normalized_correlation = ""
+    data.update(
+        {
+            "agent_id": agent_id,
+            "connector": normalize_connector(connector),
+            "lifecycle_event": normalize_connect_lifecycle_event(
+                lifecycle_event
+            ),
+            "phase": _bounded_slug(phase),
+            "outcome": normalize_connect_lifecycle_outcome(outcome),
+            "duration_ms": max(0, int(duration_ms)),
+            "retry_count": max(0, int(retry_count)),
+            "resume_count": max(0, int(resume_count)),
+            "blocker_category": _bounded_slug(blocker_category),
+            "correlation_id": normalized_correlation,
+        }
+    )
+    return _emit(EVENT_CONNECT_LIFECYCLE, data, block=block)
 
 
 def emit_flightcheck_run(

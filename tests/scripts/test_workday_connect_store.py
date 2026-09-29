@@ -21,7 +21,10 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 5
+    assert state["schemaVersion"] == 6
+    assert state["lifecycle"]["retryCount"] == 0
+    assert state["lifecycle"]["resumeCount"] == 0
+    assert state["lifecycle"]["journal"] == []
     assert _config_path(tmp_path).exists()
     assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
     assert not (tmp_path / ".local/setup/workday-da/tasks.md").exists()
@@ -61,7 +64,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v5.json").exists()
+    assert path.with_name("config.pre-v6.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -102,6 +105,112 @@ def test_future_schema_is_rejected_without_rewriting_state(
         store_module.WorkdayConnectStore(tmp_path).initialize()
 
     assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 5
+    state.pop("lifecycle")
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 6
+    assert upgraded["lifecycle"]["correlationId"]
+    assert upgraded["lifecycle"]["journal"] == []
+    assert upgraded["migration"]["source"] == "workday-connect-state-v5"
+    assert path.with_name("config.pre-v6.json").exists()
+
+
+def test_phase_transitions_append_events_and_publish_after_persistence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    published = []
+
+    def sink(state, event):
+        persisted = json.loads(_config_path(tmp_path).read_text(encoding="utf-8"))
+        assert persisted["lifecycle"]["journal"][-1] == event
+        published.append((state, event))
+
+    store = store_module.WorkdayConnectStore(tmp_path, event_sink=sink)
+    store.initialize()
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+    store.set_phase_status(
+        "preflight",
+        "blocked",
+        blocker={
+            "operation": "preflight",
+            "errorType": "WorkdayConnectPreflightError",
+            "message": "Customer-specific URL must not enter the journal.",
+        },
+    )
+    store.complete_action(
+        "preflight",
+        "verify-package",
+        evidence={"outcome": "verified"},
+    )
+    state = store.set_phase_status("preflight", "complete")
+
+    events = state["lifecycle"]["journal"]
+    assert [event["event"] for event in events] == [
+        "phase-started",
+        "blocked",
+        "phase-resumed",
+        "phase-completed",
+    ]
+    assert events[1]["blockerCategory"] == "workdayconnectpreflighterror"
+    assert "message" not in events[1]
+    assert state["lifecycle"]["retryCount"] == 1
+    assert state["lifecycle"]["resumeCount"] == 1
+    assert len(published) == 4
+
+
+def test_lifecycle_journal_is_bounded(tmp_path: Path) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for _ in range(model.LIFECYCLE_JOURNAL_MAX_EVENTS + 5):
+        store.record_lifecycle_event("invoked", phase="preflight")
+
+    state = store.load()
+    journal = state["lifecycle"]["journal"]
+    assert len(journal) == model.LIFECYCLE_JOURNAL_MAX_EVENTS
+    assert journal[0]["sequence"] == 6
+    assert journal[-1]["sequence"] == model.LIFECYCLE_JOURNAL_MAX_EVENTS + 5
+
+
+def test_telemetry_sink_failure_never_breaks_state_transition(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    def failing_sink(_state, _event):
+        raise RuntimeError("collector unavailable")
+
+    store = store_module.WorkdayConnectStore(
+        tmp_path,
+        event_sink=failing_sink,
+    )
+    store.initialize()
+
+    state = store.record_lifecycle_event("invoked", phase="preflight")
+
+    assert state["lifecycle"]["journal"][-1]["event"] == "invoked"
 
 
 def test_legacy_ready_state_reopens_runtime_for_live_topic_proof(
@@ -516,7 +625,7 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
 
@@ -552,7 +661,7 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["status"] == "in-progress"
     assert upgraded["phases"]["runtime"]["status"] == "active"
     assert upgraded["phases"]["employee-validation"]["status"] == "pending"
@@ -611,13 +720,13 @@ def test_v4_migration_captures_complete_tenant_foundation(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["migration"]["source"] == "workday-connect-state-v4"
     assert upgraded["tenantFoundation"]["scope"] == {
         "entraTenantId": "tenant-id",
         "workdayTenant": "contoso",
     }
-    assert path.with_name("config.pre-v5.json").exists()
+    assert path.with_name("config.pre-v6.json").exists()
 
 
 def test_matching_foundation_restores_workday_after_entra_reread(

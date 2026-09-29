@@ -628,6 +628,57 @@ def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
 
 
+def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
+    captured_post,
+):
+    correlation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+
+    adk.emit_connect_lifecycle(
+        "phase-completed",
+        connector="workday",
+        phase="employee-validation",
+        outcome="success",
+        duration_ms=1250,
+        retry_count=2,
+        resume_count=1,
+        blocker_category="Workday Access Denied",
+        correlation_id=correlation_id,
+        agent_id="bot-id",
+        block=True,
+    )
+
+    envelope = captured_post[0][1][0]
+    assert envelope["name"] == "adk.connect.lifecycle"
+    assert envelope["data"]["connector"] == "workday"
+    assert envelope["data"]["lifecycle_event"] == "phase_completed"
+    assert envelope["data"]["phase"] == "employee_validation"
+    assert envelope["data"]["outcome"] == "success"
+    assert envelope["data"]["duration_ms"] == 1250
+    assert envelope["data"]["retry_count"] == 2
+    assert envelope["data"]["resume_count"] == 1
+    assert envelope["data"]["blocker_category"] == "workday_access_denied"
+    assert envelope["data"]["correlation_id"] == correlation_id
+    assert envelope["data"]["agent_id"] == "bot-id"
+
+
+def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
+    adk.emit_connect_lifecycle(
+        "future-event",
+        phase="Runtime / https://example.test/path",
+        outcome="future-outcome",
+        blocker_category="C:\\customer\\secret.txt",
+        correlation_id="not-a-guid",
+        block=True,
+    )
+
+    data = captured_post[0][1][0]["data"]
+    assert data["lifecycle_event"] == "unknown"
+    assert data["outcome"] == "unknown"
+    assert data["phase"] == "runtime_https_example_test_path"
+    assert data["blocker_category"] == "c_customer_secret_txt"
+    assert data["correlation_id"] == ""
+
+
 def test_api_call_error_outcome_carries_error_fields(captured_post):
     adk.emit_api_call(
         api_endpoint="dataverse/bots",
@@ -2113,10 +2164,8 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
     assert captured_post[0][1][0]["data"]["connector"] == "workday"
 
 
-def test_schema_version_bump_records_connector_dim():
-    # The connector dimension was added in 1.5.0. Older cubes / dashboards
-    # can version-gate on this to know whether "connector" will be present.
-    assert adk.SCHEMA_VERSION == "1.5.0"
+def test_schema_version_bump_records_connect_lifecycle_event():
+    assert adk.SCHEMA_VERSION == "1.6.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------
