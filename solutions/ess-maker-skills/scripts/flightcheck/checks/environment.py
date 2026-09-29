@@ -408,13 +408,18 @@ _CAPACITY_PORTAL_PATH = "/billing/licenses/copilotStudio/overview"
 
 
 def _capacity_portal(runner) -> str:
-    """Return the ring-matched Power Platform capacity portal link."""
+    """Return the Power Platform capacity portal link.
+
+    Prefers the ring-matched admin center origin. Targeted runs (for example
+    ``--checkpoint ENV-CAPACITY-001``) authenticate only the AgentBuilder
+    client and never resolve the BAP ring, so ``runner.ring`` can be None. Fall
+    back to the ring-agnostic production Admin Center rather than raising, so a
+    missing ring cannot crash an otherwise-successful capacity verdict.
+    """
     ring = getattr(runner, "ring", None)
-    if ring not in _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING:
-        raise ValueError(
-            "Power Platform environment ring is unavailable or unsupported."
-        )
-    origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING[ring]
+    origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
+        ring, _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"]
+    )
     return (
         "[Power Platform Admin Center > Licensing > Copilot Studio > "
         f"Manage capacity]({origin}{_CAPACITY_PORTAL_PATH})"

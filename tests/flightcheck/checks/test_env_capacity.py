@@ -138,12 +138,15 @@ def test_capacity_remediation_uses_ring_admin_center(
     assert expected_origin in r.remediation
 
 
-def test_capacity_remediation_rejects_an_unresolved_ring():
-    with pytest.raises(
-        ValueError,
-        match="ring is unavailable or unsupported",
-    ):
-        _run(_runner(powerplatform=None, ring=None))
+def test_capacity_remediation_falls_back_when_ring_unresolved():
+    # Targeted --checkpoint runs never resolve the BAP ring, so runner.ring is
+    # None. The capacity row must still be produced (no crash) with a
+    # ring-agnostic production Admin Center link, rather than raising.
+    r = _run(_runner(powerplatform=None, ring=None))
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
+    assert "https://admin.powerplatform.microsoft.com" in r.remediation
+    assert "Manage capacity" in r.remediation
 
 
 def test_fails_when_no_env_id():
