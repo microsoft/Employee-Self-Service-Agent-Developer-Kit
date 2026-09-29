@@ -20,10 +20,12 @@ Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
 
 Fail-loudly contract:
   * a missing ``connectionReferenceChanges`` key means genuine absence -> ``[]``;
-  * a present-but-malformed shape raises ``ValueError``; the consuming check is
-    expected to catch it and surface a WARNING rather than reporting a confident
-    but wrong verdict (an uncaught raise the runner turns into ERROR is also
-    acceptable failure-loud behavior — the contract is "do not swallow it");
+  * a present-but-malformed shape raises ``ValueError``; how to surface it is
+    the consuming check's decision (catch and report a WARNING, or let it
+    propagate so the runner records an ERROR) - this reader's only contract is
+    "do not swallow it." No consumer imports this reader on this branch yet, so
+    the runner's uncaught-raise -> ERROR mapping is documented runner behavior,
+    not exercised here;
   * a read that cannot be attempted at all (no AgentBuilder client, or no
     configured agent botId) returns ``None`` so the caller SKIPs.
 """
@@ -74,7 +76,9 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
     components API.
 
     Raises ``ValueError`` for a malformed ``connectionReferenceChanges`` shape
-    so the owning check reports a WARNING instead of overclaiming.
+    so the owning check can surface it (as a WARNING, or an uncaught raise the
+    runner records as ERROR) instead of overclaiming; that choice belongs to
+    the consumer.
     """
     changeset = client.fetch_components(bot_id) or {}
     changes = changeset.get("connectionReferenceChanges")
@@ -90,16 +94,15 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
         # Surface a malformed individual entry instead of silently skipping it
         # (PR #304 review): a non-dict change, or a ``connectionReference`` that
         # is present but not an object, no longer matches the validated
-        # contract, so raise and let the owning check degrade to a WARNING. An
-        # absent or null ``connectionReference`` is tolerated (a non-connection
-        # change) and skipped.
+        # contract, so raise and let the owning check decide how to surface it.
+        # An absent or null ``connectionReference`` is tolerated (a
+        # non-connection change) and skipped - ``.get`` returns ``None`` for
+        # both the missing-key and explicit-null cases.
         if not isinstance(change, dict):
             raise ValueError(
                 "Component fetch returned a malformed "
                 "connectionReferenceChanges entry."
             )
-        if "connectionReference" not in change:
-            continue
         item = change.get("connectionReference")
         if item is None:
             continue
@@ -107,13 +110,26 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
             raise ValueError(
                 "Component fetch returned a malformed connectionReference entry."
             )
+        # A dict that parses but lacks its identity fields is just as
+        # misleading as a non-dict (PR #304 review F-1): a row with a
+        # null/blank connectionReferenceLogicalName or connectorId gets
+        # silently skipped or misclassified by downstream consumers,
+        # recreating the confident "not found" verdict this reader exists to
+        # prevent. The validated payload always supplies both as non-empty
+        # strings; only connectionId may legitimately be null (an unbound
+        # reference), so require the two identity fields and raise on absence.
+        logical_name = _require_identity_field(
+            item.get("connectionReferenceLogicalName"),
+            "connectionReferenceLogicalName",
+        )
+        connector_id = _require_identity_field(
+            item.get("connectorId"), "connectorId"
+        )
         refs.append(
             {
                 "botid": bot_id,
-                "connectionreferencelogicalname": item.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": item.get("connectorId"),
+                "connectionreferencelogicalname": logical_name,
+                "connectorid": connector_id,
                 "connectionid": item.get("connectionId"),
                 "sharedconnectionparameters": item.get(
                     "sharedConnectionParameters"
@@ -121,6 +137,21 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
             }
         )
     return refs
+
+
+def _require_identity_field(value: Any, field_name: str) -> str:
+    """Return ``value`` as a non-empty string, or raise ``ValueError``.
+
+    A connection reference's identity fields (``connectionReferenceLogicalName``,
+    ``connectorId``) must be present and non-blank; a null/blank/non-string
+    value is a malformed payload, not a legitimate absence.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"Component fetch returned a connectionReference with a missing or "
+            f"malformed {field_name}."
+        )
+    return value
 
 
 def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:

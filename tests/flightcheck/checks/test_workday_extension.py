@@ -27,8 +27,10 @@ exercised directly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
+import pytest
 import responses
 
 from tests.conftest import require_validated_mock
@@ -584,19 +586,65 @@ class TestRestBaseUrl:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _write_component_map(
+    tmp_path,
+    agent: str,
+    *,
+    setup_file: str = "Setusercontext.mcs.yml",
+    setup_path: str | None = None,
+    target_file: str = "WorkdaySystemGetUserContextV2.mcs.yml",
+    target_path: str | None = None,
+    dialog: str | None = None,
+):
+    agent_dir = tmp_path / "workspace" / "agents" / agent
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    component_map_path = agent_dir / ".component-map.json"
+    component_map = (
+        json.loads(component_map_path.read_text(encoding="utf-8"))
+        if component_map_path.exists()
+        else {}
+    )
+    component_map.update({
+        setup_path or f"topics/{setup_file}": {
+            "componentKind": "DialogComponent",
+            "displayName": "[Admin] - User Context - Setup",
+            "schemaName": "contoso.topic.Setusercontext",
+        }
+    })
+    if dialog:
+        component_map[target_path or f"topics/{target_file}"] = {
+            "componentKind": "DialogComponent",
+            "displayName": "Workday [System] - 1: Set User Context V2",
+            "schemaName": dialog,
+        }
+    component_map_path.write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+
 def _write_topic(tmp_path, agent: str, body: str):
     topics = tmp_path / "workspace" / "agents" / agent / "topics"
     topics.mkdir(parents=True, exist_ok=True)
-    (topics / "user-context-setup.mcs.yml").write_text(body, encoding="utf-8")
+    (topics / "Setusercontext.mcs.yml").write_text(body, encoding="utf-8")
+    _write_component_map(tmp_path, agent)
 
 
-def _write_installed_topic(tmp_path, agent: str, dialog: str):
-    topics = tmp_path / ".local" / "agents" / agent / "topics"
-    topics.mkdir(parents=True, exist_ok=True)
-    (topics / "workday-user-context.mcs.yml").write_text(
-        f"schemaName: {dialog}\nkind: AdaptiveDialog\n",
-        encoding="utf-8",
-    )
+def _write_installed_topic(
+    tmp_path,
+    agent: str,
+    dialog: str,
+    *,
+    create_file: bool = True,
+):
+    _write_component_map(tmp_path, agent, dialog=dialog)
+    if create_file:
+        topics = tmp_path / "workspace" / "agents" / agent / "topics"
+        topics.mkdir(parents=True, exist_ok=True)
+        (topics / "WorkdaySystemGetUserContextV2.mcs.yml").write_text(
+            "kind: AdaptiveDialog\n",
+            encoding="utf-8",
+        )
 
 
 class TestUserContextRedirect:
@@ -622,13 +670,18 @@ class TestUserContextRedirect:
         (tmp_path / "workspace" / "agents" / "acme" / "topics").mkdir(
             parents=True
         )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
         runner = _Runner(config={}, agent_slug="acme")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.FAILED.value
-        assert "No user-context-setup.mcs.yml found" in r.result
+        assert "No mapped admin user-context topic found" in r.result
         assert "selected agent 'acme'" in r.result
-        assert "installed Workday user-context" in r.remediation
+        assert "mapped Workday user-context" in r.remediation
 
     def test_topic_missing_redirect_fails(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -652,8 +705,9 @@ class TestUserContextRedirect:
             tmp_path,
             "acme",
             "kind: AdaptiveDialog\n"
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -667,13 +721,150 @@ class TestUserContextRedirect:
         assert "WorkdaySystemGetUserContextV3" in r.result
         assert "acme" in r.result
 
+    def test_missing_mapped_target_topic_fails(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+            create_file=False,
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "No mapped Workday User Context V2 topic found" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    def test_unsafe_mapped_target_topic_path_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n",
+        )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            target_file="../outside.mcs.yml",
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "Workday User Context V2 topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_setup_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_component_map(
+            tmp_path,
+            "acme",
+            setup_path=mapped_path,
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "admin user-context topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_target_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n",
+        )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            target_path=mapped_path,
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "Workday User Context V2 topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    def test_comment_or_unrelated_field_does_not_count_as_redirect(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n"
+            "# kind: BeginDialog\n"
+            "# dialog: cr123_WorkdaySystemGetUserContextV3\n"
+            "description: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+
     def test_selected_agent_ignores_wired_sibling(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_topic(
             tmp_path,
             "wired",
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_topic(tmp_path, "broken", "kind: AdaptiveDialog\n")
         _write_installed_topic(
@@ -700,8 +891,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "wired",
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV3\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -722,7 +915,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "active",
-            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
         )
         _write_installed_topic(
             tmp_path,
@@ -745,7 +941,10 @@ class TestUserContextRedirect:
         _write_topic(
             tmp_path,
             "other",
-            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
         )
         _write_installed_topic(
             tmp_path,
