@@ -94,7 +94,7 @@ Parse `DA_SETUP_PRODUCT_RECONCILIATION_JSON:`.
 
 After the command returns, proceed directly to the required setup checklist render and the applicable exact maker-facing message below. Do not emit an operational progress line between them. Do not emit **Verified replacement agent identities and resolved compatible ESS kit** or narrate completed probes, schema classification, or compatible-kit resolution.
 
-When `outcome` is `unavailable`, say that the compatible pinned installer could not be resolved and render **Review the setup handoff** as blocked. Do not guess a branch or release. Ask **How would you like to continue setup?** and offer exactly:
+When `outcome` is `unavailable`, say that the compatible pinned installer could not be resolved and render **Review the setup handoff** as blocked. Do not guess a branch or release. Ask **How would you like to continue setup?** and present these standard choices:
 
 - **Choose a different agent**
 - **Choose a different environment**
@@ -147,7 +147,7 @@ Use the host's interactive single-selection control and ask exactly:
 
 > How would you like to continue setup?
 
-Offer exactly:
+Present these standard choices:
 
 - **Choose a different agent**
 - **Choose a different environment**

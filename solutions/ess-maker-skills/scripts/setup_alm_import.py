@@ -154,6 +154,7 @@ def _operation_identity(
     package: AlmPackageInfo,
     replacement: dict[str, Any] | None,
     expected_alm_family_id: str | None,
+    client_request_id: str | None,
 ) -> dict[str, Any]:
     identity = {
         "environmentId": _normalize_environment_id(environment_id),
@@ -174,6 +175,8 @@ def _operation_identity(
     }
     if expected_alm_family_id is not None:
         identity["expectedAlmFamilyId"] = expected_alm_family_id
+    if client_request_id is not None:
+        identity["clientRequestId"] = client_request_id
     return identity
 
 
@@ -645,6 +648,7 @@ def import_package_once(
     retry_safe_failure: bool = False,
     resume_create_after_cleanup: bool = False,
     expected_alm_family_id: str | None = None,
+    client_request_id: str | None = None,
 ) -> dict[str, Any]:
     """Run or resume one guarded import without materializing a workspace."""
     normalized_environment_id = _normalize_environment_id(environment_id)
@@ -652,7 +656,17 @@ def import_package_once(
     expected_family = (
         str(expected_alm_family_id or "").strip().casefold() or None
     )
+    normalized_request_id = (
+        _normalize_guid(client_request_id, "Client request ID")
+        if client_request_id
+        else None
+    )
     if resume_create_after_cleanup:
+        if normalized_request_id is not None:
+            raise AlmImportSetupError(
+                "Create recovery from an existing receipt cannot start a new "
+                "client request."
+            )
         return _requested_create_recovery(
             client,
             environment_id=normalized_environment_id,
@@ -704,13 +718,13 @@ def import_package_once(
         raise AlmImportSetupError(
             "Expected ALM-family validation applies only to create imports."
         )
-
     identity = _operation_identity(
         client,
         environment_id=normalized_environment_id,
         package=package,
         replacement=replacement,
         expected_alm_family_id=expected_family,
+        client_request_id=normalized_request_id,
     )
     record_path = _record_path(resolved_kit_root, identity)
     existing = (
@@ -956,6 +970,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--expected-alm-family-id")
     parser.add_argument(
+        "--client-request-id",
+        help=(
+            "New UUID for an explicitly approved import attempt. "
+            "It creates a distinct receipt."
+        ),
+    )
+    parser.add_argument(
         "--retry-safe-failure",
         action="store_true",
         help=(
@@ -994,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
             retry_safe_failure=args.retry_safe_failure,
             resume_create_after_cleanup=args.resume_create_after_cleanup,
             expected_alm_family_id=args.expected_alm_family_id,
+            client_request_id=args.client_request_id,
         )
     except (
         AgentBuilderError,

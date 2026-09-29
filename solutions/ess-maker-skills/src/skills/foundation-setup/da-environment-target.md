@@ -10,7 +10,7 @@ Treat a recognized Copilot Studio hostname as authoritative ring evidence that c
 
 > Which Power Platform service ring should setup use?
 
-Use the host's interactive single-selection control and offer exactly:
+Use the host's interactive single-selection control and present these standard choices:
 
 - **Production / Preview**
 - **Pre-production**
@@ -39,7 +39,7 @@ When the command succeeds with an empty `environments` array, say:
 
 > No Power Platform environments were listed for this account. No agent listing was performed.
 
-Use the host's interactive single-selection control and offer exactly:
+Use the host's interactive single-selection control and present these standard choices:
 
 - **Use another account**
 - **Use an environment URL**
@@ -58,7 +58,7 @@ Do not preselect a choice.
 
 - For **Go back**, retain the selected account and return to **Resolve the service ring**. Do not rerun environment discovery until the maker explicitly selects a ring. **Use another account** remains the account-switch route on this surface.
 
-When environment discovery fails, parse `DA_ENVIRONMENT_LIST_ERROR_JSON:` and preserve it with `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:` or `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_TEXT:` as diagnostic evidence. When `authorizationFailure` is `true`, say that the selected account could not list its Power Platform environments and offer the same four choices. Do not convert an authorization failure into an empty environment list. For any other failure, report the observed blocker and stop.
+When environment discovery fails, parse `DA_ENVIRONMENT_LIST_ERROR_JSON:` and preserve it with `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:` or `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_TEXT:` as diagnostic evidence. Say that the environment list could not be loaded and ask how to continue. Present **Retry**, **Use another account**, **Use an environment URL**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Retry** reruns the same read-only environment listing. Apply the documented route when one of the other standard choices is selected. When `authorizationFailure` is `true`, identify the selected account as the blocker. Do not convert any failure into an empty environment list or prevent a maker-supplied environment from reaching its authoritative environment-scoped operation.
 
 ## Retry setup with another target
 

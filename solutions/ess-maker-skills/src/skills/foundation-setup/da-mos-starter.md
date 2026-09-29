@@ -89,26 +89,24 @@ When listing succeeds, continue the catalog surface with:
 
 > {PRODUCT_COUNT} entitled products are available for **{environment name}**. What would you like to do?
 
-Use the host's interactive single-selection control, leave the selection initially unset, and disable free-form input. Offer one choice for each exact `packageId`. Do not ask the maker to type a product name.
+Use the host's interactive single-selection control, leave the selection initially unset, and disable custom entry inside the control. Present one standard choice for each exact `packageId`. Do not ask the maker to type a product name.
 
 Use **Choose an ESS product.** as the exact interactive-control question. Do not describe the whole surface as selecting a fresh product or selecting a product to create, because some options continue with an existing agent.
 
-Build the product picker as a projection of the latest successful catalog result. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Enrich each projected row with workspace observations and the latest `devAgents` evidence. Render **Use** only when an exact `devAgents` identity matches the catalog product. Render an installed status without **Use** when the catalog row reports `installed: true` for the selected environment and ring but no matching Dev identity was returned. Render **Create** only when installation is not established. Rebuild this projection whenever the product picker is shown.
+Build the product picker as a projection of the latest successful catalog result and the latest agent-list attempt. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Enrich each projected row with workspace observations and the latest `devAgents` evidence. A successful complete agent list is authoritative for the current picker: render **Use** when an exact `devAgents` identity matches the product, and render **Create** when no exact identity matches even if an older workspace observation recorded installation. When agent listing fails or reports unresolved identities, retain the observation only as historical evidence and state that current installation could not be established; do not convert that uncertainty into either installed or uninstalled. Rebuild this projection whenever a fresh catalog or agent-list result arrives.
 
 When one or more `devAgents` have the same exact `productKey` as a catalog row, format that choice as **Use {friendly product name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
 
 - When exactly one agent has the matching key, run the parent's selected-agent product-line reconciliation for that exact returned identity and continue through `da-existing-dev.md`.
-- When multiple agents have the matching key, show only those exact returned agent names, leave the selection initially unset, disable free-form input, and let the maker select one before reconciliation and `da-existing-dev.md`.
+- When multiple agents have the matching key, show those exact returned agent names as the standard choices, leave the selection initially unset, disable custom entry inside the control, and let the maker select one before reconciliation and `da-existing-dev.md`.
 
-When environment-scoped observation reports `installed: true`, the latest agent listing succeeded, and no exact `devAgents` identity matches, format the choice as **{friendly product name} — Already installed** and use this exact text as that catalog row's supporting description instead of the default product description:
+When an older environment-scoped observation reports `installed: true` but the latest agent listing failed or was incomplete, label the row **Create {friendly product name} {version} — Installation status unavailable** and explain that an earlier installation was observed but current agent visibility could not confirm it. Selecting this row asks:
 
-> Installation was confirmed in this environment, but the matching agent was not returned by the current account’s agent list.
+> Setup previously observed this product in the environment, but current agent visibility could not confirm it. Submit a new create request and let Copilot Studio validate the current state?
 
-Show that supporting description with the row before selection; do not defer it until after the maker selects the row or repeat it after selection. Selecting this choice does not invoke create. Before showing recovery choices, say exactly: **This product is already installed, so setup cannot install another copy. The existing agent was not returned by the current account’s agent list, so setup cannot identify it automatically.**
+Present **Submit create request**, **Use an agent URL**, **Try with a different user**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Submit create request** retains the selected package facts and proceeds through **Create** with a new client request UUID. Apply the documented route when one of the other standard choices is selected. Do not add another prohibition based on the earlier observation.
 
-Offer exactly **Use an agent URL**, **Try with a different user**, and **Go back**, with no preselected choice and free-form input disabled. **Use an agent URL** continues through the parent skill's exact-agent URL route, including its realm inspection and Prod-to-Dev routing when the supplied identity is Prod. **Try with a different user** repeats account selection and reloads the environment's catalog and realm-classified agent inventory. **Go back** returns to the complete catalog projection without rerunning create. When installation is confirmed but the agent listing failed, do not use either current-account claim above. Keep **{friendly product name} — Already installed**, replace the default product description with **Installation was confirmed in this environment, but a matching agent could not be verified because the agent list could not be loaded.**, and, after selection, say **This product is already installed, so setup cannot install another copy. The agent list could not be loaded, so setup cannot identify the existing agent automatically.** before presenting the same recovery choices.
-
-When installed state is not established, format the choice as **Create {friendly product name} {version}**. This label is an action, not a claim that no matching agent exists. Omit a blank version instead of showing an unresolved value. After the maker selects the choice, retain the exact `packageId`, backend `name`, catalog `version`, and friendly product name, then begin **Create**. Retain the friendly product name for the final exact-agent link.
+When no current exact Dev identity is established, format the choice as **Create {friendly product name} {version}**. This label is an action, not a claim that no matching agent exists. Omit a blank version instead of showing an unresolved value. After the maker selects the choice, retain the exact `packageId`, backend `name`, catalog `version`, and friendly product name, then begin **Create**. Retain the friendly product name for the final exact-agent link.
 
 Unknown catalog products and agents without a registry match remain unclassified. Render an unknown catalog row as a **Create** choice using its exact service-provided name and do not correlate it with agents by display name.
 
@@ -141,7 +139,7 @@ Retain the UUID as the identity of this create request. Wait for the command to 
 
 Parse `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:`, then the response body (`DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`), then `DA_MOS_STARTER_CREATE_JSON:` when the command exits zero. Keep the response body as diagnostic evidence.
 
-The response, outcome label, fuse disposition, HTTP status, and request details are diagnostic evidence only. Do not render them as ordinary maker-facing copy. For a definitive non-success, give a plain-language reason only when the service evidence supports it; otherwise say that the service did not create a new agent and setup has stopped. For an uncertain result, say:
+The response, outcome label, fuse disposition, HTTP status, and request details are diagnostic evidence only. Do not render them as ordinary maker-facing copy. For a definitive non-success, give a plain-language reason only when the service evidence supports it. For an uncertain result, preserve the current request evidence, run fresh read-only catalog and agent inventory operations, and attempt exact identity reconciliation. If no created identity can be proven, ask whether to submit a separately confirmed create request with a new client request UUID. Explain that the earlier request may have succeeded and that Copilot Studio may return a collision. Never reuse the uncertain request UUID or delete its fuse.
 
 > I cannot confirm whether the agent was created because communication ended before a definitive result was received. Setup has stopped.
 
@@ -149,9 +147,9 @@ When the annotations report `outcome: created`, keep the distinction between `ca
 
 The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
 
-When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list visible Dev agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches for the collided product. Never offer unrelated listed agents.
+When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Say that Copilot Studio reports an installed copy of the selected product. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list visible Dev agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches for the collided product. Never offer unrelated listed agents.
 
-When exactly one Dev identity matches, ask **Use {agent display name}?** and offer exactly **Use this agent** and **Go back**. Do not add a separate choose-from-existing step. When multiple Dev identities match, ask **Choose the installed {friendly product name} agent.**, offer only those matching identities plus **Go back**, and render every agent option as its exact service-provided display name only. Leave every collision choice initially unset and disable free-form input. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either panel.
+When exactly one Dev identity matches, ask **Use {agent display name}?** and present **Use this agent** and **Go back** as the standard choices. Do not add a separate choose-from-existing step. When multiple Dev identities match, ask **Choose the installed {friendly product name} agent.**, present those matching identities plus **Go back** as the standard choices, and render every agent option as its exact service-provided display name only. Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either panel.
 
 For a selected matching identity, run `setup_existing_da.py validate-agent` only when the list result does not already establish its exact schema, then run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` and continue through `da-existing-dev.md`. If no Dev identity matches, use the installed-without-matching-Dev explanation and **Use an agent URL**, **Try with a different user**, and **Go back** recovery above instead of presenting other agents. This path does not replace an agent.
 
@@ -159,9 +157,19 @@ For **Go back**, preserve the collided create result and its client request UUID
 
 ## Enable ALM
 
-After a successful create, say:
+Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the Copilot Studio origin for the selected service ring and the exact environment and agent IDs from the successful create result.
 
-> The agent was created. Preparing its local authoring workspace...
+After a successful create, show:
+
+**Message:**
+
+The agent was created.
+
+> **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+Preparing its local authoring workspace...
+
+**End message.**
 
 Then run:
 
@@ -172,9 +180,7 @@ python scripts/setup_mos_starter.py enable-alm \
   --agent-id "{RETURNED_AGENT_ID}"
 ```
 
-Parse `DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and its response body when present, then `DA_MOS_STARTER_ALM_JSON:` on success. A failed read-back may instead emit `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`, its response body, or `DA_MOS_STARTER_ALM_VERIFY_JSON:`. Continue only for `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. If read-back definitively reports `outcome: verification-failed` and `persistedValue: false`, say, "The follow-up check showed that the agent was not prepared for local editing. Setup has stopped without attaching a workspace." If transport or read-back becomes uncertain, preserve the evidence internally, say that the agent could not be confirmed ready for local editing, and stop.
-
-An enabled or already-enabled result proceeds directly to attachment.
+Parse `DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and its response body when present, then `DA_MOS_STARTER_ALM_JSON:` on success. A failed read-back may instead emit `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`, its response body, or `DA_MOS_STARTER_ALM_VERIFY_JSON:`. Continue only for `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. If read-back definitively reports `outcome: verification-failed` and `persistedValue: false`, say, "The follow-up check showed that the agent was not prepared for local editing. Setup has stopped without attaching a workspace." If transport or read-back becomes uncertain, preserve the evidence internally, say that the agent could not be confirmed ready for local editing, and stop. An enabled or already-enabled result proceeds directly to attachment.
 
 ## Attach
 
