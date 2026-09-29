@@ -197,7 +197,10 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     else:
         try:
             connections = _servicenow_connections(
-                connectivity.list_connections(environment_id)
+                connectivity.list_connector_connections(
+                    environment_id,
+                    CONNECTOR_NAME,
+                )
             )
         except Exception as exc:
             connectivity_error = f"{type(exc).__name__}: {exc}"

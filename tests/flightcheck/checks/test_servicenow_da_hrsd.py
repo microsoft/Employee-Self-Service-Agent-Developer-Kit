@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from agentbuilder import AgentBuilderHTTPError
 from flightcheck.checks.servicenow_da_hrsd import (
     run_servicenow_da_hrsd_checks,
 )
@@ -87,7 +90,17 @@ def _runner(components: dict):
             fetch_components=lambda _agent_id: components
         ),
         connectivity=SimpleNamespace(
-            list_connections=lambda _environment_id: [_connection()]
+            list_connections=lambda _environment_id: pytest.fail(
+                "ServiceNow HRSD must not use environment-wide inventory."
+            ),
+            list_connector_connections=lambda environment_id, connector: (
+                [_connection()]
+                if (
+                    environment_id == ENVIRONMENT_ID
+                    and connector == snow.CONNECTOR_NAME
+                )
+                else pytest.fail("Unexpected connector inventory target.")
+            ),
         ),
         env_id=ENVIRONMENT_ID,
     )
@@ -172,6 +185,76 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
     )
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
+
+
+def test_hrsd_checks_use_connector_scoped_connections_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+
+    calls: list[tuple[str, str]] = []
+    runner.connectivity = SimpleNamespace(
+        list_connections=lambda _environment_id: pytest.fail(
+            "ServiceNow HRSD must not use environment-wide inventory."
+        ),
+        list_connector_connections=lambda environment_id, connector: (
+            calls.append((environment_id, connector)) or [_connection()]
+        ),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    statuses = {result.checkpoint_id: result.status for result in results}
+
+    assert calls == [(ENVIRONMENT_ID, snow.CONNECTOR_NAME)]
+    assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
+    assert (
+        statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
+        == Status.MANUAL.value
+    )
+
+
+@pytest.mark.parametrize("status_code", [429, 401, 403, 500])
+def test_hrsd_connector_inventory_error_has_no_fallback(
+    monkeypatch,
+    tmp_path: Path,
+    status_code: int,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    calls = 0
+    runner = _runner(components)
+
+    def fail_connector_inventory(
+        _environment_id: str,
+        _connector: str,
+    ) -> list[dict]:
+        nonlocal calls
+        calls += 1
+        raise AgentBuilderHTTPError(
+            "Connector-scoped connection listing",
+            status_code,
+            request_id="request-123",
+        )
+
+    runner.connectivity = SimpleNamespace(
+        list_connector_connections=fail_connector_inventory,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    credential = next(
+        result
+        for result in results
+        if result.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
+    )
+
+    assert calls == 1
+    assert credential.status == Status.ERROR.value
+    assert "request-123" in credential.result
 
 
 def test_hrsd_checks_reopen_stale_maker_evidence(
@@ -284,7 +367,12 @@ def test_agent_connection_rejects_wrong_selected_connection_id(
     other_connection = _connection()
     other_connection["name"] = other_id
     runner.connectivity = SimpleNamespace(
-        list_connections=lambda _environment_id: [other_connection]
+        list_connections=lambda _environment_id: pytest.fail(
+            "ServiceNow HRSD must not use environment-wide inventory."
+        ),
+        list_connector_connections=(
+            lambda _environment_id, _connector: [other_connection]
+        ),
     )
     monkeypatch.chdir(tmp_path)
 
