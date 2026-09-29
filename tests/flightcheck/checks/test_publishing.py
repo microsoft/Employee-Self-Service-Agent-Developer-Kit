@@ -395,6 +395,12 @@ def test_pub_001_warning_prefixes_exception_type():
     row = by_id["PUB-001"]
     assert row.status == Status.WARNING.value
     assert "RuntimeError: boom" in row.result
+
+
+def test_pub_001_skips_without_bot_id():
+    """PUB-001 has an AgentBuilder client but no configured botId, so it
+    cannot resolve which agent to export — it must SKIP (not FAIL) and
+    point the operator at .local/config.json."""
     from flightcheck.runner import Status
 
     by_id = _results_by_id(

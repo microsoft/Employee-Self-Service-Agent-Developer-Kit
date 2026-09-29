@@ -23,6 +23,7 @@ when their API probes run.
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from agentbuilder import AgentBuilderHTTPError
 
@@ -132,6 +133,24 @@ def _bot_id_missing(checkpoint_id: str, row: dict) -> CheckResult:
     )
 
 
+def _alm_error_code(body: Any) -> str | None:
+    """Extract the structured error code from an AgentBuilder error body.
+
+    Mirrors ``agentbuilder._response_error`` extraction so we match on the
+    actual ``error.code`` field rather than a substring of the whole payload
+    (a loose ``"4003" in str(body)`` also matches request IDs, GUIDs, or the
+    error message text and would false-positive)."""
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error") or body.get("Error") or body
+    if isinstance(error, dict):
+        candidate = error.get("code") or error.get("Code")
+        return candidate if isinstance(candidate, str) else None
+    if isinstance(error, str):
+        return error
+    return None
+
+
 def _is_alm_not_opted_in(error: Exception) -> bool:
     if not isinstance(error, AgentBuilderHTTPError):
         return False
@@ -145,7 +164,7 @@ def _is_alm_not_opted_in(error: Exception) -> bool:
         body = response.json()
     except ValueError:
         return False
-    return ALM_NOT_OPTED_IN_CODE in str(body)
+    return _alm_error_code(body) == ALM_NOT_OPTED_IN_CODE
 
 
 def _invalid_archive_reason(path: Path) -> str | None:

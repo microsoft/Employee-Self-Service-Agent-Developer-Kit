@@ -306,7 +306,7 @@ class TestWorkdayExtensionCheckpoints:
     """skill-5 mints five checkpoints, all sharing
     checks/workday_extension.run_workday_extension_checks, category
     "Workday Extension". Two are always-MANUAL echoes/attestations, three are
-    programmatic (one minimalBots components read + two pure-local)."""
+    programmatic (one Dataverse read + two pure-local)."""
 
     _ALL = (
         "WD-CONN-AUTH-001",
@@ -341,12 +341,10 @@ class TestWorkdayExtensionCheckpoints:
         assert registry.resolve("WD-CONN-AUTH-001").key == "WD-CONN-AUTH-001"
         assert registry.resolve("WD-CONN-AUTH-001").is_family is False
 
-    def test_dv_conn_spec_declares_agentbuilder_and_pp_admin(self):
+    def test_dv_conn_spec_declares_dataverse_and_pp_admin(self):
         spec = registry.resolve("DV-CONN-001")
-        assert spec.clients == frozenset(
-            {registry.AGENTBUILDER, registry.PP_ADMIN}
-        )
-        assert spec.requires_dataverse_endpoint is False
+        assert spec.clients == frozenset({registry.DATAVERSE, registry.PP_ADMIN})
+        assert spec.requires_dataverse_endpoint is True
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 
@@ -368,7 +366,7 @@ class TestWorkdayExtensionCheckpoints:
 
     def test_dv_conn_plan_unions_clients(self):
         plan = registry.transitive_requirements("DV-CONN-001")
-        assert registry.AGENTBUILDER in plan.clients
+        assert registry.DATAVERSE in plan.clients
         assert registry.PP_ADMIN in plan.clients
 
     def test_all_five_are_listable(self):
