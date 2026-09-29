@@ -28,13 +28,15 @@ FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # environment override via `RING=preprod` or `--ring preprod` on the
 # bootstrap-flightcheck-mac.sh one-liner.
 RING="${RING:-prod}"
-case "$RING" in
-    prod|preprod|test) ;;
-    *)
-        echo "ERROR: RING must be prod, preprod, or test (got '$RING')" >&2
-        exit 2
-        ;;
-esac
+if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
+    case "$RING" in
+        prod|preprod|test) ;;
+        *)
+            echo "ERROR: RING must be prod, preprod, or test (got '$RING')" >&2
+            exit 2
+            ;;
+    esac
+fi
 # INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
 # 'maker'    (was 'lite')     - chat-first layout, /setup after welcome wizard
 # 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`

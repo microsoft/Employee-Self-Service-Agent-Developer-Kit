@@ -666,6 +666,12 @@ Test 'install-ess-adk.sh accepts a RING env var (prod|preprod|test) defaulting t
     }
 }
 
+Test 'install-ess-adk.sh only validates RING in FlightCheck-only mode (does not regress regular installs)' {
+    if ($macInstaller -notmatch '(?s)if\s*\[\[\s*"\$FLIGHTCHECK_ONLY"\s*==\s*"true"\s*\]\]\s*;\s*then\s*case\s+"\$RING"\s+in.*?esac\s*\nfi') {
+        throw "install-ess-adk.sh must gate the RING validation case on FLIGHTCHECK_ONLY == true so that stray RING env vars do not break regular installs"
+    }
+}
+
 Test 'install-ess-adk.sh forwards $RING on the FC-only FlightCheck invocation' {
     if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+"\$RING"') {
         throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh must forward $RING, not a hardcoded ring literal'
