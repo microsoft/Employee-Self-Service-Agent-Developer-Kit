@@ -23,6 +23,7 @@ from agentbuilder import (
 )
 
 from ..runner import CheckResult, Priority, Role, Status
+from .. import agent_scope
 
 _ESS_SOLN_DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
@@ -170,27 +171,7 @@ def _result(
 
 
 def _active_agent_bot_id(runner) -> str | None:
-    config = getattr(runner, "config", None) or {}
-    agents = config.get("agents") or []
-    active_slug = config.get("activeAgent") or (config.get("agent") or {}).get(
-        "slug"
-    )
-    if active_slug:
-        for agent in agents:
-            if isinstance(agent, dict) and agent.get("slug") == active_slug:
-                bot_id = str(agent.get("botId") or "").strip()
-                if bot_id:
-                    return bot_id
-    single = config.get("agent") or {}
-    bot_id = str(single.get("botId") or "").strip()
-    if bot_id:
-        return bot_id
-    for agent in agents:
-        if isinstance(agent, dict):
-            bot_id = str(agent.get("botId") or "").strip()
-            if bot_id:
-                return bot_id
-    return None
+    return agent_scope.active_agent_bot_id(getattr(runner, "config", None))
 
 
 def _alm_realm(runner) -> int | None:

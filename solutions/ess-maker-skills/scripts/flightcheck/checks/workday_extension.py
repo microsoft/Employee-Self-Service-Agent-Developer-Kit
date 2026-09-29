@@ -59,7 +59,11 @@ from pathlib import Path, PureWindowsPath
 import yaml
 
 from ..runner import CheckResult, Priority, Role, Status
-from ..agent_scope import resolve_agent_directory, validate_agent_slug
+from ..agent_scope import (
+    active_agent_bot_id,
+    resolve_agent_directory,
+    validate_agent_slug,
+)
 
 DOC_BASE = (
     "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
@@ -303,7 +307,7 @@ def _query_connection_references(runner):
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
+    agent_id = active_agent_bot_id(config)
     if client is None or not agent_id:
         return None
     changeset = client.fetch_components(agent_id) or {}
