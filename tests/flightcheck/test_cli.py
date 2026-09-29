@@ -28,6 +28,91 @@ import pytest
 from flightcheck import cli
 
 
+def test_alm_import_probe_requires_explicit_target(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["cli.py", "--scope", "publishing", "--alm-import-probe"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
+def test_create_alm_import_target_uses_separate_environment(monkeypatch) -> None:
+    created = []
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda environment_id, ring: (
+            f"https://{environment_id}.{ring}.example.test"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    monkeypatch.setattr(
+        cli,
+        "AgentBuilderClient",
+        lambda *args, **kwargs: created.append((args, kwargs)) or object(),
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="target-env",
+    )
+
+    target = cli._create_alm_import_target(
+        args,
+        source_host="https://source.test.example",
+        token="token",
+        tenant_id="tenant",
+        ring="test",
+        api_version="2024-10-01",
+    )
+
+    assert target is not None
+    assert created == [
+        (
+            ("https://target-env.test.example.test", "token"),
+            {
+                "ring": "test",
+                "tenant_id": "tenant",
+                "api_version": "2024-10-01",
+            },
+        )
+    ]
+
+
+def test_create_alm_import_target_rejects_source_environment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda _environment_id, _ring: "https://source.example.test",
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="source-env",
+    )
+
+    with pytest.raises(ValueError, match="different environment"):
+        cli._create_alm_import_target(
+            args,
+            source_host="https://source.example.test/",
+            token="token",
+            tenant_id="tenant",
+            ring="test",
+            api_version="2024-10-01",
+        )
+
+
 def test_workday_da_check_is_explicit_scope_only() -> None:
     """An optional DA HR package must not fail unrelated full runs."""
     assert cli.SCOPE_MAP["workdayda"] == [
@@ -410,7 +495,15 @@ class TestAgentBuilderNativeScopes:
 
         assert exc.value.code == 0
         assert auth_calls == (
-            [("test", {"include_connectivity": True})]
+            [
+                (
+                    "test",
+                    {
+                        "include_connectivity": True,
+                        "allow_write": False,
+                    },
+                )
+            ]
             if expects_agent_clients
             else []
         )

@@ -301,10 +301,47 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
     client = getattr(runner, "agentbuilder", None)
     if client is None:
         return _agentbuilder_unavailable("PUB-002", row)
-
     bot_id = _configured_bot_id(runner)
     if not bot_id:
         return _bot_id_missing("PUB-002", row)
+
+    target_client = getattr(runner, "alm_import_target", None)
+    if target_client is None:
+        return _api_result(
+            checkpoint_id="PUB-002",
+            row=row,
+            status=Status.FAILED,
+            result="AgentBuilder ALM import target client is unavailable.",
+            remediation=(
+                "Pass --alm-import-target-environment-id with the ID of a "
+                "separate throwaway environment."
+            ),
+        )
+
+    source_host = str(getattr(client, "host", "")).rstrip("/").lower()
+    target_host = str(getattr(target_client, "host", "")).rstrip("/").lower()
+    if not source_host or not target_host:
+        return _api_result(
+            checkpoint_id="PUB-002",
+            row=row,
+            status=Status.FAILED,
+            result="ALM import source or target environment host is unavailable.",
+            remediation=(
+                "Configure distinct source and target AgentBuilder environment "
+                "hosts before running the mutating import probe."
+            ),
+        )
+    if source_host == target_host:
+        return _api_result(
+            checkpoint_id="PUB-002",
+            row=row,
+            status=Status.FAILED,
+            result="ALM import target matches the source environment.",
+            remediation=(
+                "Use --alm-import-target-environment-id with a separate empty "
+                "throwaway environment."
+            ),
+        )
 
     with tempfile.TemporaryDirectory(prefix="flightcheck-pub002-") as tmp:
         package_path = Path(tmp) / "agent.zip"
@@ -358,7 +395,7 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
             )
 
         try:
-            outcome = client.import_package(package_path)
+            outcome = target_client.import_package(package_path)
         except Exception as exc:  # noqa: BLE001 - report as a verdict row
             if _is_alm_not_opted_in(exc):
                 return _api_result(

@@ -41,6 +41,23 @@ def test_flightcheck_scopes_are_read_only_and_ring_specific() -> None:
     )
 
 
+def test_flightcheck_scopes_request_write_only_when_explicitly_enabled() -> None:
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        allow_write=True,
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/"
+        "CopilotStudio.MinimalBot.ReadWrite",
+    )
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+
+
 @responses.activate
 def test_native_readiness_clients_follow_validated_contract() -> None:
     responses.add(**native.get_agent())

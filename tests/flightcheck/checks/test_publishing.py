@@ -57,11 +57,13 @@ class _FakeAgentBuilder:
     def __init__(
         self,
         *,
+        host: str = "https://source.example.test",
         export_bytes: bytes | None = None,
         export_error: Exception | None = None,
         import_result: dict | None = None,
         import_error: Exception | None = None,
     ) -> None:
+        self.host = host
         self.export_bytes = (
             ab.export_package_bytes() if export_bytes is None else export_bytes
         )
@@ -109,6 +111,7 @@ def _runner(
     env_id: str | None = "env-abc",
     bot_id: str | None = "bot-xyz",
     agentbuilder=None,
+    alm_import_target=None,
     alm_import_probe: bool = False,
 ):
     """Minimal runner stub exposing the two attributes publishing.py reads."""
@@ -119,6 +122,7 @@ def _runner(
         env_id=env_id,
         config=config,
         agentbuilder=agentbuilder,
+        alm_import_target=alm_import_target,
         alm_import_probe=alm_import_probe,
     )
 
@@ -416,9 +420,14 @@ def test_pub_001_skips_without_bot_id():
 def test_pub_002_passes_when_import_returns_valid_identity():
     from flightcheck.runner import Status
 
-    client = _FakeAgentBuilder()
+    source = _FakeAgentBuilder()
+    target = _FakeAgentBuilder(host="https://target.example.test")
     by_id = _results_by_id(
-        _runner(agentbuilder=client, alm_import_probe=True)
+        _runner(
+            agentbuilder=source,
+            alm_import_target=target,
+            alm_import_probe=True,
+        )
     )
 
     row = by_id["PUB-002"]
@@ -426,7 +435,10 @@ def test_pub_002_passes_when_import_returns_valid_identity():
     assert "ALM import created agent" in row.result
     assert "gptagent_mockemployeeselfservice_imported" in row.result
     assert row.remediation == ""
-    assert client.import_calls
+    assert source.export_calls
+    assert not source.import_calls
+    assert target.import_calls
+    assert not target.export_calls
 
 
 def test_pub_002_skips_import_probe_when_not_opted_in_with_client_present():
@@ -447,14 +459,18 @@ def test_pub_002_skips_import_probe_when_not_opted_in_with_client_present():
 def test_pub_002_fails_on_same_environment_import_conflict():
     from flightcheck.runner import Status
 
+    source = _FakeAgentBuilder()
+    target = _FakeAgentBuilder(
+        host="https://target.example.test",
+        import_error=_agentbuilder_http_error(
+            status_code=409,
+            error_code="DuplicateItemError",
+        ),
+    )
     by_id = _results_by_id(
         _runner(
-            agentbuilder=_FakeAgentBuilder(
-                import_error=_agentbuilder_http_error(
-                    status_code=409,
-                    error_code="DuplicateItemError",
-                )
-            ),
+            agentbuilder=source,
+            alm_import_target=target,
             alm_import_probe=True,
         )
     )
@@ -470,7 +486,9 @@ def test_pub_002_fails_when_import_returns_4003_not_opted_in():
 
     by_id = _results_by_id(
         _runner(
-            agentbuilder=_FakeAgentBuilder(
+            agentbuilder=_FakeAgentBuilder(),
+            alm_import_target=_FakeAgentBuilder(
+                host="https://target.example.test",
                 import_error=_agentbuilder_http_error(
                     status_code=400,
                     error_code="4003",
@@ -491,7 +509,9 @@ def test_pub_002_warns_on_import_http_error():
 
     by_id = _results_by_id(
         _runner(
-            agentbuilder=_FakeAgentBuilder(
+            agentbuilder=_FakeAgentBuilder(),
+            alm_import_target=_FakeAgentBuilder(
+                host="https://target.example.test",
                 import_error=_agentbuilder_http_error(
                     status_code=500,
                     error_code="ImportFailed",
@@ -505,6 +525,39 @@ def test_pub_002_warns_on_import_http_error():
     assert row.status == Status.WARNING.value
     assert "ALM import failed" in row.result
     assert "import permission" in row.remediation
+
+
+def test_pub_002_fails_without_explicit_target_client():
+    from flightcheck.runner import Status
+
+    row = _results_by_id(
+        _runner(
+            agentbuilder=_FakeAgentBuilder(),
+            alm_import_probe=True,
+        )
+    )["PUB-002"]
+
+    assert row.status == Status.FAILED.value
+    assert "target client is unavailable" in row.result
+    assert "--alm-import-target-environment-id" in row.remediation
+
+
+def test_pub_002_fails_when_target_matches_source_host():
+    from flightcheck.runner import Status
+
+    row = _results_by_id(
+        _runner(
+            agentbuilder=_FakeAgentBuilder(host="https://same.example.test/"),
+            alm_import_target=_FakeAgentBuilder(
+                host="https://same.example.test"
+            ),
+            alm_import_probe=True,
+        )
+    )["PUB-002"]
+
+    assert row.status == Status.FAILED.value
+    assert "target matches the source" in row.result
+    assert "separate empty throwaway environment" in row.remediation
 
 
 def test_pub_002_skips_without_client_or_bot_id():

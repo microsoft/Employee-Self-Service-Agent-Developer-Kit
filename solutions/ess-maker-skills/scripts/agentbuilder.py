@@ -171,9 +171,26 @@ def connectivity_read_scopes(ring: str) -> tuple[str]:
     return (f"{audience}/Connectivity.Connections.Read",)
 
 
+def flightcheck_scopes(
+    ring: str,
+    *,
+    allow_write: bool = False,
+    include_connectivity: bool = True,
+) -> tuple[str, ...]:
+    """Return least-privilege scopes for a native-agent FlightCheck run."""
+    minimal_bot = (
+        minimal_bot_scope(ring)
+        if allow_write
+        else minimal_bot_read_scope(ring)
+    )
+    if not include_connectivity:
+        return (minimal_bot,)
+    return (minimal_bot, *connectivity_read_scopes(ring))
+
+
 def flightcheck_read_scopes(ring: str) -> tuple[str, ...]:
     """Return the read-only scopes used by native-agent FlightCheck."""
-    return (minimal_bot_read_scope(ring), *connectivity_read_scopes(ring))
+    return flightcheck_scopes(ring)
 
 
 def _ring_api_host(ring: str) -> str:
@@ -548,12 +565,13 @@ def authenticate_flightcheck(
     force_account_selection: bool = False,
     account_hint: str | None = None,
     include_connectivity: bool = True,
+    allow_write: bool = False,
 ) -> tuple[str, str]:
-    """Acquire one read-only token for native AgentBuilder FlightCheck reads."""
-    scopes = (
-        flightcheck_read_scopes(ring)
-        if include_connectivity
-        else (minimal_bot_read_scope(ring),)
+    """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
+    scopes = flightcheck_scopes(
+        ring,
+        allow_write=allow_write,
+        include_connectivity=include_connectivity,
     )
     token = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
