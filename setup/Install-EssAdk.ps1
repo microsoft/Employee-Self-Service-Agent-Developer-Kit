@@ -203,6 +203,34 @@ function Invoke-Native {
     }
 }
 
+# Close VS Code before installing the bundled profile and launching the
+# workspace. VS Code can keep the previous extension instance alive while the
+# installer updates the VSIX/settings, so the new guided layout may not appear
+# until the old processes exit. Never close it silently: unsaved editor state
+# may be lost when the operator confirms.
+function Confirm-StopRunningCode {
+    $running = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+    if (-not $running) { return }
+
+    Write-Host ''
+    Write-Warn2 "VS Code is running (PIDs: $($running.Id -join ', '))."
+    Write-Warn2 'Close/save any unsaved files before continuing.'
+    $answer = Read-Host 'Close all running VS Code instances and relaunch the new UX? [Y/N]'
+    if ($answer -notmatch '^(?i:y|yes)$') {
+        Write-Warn2 'Leaving existing VS Code instances open. The new extension/layout may require a manual VS Code reload.'
+        return
+    }
+
+    foreach ($process in $running) {
+        try {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        } catch {
+            Write-Warn2 "Could not close VS Code PID $($process.Id): $($_.Exception.Message)"
+        }
+    }
+    Start-Sleep -Milliseconds 500
+}
+
 # Helper: resolve Python executable robustly.
 # Checks py launcher, python on PATH (excluding Store alias), and known install paths.
 function Resolve-Python {
@@ -1473,6 +1501,12 @@ if ($FlightCheckOnly) {
     # stops the script and leaves ``$LASTEXITCODE`` from ``cli.py``
     # available to the calling session.
     return
+}
+
+# VS Code can retain the previous extension host while the installer updates
+# the bundled profile. Close it before relaunching so the new UX is loaded.
+if (-not $FlightCheckOnly -and -not $SkipLaunch) {
+    Confirm-StopRunningCode
 }
 
 # ---------------------------------------------------------------------------

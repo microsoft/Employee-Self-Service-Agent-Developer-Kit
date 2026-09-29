@@ -478,6 +478,36 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
     if ($macInstaller -notmatch 'guided Agent Developer Kit view') { throw 'maker launch branch (fall-through else) missing' }
 }
 
+Test 'Install-EssAdk.ps1 confirmation-gates closing running VS Code by PID' {
+    if ($src -notmatch 'Get-Process\s+-Name\s+''Code'',\s*''Code-insiders''') {
+        throw 'Windows installer must enumerate running VS Code processes'
+    }
+    if ($src -notmatch 'Read-Host\s+''Close all running VS Code instances') {
+        throw 'Windows installer must ask before closing VS Code'
+    }
+    if ($src -notmatch 'Stop-Process\s+-Id\s+\$process\.Id') {
+        throw 'Windows installer must stop specific VS Code PIDs, not use name-based termination'
+    }
+    if ($src -notmatch 'Confirm-StopRunningCode') {
+        throw 'Windows installer must invoke the VS Code shutdown helper'
+    }
+}
+
+Test 'install-ess-adk.sh confirmation-gates graceful VS Code quit before launch' {
+    if ($macInstaller -notmatch 'pgrep\s+-f\s+''/Visual Studio Code\.app/''') {
+        throw 'macOS installer must detect running VS Code'
+    }
+    if ($macInstaller -notmatch 'read\s+-r\s+-p\s+.*Close all running VS Code instances') {
+        throw 'macOS installer must ask before closing VS Code'
+    }
+    if ($macInstaller -notmatch 'osascript\s+-e\s+''tell application "Visual Studio Code" to quit''') {
+        throw 'macOS installer must request a graceful VS Code quit'
+    }
+    if ($macInstaller -notmatch 'close_running_vscode') {
+        throw 'macOS installer must invoke the VS Code shutdown helper'
+    }
+}
+
 Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {
     if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"prompt"') { throw 'no prompt branch guarding INSTALL_MODE=prompt' }
     if ($macInstaller -notmatch 'read -r answer') { throw 'terminal read for maker/developer answer missing' }

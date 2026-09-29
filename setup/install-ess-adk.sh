@@ -33,6 +33,40 @@ FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # scripts on either platform get the same answer.
 INSTALL_MODE="${INSTALL_MODE:-}"
 SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
+
+# Ask before closing VS Code so the new bundled extension and settings are
+# picked up by the fresh workspace launch. Declining leaves the existing
+# instance untouched.
+close_running_vscode() {
+    local running_pids
+    running_pids="$(pgrep -f '/Visual Studio Code.app/' 2>/dev/null || true)"
+    if [[ -z "$running_pids" ]]; then
+        return 0
+    fi
+
+    echo ""
+    warn "Visual Studio Code is running (PIDs: $(echo "$running_pids" | tr '\n' ' '))."
+    warn "Close/save any unsaved files before continuing."
+    if [[ -r /dev/tty ]]; then
+        read -r -p "Close all running VS Code instances and relaunch the new UX? [Y/N] " answer </dev/tty
+    else
+        read -r -p "Close all running VS Code instances and relaunch the new UX? [Y/N] " answer
+    fi
+    if [[ ! "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
+        warn "Leaving existing VS Code instances open. The new extension/layout may require a manual VS Code reload."
+        return 0
+    fi
+
+    osascript -e 'tell application "Visual Studio Code" to quit' >/dev/null 2>&1 || true
+    for _ in {1..20}; do
+        if ! pgrep -f '/Visual Studio Code.app/' >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    warn "VS Code did not exit within 5 seconds; continuing with the existing process still running."
+}
+
 if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
     INSTALL_MODE="developer"
 fi
@@ -762,6 +796,12 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     else
         warn "MCP configuration script not found. /setup will try again."
     fi
+fi
+
+# Close VS Code before relaunching so an old extension host cannot mask the
+# freshly installed guided profile.
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    close_running_vscode
 fi
 
 # ---------------------------------------------------------------------------
