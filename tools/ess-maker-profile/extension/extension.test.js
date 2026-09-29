@@ -199,8 +199,8 @@ test('customization view is a tree named Customization (no guidance webview)', (
         'customizationInfoView should be removed');
 });
 
-test('activates on startup finished', () => {
-    assert.ok(pkg.activationEvents.includes('onStartupFinished'));
+test('activates eagerly so the guided layout can restore hidden VS Code chrome', () => {
+    assert.ok(pkg.activationEvents.includes('*'));
 });
 
 test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
