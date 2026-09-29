@@ -46,6 +46,15 @@ LIFECYCLE_SCHEMA_VERSION = 2
 class ServiceNowConnectError(RuntimeError):
     """Raised when the DA-GA ServiceNow prototype cannot proceed safely."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.details = details
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -1371,6 +1380,57 @@ def _component_content_hash(component: dict[str, Any]) -> str:
     return _canonical_json_hash(normalized)
 
 
+def _topic_transaction_diagnostics(
+    transaction: dict[str, Any],
+) -> dict[str, Any]:
+    rollback_statuses = transaction.get("topics")
+    if not isinstance(rollback_statuses, dict):
+        rollback_statuses = {}
+    targets = transaction.get("targets")
+    if not isinstance(targets, dict):
+        targets = {}
+    target_summaries = []
+    for topic_id, target in sorted(targets.items())[:20]:
+        if not isinstance(target, dict):
+            continue
+        component = target.get("component")
+        display_name = (
+            component.get("displayName")
+            if isinstance(component, dict)
+            else None
+        )
+        target_summaries.append(
+            {
+                "topicId": topic_id,
+                "displayName": display_name,
+                "beforeVersion": target.get("beforeVersion"),
+                "postVersion": target.get("postVersion"),
+                "ownershipStatus": target.get("ownershipStatus"),
+                "changedByOperation": target.get("changedByOperation"),
+                "rollbackStatus": rollback_statuses.get(topic_id),
+            }
+        )
+    details = {
+        "operationId": transaction.get("operationId"),
+        "transactionStatus": transaction.get("status"),
+        "mutationMayHaveOccurred": transaction.get(
+            "mutationMayHaveOccurred"
+        ),
+        "updateError": transaction.get("updateError"),
+        "reconciliationError": transaction.get("reconciliationError"),
+        "rollbackError": transaction.get("rollbackError"),
+        "before": transaction.get("before"),
+        "after": transaction.get("after"),
+        "targets": target_summaries,
+    }
+    remediation = transaction.get("remediation")
+    if isinstance(remediation, str) and remediation:
+        details["remediation"] = remediation
+    if len(targets) > len(target_summaries):
+        details["omittedTargetCount"] = len(targets) - len(target_summaries)
+    return details
+
+
 def _rollback_topic_transaction(
     context: dict[str, Any],
     agentbuilder: AgentBuilderClient,
@@ -1550,6 +1610,11 @@ def enable_all_servicenow_topics(
         "preparedAt": _utc_now(),
         "changeTokenHash": _canonical_json_hash(before.get("changeToken")),
         "beforeComponentHash": _component_hash(before),
+        "before": {
+            "total": before_summary["serviceNowTopicCount"],
+            "active": before_summary["activeServiceNowTopicCount"],
+            "inactive": len(inactive),
+        },
         "targets": {
             str(topic["id"]): {
                 "beforeVersion": topic.get("version"),
@@ -1619,9 +1684,18 @@ def enable_all_servicenow_topics(
         raise ServiceNowConnectError(
             "ServiceNow topic mutation may have occurred, but the required "
             "post-update refetch failed. Do not roll back until ownership "
-            "can be established from a fresh component fetch."
+            "can be established from a fresh component fetch.",
+            details=_topic_transaction_diagnostics(transaction),
         ) from exc
     after_summary = summarize_components(after)
+    transaction["after"] = {
+        "total": after_summary["serviceNowTopicCount"],
+        "active": after_summary["activeServiceNowTopicCount"],
+        "inactive": (
+            after_summary["serviceNowTopicCount"]
+            - after_summary["activeServiceNowTopicCount"]
+        ),
+    }
     after_topics = _servicenow_topic_components(after)
     for topic_id, target in transaction["targets"].items():
         postimage = after_topics.get(topic_id.casefold())
@@ -1674,7 +1748,8 @@ def enable_all_servicenow_topics(
             )
             _write_lifecycle_state(context, state)
             raise ServiceNowConnectError(
-                "ServiceNow topic update failed before any topic mutation."
+                "ServiceNow topic update failed before any topic mutation.",
+                details=_topic_transaction_diagnostics(transaction),
             ) from update_error
         transaction["status"] = "rollback-required"
         transaction["afterComponentHash"] = _component_hash(after)
@@ -1688,7 +1763,8 @@ def enable_all_servicenow_topics(
         if rollback.get("status") != "rolled-back":
             raise ServiceNowConnectError(
                 "ServiceNow topic update failed and automatic rollback is "
-                "incomplete; review the transaction remediation."
+                "incomplete; review the transaction remediation.",
+                details=_topic_transaction_diagnostics(rollback),
             ) from update_error
         names = ", ".join(
             str(topic.get("displayName") or topic.get("id"))
@@ -1700,7 +1776,8 @@ def enable_all_servicenow_topics(
                 if update_error is not None
                 else "MinimalBot update left inactive topics and was rolled "
                 f"back safely: {names}."
-            )
+            ),
+            details=_topic_transaction_diagnostics(rollback),
         ) from update_error
     result = {
         "status": "updated" if inactive else "already-active",
@@ -2055,7 +2132,10 @@ def main(argv: list[str] | None = None) -> int:
         else:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
-        print(json.dumps({"status": "error", "message": str(exc)}, indent=2))
+        error = {"status": "error", "message": str(exc)}
+        if isinstance(exc, ServiceNowConnectError) and exc.details is not None:
+            error["details"] = exc.details
+        print(json.dumps(error, indent=2))
         return 1
     print(json.dumps(result, indent=2))
     return 0

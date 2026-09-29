@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 
 from pathlib import Path
 
@@ -1261,18 +1262,44 @@ def test_topic_rollback_does_not_overwrite_concurrent_external_edit(
         lambda _context: FakeAgentBuilder(),
     )
 
+    historical_operation_id = "00000000-0000-4000-8000-000000000001"
+    initial_state = snow._state_base(_context(), components)
+    initial_state["transactions"]["topics"][historical_operation_id] = {
+        "operationId": historical_operation_id,
+        "status": "rollback-incomplete",
+    }
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(initial_state), encoding="utf-8")
+
     with pytest.raises(
         snow.ServiceNowConnectError,
         match="rollback is incomplete",
-    ):
+    ) as raised:
         snow.enable_all_servicenow_topics(_context(), confirmed=True)
 
     assert len(updates) == 1
     assert first["externalConcurrentEdit"] == "must-survive"
-    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    transaction = next(iter(state["transactions"]["topics"].values()))
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_operation_id = raised.value.details["operationId"]
+    assert current_operation_id != historical_operation_id
+    transaction = state["transactions"]["topics"][current_operation_id]
     assert transaction["status"] == "rollback-incomplete"
     assert transaction["topics"][first["id"]] == "conflict"
+    assert raised.value.details["transactionStatus"] == "rollback-incomplete"
+    assert raised.value.details["before"] == {
+        "total": 2,
+        "active": 0,
+        "inactive": 2,
+    }
+    target = next(
+        item
+        for item in raised.value.details["targets"]
+        if item["topicId"] == first["id"]
+    )
+    assert target["ownershipStatus"] == "conflict"
+    assert target["rollbackStatus"] == "conflict"
+    assert "component" not in json.dumps(raised.value.details)
 
 
 def test_topic_rollback_treats_ambiguous_applied_restore_as_success(
@@ -1476,11 +1503,58 @@ def test_enable_all_topics_rejects_missing_transaction_target(
     with pytest.raises(
         snow.ServiceNowConnectError,
         match="rollback is incomplete",
-    ):
+    ) as raised:
         snow.enable_all_servicenow_topics(_context(), confirmed=True)
 
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    transaction = next(iter(state["transactions"]["topics"].values()))
+    operation_id = raised.value.details["operationId"]
+    transaction = state["transactions"]["topics"][operation_id]
     assert transaction["status"] == "rollback-incomplete"
     assert transaction["topics"][first["id"]] == "missing"
     assert transaction["status"] != "committed"
+    target = next(
+        item
+        for item in raised.value.details["targets"]
+        if item["topicId"] == first["id"]
+    )
+    assert target["ownershipStatus"] == "missing"
+    assert target["rollbackStatus"] == "missing"
+
+
+def test_main_serializes_current_topic_transaction_details(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    operation_id = "00000000-0000-4000-8000-000000009999"
+    monkeypatch.setattr(snow, "load_context", lambda: _context())
+    monkeypatch.setattr(
+        snow,
+        "enable_all_servicenow_topics",
+        lambda _context, *, confirmed: (_ for _ in ()).throw(
+            snow.ServiceNowConnectError(
+                "topic update failed",
+                details={
+                    "operationId": operation_id,
+                    "transactionStatus": "rollback-incomplete",
+                    "targets": [],
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["connect_servicenow_da.py", "enable-all-topics", "--yes"],
+    )
+
+    assert snow.main() == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "status": "error",
+        "message": "topic update failed",
+        "details": {
+            "operationId": operation_id,
+            "transactionStatus": "rollback-incomplete",
+            "targets": [],
+        },
+    }
