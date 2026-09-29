@@ -740,7 +740,13 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+    # --ring prod: the FlightCheck-only installer discovers environments via
+    # BAP prod (api.bap.microsoft.com), so we always target the prod service
+    # ring. Without this flag FlightCheck's --scope full aborts with "The Power
+    # Platform environment ring is unavailable" because the installer-authored
+    # config.json only carries dataverseEndpoint (no powerPlatformApiEndpoint
+    # from which FC could infer the ring).
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
     exit $?
 fi
 

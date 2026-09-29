@@ -1449,19 +1449,25 @@ if ($FlightCheckOnly) {
             # but let output stream directly to console (FlightCheck is interactive)
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
+            # --ring prod: the FlightCheck-only installer discovers environments
+            # via BAP prod (api.bap.microsoft.com), so we always target the prod
+            # service ring. Without this flag FlightCheck's --scope full aborts
+            # with "The Power Platform environment ring is unavailable" because
+            # the installer-authored config.json only carries dataverseEndpoint
+            # (no powerPlatformApiEndpoint from which FC could infer the ring).
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always'
+        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always --ring prod'
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well

@@ -597,6 +597,35 @@ Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-
     }
 }
 
+# ---------------------------------------------------------------------------
+# FC-only installer must pin --ring prod on the FlightCheck invocation.
+# Without --ring, flightcheck/cli.py --scope full aborts with
+# "The Power Platform environment ring is unavailable" because the config
+# authored by the FC-only installer only has dataverseEndpoint (no
+# powerPlatformApiEndpoint from which the ring could be inferred). The
+# FC-only installer uses BAP prod (api.bap.microsoft.com) for env discovery,
+# so prod is always the correct ring.
+# ---------------------------------------------------------------------------
+
+Test 'Install-EssAdk.ps1 passes --ring prod on every FC-only FlightCheck invocation' {
+    $src = Get-Content $installerPath -Raw
+    $invocations = [regex]::Matches($src, 'scripts/flightcheck/cli\.py[^\r\n]*')
+    if ($invocations.Count -lt 3) {
+        throw "expected at least 3 FlightCheck invocations in Install-EssAdk.ps1, found $($invocations.Count)"
+    }
+    foreach ($m in $invocations) {
+        if ($m.Value -notmatch '--ring\s+prod') {
+            throw "FlightCheck invocation is missing '--ring prod': $($m.Value)"
+        }
+    }
+}
+
+Test 'install-ess-adk.sh passes --ring prod on the FC-only FlightCheck invocation' {
+    if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+prod') {
+        throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh is missing --ring prod'
+    }
+}
+
 # Summary
 Write-Host "`n$($passed + $failed) tests, $passed passed, $failed failed" -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Green' })
 exit $(if ($failed -gt 0) { 1 } else { 0 })
