@@ -125,7 +125,7 @@ def _probe_native_agent(
     kit_root: Path,
     host: str | None,
     api_version: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str, BaseException | None]:
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     token, tenant_id = authenticate_flightcheck(
         ring,
@@ -145,7 +145,42 @@ def _probe_native_agent(
         tenant_id=tenant_id,
         api_version=api_version,
     )
-    return client.get_agent(agent_id)
+    agent = client.get_agent(agent_id)
+    schema_name = str(
+        agent.get("schemaName") or agent.get("schemaname") or ""
+    ).strip()
+    if schema_name:
+        return agent, "minimalbot-direct", None
+
+    try:
+        changeset = client.fetch_components(agent_id)
+        bot = changeset.get("bot")
+        if not isinstance(bot, dict):
+            raise ValueError("Component fetch did not return bot identity.")
+        fetched_id = _normalize_guid(
+            str(bot.get("cdsBotId") or bot.get("componentIdUnique") or ""),
+            "Fetched component agent ID",
+        )
+        if fetched_id.casefold() != agent_id.casefold():
+            raise ValueError(
+                "Component fetch returned identity for a different agent."
+            )
+        schema_name = str(bot.get("schemaName") or "").strip()
+        if not schema_name:
+            raise ValueError("Component fetch did not return a schema name.")
+    except (
+        AgentBuilderError,
+        OSError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        return agent, "minimalbot-direct", exc
+
+    return (
+        {**agent, "schemaName": schema_name},
+        "minimalbot-components",
+        None,
+    )
 
 
 def _resolve_dataverse_url(
@@ -299,7 +334,7 @@ def probe_native_identity(
     normalized_environment = _normalize_guid(environment_id, "Environment ID")
     normalized_agent = _normalize_guid(agent_id, "Agent ID")
     try:
-        agent = _probe_native_agent(
+        agent, evidence, product_identity_error = _probe_native_agent(
             normalized_environment,
             normalized_agent,
             ring,
@@ -315,11 +350,18 @@ def probe_native_identity(
         requests.RequestException,
     ) as exc:
         return _failure_result("native", exc)
-    return _identity_summary(
+    result = _identity_summary(
         "native",
         agent,
-        evidence="minimalbot-direct",
+        evidence=evidence,
     )
+    if product_identity_error is not None:
+        result["productIdentity"] = {
+            "outcome": "uncertain",
+            "stage": "component-identity",
+            "error": _exception_evidence(product_identity_error),
+        }
+    return result
 
 
 def probe_dataverse_identity(

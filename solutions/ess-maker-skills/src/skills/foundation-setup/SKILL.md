@@ -330,12 +330,12 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
-- When `almEnrollment` is `not-enrolled`, the earlier native identity probe
-  still proves that the agent exists. Say that the agent is not enrolled in
-  the ALM family required for local authoring, then offer **Choose a different
-  agent**, **Choose a different environment**, and **Go back** using the exact
-  recovery routes in `product-line-reconciliation.md`. Do not call the agent
-  missing and do not continue to validation or attachment.
+- When `routeStatus` is `not-found`, the earlier native identity probe still
+  proves that the agent exists. Say that setup could not establish an authoring
+  route for that agent, then offer **Choose a different agent**, **Choose a
+  different environment**, and **Go back** using the exact recovery routes in
+  `product-line-reconciliation.md`. Do not call the agent missing and do not
+  continue to validation or attachment.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent
