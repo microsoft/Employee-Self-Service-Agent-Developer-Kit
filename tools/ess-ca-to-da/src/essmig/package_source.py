@@ -55,6 +55,7 @@ from essmig.ess import (
     schema_prefix,
     schema_suffix,
 )
+from essmig.flows import CarriedFlow, FlowExport, canonical_id
 from essmig.reference import ReferenceSet, load
 
 _AGENT_GPT_SUFFIX = "gpt.default"
@@ -136,6 +137,135 @@ def discover_from_package(
         skipped=skipped,
         agent=_agent_metadata(layers_by_component, prefix, reference),
     )
+
+
+def read_flow_export(path: str | Path) -> FlowExport | None:
+    """Read the cloud flows an exported CA solution carries, ready to re-emit.
+
+    Returns ``None`` when the export declares no flows. Otherwise returns every
+    flow in the package (its id, name and — read from the flow definition — its
+    input/output parameter schemas and connectors) together with the raw
+    ``solution.xml``, ``customizations.xml`` and ``Workflows/`` parts, so
+    :func:`essmig.flows.build_solution_zip` can re-emit them near-verbatim.
+
+    Flows travel across the whole package, not per vertical: a cloud flow is not
+    owned by one ESS agent, and the same flow may be invoked by topics in more than
+    one of them. The caller decides, per agent, which of these are actually
+    referenced and need carrying.
+    """
+    with _package_root(path) as root:
+        customizations = root / "customizations.xml"
+        solution = root / "solution.xml"
+        if not customizations.is_file() or not solution.is_file():
+            return None
+        customizations_xml = customizations.read_text(encoding="utf-8-sig")
+        entries = _workflow_entries(customizations_xml)
+        if not entries:
+            return None
+
+        workflow_files: dict[str, bytes] = {}
+        flows: list[CarriedFlow] = []
+        for entry in entries:
+            part = entry["json_name"]
+            definition_path = root / "Workflows" / part
+            data = definition_path.read_bytes() if definition_path.is_file() else b""
+            if data:
+                workflow_files[part] = data
+            inputs, outputs, connectors = _flow_definition(data)
+            flows.append(
+                CarriedFlow(
+                    workflow_id=canonical_id(entry["workflow_id"]),
+                    name=entry["name"],
+                    description=entry["description"],
+                    json_name=part,
+                    input_schema=inputs,
+                    output_schema=outputs,
+                    connectors=connectors,
+                )
+            )
+        return FlowExport(
+            flows=tuple(flows),
+            solution_xml=solution.read_text(encoding="utf-8-sig"),
+            customizations_xml=customizations_xml,
+            workflow_files=workflow_files,
+        )
+
+
+def _workflow_entries(customizations_xml: str) -> list[dict[str, str]]:
+    """``id``/``name``/``description``/``json_name`` for each ``<Workflow>`` in the export."""
+    try:
+        root = ET.fromstring(customizations_xml)
+    except ET.ParseError:
+        return []
+    entries: list[dict[str, str]] = []
+    for workflow in root.iter("Workflow"):
+        workflow_id = workflow.get("WorkflowId")
+        json_file = (workflow.findtext("JsonFileName") or "").strip()
+        if not workflow_id or not json_file:
+            continue
+        entries.append(
+            {
+                "workflow_id": workflow_id,
+                "name": workflow.get("Name") or "",
+                "description": workflow.get("Description") or "",
+                # The manifest path is POSIX and absolute (``/Workflows/<file>``);
+                # the archive stores the part under ``Workflows/`` by its base name.
+                "json_name": json_file.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1],
+            }
+        )
+    return entries
+
+
+def _flow_definition(data: bytes) -> tuple[dict[str, Any], dict[str, Any], tuple[str, ...]]:
+    """A flow's ``(input_schema, output_schema, connectors)`` from its definition JSON."""
+    if not data:
+        return {}, {}, ()
+    try:
+        document = json.loads(data.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError):
+        return {}, {}, ()
+    properties = document.get("properties") if isinstance(document, dict) else None
+    if not isinstance(properties, dict):
+        return {}, {}, ()
+
+    definition = properties.get("definition")
+    definition = definition if isinstance(definition, dict) else {}
+    input_schema = _request_trigger_schema(definition.get("triggers"))
+    output_schema = _response_action_schema(definition.get("actions"))
+    connectors = _connectors(properties.get("connectionReferences"))
+    return input_schema, output_schema, connectors
+
+
+def _request_trigger_schema(triggers: Any) -> dict[str, Any]:
+    if isinstance(triggers, dict):
+        for trigger in triggers.values():
+            if isinstance(trigger, dict) and trigger.get("type") == "Request":
+                schema = trigger.get("inputs", {}).get("schema")
+                if isinstance(schema, dict):
+                    return schema
+    return {}
+
+
+def _response_action_schema(actions: Any) -> dict[str, Any]:
+    if isinstance(actions, dict):
+        for action in actions.values():
+            if isinstance(action, dict) and action.get("type") == "Response":
+                schema = action.get("inputs", {}).get("schema")
+                if isinstance(schema, dict):
+                    return schema
+    return {}
+
+
+def _connectors(connection_references: Any) -> tuple[str, ...]:
+    if not isinstance(connection_references, dict):
+        return ()
+    names: dict[str, None] = {}
+    for reference in connection_references.values():
+        api = reference.get("api") if isinstance(reference, dict) else None
+        name = api.get("name") if isinstance(api, dict) else None
+        if isinstance(name, str) and name:
+            names.setdefault(name, None)
+    return tuple(names)
 
 
 # --- package layout ---------------------------------------------------------

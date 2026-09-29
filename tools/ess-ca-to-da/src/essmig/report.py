@@ -18,6 +18,7 @@ from typing import Any
 from essmig.assessment import Assessment, assess
 from essmig.deliver import ImportResult
 from essmig.discovery import DiscoveryResult
+from essmig.flows import FlowFindings
 from essmig.merge import ComponentResult, MergeResult, Outcome
 from essmig.projection import dump
 
@@ -53,16 +54,25 @@ def write_reports(
     *,
     package_path: Path | None = None,
     import_result: ImportResult | None = None,
+    flow_findings: FlowFindings | None = None,
+    flows_zip: Path | None = None,
 ) -> tuple[Path, Path]:
     """Write ``migration-report.md`` and ``migration-report.json``. Returns both paths."""
     destination.mkdir(parents=True, exist_ok=True)
     markdown_path = destination / "migration-report.md"
     json_path = destination / "migration-report.json"
     markdown_path.write_text(
-        render_markdown(discovery, merged, package_path, import_result), encoding="utf-8"
+        render_markdown(
+            discovery, merged, package_path, import_result, flow_findings, flows_zip
+        ),
+        encoding="utf-8",
     )
     json_path.write_text(
-        json.dumps(render_json(discovery, merged, import_result), indent=2, default=str),
+        json.dumps(
+            render_json(discovery, merged, import_result, flow_findings),
+            indent=2,
+            default=str,
+        ),
         encoding="utf-8",
     )
     return markdown_path, json_path
@@ -72,6 +82,7 @@ def render_json(
     discovery: DiscoveryResult,
     merged: MergeResult,
     import_result: ImportResult | None = None,
+    flow_findings: FlowFindings | None = None,
 ) -> dict[str, Any]:
     return {
         "generatedUtc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -79,6 +90,7 @@ def render_json(
         "sourceSolution": discovery.solution_unique_name,
         "assessment": assess(merged).to_json(),
         "delivery": import_result.to_json() if import_result is not None else None,
+        "flows": _flows_json(flow_findings),
         "summary": {outcome.value: merged.count(outcome) for outcome in _ORDER},
         "components": [
             {
@@ -100,11 +112,31 @@ def render_json(
     }
 
 
+def _flows_json(flow_findings: FlowFindings | None) -> dict[str, Any] | None:
+    if flow_findings is None or not (flow_findings.carried or flow_findings.dangling):
+        return None
+    return {
+        "carried": [
+            {
+                "workflowId": flow.workflow_id,
+                "name": flow.name,
+                "connectors": list(flow.connectors),
+            }
+            for flow in flow_findings.carried
+        ],
+        "dangling": list(flow_findings.dangling),
+        "templateProvided": list(flow_findings.template_provided),
+        "connectionsToRebind": flow_findings.connectors(),
+    }
+
+
 def render_markdown(
     discovery: DiscoveryResult,
     merged: MergeResult,
     package_path: Path | None,
     import_result: ImportResult | None = None,
+    flow_findings: FlowFindings | None = None,
+    flows_zip: Path | None = None,
 ) -> str:
     verdict = assess(merged)
     lines: list[str] = [
@@ -123,6 +155,7 @@ def render_markdown(
     lines += ["", f"## Verdict: {verdict.verdict}", ""] + _verdict_body(verdict)
     if import_result is not None:
         lines += _delivery_body(import_result)
+    lines += _flows_body(flow_findings, flows_zip, package_path)
     lines += ["", "## Summary", "", "| Outcome | Count |", "| --- | ---: |"]
     for outcome in _ORDER:
         count = merged.count(outcome)
@@ -241,8 +274,56 @@ def render_markdown(
     lines += ["", "## What changes for your employees", ""] + [
         f"- {impact}" for impact in verdict.employee_impact
     ]
-    lines += ["", "## Next steps", ""] + _next_steps(package_path, import_result)
+    lines += ["", "## Next steps", ""] + _next_steps(package_path, import_result, flow_findings)
     return "\n".join(lines) + "\n"
+
+
+def _flows_body(
+    flow_findings: FlowFindings | None, flows_zip: Path | None, package_path: Path | None
+) -> list[str]:
+    if flow_findings is None or not (flow_findings.carried or flow_findings.dangling):
+        return []
+    lines = ["", "## Cloud flows", ""]
+    if flow_findings.carried:
+        zip_name = f"`{flows_zip.name}`" if flows_zip is not None else "a separate flows solution"
+        package = f"`{package_path.name}`" if package_path is not None else "the agent package"
+        lines += [
+            "Topics you migrated call cloud flows. The agent package can *reference* a "
+            "flow but cannot *contain* one — a flow is an environment component, "
+            f"installed by a solution import. So these flows travel in {zip_name}, which "
+            "you must import **before** the agent package:",
+            "",
+        ]
+        for flow in flow_findings.carried:
+            binds = f" (connections: {', '.join(flow.connectors)})" if flow.connectors else ""
+            lines.append(f"- **{flow.name}** — `{flow.workflow_id}`{binds}")
+        lines += [
+            "",
+            f"1. Import {zip_name} into the target environment. The flows keep their "
+            "original ids, so the migrated topics' references resolve.",
+        ]
+        connectors = flow_findings.connectors()
+        if connectors:
+            lines.append(
+                "2. Rebind each flow's connection — the connection references travel "
+                f"unbound and must be pointed at a connection in the target: "
+                f"{', '.join(connectors)}. Turn the flows on."
+            )
+            lines.append(f"3. Import {package}.")
+        else:
+            lines.append(f"2. Import {package}.")
+    if flow_findings.dangling:
+        lines += [
+            "",
+            "> ⚠️ These flows are invoked by a migrated topic but their definitions are "
+            "not available to carry (they were not in the source, or the source was a "
+            "live environment this tool cannot read flow definitions from). **The agent "
+            "import will fail** until each one exists in the target — re-create it, or "
+            "re-run the migration from an exported package that contains it:",
+            "",
+        ]
+        lines += [f"- `{flow_id}`" for flow_id in flow_findings.dangling]
+    return lines
 
 
 def _delivery_body(import_result: ImportResult) -> list[str]:
@@ -297,8 +378,17 @@ def _verdict_body(verdict: Assessment) -> list[str]:
     return lines
 
 
-def _next_steps(package_path: Path | None, import_result: ImportResult | None = None) -> list[str]:
+def _next_steps(
+    package_path: Path | None,
+    import_result: ImportResult | None = None,
+    flow_findings: FlowFindings | None = None,
+) -> list[str]:
     package = f"`{package_path.name}`" if package_path is not None else "the package"
+    flows_first = (
+        "Import the flows solution first (see *Cloud flows* above), then "
+        if flow_findings is not None and flow_findings.needs_flow_import
+        else ""
+    )
     if import_result is not None and import_result.ok:
         return [
             "1. Nothing in this migration touched your Custom Engine Agent — it is still "
@@ -321,9 +411,9 @@ def _next_steps(package_path: Path | None, import_result: ImportResult | None = 
     return [
         f"1. Review the sections above. Nothing in {package} touches your Custom Engine "
         "Agent — it is still running, unchanged.",
-        "2. Import the package into your **development** environment. Import is a clean "
-        "replace of the Declarative Agent in that environment only; Test and Production "
-        "are not affected.",
+        f"2. {flows_first}import the package into your **development** environment. Import "
+        "is a clean replace of the Declarative Agent in that environment only; Test and "
+        "Production are not affected.",
         "3. Rebind connections in the destination environment. Connection ids and secrets "
         "are deliberately not included in the package.",
         "4. Work through the conflicts and the disabled topics, then publish and promote.",

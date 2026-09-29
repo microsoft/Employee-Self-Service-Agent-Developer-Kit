@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 
 from essmig import customizations as customizations_module
-from essmig import package_source
+from essmig import flows as flows_module
+from essmig import made, package_source
 from essmig import reference as reference_module
 from essmig.assessment import Assessment, assess
 from essmig.auth import discover_tenant, provider_for, provider_for_target
@@ -203,6 +204,7 @@ def _inspect_one(
     path = out / "customizations.json"
     path.write_text(json.dumps(_snapshot(result), indent=2), encoding="utf-8")
 
+    shipped = made.snapshot(reference)
     merged = merge(
         reference,
         result.components,
@@ -218,6 +220,16 @@ def _inspect_one(
         encoding="utf-8",
     )
 
+    made_path = made.write(
+        out,
+        vertical,
+        shipped,
+        made.snapshot(reference),
+        source_solution=result.solution_unique_name,
+        da_schemaname=reference.da_schemaname,
+        template_version=reference.provenance.get("template_version"),
+    )
+
     print(f"Found {len(result.components)} customization(s) in {result.solution_unique_name}:")
     for component in sorted(result.components.values(), key=lambda c: c.schemaname):
         marker = "new" if component.is_net_new else "edited"
@@ -230,8 +242,42 @@ def _inspect_one(
     verdict_path.write_text(json.dumps(verdict.to_json(), indent=2), encoding="utf-8")
     _print_verdict(verdict)
 
-    print(f"\nWrote {path}, {diff_path} and {verdict_path}\n")
+    flow_export = (
+        package_source.read_flow_export(args.from_package)
+        if args.from_package is not None
+        else None
+    )
+    _print_flows(flows_module.plan(merged.agent, flow_export), None, None)
+
+    print(f"\nWrote {path}, {diff_path}, {made_path} and {verdict_path}\n")
     return 0
+
+
+def _print_flows(
+    findings: flows_module.FlowFindings, flows_zip: Path | None, package_path: Path | None
+) -> None:
+    if not (findings.carried or findings.dangling):
+        return
+    print("\nCloud flows:")
+    for flow in findings.carried:
+        print(f"  - {flow.name} — carried in a separate flows solution.")
+    if findings.carried:
+        connectors = findings.connectors()
+        if flows_zip is not None:
+            package = package_path.name if package_path is not None else "the agent package"
+            print(
+                f"    Import {flows_zip.name} into the target FIRST, then {package}; "
+                "the flows keep their ids so the agent's references resolve."
+            )
+        if connectors:
+            print(f"    Rebind these connections after import: {', '.join(connectors)}.")
+    for flow_id in findings.dangling:
+        print(
+            f"  - flow {flow_id} is invoked by a migrated topic but its definition is "
+            "not available to carry. Re-create or import it into the target, or the "
+            "agent import will fail."
+        )
+
 
 
 def _print_verdict(verdict: Assessment) -> None:
@@ -287,6 +333,7 @@ def _migrate_one(
             "Conflicts (spots you and ESS both changed) will be offered here to resolve; "
             "press Enter to keep ESS's version."
         )
+    shipped = made.snapshot(reference)
     merged = merge(
         reference,
         discovery.components,
@@ -295,6 +342,15 @@ def _migrate_one(
         merge_instructions=skip_instruction_reconciliation if args.keep_instructions else None,
         resolver_factory=console_resolver_factory() if interactive else None,
     )
+
+    flow_export = (
+        package_source.read_flow_export(args.from_package)
+        if args.from_package is not None
+        else None
+    )
+    flow_findings = flows_module.plan(merged.agent, flow_export)
+    flows_module.add_interfaces(merged.agent, flow_findings.carried)
+    flows_module.register_config_flows(reference.config, flow_findings.carried)
 
     plugin = write_package(out, reference, merged.agent)
     unbound = check_pointers(merged.agent, reference.config)
@@ -309,20 +365,43 @@ def _migrate_one(
     if not args.no_zip:
         package_path = zip_package(plugin, out / f"{reference.da_schemaname}.zip")
 
+    flows_zip: Path | None = None
+    if flow_findings.needs_flow_import and flow_export is not None and not args.no_zip:
+        flows_zip = out / "flows.zip"
+        flows_zip.write_bytes(flows_module.build_solution_zip(flow_export))
+
     import_result: ImportResult | None = None
     if args.do_import:
         import_result = _deliver(args, reference, package_bytes(plugin))
 
     markdown, _ = write_reports(
-        out, discovery, merged, package_path=package_path, import_result=import_result
+        out,
+        discovery,
+        merged,
+        package_path=package_path,
+        import_result=import_result,
+        flow_findings=flow_findings,
+        flows_zip=flows_zip,
+    )
+    made_path = made.write(
+        out,
+        vertical,
+        shipped,
+        made.snapshot(reference),
+        source_solution=discovery.solution_unique_name,
+        da_schemaname=reference.da_schemaname,
+        template_version=reference.provenance.get("template_version"),
+        package_path=package_path,
     )
     print(summarize(merged.results) or "nothing to migrate")
     _print_verdict(assess(merged))
+    _print_flows(flow_findings, flows_zip, package_path)
     if package_path is not None:
         print(f"\nPackage: {package_path}")
     if import_result is not None:
         _print_import(import_result)
     print(f"Report:  {markdown}")
+    print(f"Changes: {made_path}")
     if merged.count(Outcome.FAILED) or (import_result is not None and not import_result.ok):
         return 1
     return 0

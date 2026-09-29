@@ -642,6 +642,35 @@ def test_edited_instructions_are_reconciled_onto_the_da_wording_by_the_model() -
     assert "re-applied to the DA's wording" in result.results[0].detail
 
 
+def test_multiline_reconciled_instructions_serialize_as_a_block_scalar() -> None:
+    # A plain multi-line str dumps as a double-quoted scalar with \n escapes, which
+    # makes customizationsMade.md read as one giant replaced line and ships an ugly
+    # agent.yml. The reconciled instructions must round-trip as a literal block (|-).
+    from essmig.projection import dump
+
+    reference = _gpt_reference("shipped DA text")
+    component = _gpt_component("shipped CA text plus my rule")
+
+    def fake_merge(base: str, ours: str, theirs: str) -> str:
+        return "#Identity \nYou are helpful.\n\n#Rules\nBe concise."
+
+    result = merge(
+        reference,
+        {component.component_id: component},
+        "hr",
+        merge_instructions=fake_merge,
+    )
+
+    gpt = next(
+        entry
+        for entry in result.agent["components"]
+        if isinstance(entry, dict) and entry.get("kind") == "GptComponent"
+    )
+    rendered = dump(gpt)
+    assert "instructions: |-" in rendered
+    assert "\\n" not in rendered
+
+
 def test_unedited_instructions_do_not_call_the_model() -> None:
     # If the customer never touched the instructions, keep the DA's wording and make
     # no model call.
@@ -881,17 +910,34 @@ def test_an_unchanged_agent_produces_no_result() -> None:
     assert not any(r.suffix == _AGENT_SUFFIX for r in merged.results)
 
 
-def test_a_missing_baseline_that_differs_from_the_template_needs_review() -> None:
+def test_a_missing_baseline_name_is_carried_with_a_note() -> None:
     reference = reference_set([], config=_config_with_name("ESS HR (Preview)"))
     reference.agent["entity"]["description"] = "Shipped description."
     metadata = AgentMetadata(name="Contoso People Helper", description="Shipped description.")
     merged = merge(reference, {}, "hr", agent_metadata=metadata)
 
-    # Baseline unknown -> do not silently overwrite the template's name.
-    assert reference.config["values"]["botName"] == "ESS HR (Preview)"
+    # Baseline unknown, but the customer's name is their data: carry it onto the
+    # template rather than defaulting to the template name, and note the caveat.
+    assert reference.config["values"]["botName"] == "Contoso People Helper"
+    assert reference.config["values"]["gptDisplayName"] == "Contoso People Helper"
+    result = next(r for r in merged.results if r.suffix == _AGENT_SUFFIX)
+    assert result.outcome is Outcome.MERGED
+    assert "display name" in result.detail
+    assert "baseline name could not be read" in result.detail
+
+
+def test_a_missing_baseline_description_still_needs_review() -> None:
+    reference = reference_set([], config=_config_with_name("ESS HR (Preview)"))
+    reference.agent["entity"]["description"] = "Shipped description."
+    # Name matches the template (nothing to carry); only the description differs
+    # with no baseline to confirm it — that still degrades to a review.
+    metadata = AgentMetadata(name="ESS HR (Preview)", description="Our tailored description.")
+    merged = merge(reference, {}, "hr", agent_metadata=metadata)
+
+    assert reference.agent["entity"]["description"] == "Shipped description."
     result = next(r for r in merged.results if r.suffix == _AGENT_SUFFIX)
     assert result.outcome is Outcome.CONFLICTED
-    assert "Confirm which name" in result.detail
+    assert "Confirm which" in result.detail
 
 
 def test_no_agent_metadata_produces_no_agent_result() -> None:

@@ -41,6 +41,7 @@ from essmig.projection import (
     ProjectionError,
     _state_of,
     as_new_component,
+    block_scalar,
     describe,
     parse_ca_data,
     project,
@@ -335,6 +336,7 @@ def _merge_agent_metadata(
 
     applied: list[str] = []
     review: list[str] = []
+    notes: list[str] = []
 
     # Display name -> config botName / gptDisplayName (agent.yml resolves displayName
     # from botName via a ${config.values[...]} pointer).
@@ -343,9 +345,17 @@ def _merge_agent_metadata(
             _set_agent_name(values, metadata.name)
             applied.append(f'display name -> "{metadata.name}"')
         elif metadata.baseline_name is None and _differs(metadata.name, da_name):
-            review.append(
-                f'you have "{metadata.name}"; the template ships "{da_name}". '
-                "Confirm which name the agent should keep."
+            # The shipped baseline name could not be read (always the case on the
+            # package path, whose vendored gpt.default baseline carries no
+            # displayName). The customer's agent name is their data, so carry it
+            # rather than defaulting to the template name — but note that it could
+            # not be confirmed as a deliberate rename against a baseline.
+            _set_agent_name(values, metadata.name)
+            applied.append(f'display name -> "{metadata.name}"')
+            notes.append(
+                f'The shipped baseline name could not be read, so "{metadata.name}" '
+                f'was carried over the template\'s "{da_name}" without confirming it '
+                "was a deliberate rename — verify this is the title you want."
             )
 
     # Description -> agent.yml entity.description.
@@ -374,6 +384,8 @@ def _merge_agent_metadata(
     )
     if applied:
         result.detail = "Carried your agent " + " and ".join(applied) + " onto the template."
+    if notes:
+        result.detail = (result.detail + " " if result.detail else "") + " ".join(notes)
     if review:
         joined = " ".join(review)
         result.detail = (result.detail + " " if result.detail else "") + joined
@@ -697,7 +709,7 @@ def _reconcile_gpt_instructions(
 
     if isinstance(merged, dict):
         merged = dict(merged)
-        merged["instructions"] = reconciled
+        merged["instructions"] = block_scalar(reconciled)
     remaining = [
         conflict for conflict in conflicts if not conflict.path.endswith(".instructions")
     ]
