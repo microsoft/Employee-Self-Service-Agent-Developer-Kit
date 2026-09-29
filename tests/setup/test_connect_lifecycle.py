@@ -26,7 +26,8 @@ def test_workday_contract_uses_generic_lifecycle() -> None:
     wiring = contract["phases"][1]
     assert wiring["mutates"] is True
     assert wiring["requiredRole"] == "Environment Maker"
-    assert wiring["rollbackPushGlob"] == "topics/user-context-setup.mcs.yml"
+    assert wiring["rollbackPushGlobFromAction"] is True
+    assert "rollbackPushGlob" not in wiring
     assert "attestedRoleScope" not in contract
 
     entry = (_CONNECT / "workday" / "SKILL.md").read_text(encoding="utf-8")
@@ -50,9 +51,13 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert 'actionExecution: "every-invocation"' in runner
     assert "Non-mutating actions do not run a role" in runner
     assert "contiguous prefix" in runner
-    assert "clear `actionApplied`/`lastActionAt`" in runner
-    assert "fresh gate and fresh rollback" in runner
+    assert (
+        "clear\n   `actionApplied`/`lastActionAt`/`rollbackPushGlob`"
+        in runner
+    )
+    assert "fresh gate\n   and fresh rollback checkpoint" in runner
     assert "must never be reused after drift" in runner
+    assert "`actionApplied`/`lastActionAt`/`rollbackPushGlob`" in runner
     assert "attestedRoleScope: \"lifecycle\"" in runner
     assert "roleAttestations.{requiredRole}" in runner
     assert "Accepting the plan does not claim a\nrole" in runner
@@ -132,7 +137,8 @@ def test_cea_workday_routing_is_package_gated() -> None:
     assert "Passed` + full / legacy result" in route
     assert "Never start a lifecycle from an\n  inconclusive package check" in route
     assert "connect/workday/SKILL.md" in route
-    assert "Shared provider setup state is not agent connection state" in route
+    assert ".local/connect/workday-da/config.json" in route
+    assert "`scope.agent.slug` and `scope.agent.botId` exactly" in route
 
 
 def test_workday_wiring_uses_installed_identity_and_explicit_result() -> None:
@@ -140,10 +146,47 @@ def test_workday_wiring_uses_installed_identity_and_explicit_result() -> None:
         _CONNECT / "workday" / "actions" / "wire-user-context-redirect.md"
     ).read_text(encoding="utf-8")
 
-    assert ".local/agents/{AGENT_SLUG}/topics/" in action
-    assert "workspace/agents/{AGENT_SLUG}/topics/" in action
+    assert "workspace/agents/{AGENT_SLUG}/.component-map.json" in action
+    assert "workspace/agents/{AGENT_SLUG}/{USER_CONTEXT_TOPIC_PATH}" in action
     assert 'ACTION_RESULT = "cancelled"' in action
     assert 'ACTION_RESULT = "applied"' in action
+    assert "ACTION_ROLLBACK_PUSH_GLOB" in action
+    assert "install-workday-extension-pack.md" not in action
+
+
+def test_connect_contract_action_docs_and_rollback_scopes_are_valid() -> None:
+    contracts = sorted(_CONNECT.glob("*/contract.json"))
+    assert contracts
+
+    for contract_path in contracts:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        for phase in contract["phases"]:
+            action_doc = phase.get("actionDoc")
+            if action_doc:
+                assert (_SOLUTION / action_doc).is_file()
+
+            has_static_scope = "rollbackPushGlob" in phase
+            has_dynamic_scope = phase.get("rollbackPushGlobFromAction") is True
+            assert not (has_static_scope and has_dynamic_scope)
+            if phase.get("rollbackLabel"):
+                assert has_static_scope or has_dynamic_scope
+
+
+def test_dynamic_rollback_scope_is_persisted_and_reused_exactly() -> None:
+    runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
+        encoding="utf-8"
+    )
+    schema = (_CONNECT / "shared" / "lifecycle-contract-schema.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ACTION_ROLLBACK_PUSH_GLOB" in runner
+    assert "phases.{id}.rollbackPushGlob" in runner
+    assert "no wildcard characters" in runner
+    assert '--only "{ROLLBACK_PUSH_GLOB}"' in runner
+    assert "remove\n  `rollbackPushGlob`" in runner
+    assert "rollbackPushGlobFromAction" in schema
+    assert "ACTION_ROLLBACK_PUSH_GLOB" in schema
 
 
 def test_declarative_agents_do_not_enter_cea_lifecycle() -> None:

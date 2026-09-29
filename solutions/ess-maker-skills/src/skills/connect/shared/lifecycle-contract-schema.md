@@ -58,12 +58,13 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `mutates` | boolean | no (default `false`) | `true` if completing this phase changes the live agent (edits a file, pushes a change). Drives the role gate below. |
 | `requiredRole` | string | required when `mutates` is `true` | Human-readable role name passed to `permission-gate.md` as `REQUIRED_ROLE` before the phase's action runs. |
 | `gateMode` | string | no (default `"attested"`) | `"programmatic"` or `"attested"` — passed to `permission-gate.md` as `GATE_MODE`. Use `"programmatic"` only when `roleQuery` names a real, working query. |
-| `roleQuery` | array of strings | required when `gateMode` is `"programmatic"` | The exact command(s) `permission-gate.md` runs as `ROLE_QUERY`, and the role name(s) that count as a pass. Copy an existing, already-proven query rather than inventing a new one (e.g. the Dataverse security-role check `src/skills/setup/workday/install-workday-extension-pack.md` section P5.0 uses for "Environment Maker"). |
+| `roleQuery` | array of strings | required when `gateMode` is `"programmatic"` | The exact command(s) `permission-gate.md` runs as `ROLE_QUERY`. Reuse a checked-in, tested provider query rather than inventing an unverified permission check. |
 | `roleQueryPassNames` | array of strings | required when `gateMode` is `"programmatic"` | Role names in the query's result that count as holding `requiredRole` (include the role itself and any role that supersedes it, e.g. `System Administrator`). |
 | `actionDoc` | string (path) | no | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass. It is required whenever the phase needs an action before verification, including non-mutating maker evidence collection. |
 | `actionExecution` | string | no (default `"once"`) | `"once"` runs the action until it returns a successful result and then relies on live checkpoint verification. `"every-invocation"` reruns the action before verification on every lifecycle invocation, including a previously completed phase. Use this only for current maker evidence that no supported API can verify. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
-| `rollbackPushGlob` | string | no | Required with `rollbackLabel` when the action pushes a local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` glob when publishing the rollback. |
+| `rollbackPushGlob` | string | no | Static path used when the action always pushes the same local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` value when publishing the rollback. |
+| `rollbackPushGlobFromAction` | boolean | no | Set to `true` when the action resolves the pushed path dynamically. The action must return `ACTION_ROLLBACK_PUSH_GLOB`; the runner validates and persists it before checkpoint verification. Do not combine this with `rollbackPushGlob`. |
 
 ### Evolving a phase's checkpoint list
 
@@ -147,6 +148,8 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   still rerun before live verification.
 - `phases.{id}.lastActionAt` — timestamp of the most recent successful
   `applied` or `recorded` action.
+- `phases.{id}.rollbackPushGlob` — exact action-resolved local path persisted
+  when the contract uses `rollbackPushGlobFromAction: true`.
 - `phases.{id}.checkpointAcknowledgements` — map keyed by checkpoint ID for
   accepted `Manual`/`Warning` results. Each value records the acknowledged
   status and UTC `acknowledgedAt`. A resume may reuse the acknowledgement only

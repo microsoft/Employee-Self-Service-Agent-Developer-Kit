@@ -48,7 +48,8 @@ Rules:
    auto-response as an answer, and never require the maker to invoke
    `/connect` again merely to continue that question.
 
-Do not inspect `.local/connect/steps.md` before the router selects a path. If
-the router selects the retained Preview path, use that path's persisted
-`steps.md` and Fresh Start contract. If it selects the DA ServiceNow path,
-start with that skill's live `inspect` contract instead.
+After reading `SKILL.md`, follow its integration-specific state and routing
+instructions. Do not assume a shared `.local/connect/steps.md` file or a
+generic Fresh Start section. Do not inspect `.local/connect/steps.md` before
+the router selects the retained Preview path; a DA ServiceNow route starts
+with its provider lifecycle instead.

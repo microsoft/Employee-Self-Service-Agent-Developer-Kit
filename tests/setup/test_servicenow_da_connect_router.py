@@ -27,7 +27,7 @@ def test_da_servicenow_connect_routes_to_hrsd_lifecycle() -> None:
     assert "Waiting for maker input" in prompt
     assert "never require the maker to invoke" in prompt
     assert "Do not inspect `.local/connect/steps.md` before" in prompt
-    assert "start with that skill's live `inspect` contract" in prompt
+    assert "a DA ServiceNow route starts\nwith its provider lifecycle" in prompt
     assert "src/skills/connect/servicenow-da-hrsd/SKILL.md" in router
     assert "servicenow-da-hrsd/agents/<agent-slug>/lifecycle.json" in router
     assert "releaseLine" in router

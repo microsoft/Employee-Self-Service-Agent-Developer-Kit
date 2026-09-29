@@ -133,8 +133,9 @@ For every phase in that contiguous `done` prefix:
    `actionDoc` first using L.4a without re-showing the plan. Run each such
    action at most once per invocation. If its gate stops, the action is
    cancelled, or the action fails, set this phase to `in-progress`, reset
-   every later phase to `pending`, clear `actionApplied`/`lastActionAt` on the
-   current and later phases, persist, and stop. `applied` or `recorded`
+   every later phase to `pending`, clear
+   `actionApplied`/`lastActionAt`/`rollbackPushGlob` on the current and later
+   phases, persist, and stop. `applied` or `recorded`
    updates `actionApplied` and `lastActionAt` but does not complete the phase.
 2. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
    steps — reuse that exact mechanism here, silently, without re-showing the
@@ -154,9 +155,10 @@ For every phase in that contiguous `done` prefix:
    `Failed`/`Error`. Set the phase to `blocked` for `Failed`/`Error`, otherwise
    set it to `in-progress`, and set **every phase after it** back to `pending`
    (later phases may have depended on this one still holding). Clear
-   `actionApplied` and `lastActionAt` on this phase and every later phase so a
-   `"once"` action can run again through a fresh gate and fresh rollback
-   checkpoint. Persist the current checkpoint results, render the result
+   `actionApplied`, `lastActionAt`, and `rollbackPushGlob` on this phase and
+   every later phase so a `"once"` action can run again through a fresh gate
+   and fresh rollback checkpoint. Persist the current checkpoint results,
+   render the result
    without executing L.4b rollback, and stop. A rollback checkpoint from an
    earlier invocation must never be reused after drift.
 
@@ -237,12 +239,21 @@ its own Message blocks and tool calls and must return an explicit
 `ACTION_RESULT`:
 
 - **`"applied"`** — the mutation or verified no-op completed successfully.
+  Set `phases.{id}.actionApplied = true`. If the phase has
+  `rollbackPushGlobFromAction: true`, require the action to return
+  `ACTION_ROLLBACK_PUSH_GLOB` as one normalized relative path beneath
+  `topics/`, with no `..` segment and no wildcard characters; persist it as
+  `phases.{id}.rollbackPushGlob`. If the path is missing or unsafe, set the
+  phase to `blocked`, write `actionApplied = true` immediately, and stop for
+  manual attention; the live mutation may already have happened and must not
+  be repeated without a known exact rollback scope. With a valid path, write
+  the state file immediately.
 - **`"recorded"`** — a non-mutating evidence action completed successfully.
 
-  For either successful result, set `phases.{id}.actionApplied = true`,
-  `phases.{id}.lastActionAt` = now, mark the phase action as executed in the
-  invocation-local set, and write the state file immediately. This does not
-  complete the phase; continue to its checkpoints.
+  For either successful result, set `phases.{id}.lastActionAt` = now, mark the
+  phase action as executed in the invocation-local set, and write the state
+  file immediately. This does not complete the phase; continue to its
+  checkpoints.
 - **`"cancelled"`** — the user declined before mutation. Keep
   `actionApplied = false`, leave the phase `in-progress`, write the state
   file, and stop. Do not run the phase checkpoints.
@@ -284,19 +295,23 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 - **Any checkpoint `Failed`/`Error`:** set `phases.{id}.status = "blocked"`,
   record `checkpointResults`. Write the state file.
 
-  If this phase has `actionApplied: true`, `rollbackLabel`, and
-  `rollbackPushGlob`, restore and publish the exact pre-action state:
+  If this phase has `actionApplied: true` and `rollbackLabel`, resolve
+  `{ROLLBACK_PUSH_GLOB}` from `phases.{id}.rollbackPushGlob` when
+  `rollbackPushGlobFromAction: true`; otherwise use the contract's
+  `rollbackPushGlob`. Stop with manual attention if the required value is
+  missing. Restore and publish the exact pre-action state:
 
   ```
-  python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{rollbackPushGlob}"
-  python scripts/push.py --only "{rollbackPushGlob}" --dry-run
-  python scripts/push.py --only "{rollbackPushGlob}" --yes
+  python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{ROLLBACK_PUSH_GLOB}"
+  python scripts/push.py --only "{ROLLBACK_PUSH_GLOB}" --dry-run
+  python scripts/push.py --only "{ROLLBACK_PUSH_GLOB}" --yes
   ```
 
-  If all three commands succeed, set `actionApplied = false`, keep the phase
-  `in-progress`, record `rolledBackAt` = now, and write the state file. This
-  lets a later invocation re-run the gated action instead of skipping an
-  action that was undone. If any rollback command fails, leave
+  If all three commands succeed, set `actionApplied = false`, remove
+  `rollbackPushGlob`, keep the phase `in-progress`, record `rolledBackAt` =
+  now, and write the state file. This lets a later invocation re-run the gated
+  action instead of skipping an action that was undone. If any rollback
+  command fails, leave
   `actionApplied = true`, keep the phase `blocked`, and report that both the
   phase and rollback need manual attention.
 
