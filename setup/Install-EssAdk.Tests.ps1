@@ -559,6 +559,19 @@ Test 'bash emitter uses a short send timeout and trips a circuit breaker on fail
     if ($shSrc -notmatch 'curl -fsS -m 3') { throw 'bash emitter should use a short (3s) send timeout' }
     if ($shSrc -notmatch 'ESS_TEL_READY=0') { throw 'bash emitter missing circuit breaker' }
 }
+Test 'Install-EssAdk.ps1 skips the Maker/Developer prompt in FlightCheck-only mode' {
+    # Regression: the mode prompt only affects the VS Code launch, but VS Code
+    # is skipped entirely in FlightCheckOnly. Prompting would be confusing UX
+    # in the "just run FlightCheck" bootstrap flow.
+    if ($src -notmatch "FlightCheckOnly\s+-and\s+\`$InstallMode\s+-eq\s+'prompt'\s*\)\s*\{\s*\`$InstallMode\s*=\s*'maker'\s*\}") {
+        throw "FlightCheckOnly must coerce InstallMode from 'prompt' to 'maker' before the interactive prompt"
+    }
+}
+Test 'install-ess-adk.sh skips the Maker/Developer prompt in FlightCheck-only mode' {
+    if ($macInstaller -notmatch '(?s)"\$FLIGHTCHECK_ONLY"\s*==\s*"true"\s*&&\s*"\$INSTALL_MODE"\s*==\s*"prompt".*?INSTALL_MODE="maker"') {
+        throw "FLIGHTCHECK_ONLY must coerce INSTALL_MODE from 'prompt' to 'maker' before the interactive prompt"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # JSON dump suppression - regression for the "wall of JSON after env list" bug

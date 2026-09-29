@@ -57,6 +57,14 @@ esac
 # choice deterministic: the answer is applied to essMaker.mode before
 # any editor UI appears, so there's no race with the theme picker or
 # GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely, so the maker/developer
+# choice has no effect there - suppress the prompt so the FlightCheck-only
+# path stays a single straight-through experience for customers who just
+# want the readiness check.
+if [[ "$FLIGHTCHECK_ONLY" == "true" && "$INSTALL_MODE" == "prompt" ]]; then
+    INSTALL_MODE="maker"
+fi
 if [[ "$INSTALL_MODE" == "prompt" ]]; then
     if [[ -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -t 0 ]]; then
         echo ""

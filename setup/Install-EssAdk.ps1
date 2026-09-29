@@ -116,6 +116,14 @@ if ($InstallMode -eq 'standard') { $InstallMode = 'developer' }
 # choice deterministic: the answer is applied to essMaker.mode before
 # any editor UI appears, so there's no race with the theme picker or
 # GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely (see step 5c guard on
+# $FlightCheckOnly and the `if (-not $FlightCheckOnly)` around the
+# workspace launch), so the maker/developer choice has no effect there.
+# Suppressing the prompt keeps the FlightCheck-only path a single
+# straight-through experience for customers who just want the readiness
+# check.
+if ($FlightCheckOnly -and $InstallMode -eq 'prompt') { $InstallMode = 'maker' }
 if ($InstallMode -eq 'prompt') {
     $nonInteractive = $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or [Console]::IsInputRedirected
     if ($nonInteractive) {
