@@ -1260,7 +1260,13 @@ if ($FlightCheckOnly) {
         try {
             $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
             $output = Invoke-Native { & $pyCmd @discoverArgs }
-            foreach ($line in $output) { Write-Host $line }
+            # Filter out the machine-parseable JSON dump lines that discover.py
+            # emits for programmatic consumers (skills read these; a maker
+            # running the installer just sees an unreadable wall of JSON).
+            foreach ($line in $output) {
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                Write-Host $line
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw 'Environment listing failed.'
             }
@@ -1298,7 +1304,10 @@ if ($FlightCheckOnly) {
 
             $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
             $output = Invoke-Native { & $pyCmd @agentListArgs }
-            foreach ($line in $output) { Write-Host $line }
+            foreach ($line in $output) {
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                Write-Host $line
+            }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
                 $botId = ''
