@@ -31,7 +31,10 @@ Use `vscode_askQuestions` for the test result:
       { "label": "Failed - connector error" },
       { "label": "Failed - flow error" },
       { "label": "Failed - employee mismatch" },
-      { "label": "Failed - network error" }
+      { "label": "Failed - network error" },
+      { "label": "Failed - Workday access denied" },
+      { "label": "Failed - agent not published or unavailable" },
+      { "label": "Failed - another issue" }
     ],
     "allowFreeformInput": false
   }
@@ -72,17 +75,66 @@ verified `outcome`. Use a non-maker employee category and a
 timezone-qualified ISO-8601 timestamp. The controller rejects additional
 fields. Never record employee data or credentials.
 
-On failure, record only a safe `failureCategory`, a timezone-qualified
-ISO-8601 `timestamp`, and a concise non-sensitive `remediation` in
+On failure, map the selected result to exactly one stable ID below. Do not
+invent a remediation ID.
+
+| Selected result | `remediationId` |
+| --- | --- |
+| Failed - repeated sign-in | `WD-E2E-001` |
+| Failed - connector error | `WD-E2E-002` |
+| Failed - flow error | `WD-E2E-003` |
+| Failed - employee mismatch | `WD-E2E-004` |
+| Failed - network error | `WD-E2E-005` |
+| Failed - Workday access denied | `WD-E2E-006` |
+| Failed - agent not published or unavailable | `WD-E2E-007` |
+| Failed - another issue | `WD-E2E-999` |
+
+For `WD-E2E-999`, ask where the failure was observed using this separate
+structured choice:
+
+```json
+[
+  {
+    "header": "Failure surface",
+    "question": "Where was the other issue observed?",
+    "options": [
+      { "label": "Agent chat" },
+      { "label": "Authentication prompt" },
+      { "label": "Workday connection" },
+      { "label": "Flow run" },
+      { "label": "Network path" },
+      { "label": "Workday response" },
+      { "label": "Agent availability" },
+      { "label": "Other" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Map those choices respectively to `agent-chat`, `authentication-prompt`,
+`workday-connection`, `flow-run`, `network-path`, `workday-response`,
+`agent-availability`, or `other`.
+
+Record the selected `remediationId` and a timezone-qualified ISO-8601
+`timestamp` in
 `.local/connect/workday-da/employee-validation-failure.json`, then run:
 
 ```powershell
 python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\employee-validation-failure.json"
 ```
 
-This marks Employee validation blocked and persists one current blocker while
-keeping completed prerequisite phases intact. Use the failing surface to
-choose the next check:
+For `WD-E2E-999`, also record the selected bounded `failureSurface`. The
+controller derives the safe category and canonical remediation from the ID;
+do not copy those strings into the file. It also migrates existing
+three-field failure files created by earlier kit versions. Unrecognized
+legacy categories widen to `WD-E2E-999` with the `other` surface, and the
+legacy free-form remediation text is discarded. Arbitrary IDs,
+unbounded failure surfaces, and unknown fields are rejected.
+
+This marks Employee validation blocked and persists the stable remediation ID
+and bounded failure surface while keeping completed prerequisite phases
+intact. Use the failing surface to choose the next check:
 
 - sign-in loop -> identify which credential store prompted and whether the
   account or tenant differs;
