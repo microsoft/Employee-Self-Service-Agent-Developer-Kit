@@ -22,6 +22,21 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
+# RING: prod | preprod | test. Forwarded to `flightcheck/cli.py --ring` in
+# FlightCheck-only mode. Defaults to prod (matches the BAP endpoint the
+# installer uses for environment discovery). PMs validating a non-prod
+# environment override via `RING=preprod` or `--ring preprod` on the
+# bootstrap-flightcheck-mac.sh one-liner.
+RING="${RING:-prod}"
+if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
+    case "$RING" in
+        prod|preprod|test) ;;
+        *)
+            echo "ERROR: RING must be prod, preprod, or test (got '$RING')" >&2
+            exit 2
+            ;;
+    esac
+fi
 # INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
 # 'maker'    (was 'lite')     - chat-first layout, /setup after welcome wizard
 # 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`
@@ -57,6 +72,14 @@ esac
 # choice deterministic: the answer is applied to essMaker.mode before
 # any editor UI appears, so there's no race with the theme picker or
 # GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely, so the maker/developer
+# choice has no effect there - suppress the prompt so the FlightCheck-only
+# path stays a single straight-through experience for customers who just
+# want the readiness check.
+if [[ "$FLIGHTCHECK_ONLY" == "true" && "$INSTALL_MODE" == "prompt" ]]; then
+    INSTALL_MODE="maker"
+fi
 if [[ "$INSTALL_MODE" == "prompt" ]]; then
     if [[ -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -t 0 ]]; then
         echo ""
@@ -587,7 +610,10 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo ""
 
         ENV_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments 2>&1) || true
-        echo "$ENV_OUTPUT"
+        # Filter machine-parseable JSON dump lines that discover.py emits for
+        # programmatic consumers (skills parse these; a maker running the
+        # installer just sees an unreadable wall of JSON).
+        echo "$ENV_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if echo "$ENV_OUTPUT" | grep -q "^ERROR:"; then
             err "Environment listing failed."
@@ -630,7 +656,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo ""
 
         AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) && AGENT_EXIT=0 || AGENT_EXIT=$?
-        echo "$AGENT_OUTPUT"
+        echo "$AGENT_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
             warn "Agent discovery failed. Config will be created without a bot ID."
@@ -737,7 +763,14 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+    # --ring <RING>: the FlightCheck-only installer discovers environments via
+    # BAP prod (api.bap.microsoft.com) by default, so we target the prod
+    # service ring unless the caller overrode RING (typically a PM validating
+    # a preprod/test environment). Without this flag FlightCheck's --scope
+    # full aborts with "The Power Platform environment ring is unavailable"
+    # because the installer-authored config.json only carries dataverseEndpoint
+    # (no powerPlatformApiEndpoint from which FC could infer the ring).
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring "$RING"
     exit $?
 fi
 
