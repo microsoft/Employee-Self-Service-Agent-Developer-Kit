@@ -15,9 +15,10 @@ via ``--checkpoint``:
     ``oauthClientId`` / ``tokenEndpoint``.
   * ``WD-TENANT-001`` — Tenant Setup - Security is configured (redirect URL
     set; OAuth 2.0 Clients + SAML enabled; SAML Service Provider ID matches
-    the Entra Identifier) AND an active authentication rule allows SAML for
+    the exact Workday SAML entity ID) AND an active authentication rule allows
+    SAML for
     the intended employee population. Echoes the captured ``restBaseUrl`` /
-    ``soapBaseUrl`` / ``tenant`` / ``appIdUri``.
+    ``soapBaseUrl`` / ``tenant`` / ``workdaySamlEntityId``.
 
 Design invariants (per ``scripts/flightcheck/AGENTS.md``):
   * **Always MANUAL.** Workday exposes no queryable admin API the kit can
@@ -158,15 +159,16 @@ def _check_tenant_security(config) -> list[CheckResult]:
     tenant = _fmt(config, "tenant")
     rest_base = _fmt(config, "restBaseUrl")
     soap_base = _fmt(config, "soapBaseUrl")
-    app_id_uri = _fmt(config, "appIdUri")
+    saml_entity_id = _fmt(config, "workdaySamlEntityId")
 
     result = (
         "Workday admin task — verify in the Workday tenant, not "
         f"programmatically. Captured connection fields: tenant = {tenant}; "
-        f"REST base = {rest_base}; SOAP base = {soap_base}; Entra Identifier "
-        f"(App ID URI) = {app_id_uri}. Confirm Tenant Setup - Security has the "
+        f"REST base = {rest_base}; SOAP base = {soap_base}; Workday SAML "
+        f"Service Provider ID = {saml_entity_id}. Confirm Tenant Setup - "
+        "Security has the "
         "redirection URL set, OAuth 2.0 Clients and SAML enabled, and the "
-        "SAML Service Provider ID matching the Entra Identifier above — and "
+        "enabled SAML row uses the exact Service Provider ID above — and "
         "that an active authentication rule allows SAML for the intended "
         "employee population. If the existing active policy already provides "
         "that access, no policy change or activation is required."
@@ -180,8 +182,9 @@ def _check_tenant_security(config) -> list[CheckResult]:
         remediation=(
             "In Workday: (1) edit 'Tenant Setup - Security' — set the "
             "redirection URL, enable OAuth 2.0 Clients and SAML, and verify "
-            "the SAML Service Provider ID equals the Entra Identifier / Entity "
-            "ID; (2) open 'Manage Authentication Policies' and verify an active "
+            "the SAML Service Provider ID equals "
+            "http://www.workday.com/{tenant}, not the api:// Entra application "
+            "ID URI; (2) open 'Manage Authentication Policies' and verify an active "
             "rule allows SAML for the intended employees. Do not invent an "
             "OAuth-client condition when the tenant UI does not expose one, "
             "and do not use an ISU/integration-system security-group rule for "

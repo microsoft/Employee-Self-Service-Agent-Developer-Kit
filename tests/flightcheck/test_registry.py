@@ -73,9 +73,14 @@ class TestResolve:
         assert registry.resolve("WD-PKG-001").key == "WD-PKG-001"
 
     def test_exact_beats_family(self):
-        # WD-CONN-010 / -012 / -102 are fixed entries that must NOT collapse
+        # These fixed entries must NOT collapse
         # into the WD-CONN family even though that family exists.
-        for fixed in ("WD-CONN-010", "WD-CONN-012", "WD-CONN-102"):
+        for fixed in (
+            "WD-CONN-010",
+            "WD-CONN-012",
+            "WD-CONN-013",
+            "WD-CONN-102",
+        ):
             assert registry.resolve(fixed).key == fixed
             assert registry.resolve(fixed).is_family is False
 
@@ -131,6 +136,13 @@ class TestTransitiveRequirements:
         assert plan.clients == frozenset({registry.GRAPH})
         assert plan.requires_dataverse_endpoint is False
         # Only the Workday owning function runs (no prereqs).
+        assert [label for label, _ in plan.ordered_fns] == ["Workday"]
+
+    def test_obo_sharing_checkpoint_needs_only_dataverse(self):
+        plan = registry.transitive_requirements("WD-CONN-013")
+        assert plan.clients == frozenset({registry.DATAVERSE})
+        assert registry.PP_ADMIN not in plan.clients
+        assert plan.requires_dataverse_endpoint is True
         assert [label for label, _ in plan.ordered_fns] == ["Workday"]
 
     def test_closure_unions_clients_across_prereqs(self):
