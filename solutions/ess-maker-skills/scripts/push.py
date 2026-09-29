@@ -51,10 +51,15 @@ from evaluation_review import (
     metadata_description,
     parse_review_metadata,
 )
+from agentbuilder_object_model import (
+    ObjectModelConverterError,
+    yaml_to_object_models,
+)
 from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
     is_minimalbot,
+    resolve_workday_dialogs,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
@@ -1119,6 +1124,34 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
+def update_baseline_paths(agent_dir, relative_paths):
+    """Refresh exact successfully pushed files in the local baseline."""
+    import shutil
+
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    working = collect_files(agent_dir)
+    selected = {
+        str(path).replace("\\", "/")
+        for path in relative_paths
+        if isinstance(path, str) and path
+    }
+    for rel in list(selected):
+        if rel.startswith("template-configs/") and rel.endswith(".xml"):
+            meta = rel[:-4] + ".meta.json"
+            if meta in working:
+                selected.add(meta)
+
+    for rel in selected:
+        if rel not in working:
+            raise OSError(
+                f"Successfully pushed baseline path is missing locally: {rel}"
+            )
+        src = os.path.join(agent_dir, *rel.split("/"))
+        dst = os.path.join(baseline_dir, *rel.split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 def _warn_minimalbot_non_eval_changes(agent_dir):
     """Report pending non-evaluation changes the MinimalBot push cannot deploy.
 
@@ -1151,6 +1184,183 @@ def _warn_minimalbot_non_eval_changes(agent_dir):
         print(f"  ... and {len(non_eval) - 20} more")
 
 
+def _minimalbot_topic_update_plan(
+    agent_dir,
+    only_globs,
+    *,
+    activate_topics=False,
+    agent_schema=None,
+):
+    """Build guarded updates for scoped, existing MinimalBot topics."""
+    if not only_globs:
+        return []
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        return []
+    baseline = collect_files(baseline_dir)
+    working = collect_files(agent_dir)
+    changed, new, deleted = compute_diff(baseline, working)
+    selected_changed = sorted(
+        path
+        for path in changed
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
+        and path.endswith(".mcs.yml")
+    )
+    selected_new_or_deleted = sorted(
+        path
+        for path in (*new, *deleted)
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
+    )
+    if selected_new_or_deleted:
+        raise MinimalBotEvaluationError(
+            "MinimalBot scoped topic push supports updates to existing topics "
+            "only; create/delete is not allowed: "
+            + ", ".join(selected_new_or_deleted)
+        )
+    raw_component_map = load_component_map(agent_dir)
+    component_map = {}
+    for raw_path, entry in raw_component_map.items():
+        normalized_path = str(raw_path).replace("\\", "/")
+        if normalized_path in component_map:
+            raise MinimalBotEvaluationError(
+                "The component map contains duplicate normalized paths."
+            )
+        component_map[normalized_path] = entry
+
+    selected_activation = []
+    if activate_topics:
+        workday_entries = resolve_workday_dialogs(
+            agent_dir,
+            agent_schema or "",
+        )
+        workday_by_path = {
+            entry["path"]: entry
+            for entry in workday_entries
+        }
+        selected_activation = sorted(
+            path
+            for path in workday_by_path
+            if matches_only(path, only_globs)
+        )
+        missing = sorted(set(workday_by_path) - set(selected_activation))
+        selected_dialogs = {
+            str(path).replace("\\", "/")
+            for path, entry in component_map.items()
+            if isinstance(path, str)
+            and isinstance(entry, dict)
+            and entry.get("componentKind") == "DialogComponent"
+            and matches_only(path, only_globs)
+        }
+        non_workday = sorted(selected_dialogs - set(workday_by_path))
+        if missing or non_workday:
+            details = []
+            if missing:
+                details.append(
+                    f"{len(missing)} mapped Workday topic(s) were omitted"
+                )
+            if non_workday:
+                details.append(
+                    "the activation scope also matched non-Workday topics: "
+                    + ", ".join(non_workday)
+                )
+            raise MinimalBotEvaluationError(
+                "Workday activation must target exactly the complete mapped "
+                "Workday topic set; "
+                + "; ".join(details)
+                + "."
+            )
+        changed_workday = sorted(
+            path for path in selected_changed if path in workday_by_path
+        )
+        if changed_workday:
+            raise MinimalBotEvaluationError(
+                "Workday activation cannot publish pending topic content "
+                "changes. Push or discard these changes separately before "
+                "activation: "
+                + ", ".join(changed_workday)
+            )
+        selected_changed = []
+    selected_paths = sorted(
+        set(selected_changed) | set(selected_activation)
+    )
+    if not selected_paths:
+        return []
+
+    conversion_items = []
+    for path in selected_changed:
+        conversion_items.extend(
+            (
+                {"key": f"{path}:baseline", "yaml": baseline[path]},
+                {"key": f"{path}:working", "yaml": working[path]},
+            )
+        )
+    try:
+        converted = yaml_to_object_models(conversion_items)
+    except ObjectModelConverterError as exc:
+        raise MinimalBotEvaluationError(
+            f"Could not convert scoped topic YAML: {exc}"
+        ) from exc
+    converted_by_key = {entry["key"]: entry for entry in converted}
+
+    updates = []
+    for path in selected_paths:
+        entry = component_map.get(path)
+        if not isinstance(entry, dict):
+            raise MinimalBotEvaluationError(
+                f"Scoped topic is missing from .component-map.json: {path}"
+            )
+        if entry.get("componentKind") != "DialogComponent":
+            raise MinimalBotEvaluationError(
+                f"Scoped path is not a dialog component: {path}"
+            )
+        component_id = str(entry.get("componentId") or "").strip()
+        schema_name = str(entry.get("schemaName") or "").strip()
+        if not component_id or not schema_name:
+            raise MinimalBotEvaluationError(
+                f"Scoped topic identity is incomplete in the component map: "
+                f"{path}"
+            )
+        update = {
+            "path": path,
+            "componentId": component_id,
+            "schemaName": schema_name,
+            "displayName": str(entry.get("displayName") or path),
+        }
+        if path in selected_changed:
+            baseline_result = converted_by_key[f"{path}:baseline"]
+            working_result = converted_by_key[f"{path}:working"]
+            failed = next(
+                (
+                    result
+                    for result in (baseline_result, working_result)
+                    if result.get("success") is not True
+                ),
+                None,
+            )
+            if failed:
+                error = failed.get("error") or {}
+                raise MinimalBotEvaluationError(
+                    f"Could not convert scoped topic {path}: "
+                    f"{error.get('message') or 'unknown conversion error'}"
+                )
+            if (
+                baseline_result.get("elementType") != "AdaptiveDialog"
+                or working_result.get("elementType") != "AdaptiveDialog"
+            ):
+                raise MinimalBotEvaluationError(
+                    f"Scoped topic is not an AdaptiveDialog: {path}"
+                )
+            update["expectedDialog"] = baseline_result["objectModel"]
+            update["dialog"] = working_result["objectModel"]
+        if path in selected_activation:
+            update["state"] = "Active"
+            update["status"] = "Active"
+        updates.append(update)
+    return updates
+
+
 def _minimalbot_push(
     config,
     *,
@@ -1159,16 +1369,15 @@ def _minimalbot_push(
     repair_mode=False,
     only_globs=None,
     auto_yes=False,
+    preferred_username=None,
+    activate_topics=False,
 ):
-    """Push evaluation sets to a Dataverse-free MinimalBot agent.
+    """Push supported changes to a Dataverse-free MinimalBot agent.
 
     Uses the Power Platform MinimalBot components API on the agent's ring (see
-    :mod:`minimalbot_evaluation`). Only evaluation components are supported for
-    MinimalBot agents today; other component types (topics, workflows) still
-    require a Dataverse-backed environment. Destructive/scoped/repair flags are
-    rejected or honoured rather than silently ignored, so a ``--force-delete``
-    never turns into a duplicate insert and a scoped ``--only`` never expands
-    into an every-set push.
+    :mod:`minimalbot_evaluation`). Evaluation inserts and scoped updates to
+    existing dialog topics are supported. Other component types still require
+    a different authoring path.
 
     The script-level confirmation gate (a second safety layer the ``/push``
     prompt relies on) is enforced here before any component insert, mirroring
@@ -1194,13 +1403,65 @@ def _minimalbot_push(
         )
         sys.exit(1)
 
-    _warn_minimalbot_non_eval_changes(agent_dir)
-
     print("MinimalBot agent detected (Dataverse-free).")
     if only_globs:
         print(f"(Scoped push — {len(only_globs)} filter(s) active)")
 
     client = MinimalBotEvaluationClient.from_config(config)
+    try:
+        topic_updates = _minimalbot_topic_update_plan(
+            agent_dir,
+            only_globs,
+            activate_topics=activate_topics,
+            agent_schema=(config.get("agent") or {}).get("schemaName"),
+        )
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if topic_updates:
+        print(f"\nWould update {len(topic_updates)} existing topic(s):")
+        for entry in topic_updates:
+            print(f"  • {entry['displayName']}  ({entry['path']})")
+        if dry_run:
+            print("\n(Dry run — no changes pushed)")
+            return
+        if not auto_yes:
+            response = input(
+                "\nPush these changes to Copilot Studio? (yes/no): "
+            ).strip().lower()
+            if response not in ("yes", "y"):
+                print("Push cancelled.")
+                return
+        try:
+            client.authenticate(preferred_username=preferred_username)
+            result = client.update_dialog_components(topic_updates)
+        except MinimalBotEvaluationError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        pushed_content_paths = [
+            entry["path"]
+            for entry in topic_updates
+            if "dialog" in entry
+        ]
+        if pushed_content_paths:
+            update_baseline_paths(agent_dir, pushed_content_paths)
+        if client.signed_in_username:
+            print(f"Signed in as: {client.signed_in_username}")
+        print(
+            f"\n✅ Updated and verified "
+            f"{result['verifiedComponents']} topic component(s)."
+        )
+        diagnostics = result.get("blockingDiagnostics") or []
+        if diagnostics:
+            print(
+                "WARNING: The topics are enabled, but "
+                f"{len(diagnostics)} dependency diagnostic(s) remain. "
+                "Continue with Workday connection verification."
+            )
+        return
+
+    _warn_minimalbot_non_eval_changes(agent_dir)
 
     # Build the plan offline first (no auth, no mutation) so the change set can
     # be shown and confirmed BEFORE any component insert. Honouring only_globs
@@ -1263,6 +1524,14 @@ def main():
         if _idx + 1 < len(sys.argv) and not sys.argv[_idx + 1].startswith("-"):
             repair_name = sys.argv[_idx + 1]
     only_globs = parse_only_globs(sys.argv[1:])
+    preferred_username = None
+    if "--preferred-username" in sys.argv:
+        index = sys.argv.index("--preferred-username")
+        if index + 1 >= len(sys.argv) or sys.argv[index + 1].startswith("-"):
+            print("ERROR: --preferred-username requires a value.")
+            sys.exit(1)
+        preferred_username = sys.argv[index + 1]
+    activate_topics = "--activate" in sys.argv
 
     config = load_config()
 
@@ -1277,7 +1546,16 @@ def main():
             repair_mode=repair_mode,
             only_globs=only_globs,
             auto_yes=auto_yes,
+            preferred_username=preferred_username,
+            activate_topics=activate_topics,
         )
+
+    if activate_topics:
+        print(
+            "ERROR: --activate is supported only for Dataverse-free "
+            "(MinimalBot) agents."
+        )
+        sys.exit(1)
 
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]

@@ -1,143 +1,104 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# DA-1 — Install the Workday Extension Package
+# Phase 1 - Preflight
 
-Every **Message** block is the exact text to show the user. Copy it verbatim. Do
-not rephrase, add commentary, or tell the user what tools you are calling or what
-files you are reading.
+Explain only credential stores that may prompt during this phase:
 
-This step completes **DA1.1** on the Workday connect checklist. It confirms the
-ESS HR agent is available, then installs its Workday package. The router must
-stop DA IT agents before this file is read.
+- Dataverse browser sign-in verifies the exact environment and maker account.
+- PAC may use device-code sign-in to inspect or install the Workday package.
+  PAC is a separate Microsoft credential store, so this can be one additional
+  sign-in. The controller pins and verifies the resulting PAC account.
 
----
+Run read-only preflight discovery:
 
-## P1.0 — Check for the DA base agent, and install the extension if it's missing
-
-Resolve the target environment automatically:
-
-1. Use `.local/config.json` `dataverseEndpoint` when present (legacy
-   Dataverse-backed workspace).
-2. Otherwise read `.local/connect/workday-da/config.json`
-   `sidecarDataverseEndpoint`.
-3. If neither exists, show the environments available to the
-   signed-in account and ask the maker to choose one. Do not ask them to type or
-   copy a URL when a selectable environment is available. Persist the selected
-   Dataverse URL as `sidecarDataverseEndpoint`.
-
-Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
-`.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
-agent identity boundary. If `.local/connect/workday-da/config.json` does not
-yet exist, create it as an empty JSON object before the first checkpoint; if it
-exists, preserve all current fields.
-
-Resolve the package flavor from the active agent schema:
-
-- `gptagent_copilotforemployeeselfservicehr` → `runtime`
-- `msdyn_copilotforemployeeselfservicedahr` → `legacy-da`
-
-Call this value `PACKAGE_FLAVOR`. Stop if the active agent does not match one
-of these supported HR schemas.
-
-Run the checkpoint that reports both facts at once — whether a DA base agent
-exists, and whether Workday is already installed against it:
-
-```
-python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001 --connect-config ".local/connect/workday-da/config.json"
+```powershell
+python scripts/workday_connect.py preflight
 ```
 
-Read the checkpoint result from `workspace/flightcheck/results.json`. The only
-supported target is `hr`. An IT base agent or IT Workday package in the same
-environment is outside this lifecycle and must not affect DA1.1.
+Fresh native-agent setup state identifies the exact environment ID but may not
+contain a Dataverse organization URL. The controller first resolves that URL
+from setup's cached environment inventory, then asks an existing PAC profile
+for the organization whose environment ID exactly matches setup. Do not ask
+the maker to re-enter or reselect the environment when either source proves an
+exact ID match.
 
-- **`PASSED`** → the required HR Workday extension package is already installed.
-  Show the result, record `verticals: ["hr"]` into
-  `.local/connect/workday-da/config.json`, and go to **record DA1.1** below.
-- **`FAILED`** with "No ESS DA HR agent was found in this environment" or
-  "An ESS DA IT agent is installed, but no ESS DA HR agent was found" → the
-  supported HR base agent isn't installed. Stop here — this skill doesn't
-  install the base agent.
+When the controller reports that no Dataverse URL can be resolved, explain
+that refreshing Power Platform environment inventory uses its own Microsoft
+sign-in, then run:
 
-  **Message:**
-
-  I don't see an Employee Self-Service HR agent installed in this environment
-  yet. Run `/setup` first to install it, then come back and run
-  `/connect workday` again.
-
-  **End message.**
-
-  Halt this skill entirely — do not proceed to DA-2 or DA-3.
-
-- **`FAILED`** with "The Workday package required by the ESS HR agent is not
-  installed" → the HR base agent is present but Workday isn't installed yet.
-  Continue to **P1.1**.
-- Any other **`FAILED`** result → show the result and stop. Do not guess
-  whether installation is safe from an unrecognized failure reason.
-- **`WARNING` / `SKIPPED`** (Dataverse verification could not run, e.g.
-  authentication, permissions, endpoint initialization, or a transient error)
-  → show the result verbatim, keep DA1.1 `in-progress`, and stop; ask the user
-  to resolve the underlying issue and re-run this step. Never attempt package
-  installation from an inconclusive result.
-
----
-
-## P1.1 — Attempt an automated install
-
-```
-python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}" --ring "{RING}"
+```powershell
+python scripts/list_environments.py
 ```
 
-Read `RING` from canonical setup state `environment.ring`; use `prod` only for
-legacy state with no recorded ring. Run the command once. The installer selects
-or creates a PAC profile for that ring and PAC polls AppSource installation
-internally.
+Match the inventory result to `.local/config.json` `environmentId`. When there
+is exactly one matching environment with a Dataverse URL, rerun preflight with
+that URL automatically. Do not show a selection list or ask the maker to
+choose again.
 
-Parse the script's JSON marker line:
+If the recorded environment ID is absent or has no linked Dataverse URL, stop
+and explain the exact mismatch. Ask for an exact Dataverse URL only when the
+maker confirms it belongs to the already recorded setup environment; never
+silently select a different environment by display name. Once an exact URL is
+known, direct Dataverse verification is authoritative even if a later
+inventory call omits it.
 
-- **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → the HR package installed (or was
-  already installed and the script confirmed it). Re-run
-`--checkpoint WD-DA-PKG-001` with the same `--connect-config`; proceed only
-when it reports `PASSED`.
-- **`WORKDAY_PACKAGE_INSTALL_FAILED_JSON:`** → show its concise `error` value
-  and stop with DA1.1 `in-progress`. Do not claim the package needs a manual
-  AppSource installation. PAC's output is the source of truth:
-  - If PAC CLI is missing, explain that it is the local tool used to install
-    the Workday package, then ask once whether the maker wants the kit to
-    install a current-user managed copy. Do not present .NET and PAC as
-    unexplained product setup steps. If approved, run:
+Use `--maker-username` only to pin an intended maker account or resolve account
+ambiguity. On resume, the controller reuses the previously verified maker
+identity automatically.
 
-    ```powershell
-    dotnet tool install --tool-path "$env:LOCALAPPDATA\InternalTools\pac" --interactive --verbosity n --configfile "scripts\managed-pac.nuget.config" Microsoft.PowerApps.CLI.Tool
-    ```
+The command verifies the target and checks whether the package already exists.
+When the package is already installed, it completes the phase without an
+installation approval.
 
-    If the tool is already present but needs repair or update, run the same
-    command with `update` instead of `install`. Then rerun P1.1.
-    If the managed install reports that a .NET SDK is missing, explain that it
-    is required only to install the local PAC tool. Obtain approval before
-    installing it, and resume at DA1.1 afterward; do not restart the Workday
-    checklist or repeat completed rows.
-  - If PAC starts device-code authentication, wait for it to finish.
-  - If multiple profiles exist for the required ring, ask the maker to select
-    the intended profile with `pac auth select`, then retry.
-  - For permission or package-availability errors, show PAC's output and ask
-    the maker to correct that exact issue before retrying.
+When the returned result contains `requiresApproval: true`, show only its
+`approvalSummary`. Then use `vscode_askQuestions`:
 
----
+```json
+[
+  {
+    "header": "Install Workday package",
+    "question": "Install the supported Workday package in the verified Power Platform environment?",
+    "options": [
+      { "label": "Install" },
+      { "label": "Not now" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-## Record DA1.1
+Leave the selection unset until the maker explicitly chooses.
 
-When `WD-DA-PKG-001` is `PASSED`:
+If the maker selects **Not now**, leave Preflight waiting and return to the
+lifecycle runner. Do not call either approval or apply.
 
-1. Merge `verticals: ["hr"]` and `vertical: "hr"` into
-   `.local/connect/workday-da/config.json` (round-trip merge — never drop other
-   keys). Remove any stale `it` entry written by a pre-release version.
-2. Call [`shared/checklist-updater.md`](./shared/checklist-updater.md) with
-   `STEP_ID = "DA1.1"`, `CHECKPOINT_RESULT = "PASSED"`, `GATE = "prog"`.
+If the maker selects **Install**, write the returned `plan` object directly to
+`.local/connect/workday-da/preflight-plan.json` using a structured file-write
+tool. Do not serialize it into a generated shell command. Then run:
 
-**Message:**
+```powershell
+python scripts/workday_connect.py preflight-approve --plan-file ".local\connect\workday-da\preflight-plan.json"
+python scripts/workday_connect.py preflight --install-plan-hash "{PLAN_HASH}"
+```
 
-The Workday extension package is installed for the **ESS HR Agent**.
+The second `preflight` call rediscovers the target and rejects the operation if
+the approved package, environment, agent, or maker changed.
 
-**End message.**
+The completed phase:
 
-Return to the DA orchestrator (`src/skills/setup/workday-da/SKILL.md`,
-**Start**) to resume at the next unverified row.
+- verifies the selected setup-complete native ESS HR agent;
+- chooses the architecture-specific Workday package;
+- verifies the exact Dataverse URL directly rather than relying on inventory
+  visibility;
+- verifies the authenticated account and Entra tenant;
+- detects the package or installs it only after exact-plan approval through
+  PAC; and
+- rereads Dataverse to prove the package is installed.
+
+This is a controller-owned automated change. It is accurate to say the package
+was installed only when PAC succeeded and the Dataverse reread found the
+expected solution. The maker still performs any browser or device-code sign-in
+and chooses the environment when discovery cannot resolve one exact target.
+
+On failure, show the controller's concise error and preserve its blocker. Do
+not replace a precise PAC, authentication, or package error with a generic
+manual-install instruction. On success, return to `SKILL.md`.

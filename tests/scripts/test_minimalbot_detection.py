@@ -15,6 +15,8 @@ which ``tests/AGENTS.md`` exempts from the cassette rule.
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -266,7 +268,12 @@ def _minimalbot_config(folder: str) -> dict[str, Any]:
     return {
         "powerPlatformApiEndpoint": TEST_ENDPOINT,
         "environmentId": ENV_ID,
-        "agent": {"botId": BOT_ID, "folder": folder, "releaseLine": "da"},
+        "agent": {
+            "botId": BOT_ID,
+            "folder": folder,
+            "releaseLine": "da",
+            "schemaName": "contoso",
+        },
     }
 
 
@@ -391,9 +398,11 @@ class _RecordingClient:
         self.signed_in_username = "tester@example.com"
         self.authenticated = False
         self.real_push = False
+        self.topic_updates = []
 
-    def authenticate(self):
+    def authenticate(self, preferred_username=None):
         self.authenticated = True
+        self.preferred_username = preferred_username
 
     def push_agent_evaluations(self, agent_dir, *, dry_run=False, only_globs=None):
         if dry_run:
@@ -405,6 +414,13 @@ class _RecordingClient:
             {"folder": "compensation", "displayName": "compensation",
              "testSetId": "real-id", "cases": "1"}],
             "componentCount": 2, "verifiedComponents": 2}
+
+    def update_dialog_components(self, updates):
+        self.topic_updates = updates
+        return {
+            "updatedComponents": len(updates),
+            "verifiedComponents": len(updates),
+        }
 
 
 def _patch_client(monkeypatch, fake):
@@ -466,3 +482,578 @@ def test_minimalbot_dry_run_never_mutates(tmp_path, monkeypatch, capsys):
     assert "Dry run — no changes pushed" in out
     assert fake.authenticated is False
     assert fake.real_push is False
+
+
+def _write_existing_topic_change(root):
+    baseline = root / ".baseline" / "topics"
+    working = root / "topics"
+    baseline.mkdir(parents=True)
+    working.mkdir(parents=True)
+    baseline_body = "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n"
+    working_body = (
+        f"{baseline_body}"
+        "  actions:\n"
+        "    - kind: BeginDialog\n"
+        "      dialog: contoso.topic.WorkdaySystemGetUserContextV2\n"
+    )
+    baseline.joinpath("Setusercontext.mcs.yml").write_text(
+        baseline_body,
+        encoding="utf-8",
+    )
+    working.joinpath("Setusercontext.mcs.yml").write_text(
+        working_body,
+        encoding="utf-8",
+    )
+    root.joinpath(".component-map.json").write_text(
+        json.dumps(
+            {
+                "topics/Setusercontext.mcs.yml": {
+                    "componentKind": "DialogComponent",
+                    "componentId": "setup-topic",
+                    "schemaName": "contoso.topic.Setusercontext",
+                    "displayName": "[Admin] - User Context - Setup",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _fake_topic_conversion(items):
+    return [
+        {
+            "key": item["key"],
+            "success": True,
+            "elementType": "AdaptiveDialog",
+            "objectModel": {
+                "$kind": "AdaptiveDialog",
+                "source": item["yaml"],
+            },
+        }
+        for item in items
+    ]
+
+
+def _write_workday_topics(root, *, changed=False):
+    baseline = root / ".baseline" / "topics"
+    working = root / "topics"
+    baseline.mkdir(parents=True)
+    working.mkdir(parents=True)
+    component_map = {}
+    for index in (1, 2):
+        path = f"topics/workday-{index}.mcs.yml"
+        baseline_body = f"kind: AdaptiveDialog\nvalue: before-{index}\n"
+        working_body = (
+            f"kind: AdaptiveDialog\nvalue: after-{index}\n"
+            if changed and index == 1
+            else baseline_body
+        )
+        baseline.joinpath(f"workday-{index}.mcs.yml").write_text(
+            baseline_body,
+            encoding="utf-8",
+        )
+        working.joinpath(f"workday-{index}.mcs.yml").write_text(
+            working_body,
+            encoding="utf-8",
+        )
+        component_map[path] = {
+            "componentKind": "DialogComponent",
+            "componentId": f"workday-{index}",
+            "schemaName": f"contoso.topic.WorkdayTopic{index}",
+            "displayName": f"Workday Topic {index}",
+        }
+    root.joinpath(".component-map.json").write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+    return sorted(component_map)
+
+
+def test_scoped_minimalbot_topic_dry_run_is_non_mutating(
+    tmp_path, monkeypatch, capsys
+):
+    _write_existing_topic_change(tmp_path)
+    fake = _RecordingClient()
+    _patch_client(monkeypatch, fake)
+    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+
+    push._minimalbot_push(
+        _minimalbot_config(str(tmp_path)),
+        dry_run=True,
+        only_globs=["topics/Setusercontext.mcs.yml"],
+    )
+
+    out = capsys.readouterr().out
+    assert "Would update 1 existing topic" in out
+    assert fake.authenticated is False
+    assert fake.topic_updates == []
+
+
+def test_scoped_minimalbot_topic_push_pins_account_and_updates_baseline(
+    tmp_path, monkeypatch
+):
+    _write_existing_topic_change(tmp_path)
+    fake = _RecordingClient()
+    _patch_client(monkeypatch, fake)
+    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+
+    push._minimalbot_push(
+        _minimalbot_config(str(tmp_path)),
+        auto_yes=True,
+        only_globs=["topics/Setusercontext.mcs.yml"],
+        preferred_username="maker@contoso.com",
+    )
+
+    assert fake.authenticated is True
+    assert fake.preferred_username == "maker@contoso.com"
+    assert fake.topic_updates[0]["componentId"] == "setup-topic"
+    assert (
+        tmp_path / ".baseline" / "topics" / "Setusercontext.mcs.yml"
+    ).read_text(encoding="utf-8") == (
+        tmp_path / "topics" / "Setusercontext.mcs.yml"
+    ).read_text(encoding="utf-8")
+
+
+def test_scoped_minimalbot_topic_activation_does_not_require_content_diff(
+    tmp_path,
+):
+    paths = _write_workday_topics(tmp_path)
+
+    plan = push._minimalbot_topic_update_plan(
+        str(tmp_path),
+        paths,
+        activate_topics=True,
+        agent_schema="contoso",
+    )
+
+    assert len(plan) == 2
+    assert all(entry["state"] == "Active" for entry in plan)
+    assert all(entry["status"] == "Active" for entry in plan)
+    assert all("requireCleanDiagnostics" not in entry for entry in plan)
+    assert all("dialog" not in entry for entry in plan)
+
+
+def test_minimalbot_activation_rejects_non_workday_topic(tmp_path):
+    _write_existing_topic_change(tmp_path)
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="No mapped Workday dialog topics",
+    ):
+        push._minimalbot_topic_update_plan(
+            str(tmp_path),
+            ["topics/Setusercontext.mcs.yml"],
+            activate_topics=True,
+            agent_schema="contoso",
+        )
+
+
+def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
+    _write_workday_topics(tmp_path)
+    component_map_path = tmp_path / ".component-map.json"
+    component_map = json.loads(component_map_path.read_text(encoding="utf-8"))
+    for entry in component_map.values():
+        entry["schemaName"] = entry["schemaName"].replace(
+            "contoso",
+            "gptagent_copilotforemployeeselfservicehr",
+        )
+    component_map_path.write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="expected 21",
+    ):
+        mbe.resolve_workday_dialogs(
+            tmp_path,
+            "gptagent_copilotforemployeeselfservicehr",
+        )
+
+
+def test_minimalbot_activation_rejects_local_topic_content_changes(
+    tmp_path,
+    monkeypatch,
+):
+    paths = _write_workday_topics(tmp_path, changed=True)
+    baseline_workflow = tmp_path / ".baseline" / "workflows" / "flow.json"
+    working_workflow = tmp_path / "workflows" / "flow.json"
+    baseline_workflow.parent.mkdir(parents=True)
+    working_workflow.parent.mkdir(parents=True)
+    baseline_workflow.write_text('{"state":"before"}', encoding="utf-8")
+    working_workflow.write_text('{"state":"unpushed"}', encoding="utf-8")
+    fake = _RecordingClient()
+    _patch_client(monkeypatch, fake)
+    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+
+    with pytest.raises(
+        SystemExit,
+    ):
+        push._minimalbot_push(
+            _minimalbot_config(str(tmp_path)),
+            auto_yes=True,
+            only_globs=["*"],
+            activate_topics=True,
+            preferred_username="maker@contoso.com",
+        )
+
+    assert paths
+    assert fake.topic_updates == []
+    assert baseline_workflow.read_text(encoding="utf-8") == (
+        '{"state":"before"}'
+    )
+
+
+def test_minimalbot_dialog_update_uses_update_envelope_and_verifies(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    before_component = {
+        "$kind": "DialogComponent",
+        "id": "setup-topic",
+        "schemaName": "contoso.topic.Setusercontext",
+        "dialog": {"$kind": "AdaptiveDialog", "state": "before"},
+    }
+    desired_dialog = {"$kind": "AdaptiveDialog", "state": "after"}
+    after_component = {
+        **before_component,
+        "dialog": {
+            **desired_dialog,
+            "diagnostics": [{"$kind": "Informational"}],
+        },
+    }
+    reads = iter(
+        (
+            {
+                "changeToken": "token-1",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": before_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-2",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+        )
+    )
+    monkeypatch.setattr(client, "read_components", lambda: next(reads))
+    captured = {}
+
+    def request(method, url, *, body, operation):
+        captured.update(
+            method=method,
+            url=url,
+            body=body,
+            operation=operation,
+        )
+        return SimpleNamespace(status_code=200), {}
+
+    monkeypatch.setattr(client, "_request", request)
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "setup-topic",
+                "schemaName": "contoso.topic.Setusercontext",
+                "expectedDialog": before_component["dialog"],
+                "dialog": desired_dialog,
+            }
+        ]
+    )
+
+    assert result["verifiedComponents"] == 1
+    assert captured["method"] == "PUT"
+    assert captured["body"]["changeToken"] == "token-1"
+    assert captured["body"]["botComponentChanges"][0]["$kind"] == (
+        "BotComponentUpdate"
+    )
+
+
+def test_minimalbot_dialog_activation_preserves_content(monkeypatch):
+    client = _mb_client()
+    client._token = "token"
+    dialog = {"$kind": "AdaptiveDialog"}
+    before_component = {
+        "$kind": "DialogComponent",
+        "id": "setup-topic",
+        "schemaName": "contoso.topic.Setusercontext",
+        "state": "Inactive",
+        "status": "Inactive",
+        "dialog": dialog,
+    }
+    after_component = {
+        **before_component,
+        "state": "Active",
+        "status": "Active",
+    }
+    reads = iter(
+        (
+            {
+                "changeToken": "token-1",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": before_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-2",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+        )
+    )
+    monkeypatch.setattr(client, "read_components", lambda: next(reads))
+    captured = {}
+
+    def request(_method, _url, *, body, operation):
+        captured["body"] = body
+        captured["operation"] = operation
+        return SimpleNamespace(status_code=200), {}
+
+    monkeypatch.setattr(client, "_request", request)
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "setup-topic",
+                "schemaName": "contoso.topic.Setusercontext",
+                "state": "Active",
+                "status": "Active",
+            }
+        ]
+    )
+
+    updated = captured["body"]["botComponentChanges"][0]["component"]
+    assert result["verifiedComponents"] == 1
+    assert updated["dialog"] == dialog
+    assert updated["state"] == "Active"
+    assert updated["status"] == "Active"
+
+
+def test_minimalbot_activation_rejects_blocking_diagnostics(monkeypatch):
+    client = _mb_client()
+    client._token = "token"
+    component = {
+        "$kind": "DialogComponent",
+        "id": "workday-topic",
+        "schemaName": "contoso.topic.WorkdayTopic",
+        "state": "Active",
+        "status": "Active",
+        "dialog": {
+            "$kind": "AdaptiveDialog",
+            "diagnostics": [
+                {
+                    "$kind": "InvalidReferenceError",
+                    "errorCode": "NotFound",
+                    "errorMessage": "CloudFlow not found",
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="blocking diagnostics",
+    ):
+        client.verify_dialog_components(
+            [
+                {
+                    "componentId": "workday-topic",
+                    "schemaName": "contoso.topic.WorkdayTopic",
+                    "state": "Active",
+                    "status": "Active",
+                    "requireCleanDiagnostics": True,
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "components",
+    [
+        [],
+        [
+            {
+                "$kind": "DialogComponent",
+                "id": "workday-topic",
+                "schemaName": "contoso.topic.WorkdayTopic",
+            },
+            {
+                "$kind": "DialogComponent",
+                "id": "workday-topic",
+                "schemaName": "contoso.topic.WorkdayTopic",
+            },
+        ],
+    ],
+)
+def test_minimalbot_verification_rejects_missing_or_duplicate_ids(
+    monkeypatch,
+    components,
+):
+    client = _mb_client()
+    client._token = "token"
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {"$kind": "BotComponentInsert", "component": component}
+                for component in components
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="missing or duplicate component ID",
+    ):
+        client.verify_dialog_components(
+            [
+                {
+                    "componentId": "workday-topic",
+                    "schemaName": "contoso.topic.WorkdayTopic",
+                }
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        {
+            "$kind": "UnexpectedComponent",
+            "id": "workday-topic",
+            "schemaName": "contoso.topic.WorkdayTopic",
+        },
+        {
+            "$kind": "DialogComponent",
+            "id": "workday-topic",
+            "schemaName": "contoso.topic.OtherTopic",
+        },
+    ],
+)
+def test_minimalbot_verification_rejects_kind_or_schema_drift(
+    monkeypatch,
+    component,
+):
+    client = _mb_client()
+    client._token = "token"
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="verification failed",
+    ):
+        client.verify_dialog_components(
+            [
+                {
+                    "componentId": "workday-topic",
+                    "schemaName": "contoso.topic.WorkdayTopic",
+                }
+            ]
+        )
+
+
+def test_minimalbot_activation_reports_diagnostics_without_rejecting(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    component = {
+        "$kind": "DialogComponent",
+        "id": "workday-topic",
+        "schemaName": "contoso.topic.WorkdayTopic",
+        "state": "Active",
+        "status": "Active",
+        "dialog": {
+            "$kind": "AdaptiveDialog",
+            "diagnostics": [
+                {
+                    "$kind": "InvalidReferenceError",
+                    "errorCode": "NotFound",
+                    "errorMessage": "CloudFlow not found",
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+
+    result = client.verify_dialog_components(
+        [
+            {
+                "componentId": "workday-topic",
+                "schemaName": "contoso.topic.WorkdayTopic",
+                "state": "Active",
+                "status": "Active",
+            }
+        ]
+    )
+
+    assert result["verifiedComponents"] == 1
+    assert result["activeComponents"] == 1
+    assert result["blockingDiagnostics"] == [
+        {
+            "path": "$.dialog.diagnostics[0]",
+            "kind": "InvalidReferenceError",
+            "errorCode": "NotFound",
+            "message": "CloudFlow not found",
+            "referenceType": "",
+            "referenceId": "",
+            "componentId": "workday-topic",
+            "schemaName": "contoso.topic.WorkdayTopic",
+        }
+    ]

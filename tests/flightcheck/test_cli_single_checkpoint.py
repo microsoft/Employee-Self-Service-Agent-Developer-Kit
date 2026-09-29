@@ -71,6 +71,37 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
     )
 
 
+class _FakeRunResult:
+    """Minimal stand-in exposing only the counts ``_run_exit_code`` reads."""
+
+    def __init__(self, *, failed: int = 0, blocked: int = 0, errors: int = 0):
+        self.failed = failed
+        self.blocked = blocked
+        self.errors = errors
+
+
+@pytest.mark.parametrize(
+    ("failed", "blocked", "errors", "expected"),
+    [
+        (0, 0, 0, 0),   # clean run -> ready
+        (1, 0, 0, 1),   # failed row -> not ready
+        (0, 0, 1, 1),   # errored row -> not ready
+        (0, 1, 0, 1),   # BLOCKED-only run must NOT exit 0 (hard release gate)
+        (0, 2, 0, 1),   # multiple blocked rows -> not ready
+        (1, 1, 1, 1),   # all three -> not ready
+    ],
+)
+def test_run_exit_code_treats_blocked_as_not_ready(
+    failed: int, blocked: int, errors: int, expected: int
+) -> None:
+    # BLOCKED forces overall = NOT_READY; the exit code must mirror that so a
+    # CI/Connect caller keying on it can't read a blocked essential capability
+    # as success. Regression guard for the checkpoint/full-run exit paths that
+    # previously omitted result.blocked.
+    result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
+    assert cli._run_exit_code(result) == expected
+
+
 @pytest.mark.parametrize(
     ("config", "explicit_ring", "expected"),
     [
@@ -214,6 +245,58 @@ class TestGates:
         assert merged["workdayProbe"] == {
             "url": "https://foundation.example"
         }
+
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5])
+    def test_connect_config_flattens_workday_state(
+        self, tmp_path: Path, schema_version: int
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": schema_version,
+                    "scope": {
+                        "workdayTenant": "acme_impl",
+                        "entraTenantId": "tenant-id",
+                        "dataverseUrl": "https://acme.crm.dynamics.com",
+                    },
+                    "identifiers": {
+                        "entraAppId": "app-id",
+                        "entraAppIdUri": "api://app-id",
+                        "workdaySamlEntityId": (
+                            "http://www.workday.com/acme_impl"
+                        ),
+                    },
+                    "endpoints": {
+                        "restBaseUrl": (
+                            "https://wd2-impl-services1.workday.com/ccx/api"
+                        ),
+                        "oauthTokenUrl": (
+                            "https://wd2-impl-services1.workday.com/"
+                            "ccx/oauth2/acme_impl/token"
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["tenantId"] == "tenant-id"
+        assert merged["dataverseEndpoint"] == (
+            "https://acme.crm.dynamics.com"
+        )
+        assert merged["entraAppId"] == "app-id"
+        assert merged["appIdUri"] == "api://app-id"
+        assert merged["workdaySamlEntityId"] == (
+            "http://www.workday.com/acme_impl"
+        )
+        assert merged["tokenEndpoint"] == (
+            "https://wd2-impl-services1.workday.com/"
+            "ccx/oauth2/acme_impl/token"
+        )
 
     @pytest.mark.parametrize(
         "agent_slug",

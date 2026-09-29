@@ -100,6 +100,10 @@ def main():
         "--resolve-environment-url",
         help="Resolve one environment URL to its Power Platform metadata",
     )
+    parser.add_argument(
+        "--preferred-username",
+        help="Account to reuse for environment resolution when available",
+    )
     parser.add_argument("--select", type=int, default=None,
                         help="Select environment by number and output JSON")
     args = parser.parse_args()
@@ -107,7 +111,10 @@ def main():
     if args.resolve_environment_url:
         from list_environments import resolve_environment_for_user
 
-        selected = resolve_environment_for_user(args.resolve_environment_url)
+        selected = resolve_environment_for_user(
+            args.resolve_environment_url,
+            preferred_username=args.preferred_username,
+        )
         if selected is None:
             print(
                 "ERROR: The provided URL did not match a Dataverse-linked "

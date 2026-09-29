@@ -183,13 +183,18 @@ result.
 
 One workspace targets one Power Platform environment, can contain multiple ESS Dev agents from that environment, and has one active agent at a time. `.local/config.json` owns the active agent through `activeAgent` and the matching `agent` entry. Canonical setup state records readiness independently for every configured agent.
 
-When an occupied workspace needs a new environment, offer **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
+When an occupied workspace needs a new environment, offer **Reset and use this workspace** alongside **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Ask exactly:
 
+> This workspace is already connected to a different Power Platform environment. How would you like to continue?
+
+Use the host's interactive single-selection control and offer exactly:
+
+- **Reset and use this workspace**
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
 - **Go back**
 
-For **Go back**, make no changes and return to the Setup choice surface that offered **Create and open a new workspace**. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
+For **Reset and use this workspace**, do not derive or create a fresh destination; continue through the existing reset confirmation below. For **Go back**, make no changes and return to the Setup choice surface that entered different-environment handling. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
 
 ```text
 python scripts/prepare_fresh_workspace.py \

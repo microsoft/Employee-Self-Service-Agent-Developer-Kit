@@ -25,11 +25,12 @@ rather than a hardcoded TEST ring.
 from __future__ import annotations
 
 import base64
+import copy
 from datetime import datetime, timezone
 import fnmatch
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 import uuid
@@ -70,6 +71,9 @@ MAKEREVAL_API_VERSION = "2024-10-01"
 MCS_CONNECTOR = "shared_microsoftcopilotstudio"
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
+_EXPECTED_WORKDAY_TOPIC_COUNTS = {
+    "gptagent_copilotforemployeeselfservicehr": 21,
+}
 
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
@@ -219,6 +223,154 @@ def _wire_kinds(value: Any) -> Any:
     return value
 
 
+def _without_diagnostics(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_diagnostics(child)
+            for key, child in value.items()
+            if key != "diagnostics"
+        }
+    if isinstance(value, list):
+        return [_without_diagnostics(child) for child in value]
+    return value
+
+
+def blocking_diagnostics(
+    value: Any,
+    *,
+    path: str = "$",
+) -> list[dict[str, str]]:
+    """Return only error diagnostics from a component Object Model tree."""
+    findings: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        diagnostics = value.get("diagnostics")
+        if isinstance(diagnostics, list):
+            for index, diagnostic in enumerate(diagnostics):
+                if not isinstance(diagnostic, dict):
+                    continue
+                kind = str(diagnostic.get("$kind") or "")
+                code = str(diagnostic.get("errorCode") or "")
+                if not code and not kind.casefold().endswith("error"):
+                    continue
+                findings.append(
+                    {
+                        "path": f"{path}.diagnostics[{index}]",
+                        "kind": kind,
+                        "errorCode": code,
+                        "message": str(
+                            diagnostic.get("errorMessage") or ""
+                        ),
+                        "referenceType": str(
+                            diagnostic.get("referenceType") or ""
+                        ),
+                        "referenceId": str(
+                            diagnostic.get("referenceId") or ""
+                        ),
+                    }
+                )
+        for key, child in value.items():
+            if key != "diagnostics":
+                findings.extend(
+                    blocking_diagnostics(child, path=f"{path}.{key}")
+                )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            findings.extend(
+                blocking_diagnostics(child, path=f"{path}[{index}]")
+            )
+    return findings
+
+
+def resolve_workday_dialogs(
+    agent_folder: str | Path,
+    agent_schema: str,
+) -> list[dict[str, str]]:
+    """Resolve the complete mapped Workday dialog set for one agent."""
+    root = Path(agent_folder).resolve()
+    schema = str(agent_schema or "").strip()
+    if not schema:
+        raise MinimalBotEvaluationError(
+            "The active agent schema name is required for Workday activation."
+        )
+    map_path = root / ".component-map.json"
+    try:
+        component_map = json.loads(map_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MinimalBotEvaluationError(
+            f"Could not read the active agent component map: {map_path}: {exc}"
+        ) from exc
+    if not isinstance(component_map, dict):
+        raise MinimalBotEvaluationError(
+            "The active agent component map must contain a JSON object."
+        )
+
+    schema_prefix = f"{schema}.topic.Workday".casefold()
+    entries: list[dict[str, str]] = []
+    component_ids: set[str] = set()
+    schema_names: set[str] = set()
+    for raw_path, raw_entry in component_map.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_entry, dict):
+            continue
+        component_schema = str(raw_entry.get("schemaName") or "").strip()
+        display_name = str(raw_entry.get("displayName") or "").strip()
+        if (
+            raw_entry.get("componentKind") != "DialogComponent"
+            or not component_schema.casefold().startswith(schema_prefix)
+            or not display_name.startswith("Workday")
+        ):
+            continue
+        relative_path = raw_path.replace("\\", "/")
+        safe_path = PurePosixPath(relative_path)
+        if (
+            safe_path.is_absolute()
+            or ".." in safe_path.parts
+            or not safe_path.parts
+            or safe_path.parts[0] != "topics"
+            or not relative_path.endswith(".mcs.yml")
+        ):
+            raise MinimalBotEvaluationError(
+                f"Unsafe Workday topic path in component map: {raw_path}"
+            )
+        local_path = root.joinpath(*safe_path.parts)
+        if not local_path.is_file():
+            raise MinimalBotEvaluationError(
+                f"Mapped Workday topic is missing: {relative_path}"
+            )
+        component_id = str(raw_entry.get("componentId") or "").strip()
+        if not component_id or not component_schema:
+            raise MinimalBotEvaluationError(
+                f"Mapped Workday topic has incomplete identity: {relative_path}"
+            )
+        normalized_id = component_id.casefold()
+        normalized_schema = component_schema.casefold()
+        if normalized_id in component_ids or normalized_schema in schema_names:
+            raise MinimalBotEvaluationError(
+                "The Workday topic map contains duplicate component identity."
+            )
+        component_ids.add(normalized_id)
+        schema_names.add(normalized_schema)
+        entries.append(
+            {
+                "path": relative_path,
+                "componentId": component_id,
+                "schemaName": component_schema,
+                "displayName": display_name,
+            }
+        )
+    if not entries:
+        raise MinimalBotEvaluationError(
+            "No mapped Workday dialog topics were found for the active agent."
+        )
+    expected_count = _EXPECTED_WORKDAY_TOPIC_COUNTS.get(schema.casefold())
+    if expected_count is not None and len(entries) != expected_count:
+        raise MinimalBotEvaluationError(
+            "The active ESS HR component map contains "
+            f"{len(entries)} Workday topics; expected {expected_count}. "
+            "Refresh the workspace before activation."
+        )
+    return sorted(entries, key=lambda entry: entry["path"])
+
+
 def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bool:
     """True if any ``*.mcs.yml`` in ``folder`` matches one of ``only_globs``.
 
@@ -273,7 +425,9 @@ def _connection_id(connection: dict[str, Any]) -> str:
 
 
 def acquire_test_pp_token(
-    tenant_id: str, scope: str | None = None
+    tenant_id: str,
+    scope: str | None = None,
+    preferred_username: str | None = None,
 ) -> tuple[str, str]:
     """Acquire a Power Platform token, reusing the shared MSAL cache.
 
@@ -295,15 +449,28 @@ def acquire_test_pp_token(
         CLIENT_ID, authority=authority, token_cache=cache
     )
     accounts = app.get_accounts()
-    selected_account = accounts[0] if accounts else None
+    preferred = str(preferred_username or "").casefold()
+    selected_account = next(
+        (
+            account
+            for account in accounts
+            if str(account.get("username") or "").casefold() == preferred
+        ),
+        None,
+    )
+    if selected_account is None and not preferred:
+        selected_account = accounts[0] if accounts else None
     result = None
     if selected_account:
         result = app.acquire_token_silent([scope], account=selected_account)
     if not result or "access_token" not in result:
         print("Opening browser for Power Platform sign-in...")
-        result = app.acquire_token_interactive(
-            [scope], prompt="select_account"
+        interactive_options = (
+            {"login_hint": preferred_username}
+            if preferred_username
+            else {"prompt": "select_account"}
         )
+        result = app.acquire_token_interactive([scope], **interactive_options)
     if "access_token" not in result:
         # Don't echo error_description (CWE-209); mirror auth.py.
         error = result.get("error", "unknown_error")
@@ -389,11 +556,21 @@ class MinimalBotEvaluationClient:
         )
 
     # -- auth ---------------------------------------------------------------
-    def authenticate(self) -> str:
+    def authenticate(self, preferred_username: str | None = None) -> str:
         """Acquire a Power Platform token for this ring, reusing the MSAL cache."""
         self._token, self.signed_in_username = acquire_test_pp_token(
-            self.tenant_id, scope=self.scope
+            self.tenant_id,
+            scope=self.scope,
+            preferred_username=preferred_username,
         )
+        if preferred_username and (
+            str(self.signed_in_username or "").casefold()
+            != preferred_username.casefold()
+        ):
+            raise MinimalBotEvaluationError(
+                "Power Platform authentication used a different account from "
+                "the selected Environment Maker."
+            )
         return self._token
 
     def _require_token(self) -> str:
@@ -456,6 +633,251 @@ class MinimalBotEvaluationClient:
                 "MinimalBot component read returned an unexpected payload."
             )
         return body
+
+    def update_dialog_components(
+        self,
+        updates: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Update existing dialog components with drift and identity checks."""
+        if not updates:
+            raise MinimalBotEvaluationError(
+                "No MinimalBot dialog updates were requested."
+            )
+
+        before = self.read_components()
+        change_token = str(before.get("changeToken") or "")
+        if not change_token:
+            raise MinimalBotEvaluationError(
+                "MinimalBot component read did not return a changeToken."
+            )
+        remote_changes = before.get("botComponentChanges")
+        if not isinstance(remote_changes, list):
+            raise MinimalBotEvaluationError(
+                "MinimalBot component read returned no component changes."
+            )
+
+        changes: list[dict[str, Any]] = []
+        for update in updates:
+            component_id = str(update.get("componentId") or "")
+            schema_name = str(update.get("schemaName") or "")
+            matches = [
+                change.get("component")
+                for change in remote_changes
+                if isinstance(change, dict)
+                and isinstance(change.get("component"), dict)
+                and str(change["component"].get("id") or "").casefold()
+                == component_id.casefold()
+            ]
+            if len(matches) != 1:
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog component is no longer "
+                    "unique."
+                )
+            component = matches[0]
+            if (
+                component.get("$kind") != "DialogComponent"
+                or str(component.get("schemaName") or "").casefold()
+                != schema_name.casefold()
+            ):
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog identity changed after "
+                    "local extraction."
+                )
+            has_dialog_update = "dialog" in update
+            desired_dialog = update.get("dialog")
+            expected_dialog = update.get("expectedDialog")
+            if has_dialog_update and (
+                not isinstance(expected_dialog, dict)
+                or not isinstance(desired_dialog, dict)
+            ):
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog content updates require expected and "
+                    "desired Object Model payloads."
+                )
+            desired_state = update.get("state")
+            desired_status = update.get("status")
+            if (
+                not has_dialog_update
+                and desired_state is None
+                and desired_status is None
+            ):
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog update did not request content or state "
+                    "changes."
+                )
+            remote_dialog = _without_diagnostics(component.get("dialog"))
+            dialog_is_desired = (
+                not has_dialog_update
+                or remote_dialog == _without_diagnostics(desired_dialog)
+            )
+            state_is_desired = (
+                desired_state is None
+                or component.get("state") == desired_state
+            )
+            status_is_desired = (
+                desired_status is None
+                or component.get("status") == desired_status
+            )
+            if dialog_is_desired and state_is_desired and status_is_desired:
+                continue
+            if (
+                has_dialog_update
+                and not dialog_is_desired
+                and remote_dialog != _without_diagnostics(expected_dialog)
+            ):
+                raise MinimalBotEvaluationError(
+                    "The selected MinimalBot dialog changed remotely after "
+                    "the workspace baseline was captured."
+                )
+            updated_component = copy.deepcopy(component)
+            if has_dialog_update:
+                updated_component["dialog"] = desired_dialog
+            if desired_state is not None:
+                updated_component["state"] = desired_state
+            if desired_status is not None:
+                updated_component["status"] = desired_status
+            changes.append(
+                {
+                    "$kind": "BotComponentUpdate",
+                    "component": updated_component,
+                }
+            )
+
+        if changes:
+            payload = {
+                "changeToken": change_token,
+                "botComponentChanges": changes,
+                "cloudFlowDefinitionChanges": [],
+                "connectionReferenceChanges": [],
+                "connectorDefinitionChanges": [],
+                "environmentVariableChanges": [],
+                "aIPluginOperationChanges": [],
+                "componentCollectionChanges": [],
+                "dataverseTableSearchChanges": [],
+                "connectedAgentDefinitionChanges": [],
+            }
+            response, _ = self._request(
+                "PUT",
+                self._components_url,
+                body=payload,
+                operation="dialog update",
+            )
+            if response.status_code != 200:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog update failed "
+                    f"(HTTP {response.status_code})."
+                )
+
+        verified = self.read_components()
+        verification = self._verify_dialog_components_payload(
+            updates,
+            verified,
+        )
+        return {
+            "updatedComponents": len(changes),
+            **verification,
+        }
+
+    def verify_dialog_components(
+        self,
+        expectations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Reread and verify existing dialog identity, state, and diagnostics."""
+        if not expectations:
+            raise MinimalBotEvaluationError(
+                "No MinimalBot dialog verification was requested."
+            )
+        return self._verify_dialog_components_payload(
+            expectations,
+            self.read_components(),
+        )
+
+    @staticmethod
+    def _verify_dialog_components_payload(
+        updates: list[dict[str, Any]],
+        verified: dict[str, Any],
+    ) -> dict[str, Any]:
+        verified_changes = verified.get("botComponentChanges")
+        if not isinstance(verified_changes, list):
+            raise MinimalBotEvaluationError(
+                "MinimalBot dialog verification returned no component changes."
+            )
+        verified_by_id: dict[str, list[dict[str, Any]]] = {}
+        for change in verified_changes:
+            if not isinstance(change, dict):
+                continue
+            component = change.get("component")
+            if not isinstance(component, dict):
+                continue
+            component_id = str(component.get("id") or "").casefold()
+            if component_id:
+                verified_by_id.setdefault(component_id, []).append(component)
+        all_diagnostics: list[dict[str, str]] = []
+        for update in updates:
+            component_id = str(update["componentId"])
+            matches = verified_by_id.get(component_id.casefold()) or []
+            if len(matches) != 1:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog verification found a missing or "
+                    f"duplicate component ID: {component_id}."
+                )
+            component = matches[0]
+            expected_schema = str(update.get("schemaName") or "")
+            verified_update = (
+                component.get("$kind") == "DialogComponent"
+                and str(component.get("schemaName") or "").casefold()
+                == expected_schema.casefold()
+            )
+            if verified_update and "dialog" in update:
+                verified_update = _without_diagnostics(
+                    component.get("dialog")
+                ) == _without_diagnostics(update["dialog"])
+            if verified_update and update.get("state") is not None:
+                verified_update = (
+                    component.get("state") == update["state"]
+                )
+            if verified_update and update.get("status") is not None:
+                verified_update = (
+                    component.get("status") == update["status"]
+                )
+            diagnostics = (
+                blocking_diagnostics(component)
+                if component is not None
+                else []
+            )
+            for diagnostic in diagnostics:
+                all_diagnostics.append(
+                    {
+                        **diagnostic,
+                        "componentId": component_id,
+                        "schemaName": str(update.get("schemaName") or ""),
+                    }
+                )
+            if (
+                diagnostics
+                and update.get("requireCleanDiagnostics") is True
+            ):
+                first = diagnostics[0]
+                detail = first["errorCode"] or first["kind"] or "error"
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog has blocking diagnostics after "
+                    f"verification ({update.get('schemaName')}): {detail}."
+                )
+            if not verified_update:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot dialog verification failed for component "
+                    f"{component_id}."
+                )
+        return {
+            "verifiedComponents": len(updates),
+            "activeComponents": sum(
+                1
+                for update in updates
+                if update.get("state") == "Active"
+                and update.get("status") == "Active"
+            ),
+            "blockingDiagnostics": all_diagnostics,
+        }
 
     # -- push ---------------------------------------------------------------
     def push_agent_evaluations(

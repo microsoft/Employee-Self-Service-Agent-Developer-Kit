@@ -162,11 +162,11 @@ def find_environment_by_url(environments, env_url):
     return None
 
 
-def resolve_environment_for_user(env_url):
+def resolve_environment_for_user(env_url, preferred_username=None):
     """Resolve one Dataverse URL through the user-scoped Power Platform API."""
     try:
         client = PowerPlatformClient(discover_tenant(env_url))
-        client.authenticate()
+        client.authenticate(preferred_username=preferred_username)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: Power Platform authentication failed - {exc}")
         sys.exit(1)

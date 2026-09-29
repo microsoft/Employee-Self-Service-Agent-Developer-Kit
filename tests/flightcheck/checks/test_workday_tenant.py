@@ -52,7 +52,7 @@ _FULL_CONFIG = {
     "tenant": "acme_dpt1",
     "restBaseUrl": "https://wd2-impl-services1.workday.com/ccx/api",
     "soapBaseUrl": "https://wd2-impl-services1.workday.com/ccx/service",
-    "appIdUri": "api://11111111-1111-1111-1111-111111111111",
+    "workdaySamlEntityId": "http://www.workday.com/acme_dpt1",
 }
 
 
@@ -109,10 +109,11 @@ class TestConfigPresentEchoesValues:
             "acme_dpt1",
             _FULL_CONFIG["restBaseUrl"],
             _FULL_CONFIG["soapBaseUrl"],
-            _FULL_CONFIG["appIdUri"],
+            _FULL_CONFIG["workdaySamlEntityId"],
         ):
             assert value in tenant.result
         assert "Service Provider ID" in tenant.result
+        assert "api://" not in tenant.result
         assert "Tenant Setup - Security" in tenant.remediation
         assert "intended employees" in tenant.remediation
         assert "Do not invent an OAuth-client condition" in tenant.remediation

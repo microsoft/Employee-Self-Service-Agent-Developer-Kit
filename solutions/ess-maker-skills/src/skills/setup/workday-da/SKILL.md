@@ -1,253 +1,175 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# Workday Connect (DA) — Orchestrator
+# Connect Workday to the ESS HR agent
 
-Every **Message** block is the exact text to show the user. Copy it verbatim. Do
-not rephrase, add commentary, or tell the user what tools you are calling or what
-files you are reading.
+Guide the customer through one resumable Workday connection lifecycle. Use
+`scripts/workday_connect.py` and
+`.local/connect/workday-da/config.json` internally; do not create, copy,
+update, or infer status from a Markdown checklist.
+Use `shared/config-schema.md` as the internal state and migration reference;
+it is not a customer-executed phase and must not be shown as an extra step.
 
-This router sequences the five Workday connect steps for the **ESS HR agent**,
-using the master checklist as a
-**resume-aware spine**: it renders the working checklist on first run, resumes at
-the first unverified step, and dispatches to the owning step's playbook. It
-**never** advances past a `MANUAL` / attestation row on a flightcheck pass alone —
-those require explicit user acknowledgement (enforced by
-[`shared/checklist-updater.md`](./shared/checklist-updater.md)).
+## Safety contract
 
-This skill assumes the Employee Self-Service base agent itself is already
-installed — that's owned by `/setup`, not by this skill. DA-1 checks for it and
-sends you to `/setup` first if it isn't there yet.
+- Support only the active native ESS HR agent recorded by `/setup`. Classic DA
+  and ESS IT agents are outside this lifecycle. The controller verifies the
+  exact agent, workspace materialization, architecture, and Dataverse
+  environment during preflight.
+- Never ask for a Workday password, client secret, access token, refresh token,
+  cookie, certificate private key, or certificate body in chat.
+- Explain an authentication prompt before launching it. Azure CLI/Graph, PAC,
+  Dataverse, connector OAuth, and Agent Builder are separate credential stores;
+  a prompt for a different store is expected, but a valid store must not be
+  prompted twice for the same account and session.
+- Preview the exact target and actions before approval. After approval, verify
+  the plan hash immediately before every mutation. If discovery or scope
+  changes, discard the approval and show the new plan.
+- After every mutation, reread the target and persist evidence only after the
+  verified result matches the approved plan.
+- Never diagnose a permission problem from a guess. Show the API, CLI, or
+  checked-in script evidence that produced the diagnosis.
+- Use structured `vscode_askQuestions` forms for customer evidence. Never
+  replace a multi-field form with one large free-text question or ask the
+  customer to edit a prose template.
+- Leave every option initially unset. Do not add `recommended`, `default`,
+  “recommended” label text, or any equivalent preselection to approvals,
+  factual observations, connection choices, or validation outcomes. Continue
+  only after the customer explicitly submits a choice.
+- Reuse the exact recorded account through the shared credential cache. Run
+  only the narrow verification required for the current phase; do not launch
+  broader checks that request unrelated API audiences.
 
-This release does not support Workday for the ESS DA IT Agent. Before creating
-the working checklist or reading provider state, resolve `activeAgent` from
-`.local/config.json` and require an ESS DA HR agent entry with a stable slug,
-`botId`, and HR schema name. Then read the canonical
-`.local/setup/config.json` `agents` record keyed by that `botId` and require
-canonical workspace evidence plus `steps.SETUP-07.state: "done"`. Do not
-require `connect_ready: true`; configuring Workday may resolve the remaining
-runtime connection blocker. Do not use the retired `selected_products` field
-or choose the first agent in a multi-agent workspace. If the target is IT,
-Hub, CEA, ambiguous, incomplete, or unresolved, show:
+## Customer-facing language contract
 
-**Message:**
+Commands, file paths, JSON payloads, state keys, plan hashes, checkpoint IDs,
+schema names, component maps, API names, and implementation terms in this skill
+are internal execution instructions. Never show or narrate them unless the
+customer explicitly asks for technical diagnostics.
 
-This Workday setup supports the ESS HR agent only. Select the ESS HR agent,
-or contact your administrator if it isn't available.
+Customer-facing messages must describe only:
 
-**End message.**
+- the customer-visible target and current phase;
+- who needs to perform a portal or Workday action;
+- the exact portal navigation and field value needed for that action;
+- whether a supported change or verification succeeded;
+- the concise remediation needed when it did not.
 
-Stop immediately without creating or updating any Workday state. This guard is
-required even though the `/connect workday` router performs the same check,
-because this file must remain safe if invoked directly.
+Translate internal outcomes into plain language. For example, say **all
+Workday topics are enabled**, not that component `state` and `status` are
+`Active`. Topic metadata diagnostics are support context and must not be
+translated into a missing-package, missing-flow, or runtime-failure claim by
+themselves. Never show `CloudFlow NotFound`, `MinimalBot`, component-map,
+native-definition terminology, raw command output, tracebacks, encoding
+errors, or internal identifiers in a customer message.
 
----
+Read `WORKDAY_CONNECT_RESULT_JSON` directly. Do not create an ad hoc Python or
+PowerShell formatter merely to render controller status. If an internal
+formatting command fails, correct or retry it internally and show only the
+validated customer-facing result.
 
-## Handling Workday credentials — never put secrets in chat
+## Capability contract
 
-The Workday **password is a secret**. **Never** ask for it with a chat question
-(`vscode_askQuestions`, or a plain "paste your Workday password" message) — the
-chat question tool has no masked-input option, so anything typed is recorded
-verbatim in the transcript.
+Describe each action according to who actually performs it:
 
-When a Workday secret is genuinely required (only the FlightCheck Workday SOAP
-workflow tests need one), it is collected **exclusively** through a masked
-input that keeps the value out of chat history:
+| Phase | What the skill can do | What remains a user or administrator action |
+| --- | --- | --- |
+| Preflight | Verify the selected agent, environment, account, and supported Workday package; install the package when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
+| Microsoft Entra | Discover exact applications, validate roles, generate one administrator handoff, reread Graph, and record verified evidence | Create or change the Entra application in the portal |
+| Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
+| Connections | Record the reviewed physical-connection readiness evidence | Create connector connections and complete connector OAuth |
+| Runtime | After approval, bind the Workday connections, activate the package flows, configure required runtime permissions, connect employee context routing, enable every Workday topic included with the agent, and verify the result | Connect flows to the agent and enable parameter sharing in Copilot Studio when those settings require maker interaction |
+| Employee validation | Record safe validation evidence and retain the current blocker | Publish the agent, sign in as an employee, and run the real employee scenario |
 
-- the `.vscode/mcp.json` `workdayPass` input — a `promptString` with
-  `"password": true`, which VS Code masks and substitutes directly into the
-  check environment, or
-- the FlightCheck CLI's own `getpass` prompt when you run
-  `python scripts/flightcheck/cli.py --scope workdayda` in the terminal.
+Never say "I changed," "I configured," "I enabled," or "I updated" for a
+manual action. Say what the administrator or maker must do, then say what the
+skill can verify or record afterward. Claim an automated change only after its
+command succeeded and the target was reread.
 
-Non-secret connection identifiers (tenant, SOAP/REST/token URLs, OAuth client
-ID, App ID URI) are safe to capture in chat — see
-[`shared/connection-fields.md`](./shared/connection-fields.md). The Workday
-**username** is likewise not masked (`"password": false`); only the password is.
+## Tenant foundation and deployment scope
 
----
+Treat the Entra and Workday configuration as a reusable tenant foundation.
+Treat package installation, physical connections, runtime flow wiring, native
+topics, publishing, and employee validation as environment-and-agent-specific
+deployment work.
 
-## Start
+- A different Power Platform environment, ESS HR agent, or maker account must
+  not by itself require the Entra or Workday administrators to repeat setup.
+- When the Entra tenant, Workday tenant, and exact Entra application still
+  match stored foundation evidence, reread the Entra configuration. If it is
+  healthy, reuse the stored Workday administrator evidence and continue at
+  Connections.
+- Involve an administrator only when foundation evidence is absent, the
+  tenant/application identity changed, the Entra reread finds drift, the
+  signing certificate changed or is unhealthy, or a later connection/runtime
+  test proves the stored Workday configuration no longer works.
+- Never reuse foundation evidence across a different Entra tenant, Workday
+  tenant, SAML Service Provider ID, Entra application, or signing certificate.
+- Preserve the full administrator guide even on the reuse path, but show only
+  the affected remediation step instead of making the user repeat healthy
+  configuration.
 
-1. **Show the readiness briefing.** After the DA HR agent guard and routing
-   FlightChecks have passed, show this before creating or resuming the
-   checklist. Show it on every invocation so a resumed setup makes its
-   remaining administrator dependencies clear.
+## Start or resume
 
-   **Message:**
+Before running status, show this readiness briefing on every invocation. A
+resumed setup must still make its remaining administrator dependencies clear.
 
-   Here's the plan for connecting Workday to your ESS HR agent. Some steps
-   require administrators outside the maker role, so involve them now if you
-   don't hold these permissions:
+> Here's who may be needed to connect Workday to your ESS HR agent:
+>
+> | Phase | Responsibility | Who is needed |
+> | --- | --- | --- |
+> | Preflight | Verify the ESS HR agent and environment, and install or verify the supported Workday package | Power Platform Environment Maker with package installation access |
+> | Microsoft Entra | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required |
+> | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy | Workday Administrator |
+> | Connections | Create the Workday OAuthUser and Dataverse connections and complete connector sign-in | Power Platform Environment Maker |
+> | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization |
+> | Employee validation | Publish the agent and validate a real signed-in employee scenario | Environment Maker and Workday test employee; Workday Administrator or network administrator if remediation is needed |
+>
+> I'll automate checks and supported changes where reliable APIs are available.
+> For Workday or portal-only settings, I'll provide the responsible
+> administrator with the exact steps and wait for verified evidence. The
+> environment isn't ready until the signed-in Workday scenario succeeds.
 
-   | Phase | What we'll do | Who is needed |
-   | --- | --- | --- |
-   | Workday extension | Install or verify the Workday package for the ESS HR agent | Power Platform Environment Maker |
-   | Microsoft Entra | Configure Workday SSO, API permission, consent, user assignment, NameID, and SAML signing | Entra Application Administrator or Cloud Application Administrator; a consent-capable administrator if required |
-   | Workday tenant | Configure tenant security, the API client, functional areas, endpoints, authentication policy, and certificate trust | Workday Administrator |
-   | Power Platform connections | Configure Workday OAuthUser and Dataverse connections, shared parameters, bindings, and cloud flows | Power Platform Environment Maker |
-   | Agent authorization | Preview and run the Dataverse bot-to-flow authorization script | Power Platform Administrator with Dataverse System Administrator access |
-   | Network readiness | Allow the required Workday REST and SOAP hosts | InfoSec or network administrator |
-   | Topics and validation | Select Workday topics and validate a real signed-in employee scenario | Environment Maker, Workday test employee, and Workday Administrator if remediation is needed |
+Run:
 
-   I'll automate checks and supported changes where reliable APIs are
-   available. For Workday or portal-only settings, I'll give the responsible
-   administrator the exact steps and wait for confirmation. I won't mark the
-   environment ready until the signed-in Workday scenario succeeds.
+```powershell
+python scripts/workday_connect.py status
+```
 
-   **End message.**
+After the readiness briefing:
 
-2. **Working copy.** If `.local/setup/workday-da/tasks.md` does not exist, render
-   it by copying the template `src/skills/setup/workday-da/tasks.md`. Do not
-   hand-edit its status markers — the shared checklist-updater writes them.
+1. Render the returned `progressText` as Markdown. It is the visible six-row
+   roadmap and must not be collapsed into a one-line phase list.
+2. Render the returned `nextPhaseSummary` in this form:
 
-3. **Resume point.** Read `setupStatus` in `.local/connect/workday-da/config.json`
-   (the durable source of truth; the tasks file is only the view). If the file or
-   the `setupStatus` key is missing, treat every row as `pending`. A row counts as
-   complete only when `setupStatus["{Step}"].state` is `"done"`.
+   ```markdown
+   ### Next phase: {title}
 
-4. **Show the checklist, then find where to resume.** Determine each item's state
-   from `setupStatus`: ✅ = `done`, 🔄 = `in-progress`, ⛔ = `blocked`, ⬜ =
-   `pending` or unset. Show the checklist **grouped exactly as in the template** —
-   the group headings and item titles below are verbatim from
-   `src/skills/setup/workday-da/tasks.md`; render every group and every item,
-   replacing each `{m}` with that item's marker. **Never show Step IDs or
-   checkpoint IDs.**
+   What happens in this phase:
 
-   **Message:**
+   - {whatHappens item 1}
+   - {whatHappens item 2}
+   - {whatHappens item 3}
+   ```
 
-   Here's the checklist for connecting Workday to your agent:
+3. Show the current blocker afterward when one is present.
 
-   **1. Workday extension package**
-   - {m} Install the Workday extension package
+Do not render internal action IDs, hashes, or the full JSON state. Do not
+replace the phase explanation with only `Next phase: {title}`.
 
-   **2. Connect Microsoft Entra sign-in to Workday**
-   - {m} Set up Workday sign-in
-   - {m} Allow Power Platform to call Workday
-   - {m} Approve the sign-in permissions
-   - {m} Choose who can use Workday
-   - {m} Match the signed-in employee
-   - {m} Sign the Workday sign-in response
-   - {m} Confirm the correct Microsoft Entra tenant
+Dispatch from `nextPhaseId`:
 
-   **3. Workday tenant configuration**
-   - {m} Register the Workday API client
-   - {m} Capture your Workday connection details
-   - {m} Verify employee SAML sign-in policy
-   - {m} Match the signing certificate
+- `preflight` -> read `install-extension.md`
+- `entra` -> read `provision-entra-app.md`
+- `workday-admin` -> read `configure-tenant.md`
+- `connections` or `runtime` -> read `configure-power-platform.md`
+- `employee-validation` -> read `verify-connection.md`
 
-   **4. Power Platform and agent integration**
-   - {m} Create the Workday connection
-   - {m} Create the Microsoft Dataverse connection
-   - {m} Bind the extension connections
-   - {m} Turn on the Workday cloud flows
-   - {m} Connect Workday to the agent
-   - {m} Authorize the agent to use the Workday flows
-   - {m} Configure employee context and topics
-   - {m} Allow Workday through the firewall
+When a phase returns, run `status` again and continue from the controller's
+next phase. Never restart completed phases because the user asked a side
+question; answer the side question, then resume the same blocker.
 
-   **5. Validate Workday readiness**
-   - {m} Validate a signed-in Workday scenario
+## Completion
 
-   Picking up at: {title of the first item whose state is not `done`}.
+Only show the following after controller status is `ready`:
 
-   **End message.**
-
-   Then walk the items in Step order (DA1.1, DA2.1 … DA5.1 — these IDs are
-   internal only), pick the first whose state is not `done`, and dispatch by that
-   Step in **Dispatch** below. A step's playbook may re-run its own idempotent
-   foundation steps (role gate, resource lookup) ahead of the resume item to
-   rehydrate in-memory state — follow the playbook's stated build order rather
-   than jumping straight into it.
-
-5. If **every** item is `done`, also require provider `status` to be `"ready"`
-   before showing **All done**. If every row is done but status is not ready,
-   treat DA5.1 as `in-progress` and dispatch to DA-5 to reconcile readiness;
-   never claim success from checklist state alone.
-
----
-
-## Dispatch
-
-**Persist each row the moment its checkpoint passes.** Every step calls
-[`shared/checklist-updater.md`](./shared/checklist-updater.md) per row, inline —
-updating both the working checklist and the durable `setupStatus` mirror
-immediately — and **must not** batch those writes to the end of its run. This
-keeps progress crash-safe: if a step errors midway, the rows already verified
-stay complete and this router resumes at the first row that isn't.
-
-### DA1.1 — Install the Workday extension package (DA-1)
-
-Read `src/skills/setup/workday-da/install-extension.md` and follow it. That
-playbook checks the DA base agent is installed and sends the user to `/setup`
-if it isn't, attempts an automated install of the Workday extension package,
-falls back to a guided manual AppSource install if automation isn't available
-in this tenant, verifies the package landed (`WD-DA-PKG-001`), and updates row
-**DA1.1** through the shared checklist-updater.
-
-When it returns, go back to **Start** to resume at the next unverified row.
-
-### DA2.1 through DA2.7 — Provision the Workday Entra app (DA-2)
-
-Read `src/skills/setup/workday-da/provision-entra-app.md` and follow it. That
-playbook role-gates (App / Cloud Application Administrator), instantiates and
-configures the Workday SSO gallery app, exposes the API scope and
-pre-authorizes the Workday connector, grants and consents the Graph
-permissions, assigns the enterprise app, sets the NameID mapping and SAML
-signing option, and confirms single-tenant federation. It verifies each
-outcome (`WD-CONN-102`, `WD-ENTRA-SCOPE-001`, `WD-ENTRA-CONSENT-001`,
-`WD-ASSIGN-001`, `WD-ENTRA-NAMEID-001`, `WD-ENTRA-SIGNOPT-001`, `WD-CONN-010`)
-and updates rows **DA2.1**–**DA2.7** through the shared checklist-updater
-(DA2.1/DA2.6 manual and DA2.7 attest rows need acknowledgement). On resume it
-always re-runs its role gate and DA2.1 (create the SSO app) first — both
-idempotent — before the first incomplete row, since DA2.2–DA2.4 depend on the
-in-memory app object id that only DA2.1 populates.
-
-When it returns, go back to **Start** to resume at the next unverified row.
-
-### DA3.1 through DA3.4 — Configure the Workday tenant (DA-3)
-
-Read `src/skills/setup/workday-da/configure-tenant.md` and follow it. That
-playbook role-gates (Workday Administrator, by attestation), records the
-current single-tenant SAML federation before any change, uploads and verifies
-the X.509 signing certificate (`WD-CONN-102`), edits Tenant Setup – Security,
-registers the Workday API client and captures the connection fields
-(`WD-API-CLIENT-001`), and verifies the signed-in employee SAML policy
-(`WD-TENANT-001`) — updating rows **DA3.1**–**DA3.4** through the shared
-checklist-updater. All four are manual Workday-admin tasks (attest / manual
-gates) that need acknowledgement; `WD-API-CLIENT-001` and `WD-TENANT-001`
-report `MANUAL`. On resume it always re-runs its role gate and the
-single-tenant SAML pre-check first — both idempotent — before the first
-incomplete row.
-
-When it returns, go back to **Start** to resume at the next unverified row.
-
-### DA4.1 through DA4.8 — Configure Power Platform and agent integration (DA-4)
-
-Read `src/skills/setup/workday-da/configure-power-platform.md` and follow it.
-That playbook guides creation of the Workday and Dataverse connections, binds
-the installed solution references, activates the runtime flows, connects the
-flows to the agent with parameter sharing, applies checked-in script
-authorization, configures DA V2 employee context and topic selection, and
-records firewall allowlisting. It updates rows **DA4.1**–**DA4.8** through the
-shared checklist-updater. Manual and attestation rows require explicit
-evidence; DA4.3, supported DA4.4 activation, and DA4.6 are programmatic.
-
-When it returns, go back to **Start** to resume at DA5.1.
-
-### DA5.1 — Validate Workday readiness (DA-5)
-
-Read `src/skills/setup/workday-da/verify-connection.md` and follow it. That
-playbook re-runs `WD-DA-PKG-001`, summarizes all setup areas, and requires a
-successful signed-in employee Workday scenario. It updates **DA5.1** only after
-runtime evidence is captured and sets provider `status` to `"ready"`.
-
-When it returns, go back to **Start** — every row should now be `done`.
-
-## All done
-
-**Message:**
-
-Your ESS HR agent is connected to Workday and the signed-in employee path
-has been validated in this environment. The Workday connection is ready; you
-do not need to run `/setup` again.
-
-**End message.**
+> Your ESS HR agent is connected to Workday, and the signed-in employee path
+> has been validated in this environment.

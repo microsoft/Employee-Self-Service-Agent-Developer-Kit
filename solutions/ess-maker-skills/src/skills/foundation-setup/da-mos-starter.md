@@ -44,9 +44,38 @@ python scripts/setup_mos_starter.py list \
 
 Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description as authoritative inputs. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
 
+After a successful catalog list, independently run the environment-scoped read-only agent listing:
+
+```text
+python scripts/setup_existing_da.py list-agents \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}"
+```
+
+Parse `DA_AGENT_LIST_JSON:`. The result classifies every safely reportable listed identity into `devAgents`, `testAgents`, `prodAgents`, or `realmNotEstablishedAgents`. Catalog and `devAgents` results resolve workspace observations before the checked-in seed in `src/reference/da-product-setup-registry.json`. Join catalog rows only to `devAgents` by the returned `productKey`, or by the exact returned `agentSchemaName` and `schemaName` when a workspace observation supplies them. The mapping identifies a product family; it is not starter-package provenance and does not prove the installed agent's template version.
+
+Determine product mapping values from available operation evidence: `setup_mos_starter.py list` for package ID, catalog name, descriptions, and catalog version; `setup_mos_starter.py create` for successful `sourcePackage` identity or a definitive collision response; `setup_existing_da.py list-agents` for visible editable agents and their exact schemas; and `setup_existing_da.py validate-agent` for the exact identity and schema of a selected agent.
+
+The checked-in registry is the initial seed. When current operation results establish a newer package, catalog, and schema mapping, record it with:
+
+```text
+python scripts/da_product_registry.py observe \
+  --product-key "{PRODUCT_KEY}" \
+  --package-id "{PACKAGE_ID}" \
+  --catalog-name "{CATALOG_NAME}" \
+  --agent-schema-name "{SCHEMA_NAME}" \
+  --source "{OPERATION_SOURCE}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}"
+```
+
+Parse `DA_PRODUCT_OBSERVATION_JSON:`. The workspace-local observation becomes the preferred mapping for later catalog and agent lists and records that the mapped product was definitively observed as installed in that environment and ring. Product identity interpretation and operation ordering remain session responsibilities; the command only validates and writes the supplied facts.
+
+If agent listing fails, preserve its failure evidence and continue with the catalog using only installation facts already established by workspace observations. Do not interpret a failed operation as an empty environment. When `realmNotEstablishedAgents` is non-empty or `productIdentityUnavailableCount` is nonzero, known exact matches remain usable, but do not claim that unmatched catalog products are uninstalled. `testAgents` and `prodAgents` remain service evidence; they are not direct editable-Dev matches for catalog **Use** actions. A selected Prod identity can still follow the parent setup skill's established Prod-to-Dev route.
+
 For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. Render `Employee Self-Service` as `Employee Self-Service (Hub)`, render `Employee Self-Service IT` or `Employee Self-Service (IT)` as `Employee Self-Service (IT)`, and render `Employee Self-Service HR` or `Employee Self-Service (HR)` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
 
-For the three recognized ESS products, render the following friendly product name and supporting description exactly as written. Do not paraphrase, shorten, or combine this copy with the service-provided description.
+For the three recognized ESS products, render the following friendly product name and default supporting description exactly as written. Do not paraphrase, shorten, or combine this copy with the service-provided description. The installed-without-matching-Dev case below replaces the default supporting description for that row.
 
 | Friendly product name         | Supporting description                                                                                                       |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -58,9 +87,30 @@ For every other product, use its exact service-provided name unchanged and use `
 
 When listing succeeds, continue the catalog surface with:
 
-> {PRODUCT_COUNT} entitled products are available. Select the product to create.
+> {PRODUCT_COUNT} entitled products are available for **{environment name}**. What would you like to do?
 
-Use the host's interactive single-selection control and offer one choice for each exact `packageId`. Do not ask the maker to type a product name. Format each choice as **{friendly product name} {version}** followed by its supporting description. Omit a blank version or description instead of showing an unresolved value. Retain the selected friendly product name for the final exact-agent link.
+Use the host's interactive single-selection control, leave the selection initially unset, and disable free-form input. Offer one choice for each exact `packageId`. Do not ask the maker to type a product name.
+
+Use **Choose an ESS product.** as the exact interactive-control question. Do not describe the whole surface as selecting a fresh product or selecting a product to create, because some options continue with an existing agent.
+
+Build the product picker as a projection of the latest successful catalog result. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Enrich each projected row with workspace observations and the latest `devAgents` evidence. Render **Use** only when an exact `devAgents` identity matches the catalog product. Render an installed status without **Use** when the catalog row reports `installed: true` for the selected environment and ring but no matching Dev identity was returned. Render **Create** only when installation is not established. Rebuild this projection whenever the product picker is shown.
+
+When one or more `devAgents` have the same exact `productKey` as a catalog row, format that choice as **Use {friendly product name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
+
+- When exactly one agent has the matching key, run the parent's selected-agent product-line reconciliation for that exact returned identity and continue through `da-existing-dev.md`.
+- When multiple agents have the matching key, show only those exact returned agent names, leave the selection initially unset, disable free-form input, and let the maker select one before reconciliation and `da-existing-dev.md`.
+
+When environment-scoped observation reports `installed: true`, the latest agent listing succeeded, and no exact `devAgents` identity matches, format the choice as **{friendly product name} — Already installed** and use this exact text as that catalog row's supporting description instead of the default product description:
+
+> Installation was confirmed in this environment, but the matching agent was not returned by the current account’s agent list.
+
+Show that supporting description with the row before selection; do not defer it until after the maker selects the row or repeat it after selection. Selecting this choice does not invoke create. Before showing recovery choices, say exactly: **This product is already installed, so setup cannot install another copy. The existing agent was not returned by the current account’s agent list, so setup cannot identify it automatically.**
+
+Offer exactly **Use an agent URL**, **Try with a different user**, and **Go back**, with no preselected choice and free-form input disabled. **Use an agent URL** continues through the parent skill's exact-agent URL route, including its realm inspection and Prod-to-Dev routing when the supplied identity is Prod. **Try with a different user** repeats account selection and reloads the environment's catalog and realm-classified agent inventory. **Go back** returns to the complete catalog projection without rerunning create. When installation is confirmed but the agent listing failed, do not use either current-account claim above. Keep **{friendly product name} — Already installed**, replace the default product description with **Installation was confirmed in this environment, but a matching agent could not be verified because the agent list could not be loaded.**, and, after selection, say **This product is already installed, so setup cannot install another copy. The agent list could not be loaded, so setup cannot identify the existing agent automatically.** before presenting the same recovery choices.
+
+When installed state is not established, format the choice as **Create {friendly product name} {version}**. This label is an action, not a claim that no matching agent exists. Omit a blank version instead of showing an unresolved value. After the maker selects the choice, retain the exact `packageId`, backend `name`, catalog `version`, and friendly product name, then begin **Create**. Retain the friendly product name for the final exact-agent link.
+
+Unknown catalog products and agents without a registry match remain unclassified. Render an unknown catalog row as a **Create** choice using its exact service-provided name and do not correlate it with agents by display name.
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
@@ -69,28 +119,11 @@ If `catalogWarnings` is non-empty, tell the maker the product listing was incomp
 
 If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, say that entitled products could not be loaded and nothing was changed, then present **Retry setup with another target** from `da-environment-target.md`.
 
-## Confirm the exact product and target
-
-After the maker selects one product from the interactive list, confirm the target Power Platform environment. Do not preselect a choice. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
-
 Read `src/reference/da-product-setup-registry.json` for setup requirements. A registry-declared connection is evaluated after creation and attachment; do not inspect or require a physical connection before dispatching create. Products without a declared requirement proceed without a connection gate.
-
-Substitute the selected picker label and show:
-
-> Create a new ESS agent in **{friendly environment name or Selected Power Platform environment}** from **{selected product label}**?
-
-Offer exactly:
-
-- **Create agent**
-- **Choose a different product**
-- **Go back**
-
-Do not preselect **Create agent**. After the maker explicitly selects **Create agent** for the displayed product and target, begin the create operation immediately; the confirmation surface already communicates the selected product and environment.
-For **Choose a different product**, return to the valid rows from the latest successful catalog result and continue through this confirmation surface for the new selection. For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface.
 
 ## Create
 
-Only after the maker selects **Create agent**, run:
+Only after the maker selects a **Create {friendly product name} {version}** catalog choice, generate a new client request UUID and run:
 
 ```text
 python scripts/setup_mos_starter.py create \
@@ -102,7 +135,7 @@ python scripts/setup_mos_starter.py create \
   --client-request-id "{NEW_CLIENT_REQUEST_UUID}"
 ```
 
-Generate a new UUID only after this confirmation and retain it as the identity of this create request. Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. Reusing the same request UUID means the same mutation and must not dispatch another POST.
+Retain the UUID as the identity of this create request. Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. Reusing the same request UUID means the same mutation and must not dispatch another POST.
 
 ## Interpret the response
 
@@ -114,19 +147,15 @@ The response, outcome label, fuse disposition, HTTP status, and request details 
 
 When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
 
-The successful native create result is authoritative identity evidence. Run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
+The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
 
-When the annotations report `outcome: collision`, do not infer which visible agent corresponds to the package. List visible Dev agents in the same environment through `setup_existing_da.py list-agents`, then offer exactly:
+When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list visible Dev agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches for the collided product. Never offer unrelated listed agents.
 
-- **Choose an existing agent in this environment**
-- **Choose a different catalog product**
-- **Go back**
+When exactly one Dev identity matches, ask **Use {agent display name}?** and offer exactly **Use this agent** and **Go back**. Do not add a separate choose-from-existing step. When multiple Dev identities match, ask **Choose the installed {friendly product name} agent.**, offer only those matching identities plus **Go back**, and render every agent option as its exact service-provided display name only. Leave every collision choice initially unset and disable free-form input. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either panel.
 
-Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
+For a selected matching identity, run `setup_existing_da.py validate-agent` only when the list result does not already establish its exact schema, then run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` and continue through `da-existing-dev.md`. If no Dev identity matches, use the installed-without-matching-Dev explanation and **Use an agent URL**, **Try with a different user**, and **Go back** recovery above instead of presenting other agents. This path does not replace an agent.
 
-For **Choose a different catalog product**, present the valid rows from the latest successful catalog result and let the maker select another exact product. Continue through **Confirm the exact product and target** for that selection. A new create request becomes available only after the maker confirms the new product and uses a new client request UUID.
-
-For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Preserve the collided create result and its client request UUID; do not repeat that create request.
+For **Go back**, preserve the collided create result and its client request UUID, then return to the complete action-oriented catalog composed from every selectable row in the latest successful catalog result and the latest agent list. Any later **Create** selection uses a new client request UUID; never repeat the collided request.
 
 ## Enable ALM
 
