@@ -2234,19 +2234,23 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
         print(f"  [WARN]  Ready with warnings -- {result.warnings} "
               "warning(s) to verify")
     else:
-        # Headline counts only the blocking items (failures + errors).
-        # Warnings live in the manual-verification section and aren't
-        # blockers, so counting them here would overstate the action
-        # load.
-        failing = result.failed + result.errors
+        # Headline counts the blocking items: failures, errors, and
+        # blocked essential capabilities. A blocked row is a hard release
+        # gate (runner scores the run NOT_READY), so omitting it made a
+        # blocked-only run print "0 issues need attention" while still
+        # exiting non-zero. Warnings stay out — they live in the
+        # manual-verification section and aren't blockers.
+        failing = result.failed + result.errors + result.blocked
         word = "issue" if failing == 1 else "issues"
-        print(f"  [FAIL]  Not ready -- {failing} {word} need "
+        verb = "needs" if failing == 1 else "need"
+        print(f"  [FAIL]  Not ready -- {failing} {word} {verb} "
               "attention")
 
     print()
     # Counts strip — every status in one line so the operator can
     # cross-reference with the detail sections below.
     print(f"  Failed: {result.failed}   Errored: {result.errors}   "
+          f"Blocked: {result.blocked}   "
           f"Warnings: {result.warnings}   Manual: {result.manual}   "
           f"NotConfigured: {result.not_configured}   "
           f"Skipped: {result.skipped}   Passed: {result.passed}")
@@ -2331,6 +2335,7 @@ def _status_tag(status: str) -> str:
     """
     return {
         Status.FAILED.value: "[FAIL]",
+        Status.BLOCKED.value: "[BLK ]",
         Status.ERROR.value: "[ERR ]",
         Status.WARNING.value: "[WARN]",
         Status.MANUAL.value: "[MAN ]",

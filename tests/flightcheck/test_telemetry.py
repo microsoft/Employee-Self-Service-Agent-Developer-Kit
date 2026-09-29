@@ -62,6 +62,7 @@ class FakeRun:
     manual: int = 0
     skipped: int = 0
     errors: int = 0
+    blocked: int = 0
 
 
 @pytest.fixture(autouse=True)
@@ -378,19 +379,37 @@ def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
 
 
 def test_derive_run_outcome_precedence():
-    """errored > failed > warnings > ready (ADO 7590584)."""
-    # errored wins even when failures/warnings are also present.
+    """errored > failed > blocked > warnings > ready (ADO 7590584, 7943641)."""
+    # errored wins even when failures/blocked/warnings are also present.
     assert telemetry.derive_run_outcome(
-        FakeRun(errors=1, failed=3, warnings=2)) == "Blocked (check errored)"
-    # failed wins over warnings when nothing errored.
+        FakeRun(errors=1, failed=3, blocked=2, warnings=2)) == "Blocked (check errored)"
+    # failed wins over blocked/warnings when nothing errored.
     assert telemetry.derive_run_outcome(
-        FakeRun(errors=0, failed=1, warnings=5)) == "Failed"
+        FakeRun(errors=0, failed=1, blocked=2, warnings=5)) == "Failed"
+    # blocked wins over warnings when nothing errored/failed. A blocked
+    # essential capability is a release gate, not an advisory warning.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, blocked=1, warnings=5)) == "Blocked (gate)"
     # warnings-only run.
     assert telemetry.derive_run_outcome(
         FakeRun(errors=0, failed=0, warnings=1)) == "Ready with warnings"
     # clean run.
     assert telemetry.derive_run_outcome(
         FakeRun(errors=0, failed=0, warnings=0)) == "Ready"
+
+
+def test_derive_run_outcome_blocked_only_is_not_ready():
+    """Regression (ADO 7943641): a blocked-only run must NOT bucket as Ready.
+
+    Before the fix ``derive_run_outcome`` had no blocked branch, so a run
+    whose only non-passing rows were BLOCKED fell through to
+    RUN_OUTCOME_READY — the donut said "Ready" for a run the runner scores
+    NOT_READY with exit code 1.
+    """
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, blocked=1, warnings=0)
+    ) == telemetry.RUN_OUTCOME_BLOCKED
+    assert telemetry.RUN_OUTCOME_BLOCKED != telemetry.RUN_OUTCOME_READY
 
 
 def test_check_events_never_leak_free_text():
@@ -588,6 +607,16 @@ def test_emit_noop_when_disabled(monkeypatch, tmp_path):
     (" topics ", "workday"),        # whitespace-tolerant
     ("servicenow", "servicenow"),
     ("ServiceNow", "servicenow"),
+    # ADO 7943641 carry-over — profile and single-checkpoint runs pass a
+    # wrapped scope ("profile:<name>" / "checkpoint:<id>"). Before the fix
+    # these unwrapped to nothing and every DA profile run emitted "".
+    ("profile:workday-da:final", "workday"),
+    ("profile:workday-da:setup-readiness", "workday"),
+    ("profile:workday-legacy:diagnostic", "workday"),
+    ("PROFILE:Workday-DA:Final", "workday"),   # case-insensitive
+    ("checkpoint:WD-CONN-012", "workday"),
+    ("checkpoint:wd-wf-001", "workday"),
+    ("checkpoint:SN-CONN-001", "servicenow"),
 ])
 def test_derive_connector_from_scope_known(scope, expected):
     assert telemetry.derive_connector_from_scope(scope) == expected
@@ -601,6 +630,11 @@ def test_derive_connector_from_scope_known(scope, expected):
     "local",
     "publishing",
     "entraapp",
+    # Wrapped non-connector scopes must stay "" too: a Dataverse or
+    # environment checkpoint/profile is not connector-scoped.
+    "checkpoint:DV-CONN-001",
+    "checkpoint:ENV-001",
+    "profile:dataverse-ready",
     "",
     None,
 ])
