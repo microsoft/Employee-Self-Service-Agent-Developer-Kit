@@ -1955,7 +1955,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
         results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-ENV-002", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="Workday environment variables",
+            description="Workday RaaS report environment variables (Dataverse query)",
             result=f"Unable to check: {e}",
         ))
 
