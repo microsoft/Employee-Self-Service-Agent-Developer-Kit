@@ -224,8 +224,10 @@ under `roleAttestations.{requiredRole}` and write the lifecycle state before
 executing the action. Non-mutating actions do not run a role gate.
 
 **If the gate returns `"stop"`:** stop here. Leave the phase `in-progress` in
-the state file (write it now) so the next invocation resumes at this same
-gate rather than re-showing the whole plan.
+the state file, clear its `actionApplied`, `lastActionAt`, and
+`rollbackPushGlob`, and write it now so the next invocation resumes at this
+same gate rather than re-showing the whole plan. Keep valid lifecycle-scoped
+role attestations unchanged.
 
 **If the gate returns `"pass"` (or the action is non-mutating):** if the phase
 names a `rollbackLabel`, save a checkpoint first:
@@ -257,11 +259,13 @@ its own Message blocks and tool calls and must return an explicit
   file immediately. This does not complete the phase; continue to its
   checkpoints.
 - **`"cancelled"`** — the user declined before mutation. Keep
-  `actionApplied = false`, leave the phase `in-progress`, write the state
-  file, and stop. Do not run the phase checkpoints.
+  `actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, leave
+  the phase `in-progress`, write the state file, and stop. Do not run the phase
+  checkpoints.
 
 Any missing, unknown, or failure result is not success: keep
-`actionApplied = false`, report the action failure, and stop.
+`actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, report
+the action failure, write the state file, and stop.
 
 ### L.4b — Run the phase's checkpoints
 

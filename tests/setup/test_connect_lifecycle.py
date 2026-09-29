@@ -65,6 +65,13 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "different provider or agent slug" in runner
     assert "missing `roleAttestations` object" in runner
     assert "Do not infer an attestation from `attested`" in runner
+    assert (
+        "clear its `actionApplied`, `lastActionAt`, and\n"
+        "`rollbackPushGlob`"
+        in runner
+    )
+    assert "remove `lastActionAt` and `rollbackPushGlob`" in runner
+    assert "Keep valid lifecycle-scoped\nrole attestations unchanged" in runner
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
 
