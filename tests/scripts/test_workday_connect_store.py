@@ -21,7 +21,10 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 5
+    assert state["schemaVersion"] == 6
+    assert state["lifecycle"]["retryCount"] == 0
+    assert state["lifecycle"]["resumeCount"] == 0
+    assert state["lifecycle"]["journal"] == []
     assert _config_path(tmp_path).exists()
     assert not (tmp_path / ".local/connect/workday-da/tasks.md").exists()
     assert not (tmp_path / ".local/setup/workday-da/tasks.md").exists()
@@ -61,7 +64,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v5.json").exists()
+    assert path.with_name("config.pre-v6.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -102,6 +105,441 @@ def test_future_schema_is_rejected_without_rewriting_state(
         store_module.WorkdayConnectStore(tmp_path).initialize()
 
     assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 5
+    state.pop("lifecycle")
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 6
+    assert upgraded["lifecycle"]["correlationId"]
+    assert upgraded["lifecycle"]["journal"] == []
+    assert upgraded["migration"]["source"] == "workday-connect-state-v5"
+    assert path.with_name("config.pre-v6.json").exists()
+
+
+def test_early_v6_events_are_normalized_without_losing_history(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["lifecycle"].pop("phaseDurationsMs")
+    state["lifecycle"].pop("activePhaseStartedAt")
+    state["lifecycle"].pop("eventMarkers")
+    state["lifecycle"]["journal"] = [
+        {
+            "sequence": 1,
+            "event": "blocked",
+            "phase": "preflight",
+            "outcome": "blocked",
+            "blockerCategory": "workdayconnectpreflighterror",
+            "durationMs": 0,
+            "retryCount": 0,
+            "resumeCount": 0,
+            "timestamp": "2026-09-28T00:00:00Z",
+        }
+    ]
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    normalized = store_module.WorkdayConnectStore(tmp_path).initialize()
+    event = normalized["lifecycle"]["journal"][0]
+
+    assert event["correlationId"] == normalized["lifecycle"]["correlationId"]
+    assert event["blockerCategory"] == "platform"
+    assert event["remediationId"] == ""
+    assert event["timestamp"] == "2026-09-28T00:00:00Z"
+    assert normalized["lifecycle"]["eventMarkers"] == [
+        "blocked|preflight"
+    ]
+
+
+def test_invalid_early_v6_normalization_does_not_rewrite_state(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["lifecycle"]["journal"] = [
+        {
+            "sequence": 1,
+            "event": "blocked",
+            "phase": "preflight",
+            "outcome": "blocked",
+            "blockerCategory": "legacy-platform-error",
+            "durationMs": -1,
+            "retryCount": 0,
+            "resumeCount": 0,
+            "timestamp": "2026-09-28T00:00:00Z",
+        }
+    ]
+    original = json.dumps(state)
+    path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="durationMs must be non-negative",
+    ):
+        store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_phase_transitions_append_events_and_publish_after_persistence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    published = []
+
+    def sink(state, event):
+        persisted = json.loads(_config_path(tmp_path).read_text(encoding="utf-8"))
+        persisted_event = next(
+            record
+            for record in persisted["lifecycle"]["journal"]
+            if record["sequence"] == event["sequence"]
+        )
+        assert persisted_event == event
+        published.append((state, event))
+
+    store = store_module.WorkdayConnectStore(tmp_path, event_sink=sink)
+    store.initialize()
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+    store.set_phase_status(
+        "preflight",
+        "blocked",
+        blocker={
+            "operation": "preflight",
+            "errorType": "WorkdayConnectPreflightError",
+            "message": "Customer-specific URL must not enter the journal.",
+        },
+    )
+    store.complete_action(
+        "preflight",
+        "verify-package",
+        evidence={"outcome": "verified"},
+    )
+    state = store.set_phase_status("preflight", "complete")
+
+    events = state["lifecycle"]["journal"]
+    assert [event["event"] for event in events] == [
+        "phase-started",
+        "phase-paused",
+        "blocked",
+        "phase-resumed",
+        "phase-completed",
+    ]
+    assert events[2]["blockerCategory"] == "platform"
+    assert "message" not in events[2]
+    assert events[-1]["durationMs"] >= events[1]["durationMs"]
+    assert {
+        event["correlationId"] for event in events
+    } == {state["lifecycle"]["correlationId"]}
+    assert state["lifecycle"]["retryCount"] == 1
+    assert state["lifecycle"]["resumeCount"] == 1
+    assert len(published) == 5
+
+
+def test_target_change_rotates_correlation_and_abandons_old_run(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    original = store.initialize()["lifecycle"]["correlationId"]
+    store.record_lifecycle_event("invoked")
+    store.merge_section("scope", {"environmentId": "environment-one"})
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+
+    state = store.merge_section(
+        "scope",
+        {"environmentId": "environment-two"},
+    )
+
+    assert state["lifecycle"]["correlationId"] != original
+    assert state["lifecycle"]["retryCount"] == 0
+    assert state["lifecycle"]["resumeCount"] == 0
+    assert state["phases"]["preflight"]["status"] == "pending"
+    abandoned = state["lifecycle"]["journal"][-2]
+    assert abandoned["event"] == "abandoned"
+    assert abandoned["outcome"] == "cancelled"
+    assert abandoned["phase"] == "preflight"
+    assert abandoned["correlationId"] == original
+    invoked = state["lifecycle"]["journal"][-1]
+    assert invoked["event"] == "invoked"
+    assert invoked["correlationId"] == state["lifecycle"]["correlationId"]
+
+
+def test_slug_only_target_change_rotates_lifecycle(tmp_path: Path) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.record_lifecycle_event("invoked", once_per_lifecycle=True)
+    store.merge_section(
+        "scope",
+        {
+            "agent": {
+                "slug": "agent-a",
+                "botId": "7f7c8f9c-1234-4abc-9def-0123456789ab",
+                "schemaName": "contoso.agent",
+            }
+        },
+    )
+    original = store.load()["lifecycle"]["correlationId"]
+
+    state = store.merge_section(
+        "scope",
+        {
+            "agent": {
+                "slug": "agent-b",
+                "botId": "7f7c8f9c-1234-4abc-9def-0123456789ab",
+                "schemaName": "contoso.agent",
+            }
+        },
+    )
+
+    assert state["lifecycle"]["correlationId"] != original
+    assert state["lifecycle"]["journal"][-2]["event"] == "abandoned"
+    assert state["lifecycle"]["journal"][-1]["event"] == "invoked"
+
+
+def test_operator_attestation_is_once_per_lifecycle(tmp_path: Path) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    operator = {"username": "maker@example.test"}
+
+    store.merge_section("operators", {"powerPlatformMaker": operator})
+    state = store.merge_section(
+        "operators",
+        {"powerPlatformMaker": operator},
+    )
+
+    matching = [
+        event
+        for event in state["lifecycle"]["journal"]
+        if event["event"] == "roles-attested"
+    ]
+    assert len(matching) == 1
+    assert matching[0]["phase"] == "preflight"
+    assert matching[0]["outcome"] == "success"
+
+
+def test_lifecycle_journal_is_bounded(tmp_path: Path) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for _ in range(model.LIFECYCLE_JOURNAL_MAX_EVENTS + 5):
+        store.record_lifecycle_event("invoked", phase="preflight")
+
+    state = store.load()
+    journal = state["lifecycle"]["journal"]
+    assert len(journal) == model.LIFECYCLE_JOURNAL_MAX_EVENTS
+    assert journal[0]["sequence"] == 6
+    assert journal[-1]["sequence"] == model.LIFECYCLE_JOURNAL_MAX_EVENTS + 5
+
+
+def test_lifecycle_aggregates_survive_journal_eviction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    timestamps = iter(
+        [
+            "2026-09-29T00:00:00Z",
+            "2026-09-29T00:00:01Z",
+            *[
+                f"2026-09-29T00:00:{second:02d}Z"
+                for second in range(2, 60)
+            ],
+        ]
+    )
+    last = "2026-09-29T00:00:59Z"
+
+    def fake_now():
+        nonlocal last
+        try:
+            last = next(timestamps)
+        except StopIteration:
+            pass
+        return last
+
+    monkeypatch.setattr(store_module, "utc_now", fake_now)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.set_phase_status("preflight", "active")
+    store.set_phase_status(
+        "preflight",
+        "blocked",
+        blocker={
+            "operation": "preflight",
+            "errorType": "timeout",
+            "message": "Timed out",
+        },
+    )
+    for _ in range(model.LIFECYCLE_JOURNAL_MAX_EVENTS + 5):
+        store.record_lifecycle_event("plan-generated")
+    state = store.merge_section(
+        "operators",
+        {"powerPlatformMaker": {"username": "maker@example.test"}},
+    )
+    state = store.merge_section(
+        "operators",
+        {"powerPlatformMaker": {"username": "maker@example.test"}},
+    )
+
+    assert state["lifecycle"]["phaseDurationsMs"]["preflight"] >= 1000
+    assert len(
+        [
+            event
+            for event in state["lifecycle"]["journal"]
+            if event["event"] == "roles-attested"
+        ]
+    ) == 1
+
+
+def test_telemetry_sink_failure_never_breaks_state_transition(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    def failing_sink(_state, _event):
+        raise RuntimeError("collector unavailable")
+
+    store = store_module.WorkdayConnectStore(
+        tmp_path,
+        event_sink=failing_sink,
+    )
+    store.initialize()
+
+    state = store.record_lifecycle_event("invoked", phase="preflight")
+
+    assert state["lifecycle"]["journal"][-1]["event"] == "invoked"
+
+
+def test_naive_lifecycle_timestamp_is_rejected_before_transition(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["lifecycle"]["activePhaseStartedAt"]["preflight"] = (
+        "2026-09-29T12:00:00"
+    )
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="must include a timezone",
+    ):
+        store_module.WorkdayConnectStore(tmp_path).initialize()
+
+
+def test_first_attempt_failure_records_start_pause_and_block(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    state = store.set_phase_status(
+        "preflight",
+        "blocked",
+        blocker={
+            "operation": "preflight",
+            "errorType": "WorkdayConnectPreflightError",
+            "message": "Failed before evidence was recorded.",
+        },
+    )
+
+    assert [
+        event["event"] for event in state["lifecycle"]["journal"]
+    ] == ["phase-started", "phase-paused", "blocked"]
+
+
+def test_employee_validation_blocker_retains_bounded_remediation_id(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    state = store.set_phase_status(
+        "employee-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation-failure",
+            "errorType": "employee-context",
+            "message": "Canonical remediation",
+            "remediationId": "WD-E2E-004",
+        },
+    )
+
+    blocked = state["lifecycle"]["journal"][-1]
+    assert blocked["blockerCategory"] == "validation"
+    assert blocked["remediationId"] == "WD-E2E-004"
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected"),
+    [
+        ("TimeoutError", "timeout"),
+        ("UnauthorizedOperation", "permissions"),
+        ("SignInLoop", "auth"),
+        ("NetworkEndpointError", "connection"),
+        ("EmployeeContextValidation", "validation"),
+        ("StateSchemaError", "state"),
+        ("DataversePreflightError", "platform"),
+        ("RuntimeFlowError", "runtime"),
+        ("UnclassifiedFailure", "unknown"),
+    ],
+)
+def test_blocker_category_uses_bounded_taxonomy(
+    error_type: str,
+    expected: str,
+) -> None:
+    import workday_connect_store as store_module
+
+    assert (
+        store_module._blocker_category({"errorType": error_type})
+        == expected
+    )
 
 
 def test_legacy_ready_state_reopens_runtime_for_live_topic_proof(
@@ -516,7 +954,7 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
 
@@ -552,7 +990,7 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["status"] == "in-progress"
     assert upgraded["phases"]["runtime"]["status"] == "active"
     assert upgraded["phases"]["employee-validation"]["status"] == "pending"
@@ -611,13 +1049,13 @@ def test_v4_migration_captures_complete_tenant_foundation(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 5
+    assert upgraded["schemaVersion"] == 6
     assert upgraded["migration"]["source"] == "workday-connect-state-v4"
     assert upgraded["tenantFoundation"]["scope"] == {
         "entraTenantId": "tenant-id",
         "workdayTenant": "contoso",
     }
-    assert path.with_name("config.pre-v5.json").exists()
+    assert path.with_name("config.pre-v6.json").exists()
 
 
 def test_matching_foundation_restores_workday_after_entra_reread(
