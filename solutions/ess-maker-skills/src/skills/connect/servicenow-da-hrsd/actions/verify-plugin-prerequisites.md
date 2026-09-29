@@ -4,6 +4,13 @@ Treat this as one complete high-level setup step. Give the Maker the full
 handoff below, then ask one completion question for the whole step. Do not
 pause between the individual prerequisite checks.
 
+Read `adminSetup.phaseHandoffs.plugin-prerequisites` first. If it is already
+`completed` or `reused` and stored checkpoint results are empty or all in the
+phase's `completionStatuses`, do not ask again; return
+`ACTION_RESULT = "recorded"` and let the phase checkpoint reverify it. A prior
+result outside `completionStatuses` requires one new complete phase handoff,
+not a checklist-item question.
+
 ## Goal and owner
 
 - **Goal:** confirm this HRSD instance has both its HR data foundation and the

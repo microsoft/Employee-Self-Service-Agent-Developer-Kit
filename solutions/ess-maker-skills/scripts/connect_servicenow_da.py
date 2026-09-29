@@ -864,14 +864,40 @@ def _validate_state_identity(
     state: dict[str, Any],
 ) -> None:
     expected = {
+        "provider": PROVIDER_KEY,
+        "profile": PROFILE_KEY,
+        "agentSlug": _agent_slug(context),
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
     }
     for key, value in expected.items():
         recorded = state.get(key)
-        if recorded and str(recorded).casefold() != str(value).casefold():
+        if (
+            not isinstance(recorded, str)
+            or not recorded
+            or recorded.casefold() != str(value).casefold()
+        ):
             raise ServiceNowConnectError(
                 f"ServiceNow lifecycle {key} does not match the active agent."
+            )
+
+
+def _validate_legacy_state_identity(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    for key, value in {
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+    }.items():
+        recorded = state.get(key)
+        if (
+            not isinstance(recorded, str)
+            or not recorded
+            or recorded.casefold() != str(value).casefold()
+        ):
+            raise ServiceNowConnectError(
+                f"Legacy ServiceNow state {key} does not match the active agent."
             )
 
 
@@ -978,7 +1004,7 @@ def _migrate_legacy_state(
     if not legacy_path.exists():
         return state
     legacy = _load_json(legacy_path)
-    _validate_state_identity(context, legacy)
+    _validate_legacy_state_identity(context, legacy)
     digest = _canonical_json_hash(legacy)
     migration = state.setdefault("migration", {})
     if migration.get("legacySha256") == digest:
@@ -1073,6 +1099,15 @@ def _load_lifecycle_state(
     path = _lifecycle_state_path(context)
     if path.exists():
         state = _load_json(path)
+        version = state.get("schemaVersion")
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle schemaVersion must be an integer."
+            )
+        if version > LIFECYCLE_SCHEMA_VERSION:
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle state was written by a newer kit version."
+            )
         _validate_state_identity(context, state)
         state = _migrate_lifecycle_schema(context, state)
     elif components is not None:
@@ -1311,19 +1346,23 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         connection_summary(record)
         for record in _connectivity_client(context).list_connections()
     ]
-    user_login_connections = [
+    user_login_connections = sorted(
+        [
         connection
         for connection in connections
         if connection.get("authMode") == AUTH_MODE
-    ]
+        ],
+        key=lambda connection: (
+            str(connection.get("connectionId") or ""),
+            str(connection.get("displayName") or ""),
+        ),
+    )
     handoffs = setup["phaseHandoffs"]
     app_record = handoffs.get("entra-registration")
     client_id = None
     if isinstance(app_record, dict):
         client_id = (app_record.get("evidence") or {}).get("clientId")
-    discovery = {
-        "source": "connectivity-readonly",
-        "observedAt": _utc_now(),
+    stable_discovery = {
         "scope": setup["scope"],
         "authMode": setup["authMode"],
         "instanceName": setup["preflight"].get("instanceName"),
@@ -1331,11 +1370,14 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
             setup["scope"],
             setup["authMode"],
         ),
-        "entraClientId": client_id,
         "connectionCandidates": user_login_connections,
-        "connectionCandidateSetHash": _canonical_json_hash(
-            user_login_connections
-        ),
+    }
+    discovery = {
+        "source": "connectivity-readonly",
+        "observedAt": _utc_now(),
+        **stable_discovery,
+        "entraClientId": client_id,
+        "fingerprint": _canonical_json_hash(stable_discovery),
         "limitations": [
             "ServiceNow plugin and OIDC security objects require admin "
             "confirmation when no supported read-only API is available.",
@@ -1366,7 +1408,7 @@ def record_reuse_decision(
         "decision": decision,
         "approvedBy": "maker-attested",
         "approvedAt": _utc_now(),
-        "discoveryHash": _canonical_json_hash(discovery),
+        "discoveryFingerprint": discovery.get("fingerprint"),
     }
     preflight["reuseDecision"] = record
     setup = _admin_setup(state)
@@ -1377,7 +1419,7 @@ def record_reuse_decision(
             "scenario": preflight.get("scenario"),
             "instanceName": preflight.get("instanceName"),
             "decision": decision,
-            "discoveryHash": record["discoveryHash"],
+            "discoveryFingerprint": record["discoveryFingerprint"],
             "recordedAt": record["approvedAt"],
         },
     }

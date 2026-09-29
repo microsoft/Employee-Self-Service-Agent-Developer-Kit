@@ -992,14 +992,27 @@ def test_preflight_paths_require_discovery_and_explicit_reuse(
         _context(),
         decision="reuse-discovered",
     )
+    refreshed = snow.inspect_admin_setup(_context())
+    snow.record_admin_phase(
+        _context(),
+        phase="entra-registration",
+        status="completed",
+        client_id=APP_CLIENT_ID,
+    )
+    with_client_id = snow.inspect_admin_setup(_context())
 
     assert discovery["connectionCandidates"][0]["status"] == "Connected"
+    assert refreshed["fingerprint"] == discovery["fingerprint"]
+    assert with_client_id["fingerprint"] == discovery["fingerprint"]
+    assert with_client_id["entraClientId"] == APP_CLIENT_ID
     assert decision["decision"] == "reuse-discovered"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["adminSetup"]["preflight"]["scenario"] == scenario
     assert (
-        state["adminSetup"]["preflight"]["reuseDecision"]["discoveryHash"]
-        == snow._canonical_json_hash(discovery)
+        state["adminSetup"]["preflight"]["reuseDecision"][
+            "discoveryFingerprint"
+        ]
+        == discovery["fingerprint"]
     )
 
 
@@ -1128,6 +1141,49 @@ def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
     assert state["transactions"]["topics"]["operation"]["status"] == "committed"
     assert state["migration"]["schemaV3"]["reuseApprovalInferred"] is False
     assert first_bytes == state_path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provider", "workday"),
+        ("profile", "itsm"),
+        ("agentSlug", "other-agent"),
+        ("provider", None),
+    ],
+)
+def test_v2_migration_rejects_canonical_identity_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    field: str,
+    value: str | None,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state = {
+        "schemaVersion": 2,
+        "provider": snow.PROVIDER_KEY,
+        "profile": "hrsd",
+        "agentSlug": AGENT_SLUG,
+        "agentId": AGENT_ID,
+        "environmentId": ENVIRONMENT_ID,
+        "phases": {},
+        "evidence": {"mustSurvive": True},
+        "transactions": {"topics": {}},
+        "migration": {},
+    }
+    if value is None:
+        state.pop(field)
+    else:
+        state[field] = value
+    original = json.dumps(state)
+    state_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(snow.ServiceNowConnectError, match=field):
+        snow._load_lifecycle_state(_context())
+
+    assert state_path.read_text(encoding="utf-8") == original
 
 
 def test_future_lifecycle_schema_fails_without_rewrite(

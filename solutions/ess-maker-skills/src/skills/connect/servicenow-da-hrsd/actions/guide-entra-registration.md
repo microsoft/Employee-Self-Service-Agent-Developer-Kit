@@ -10,18 +10,30 @@ Graph `POST`/`PATCH`, admin-consent mutation, or any equivalent write
 operation. Never request or persist a client secret, certificate, password,
 token, or PFX.
 
+Read `adminSetup.phaseHandoffs.entra-registration` first. If it is already
+`completed` or `reused` and stored checkpoint results are empty or all in the
+phase's `completionStatuses`, do not ask again; return
+`ACTION_RESULT = "recorded"` and let all six Graph checkpoints reverify the
+current app. A prior `Failed`/`Error` or any other result outside
+`completionStatuses` requires one new complete Entra handoff so the Maker can
+return corrected bundled evidence.
+
 ## Goal and owner
 
 - **Goal:** configure one single-tenant App A so the Power Platform ServiceNow
   connector can request delegated user tokens accepted by ServiceNow.
-- **Owner role:** Global Administrator or Cloud App Administrator, with an
-  appropriately authorized admin granting tenant-wide consent.
+- **Owner role:** Application Administrator, Cloud Application Administrator,
+  Privileged Role Administrator, or Global Administrator. An application
+  owner may collaborate on app settings, but the phase still requires an
+  appropriately authorized admin to grant tenant-wide consent.
 
 ## Complete admin instructions
 
 1. In Microsoft Entra admin center, open **Identity -> Applications -> App
    registrations -> New registration**. Create or identify one single-tenant
-   app; no redirect URI is required.
+   app; no redirect URI is required. Follow PR #217's deterministic display
+   name `ESS Copilot - ServiceNow OIDC (<instance-name>)` so an existing app
+   can be found by persisted app ID first and display name second.
 2. In **Token configuration -> Add optional claim -> Access**, add `email`
    and `upn`.
 3. In **Expose an API**, set Application ID URI to

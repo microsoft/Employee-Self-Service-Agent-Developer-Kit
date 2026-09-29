@@ -10,6 +10,14 @@ pause boundary.
 - **Completion evidence:** confirmed ServiceNow instance URL, existing-setup
   scenario, and one explicit reuse-versus-configure-missing decision.
 
+Read `adminSetup.phaseHandoffs.preflight` first. If it is already
+`completed` or `reused`, refresh `inspect-admin-setup`. When the stored phase
+checkpoint results are empty or all still in this phase's
+`completionStatuses`, do not ask again; return
+`ACTION_RESULT = "recorded"` so the runner can reverify. If a prior result is
+outside `completionStatuses`, present the complete preflight/reuse step again
+with one new bundled pause.
+
 Run:
 
 ```text

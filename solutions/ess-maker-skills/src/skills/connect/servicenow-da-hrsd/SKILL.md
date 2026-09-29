@@ -2,7 +2,9 @@
 
 This provider uses the shared connect lifecycle. It supports only the exact
 editable Employee Self-Service HR agent and does not use the retained Preview
-ServiceNow state or steps.
+ServiceNow state or steps. One lifecycle instance serves the current active
+HR agent/profile only; it does not combine HRSD and ITSM into one state file.
+ITSM remains a separate provider/PR layer.
 
 The lifecycle is Actions-only and supports only Microsoft Entra ID User Login
 (`entraIDUserLogin`). Knowledge/Graph Connector retrieval, certificate/App B,
@@ -11,15 +13,17 @@ URL setup are out of scope. Admin prerequisites are always guided: the skill
 may discover and verify with read-only APIs, but never creates or patches an
 Entra application or ServiceNow OIDC/security object.
 
-Use Draft PR #217 (`users/mukesh4139/servicenow-connect-adk`) as the
-source-of-truth for the end-to-end admin runbook structure, delegated handoff,
-resume, and evidence patterns. Use current Microsoft Learn ServiceNow
-connector documentation to validate external field semantics, IDs,
-permissions, and auth values. If those sources conflict in a way that changes
-user steps, required artifacts, admin roles, auth requirements, or acceptance
-criteria, stop and ask the user rather than silently diverging or mechanically
-copying Preview-era behavior. The explicit DA-GA scope exclusions above are
-already approved deviations.
+Strictly follow Draft PR #217
+(`users/mukesh4139/servicenow-connect-adk`) as the source-of-truth for admin
+steps, requirements, runbook structure, delegated handoff, resume, and
+evidence patterns unless the user approves a deviation. Microsoft Learn is a
+secondary reference that can explain fields or flag a possible external
+change; it never overrides PR #217 by itself. If Learn or current runtime
+evidence suggests PR #217 is stale in a way that changes user steps, required
+artifacts, admin roles, auth requirements, or acceptance criteria, stop and
+report the old PR behavior, current evidence, proposed deviation, and impact
+for a user decision. The explicit DA-GA scope exclusions above and the
+`email`/`upn` optional-claim requirement are already approved decisions.
 
 Resolve `AGENT_SLUG` from `.local/config.json` (`activeAgent`, falling back to
 `agent.slug`). Then read `src/skills/connect/shared/lifecycle-runner.md` and

@@ -7,6 +7,13 @@ elevation, provider registration, metadata, claim mapping, and user checks.
 
 Never create or patch ServiceNow security objects.
 
+Read `adminSetup.phaseHandoffs.servicenow-oidc` first. If it is already
+`completed` or `reused` and stored checkpoint results are empty or all in the
+phase's `completionStatuses`, do not ask again; return
+`ACTION_RESULT = "recorded"` and let the structured checkpoint reverify the
+current bundled evidence. A prior result outside `completionStatuses`
+requires one new complete OIDC handoff.
+
 ## Goal and owner
 
 - **Goal:** make ServiceNow trust App A's delegated user token and resolve the
@@ -26,7 +33,6 @@ Never create or patch ServiceNow security objects.
    - if the form requires **Client secret**, the connector does not use that
      value for this flow; the admin enters a tenant-approved placeholder
      locally and never returns or persists it;
-   - Scope Restriction = Broadly scoped;
    - entity Active.
 4. In **OAuth OIDC Provider Configuration**, set:
    - metadata URL =
@@ -40,7 +46,7 @@ Never create or patch ServiceNow security objects.
    match exactly.
 6. Open **All -> User Administration -> Users** and confirm a real signed-in
    test user has one matching Active record. Do not return the employee's
-   identifier to the skill.
+   identifier to the skill. Do not create a test user as part of this skill.
 
 Do not use a Graph Connector app-only OIDC configuration. Use the Application
 client ID, not the object ID, `api://` URI, connector app ID, secret, or

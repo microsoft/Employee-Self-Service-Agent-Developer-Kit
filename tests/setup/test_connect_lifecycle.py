@@ -132,7 +132,14 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "test",
     ]
     by_id = {phase["id"]: phase for phase in contract["phases"]}
-    assert by_id["credential"]["actionExecution"] == "every-invocation"
+    assert by_id["preflight"]["actionExecution"] == "every-invocation"
+    for phase_id in (
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+        "credential",
+    ):
+        assert by_id[phase_id]["actionExecution"] == "once"
     assert by_id["agent-connection"]["actionExecution"] == "every-invocation"
     assert by_id["parameter-sharing"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["actionExecution"] == "every-invocation"

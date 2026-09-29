@@ -3,6 +3,13 @@
 Treat physical connection setup as one complete high-level step with one pause
 boundary.
 
+Read `adminSetup.phaseHandoffs.credential` first. If it is already
+`completed` or `reused` and stored checkpoint results are empty or all in the
+phase's `completionStatuses`, do not ask again; return
+`ACTION_RESULT = "applied"` and let connector-scoped Direct A inventory
+reverify the exact current connection. A prior result outside
+`completionStatuses` requires one new complete physical-connection handoff.
+
 ## Goal and owner
 
 - **Goal:** create or explicitly reuse one exact Connected
@@ -37,6 +44,15 @@ Show the exact field table from the output:
 Guide the Maker/Admin through Copilot Studio connection creation and Entra
 sign-in. While the completion question is pending, do not return an action
 result. If they are not finished, return `ACTION_RESULT = "waiting"`.
+
+Microsoft Entra ID User Login connections are not shareable. This step proves
+only the current Maker's physical connection; do not describe it as a
+tenant-wide or shared credential.
+
+If sign-in fails with `Invalid redirect_uri`, do not add another normal-flow
+pause. As conditional remediation, copy the popup's `redirect_uri`, URL-decode
+it, have the ServiceNow Admin update the OIDC Application Registry Redirect
+URL to that exact value, and retry sign-in.
 
 Ask one completion question for the entire physical connection step. The Maker
 must return once with the non-secret connection display name and connection

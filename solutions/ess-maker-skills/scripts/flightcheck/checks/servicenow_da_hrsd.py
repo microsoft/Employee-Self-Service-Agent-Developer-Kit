@@ -337,7 +337,14 @@ def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
     elif not decision.get("decision"):
         status = Status.NOT_CONFIGURED.value
         result = "The Maker has not approved reuse or configuration of the gaps."
-    elif decision.get("discoveryHash") != _hash(discovery):
+    elif (
+        decision.get("decision") == "reuse-discovered"
+        and (
+            not discovery.get("fingerprint")
+            or decision.get("discoveryFingerprint")
+            != discovery.get("fingerprint")
+        )
+    ):
         status = Status.NOT_CONFIGURED.value
         result = "Remote discovery changed after the Maker's reuse decision."
     else:
@@ -691,6 +698,11 @@ def _entra_results(
             select="id,appId",
             raise_on_permission_error=True,
         )
+        graph_service_principals = graph.get_service_principals(
+            filter_expr=f"appId eq '{_MS_GRAPH_RESOURCE_APP_ID}'",
+            select="id,appId",
+            raise_on_permission_error=True,
+        )
         grants = (
             graph.get_all(
                 "/oauth2PermissionGrants",
@@ -725,28 +737,44 @@ def _entra_results(
             )
         )
         return results
+    required_scopes = {name.casefold() for name in _GRAPH_DELEGATED_SCOPE_IDS}
+    graph_resource_id = (
+        str(graph_service_principals[0].get("id") or "").casefold()
+        if graph_service_principals
+        else ""
+    )
+    graph_grants = [
+        grant
+        for grant in grants
+        if isinstance(grant, dict)
+        and str(grant.get("resourceId") or "").casefold()
+        == graph_resource_id
+    ]
     granted_scopes: set[str] = set()
-    for grant in grants:
-        if (
-            isinstance(grant, dict)
-            and grant.get("consentType") == "AllPrincipals"
-        ):
+    for grant in graph_grants:
+        if grant.get("consentType") == "AllPrincipals":
             granted_scopes.update(
                 str(grant.get("scope") or "").casefold().split()
             )
-    required_scopes = {name.casefold() for name in _GRAPH_DELEGATED_SCOPE_IDS}
     missing_consent = sorted(required_scopes - granted_scopes)
     results.append(
         programmatic(
             rows[5][0],
             rows[5][1],
-            bool(service_principals) and not missing_consent,
+            bool(service_principals)
+            and bool(graph_resource_id)
+            and not missing_consent,
             (
                 "Tenant-wide admin consent is missing for: "
                 + ", ".join(missing_consent)
                 + "."
-                if service_principals
-                else "The application service principal does not exist."
+                if service_principals and graph_resource_id
+                else (
+                    "The Microsoft Graph resource service principal does not "
+                    "exist."
+                    if service_principals
+                    else "The application service principal does not exist."
+                )
             ),
         )
     )

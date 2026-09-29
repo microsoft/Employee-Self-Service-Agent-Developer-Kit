@@ -26,7 +26,7 @@
       "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
-      "actionExecution": "every-invocation",
+      "actionExecution": "once",
       "mutates": false
     },
     {
@@ -42,7 +42,7 @@
       ],
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
-      "actionExecution": "every-invocation",
+      "actionExecution": "once",
       "mutates": false
     },
     {
@@ -51,7 +51,7 @@
       "checkpoints": ["SN-DA-HRSD-OIDC-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-servicenow-oidc.md",
-      "actionExecution": "every-invocation",
+      "actionExecution": "once",
       "mutates": false
     },
     {
@@ -60,7 +60,7 @@
       "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
-      "actionExecution": "every-invocation",
+      "actionExecution": "once",
       "mutates": false
     },
     {

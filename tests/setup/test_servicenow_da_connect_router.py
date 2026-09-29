@@ -75,10 +75,13 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "connect/shared/lifecycle-runner.md" in skill
     assert 'PROVIDER = "servicenow-da-hrsd"' in skill
     assert "topic mutation and publish require" in skill
-    assert "source-of-truth for the end-to-end admin runbook" in skill
-    assert "current Microsoft Learn ServiceNow" in skill
-    assert "connector documentation" in skill
-    assert "stop and ask the user rather than silently diverging" in skill
+    assert "source-of-truth for admin" in skill
+    assert "Microsoft Learn is a\nsecondary reference" in skill
+    assert "it never overrides PR #217 by itself" in skill
+    assert "old PR behavior, current evidence, proposed deviation" in skill
+    assert "`email`/`upn` optional-claim requirement" in skill
+    assert "current active\nHR agent/profile only" in skill
+    assert "ITSM remains a separate provider/PR layer" in skill
 
     actions = (
         _SOLUTION
@@ -126,11 +129,18 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "ITSM must not inherit" in plugins
     assert "Never run `az ad app create`" in entra
     assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra
+    assert "ESS Copilot - ServiceNow OIDC" in entra
+    assert "Application Administrator" in entra
+    assert "Cloud Application Administrator" in entra
+    assert "Privileged Role Administrator" in entra
+    assert "application\n  owner may collaborate" in entra
     assert "`Failed` or `Error`" in entra
     assert "cannot be overridden" in entra
     assert "upn" in oidc
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc
+    assert "Do not create a test user" in oidc
+    assert "Broadly scoped" not in oidc
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
@@ -146,3 +156,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-admin-operation" not in plugins + entra + oidc
     assert "one complete high-level step" in credential
     assert "one completion question" in credential
+    assert "not shareable" in credential
+    assert "Invalid redirect_uri" in credential
+    for action in (preflight, plugins, entra, oidc, credential):
+        assert "do not ask again" in action
+        assert "completionStatuses" in action

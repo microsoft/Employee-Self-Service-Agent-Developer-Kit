@@ -123,7 +123,11 @@ def _runner(components: dict):
     )
 
 
-def _graph_client(*, missing_claims: bool = False):
+def _graph_client(
+    *,
+    missing_claims: bool = False,
+    foreign_consent: bool = False,
+):
     require_validated_mock(graph_mock)
     application = graph_mock.application(
         app_id=APP_CLIENT_ID,
@@ -137,8 +141,18 @@ def _graph_client(*, missing_claims: bool = False):
         sp_id="00000000-0000-4000-8000-000000007777",
         application_template_id=None,
     )
+    graph_service_principal = graph_mock.service_principal(
+        app_id=graph_mock.MS_GRAPH_RESOURCE_APP_ID,
+        sp_id="00000000-0000-4000-8000-000000008888",
+        application_template_id=None,
+    )
     grant = graph_mock.oauth2_permission_grant(
         client_id=service_principal["id"],
+        resource_id=(
+            "00000000-0000-4000-8000-000000009999"
+            if foreign_consent
+            else graph_service_principal["id"]
+        ),
     )
 
     class FakeGraph:
@@ -156,7 +170,14 @@ def _graph_client(*, missing_claims: bool = False):
                 return [grant]
             raise AssertionError(f"Unexpected Graph path: {path}")
 
-        def get_service_principals(self, **_kwargs) -> list[dict]:
+        def get_service_principals(
+            self,
+            *,
+            filter_expr: str = "",
+            **_kwargs,
+        ) -> list[dict]:
+            if graph_mock.MS_GRAPH_RESOURCE_APP_ID in filter_expr:
+                return [graph_service_principal]
             return [service_principal]
 
     return FakeGraph()
@@ -179,6 +200,9 @@ def _write_state(root: Path, components: dict) -> None:
         "observedAt": "2026-09-29T00:00:00Z",
         "connectionCandidates": [],
     }
+    discovery["fingerprint"] = snow._canonical_json_hash(
+        {"connectionCandidates": []}
+    )
     handoffs = {
         phase: {
             "status": "completed",
@@ -211,9 +235,7 @@ def _write_state(root: Path, components: dict) -> None:
                         "discovery": discovery,
                         "reuseDecision": {
                             "decision": "reuse-discovered",
-                            "discoveryHash": snow._canonical_json_hash(
-                                discovery
-                            ),
+                            "discoveryFingerprint": discovery["fingerprint"],
                         },
                     },
                     "phaseHandoffs": handoffs,
@@ -310,6 +332,69 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
 
 
+def test_preflight_candidate_drift_invalidates_reuse_approval(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["preflight"]["discovery"]["fingerprint"] = "changed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        item
+        for item in run_servicenow_da_hrsd_checks(_runner(components))
+        if item.checkpoint_id == "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "changed after the Maker's reuse decision" in result.result
+
+
+def test_configure_missing_allows_expected_candidate_change(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["preflight"]["reuseDecision"]["decision"] = (
+        "configure-missing"
+    )
+    state["adminSetup"]["preflight"]["discovery"]["fingerprint"] = "changed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        item
+        for item in run_servicenow_da_hrsd_checks(_runner(components))
+        if item.checkpoint_id == "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+    )
+
+    assert result.status == Status.PASSED.value
+    assert "configure-missing" in result.result
+
+
 def test_graph_failure_cannot_be_overridden_by_admin_attestation(
     monkeypatch,
     tmp_path: Path,
@@ -330,6 +415,27 @@ def test_graph_failure_cannot_be_overridden_by_admin_attestation(
     assert claim_result.status == Status.FAILED.value
     assert "upn" in claim_result.result
     assert "correct this exact application setting" in claim_result.remediation
+
+
+def test_foreign_resource_consent_does_not_satisfy_graph_admin_consent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+    runner.graph = _graph_client(foreign_consent=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        item
+        for item in run_servicenow_da_hrsd_checks(runner)
+        if item.checkpoint_id == "SN-DA-HRSD-ENTRA-CONSENT-001"
+    )
+
+    assert result.status == Status.FAILED.value
+    assert "openid" in result.result
+    assert "tenant-wide admin consent" in result.description.casefold()
 
 
 def test_graph_unavailable_uses_manual_fallback_only_with_evidence(
