@@ -145,6 +145,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
     assert "one bundled question form" in preflight
+    assert "compare the\nupdated `preflight.discovery.fingerprint` directly" in (
+        preflight
+    )
+    assert "present\n  the complete bundled preflight/reuse question now" in (
+        preflight
+    )
     assert "Ask one question only" in plugins
     assert "pause exactly once" in entra
     assert "pause exactly once" in oidc

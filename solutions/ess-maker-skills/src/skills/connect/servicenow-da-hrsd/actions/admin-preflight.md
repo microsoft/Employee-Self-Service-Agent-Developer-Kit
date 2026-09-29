@@ -11,12 +11,19 @@ pause boundary.
   scenario, and one explicit reuse-versus-configure-missing decision.
 
 Read `adminSetup.phaseHandoffs.preflight` first. If it is already
-`completed` or `reused`, refresh `inspect-admin-setup`. When the stored phase
-checkpoint results are empty or all still in this phase's
-`completionStatuses`, do not ask again; return
-`ACTION_RESULT = "recorded"` so the runner can reverify. If a prior result is
-outside `completionStatuses`, present the complete preflight/reuse step again
-with one new bundled pause.
+`completed` or `reused`, refresh `inspect-admin-setup`, then compare the
+updated `preflight.discovery.fingerprint` directly with
+`preflight.reuseDecision.discoveryFingerprint`.
+
+- If the decision is `reuse-discovered` and the fingerprints differ, present
+  the complete bundled preflight/reuse question now in this same invocation.
+  Do not return `recorded` and wait for a later checkpoint to discover drift.
+- If the decision is `configure-missing`, or the fingerprints still match,
+  and stored phase checkpoint results are empty or all in this phase's
+  `completionStatuses`, do not ask again; return
+  `ACTION_RESULT = "recorded"` so the runner can reverify.
+- Any other prior result outside `completionStatuses` also requires the
+  complete preflight/reuse step again with one new bundled pause.
 
 Run:
 
