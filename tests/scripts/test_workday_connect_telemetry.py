@@ -31,6 +31,7 @@ def test_workday_projection_uses_only_safe_bounded_event_fields(monkeypatch):
         "retryCount": 1,
         "resumeCount": 2,
         "blockerCategory": "runtime",
+        "remediationId": "WD-E2E-003",
         "correlationId": "9c7f8f9c-1234-4abc-9def-0123456789ab",
         "message": "https://customer.example/secret",
     }
@@ -46,9 +47,51 @@ def test_workday_projection_uses_only_safe_bounded_event_fields(monkeypatch):
         "retry_count": 1,
         "resume_count": 2,
         "blocker_category": "runtime",
+        "remediation_id": "WD-E2E-003",
         "correlation_id": "9c7f8f9c-1234-4abc-9def-0123456789ab",
         "agent_id": "",
     }
+
+
+def test_workday_projection_forwards_only_canonical_current_agent_id(
+    monkeypatch,
+):
+    import adk_telemetry
+    import workday_connect_telemetry
+
+    observed = []
+    monkeypatch.setattr(
+        adk_telemetry,
+        "emit_connect_lifecycle",
+        lambda event, **dimensions: observed.append((event, dimensions)),
+    )
+    correlation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    event = {"event": "invoked", "correlationId": correlation_id}
+
+    workday_connect_telemetry.emit_lifecycle_event(
+        {
+            "scope": {"agent": {"botId": "owner@customer.example"}},
+            "lifecycle": {"correlationId": correlation_id},
+        },
+        event,
+    )
+    workday_connect_telemetry.emit_lifecycle_event(
+        {
+            "scope": {
+                "agent": {
+                    "botId": "7f7c8f9c-1234-4abc-9def-0123456789ab",
+                }
+            },
+            "lifecycle": {"correlationId": correlation_id},
+        },
+        event,
+    )
+
+    assert observed[0][1]["agent_id"] == "owner@customer.example"
+    assert (
+        observed[1][1]["agent_id"]
+        == "7f7c8f9c-1234-4abc-9def-0123456789ab"
+    )
 
 
 def test_projection_and_flush_are_fail_open(monkeypatch):

@@ -253,6 +253,7 @@ def test_controller_records_invocation_only_at_status_boundary(
         ],
     )
     workday_connect.main()
+    workday_connect.main()
     monkeypatch.setattr(
         sys,
         "argv",

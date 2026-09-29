@@ -445,7 +445,7 @@ adk_connect_lifecycle
             Runs = dcount(correlation_id),
             MaxRetryCount = max(retry_count),
             MaxResumeCount = max(resume_count)
-    by lifecycle_event, phase, outcome, blocker_category
+    by lifecycle_event, phase, outcome, blocker_category, remediation_id
 | order by Events desc
 
 // Cumulative active duration for completed phases. Paused time is excluded;
@@ -464,6 +464,6 @@ let correlationOfInterest = "<correlation-guid>";
 adk_connect_lifecycle
 | where correlation_id == correlationOfInterest
 | project EventInfo_Time, lifecycle_event, phase, outcome, duration_ms,
-          retry_count, resume_count, blocker_category, toolkit_git_sha,
-          toolkit_git_branch
+          retry_count, resume_count, blocker_category, remediation_id,
+          toolkit_git_sha, toolkit_git_branch
 | order by EventInfo_Time asc

@@ -232,6 +232,7 @@ _CORRELATION_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+_REMEDIATION_ID_RE = re.compile(r"^WD-E2E-\d{3}$")
 _SECRET_KEYS = {
     "password",
     "clientsecret",
@@ -247,6 +248,21 @@ _SECRET_KEYS = {
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _validate_timestamp(value: Any, label: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise WorkdayConnectModelError(f"{label} is required.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise WorkdayConnectModelError(
+            f"{label} must be ISO-8601."
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise WorkdayConnectModelError(
+            f"{label} must include a timezone."
+        )
 
 
 def load_catalog(path: Path = CATALOG_PATH) -> dict[str, Any]:
@@ -358,6 +374,15 @@ def default_lifecycle_state() -> dict[str, Any]:
         "startedAt": utc_now(),
         "retryCount": 0,
         "resumeCount": 0,
+        "phaseDurationsMs": {
+            definition.identifier.value: 0
+            for definition in PHASE_DEFINITIONS
+        },
+        "activePhaseStartedAt": {
+            definition.identifier.value: None
+            for definition in PHASE_DEFINITIONS
+        },
+        "eventMarkers": [],
         "journal": [],
     }
 
@@ -392,6 +417,9 @@ def _validate_lifecycle_state(value: Any) -> None:
         "startedAt",
         "retryCount",
         "resumeCount",
+        "phaseDurationsMs",
+        "activePhaseStartedAt",
+        "eventMarkers",
         "journal",
     }
     missing = sorted(required - value.keys())
@@ -408,10 +436,10 @@ def _validate_lifecycle_state(value: Any) -> None:
         raise WorkdayConnectModelError(
             "Workday lifecycle correlationId must be a UUID."
         )
-    if not isinstance(value["startedAt"], str) or not value["startedAt"]:
-        raise WorkdayConnectModelError(
-            "Workday lifecycle startedAt is required."
-        )
+    _validate_timestamp(
+        value["startedAt"],
+        "Workday lifecycle startedAt",
+    )
     for field in ("retryCount", "resumeCount"):
         if (
             not isinstance(value[field], int)
@@ -421,6 +449,52 @@ def _validate_lifecycle_state(value: Any) -> None:
             raise WorkdayConnectModelError(
                 f"Workday lifecycle {field} must be a non-negative integer."
             )
+    phase_ids = set(PHASE_BY_ID)
+    phase_durations = value["phaseDurationsMs"]
+    if (
+        not isinstance(phase_durations, dict)
+        or set(phase_durations) != phase_ids
+        or any(
+            not isinstance(duration, int)
+            or isinstance(duration, bool)
+            or duration < 0
+            for duration in phase_durations.values()
+        )
+    ):
+        raise WorkdayConnectModelError(
+            "Workday lifecycle phaseDurationsMs must contain non-negative "
+            "durations for every phase."
+        )
+    active_starts = value["activePhaseStartedAt"]
+    if not isinstance(active_starts, dict) or set(active_starts) != phase_ids:
+        raise WorkdayConnectModelError(
+            "Workday lifecycle activePhaseStartedAt must contain every phase."
+        )
+    for phase_id, timestamp in active_starts.items():
+        if timestamp is not None:
+            _validate_timestamp(
+                timestamp,
+                f"Workday lifecycle active start for {phase_id}",
+            )
+    event_markers = value["eventMarkers"]
+    valid_markers = {
+        f"{event}|{phase}"
+        for event in LIFECYCLE_EVENT_TYPES
+        for phase in ("", *PHASE_BY_ID)
+    }
+    if (
+        not isinstance(event_markers, list)
+        or any(
+            not isinstance(marker, str)
+            or marker not in valid_markers
+            for marker in event_markers
+        )
+        or len(event_markers) != len(set(event_markers))
+        or len(event_markers) > len(valid_markers)
+    ):
+        raise WorkdayConnectModelError(
+            "Workday lifecycle eventMarkers must use bounded unique values."
+        )
     journal = value["journal"]
     if not isinstance(journal, list):
         raise WorkdayConnectModelError(
@@ -443,6 +517,7 @@ def _validate_lifecycle_state(value: Any) -> None:
             "phase",
             "outcome",
             "blockerCategory",
+            "remediationId",
             "durationMs",
             "retryCount",
             "resumeCount",
@@ -493,6 +568,16 @@ def _validate_lifecycle_state(value: Any) -> None:
                 "Workday lifecycle blockerCategory must use the bounded "
                 "taxonomy."
             )
+        remediation_id = record["remediationId"]
+        if (
+            not isinstance(remediation_id, str)
+            or remediation_id
+            and not _REMEDIATION_ID_RE.fullmatch(remediation_id)
+        ):
+            raise WorkdayConnectModelError(
+                "Workday lifecycle remediationId must be empty or use the "
+                "WD-E2E-NNN contract."
+            )
         for field in ("durationMs", "retryCount", "resumeCount"):
             if (
                 not isinstance(record[field], int)
@@ -502,10 +587,10 @@ def _validate_lifecycle_state(value: Any) -> None:
                 raise WorkdayConnectModelError(
                     f"Workday lifecycle event {field} must be non-negative."
                 )
-        if not isinstance(record["timestamp"], str) or not record["timestamp"]:
-            raise WorkdayConnectModelError(
-                "Workday lifecycle event timestamp is required."
-            )
+        _validate_timestamp(
+            record["timestamp"],
+            "Workday lifecycle event timestamp",
+        )
 
 
 def _validate_phase_state(phase_id: str, value: Any) -> None:

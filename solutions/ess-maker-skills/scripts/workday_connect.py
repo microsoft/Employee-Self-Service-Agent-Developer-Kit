@@ -631,7 +631,10 @@ def main() -> None:
     )
     try:
         if args.command == "status":
-            store.record_lifecycle_event("invoked")
+            store.record_lifecycle_event(
+                "invoked",
+                once_per_lifecycle=True,
+            )
         handler = _COMMAND_HANDLERS.get(args.command)
         if handler is None:
             parser.error(f"Unsupported command: {args.command}")

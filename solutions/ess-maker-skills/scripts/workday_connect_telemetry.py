@@ -29,11 +29,13 @@ def emit_lifecycle_event(
             retry_count=int(event.get("retryCount") or 0),
             resume_count=int(event.get("resumeCount") or 0),
             blocker_category=str(event.get("blockerCategory") or ""),
+            remediation_id=str(event.get("remediationId") or ""),
             correlation_id=str(
                 event_correlation
                 or current_correlation
                 or ""
             ),
+            # Historical events must not inherit the current target's agent.
             agent_id=(
                 str(agent.get("botId") or "")
                 if not event_correlation

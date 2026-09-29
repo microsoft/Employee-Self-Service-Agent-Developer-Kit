@@ -632,6 +632,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     captured_post,
 ):
     correlation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    agent_id = "7f7c8f9c-1234-4abc-9def-0123456789ab"
 
     adk.emit_connect_lifecycle(
         "phase-completed",
@@ -642,8 +643,9 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
         retry_count=2,
         resume_count=1,
         blocker_category="permissions",
+        remediation_id="WD-E2E-006",
         correlation_id=correlation_id,
-        agent_id="bot-id",
+        agent_id=agent_id,
         block=True,
     )
 
@@ -657,8 +659,9 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     assert envelope["data"]["retry_count"] == 2
     assert envelope["data"]["resume_count"] == 1
     assert envelope["data"]["blocker_category"] == "permissions"
+    assert envelope["data"]["remediation_id"] == "WD-E2E-006"
     assert envelope["data"]["correlation_id"] == correlation_id
-    assert envelope["data"]["agent_id"] == "bot-id"
+    assert envelope["data"]["agent_id"] == agent_id
 
 
 def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
@@ -667,7 +670,9 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
         phase="Runtime / https://example.test/path",
         outcome="future-outcome",
         blocker_category="C:\\customer\\secret.txt",
+        remediation_id="customer-specific-value",
         correlation_id="not-a-guid",
+        agent_id="owner@customer.example",
         block=True,
     )
 
@@ -678,7 +683,9 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
     assert data["blocker_category"] == "unknown"
     assert "example" not in data["phase"]
     assert "customer" not in data["blocker_category"]
+    assert data["remediation_id"] == ""
     assert data["correlation_id"] == ""
+    assert data["agent_id"] == ""
 
 
 def test_api_call_error_outcome_carries_error_fields(captured_post):

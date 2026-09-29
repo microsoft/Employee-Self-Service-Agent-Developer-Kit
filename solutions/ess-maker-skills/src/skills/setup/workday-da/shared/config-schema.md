@@ -28,6 +28,9 @@ they must not edit this file directly or create a Markdown state mirror.
     "startedAt": "UTC timestamp",
     "retryCount": 0,
     "resumeCount": 0,
+    "phaseDurationsMs": {},
+    "activePhaseStartedAt": {},
+    "eventMarkers": [],
     "journal": []
   },
   "phases": {},
@@ -48,7 +51,10 @@ they must not edit this file directly or create a Markdown state mirror.
   random current correlation ID. Each journal record retains the correlation
   ID active when that event occurred. Changing an existing target environment,
   agent identity, Entra tenant, or Workday tenant rotates the current ID while
-  preserving bounded prior history. The journal never contains free-form
+  preserving bounded prior history. Cumulative phase durations, active segment
+  starts, and once-per-lifecycle markers are retained separately so trimming
+  the journal cannot change lifecycle behavior. Blocked events may retain a
+  bounded `WD-E2E-NNN` remediation ID. The journal never contains free-form
   errors or customer data.
 - `phases` contains exactly the six controller phases.
 

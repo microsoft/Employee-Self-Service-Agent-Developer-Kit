@@ -79,7 +79,9 @@ Time column on every table: `EventInfo_Time` (UTC).
 For Workday investigations, filter `connector == "workday"` and stitch one
 run using `correlation_id`. Its bounded dimensions include `lifecycle_event`,
 `phase`, `outcome`, `duration_ms`, `retry_count`, `resume_count`, and
-`blocker_category`. It does not contain free-form errors, URLs, connection
+`blocker_category`. Employee-validation blockers can also carry the bounded
+`remediation_id` (`WD-E2E-NNN`). `agent_id` is emitted only when it is a
+canonical GUID. It does not contain free-form errors, URLs, connection
 identifiers, or employee data.
 
 `phase` is restricted to the six Workday phases (normalized with underscores)
@@ -87,11 +89,15 @@ or `unknown`. `blocker_category` is restricted to `auth`, `permissions`,
 `connection`, `runtime`, `validation`, `state`, `timeout`, `platform`, or
 `unknown`. Arbitrary caller values are never slugged into dimensions.
 
-One `invoked` event is recorded when the controller's outer `status` boundary
-starts a `/connect` conversation, not for each internal controller command.
+One `invoked` event is recorded per lifecycle when the controller's outer
+`status` boundary starts a `/connect` conversation, not for repeated progress
+refreshes or internal controller commands. If target reconciliation rotates
+the lifecycle, the invocation is carried to the new correlation.
 Blocking an active phase records `phase_paused` followed by `blocked`; a later
 retry records `phase_resumed`. `phase_completed.duration_ms` is cumulative
 active time across all paused/resumed segments for that phase.
+Use the lifecycle event's journal timestamp and `duration_ms` for transition
+analysis; asynchronous delivery means `EventInfo_Time` can be later.
 
 Changing an existing target environment, agent identity, Entra tenant, or
 Workday tenant starts a new correlation ID. An in-progress prior run records

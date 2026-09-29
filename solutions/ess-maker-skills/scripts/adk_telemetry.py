@@ -320,6 +320,7 @@ _CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+_CONNECT_LIFECYCLE_REMEDIATION_RE = re.compile(r"^WD-E2E-\d{3}$")
 
 
 def normalize_connector(connector: str) -> str:
@@ -1434,6 +1435,7 @@ def emit_connect_lifecycle(
     retry_count: int = 0,
     resume_count: int = 0,
     blocker_category: str = "",
+    remediation_id: str = "",
     correlation_id: str = "",
     agent_id: str = "",
     surface: str = SURFACE_CLI,
@@ -1444,9 +1446,17 @@ def emit_connect_lifecycle(
     normalized_correlation = str(correlation_id or "").strip().lower()
     if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_correlation):
         normalized_correlation = ""
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_agent_id):
+        normalized_agent_id = ""
+    normalized_remediation_id = str(remediation_id or "").strip().upper()
+    if not _CONNECT_LIFECYCLE_REMEDIATION_RE.fullmatch(
+        normalized_remediation_id
+    ):
+        normalized_remediation_id = ""
     data.update(
         {
-            "agent_id": agent_id,
+            "agent_id": normalized_agent_id,
             "connector": normalize_connector(connector),
             "lifecycle_event": normalize_connect_lifecycle_event(
                 lifecycle_event
@@ -1461,6 +1471,7 @@ def emit_connect_lifecycle(
                     blocker_category
                 )
             ),
+            "remediation_id": normalized_remediation_id,
             "correlation_id": normalized_correlation,
         }
     )
