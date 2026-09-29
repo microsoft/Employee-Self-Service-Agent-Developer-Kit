@@ -29,6 +29,8 @@
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
+    [ValidateSet('prod', 'preprod', 'test')]
+    [string] $Ring = 'prod',
     [string] $SourceBaseUrl
 )
 
@@ -86,7 +88,7 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true }
+$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

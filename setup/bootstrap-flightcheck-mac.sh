@@ -9,17 +9,25 @@ set -euo pipefail
 
 export FLIGHTCHECK_ONLY="true"
 
-# Parse optional --branch / --source-base-url arguments
+# Parse optional --branch / --source-base-url / --ring arguments
 BRANCH="main"
 SOURCE_BASE_URL=""
+RING_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --branch)       BRANCH="$2"; shift 2 ;;
         --source-base-url) SOURCE_BASE_URL="$2"; shift 2 ;;
+        --ring)         RING_ARG="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
 SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
+# Forward the ring choice to install-ess-adk.sh via the RING env var. Explicit
+# --ring wins over an inherited RING env from the caller so a mistake in the
+# shell environment can't silently override the one-liner argument.
+if [[ -n "$RING_ARG" ]]; then
+    export RING="$RING_ARG"
+fi
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT

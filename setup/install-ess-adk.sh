@@ -22,6 +22,19 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
+# RING: prod | preprod | test. Forwarded to `flightcheck/cli.py --ring` in
+# FlightCheck-only mode. Defaults to prod (matches the BAP endpoint the
+# installer uses for environment discovery). PMs validating a non-prod
+# environment override via `RING=preprod` or `--ring preprod` on the
+# bootstrap-flightcheck-mac.sh one-liner.
+RING="${RING:-prod}"
+case "$RING" in
+    prod|preprod|test) ;;
+    *)
+        echo "ERROR: RING must be prod, preprod, or test (got '$RING')" >&2
+        exit 2
+        ;;
+esac
 # INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
 # 'maker'    (was 'lite')     - chat-first layout, /setup after welcome wizard
 # 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`
@@ -748,13 +761,14 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    # --ring prod: the FlightCheck-only installer discovers environments via
-    # BAP prod (api.bap.microsoft.com), so we always target the prod service
-    # ring. Without this flag FlightCheck's --scope full aborts with "The Power
-    # Platform environment ring is unavailable" because the installer-authored
-    # config.json only carries dataverseEndpoint (no powerPlatformApiEndpoint
-    # from which FC could infer the ring).
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
+    # --ring <RING>: the FlightCheck-only installer discovers environments via
+    # BAP prod (api.bap.microsoft.com) by default, so we target the prod
+    # service ring unless the caller overrode RING (typically a PM validating
+    # a preprod/test environment). Without this flag FlightCheck's --scope
+    # full aborts with "The Power Platform environment ring is unavailable"
+    # because the installer-authored config.json only carries dataverseEndpoint
+    # (no powerPlatformApiEndpoint from which FC could infer the ring).
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring "$RING"
     exit $?
 fi
 

@@ -629,31 +629,68 @@ Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-
 }
 
 # ---------------------------------------------------------------------------
-# FC-only installer must pin --ring prod on the FlightCheck invocation.
+# FC-only installer must pass --ring on every FlightCheck invocation.
 # Without --ring, flightcheck/cli.py --scope full aborts with
 # "The Power Platform environment ring is unavailable" because the config
 # authored by the FC-only installer only has dataverseEndpoint (no
 # powerPlatformApiEndpoint from which the ring could be inferred). The
 # FC-only installer uses BAP prod (api.bap.microsoft.com) for env discovery,
-# so prod is always the correct ring.
+# so prod is the default ring; PMs can override to preprod/test via -Ring
+# / --ring.
 # ---------------------------------------------------------------------------
 
-Test 'Install-EssAdk.ps1 passes --ring prod on every FC-only FlightCheck invocation' {
-    $src = Get-Content $installerPath -Raw
+Test 'Install-EssAdk.ps1 accepts a -Ring parameter (prod|preprod|test) defaulting to prod' {
+    if ($src -notmatch "ValidateSet\('prod',\s*'preprod',\s*'test'\)\]\s*\r?\n\s*\[string\]\s*\`$Ring\s*=\s*'prod'") {
+        throw "Install-EssAdk.ps1 must declare -Ring with ValidateSet('prod','preprod','test') defaulting to 'prod'"
+    }
+}
+
+Test 'Install-EssAdk.ps1 forwards $Ring on every FC-only FlightCheck invocation' {
     $invocations = [regex]::Matches($src, 'scripts/flightcheck/cli\.py[^\r\n]*')
     if ($invocations.Count -lt 3) {
         throw "expected at least 3 FlightCheck invocations in Install-EssAdk.ps1, found $($invocations.Count)"
     }
     foreach ($m in $invocations) {
-        if ($m.Value -notmatch '--ring\s+prod') {
-            throw "FlightCheck invocation is missing '--ring prod': $($m.Value)"
+        if ($m.Value -notmatch '--ring\s+\$Ring') {
+            throw "FlightCheck invocation must forward `$Ring, not a hardcoded ring literal: $($m.Value)"
         }
     }
 }
 
-Test 'install-ess-adk.sh passes --ring prod on the FC-only FlightCheck invocation' {
-    if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+prod') {
-        throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh is missing --ring prod'
+Test 'install-ess-adk.sh accepts a RING env var (prod|preprod|test) defaulting to prod' {
+    if ($macInstaller -notmatch 'RING="\$\{RING:-prod\}"') {
+        throw "install-ess-adk.sh must default RING to prod via `${RING:-prod}"
+    }
+    if ($macInstaller -notmatch '(?s)case\s+"\$RING"\s+in[^)]*prod\|preprod\|test') {
+        throw "install-ess-adk.sh must validate RING against prod|preprod|test"
+    }
+}
+
+Test 'install-ess-adk.sh forwards $RING on the FC-only FlightCheck invocation' {
+    if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+"\$RING"') {
+        throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh must forward $RING, not a hardcoded ring literal'
+    }
+}
+
+Test 'bootstrap-flightcheck.ps1 accepts -Ring and forwards it to Install-EssAdk.ps1' {
+    $bsPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+    $bsSrc = Get-Content $bsPath -Raw
+    if ($bsSrc -notmatch "ValidateSet\('prod',\s*'preprod',\s*'test'\)\]\s*\r?\n\s*\[string\]\s*\`$Ring\s*=\s*'prod'") {
+        throw "bootstrap-flightcheck.ps1 must declare -Ring with ValidateSet('prod','preprod','test') defaulting to 'prod'"
+    }
+    if ($bsSrc -notmatch 'Ring\s*=\s*\$Ring') {
+        throw "bootstrap-flightcheck.ps1 must forward -Ring in the installer args hashtable"
+    }
+}
+
+Test 'bootstrap-flightcheck-mac.sh accepts --ring and exports RING for install-ess-adk.sh' {
+    $bsMacPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck-mac.sh'
+    $bsMacSrc = Get-Content $bsMacPath -Raw
+    if ($bsMacSrc -notmatch '--ring\)\s+RING_ARG="\$2"') {
+        throw "bootstrap-flightcheck-mac.sh must accept --ring <value>"
+    }
+    if ($bsMacSrc -notmatch 'export\s+RING="\$RING_ARG"') {
+        throw "bootstrap-flightcheck-mac.sh must export RING so install-ess-adk.sh sees it"
     }
 }
 

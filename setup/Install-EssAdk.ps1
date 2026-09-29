@@ -93,6 +93,8 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [ValidateSet('prod', 'preprod', 'test')]
+    [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
@@ -1457,25 +1459,27 @@ if ($FlightCheckOnly) {
             # but let output stream directly to console (FlightCheck is interactive)
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
-            # --ring prod: the FlightCheck-only installer discovers environments
-            # via BAP prod (api.bap.microsoft.com), so we always target the prod
-            # service ring. Without this flag FlightCheck's --scope full aborts
-            # with "The Power Platform environment ring is unavailable" because
+            # --ring <ring>: the FlightCheck-only installer discovers
+            # environments via BAP prod (api.bap.microsoft.com) by default,
+            # so we target the prod service ring unless the caller (typically
+            # a PM validating a preprod/test environment) overrode -Ring.
+            # Without this flag FlightCheck's --scope full aborts with
+            # "The Power Platform environment ring is unavailable" because
             # the installer-authored config.json only carries dataverseEndpoint
             # (no powerPlatformApiEndpoint from which FC could infer the ring).
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring prod
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always --ring prod'
+        Write-Warn2 "  python scripts/flightcheck/cli.py --scope full --select-targets always --ring $Ring"
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
