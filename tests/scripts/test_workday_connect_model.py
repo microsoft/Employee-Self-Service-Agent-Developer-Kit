@@ -23,7 +23,9 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 5
+    assert state["schemaVersion"] == 6
+    assert state["lifecycle"]["correlationId"]
+    assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
 
 

@@ -50,7 +50,7 @@ python scripts/reconcile_setup_agent.py \
 
 Append the parent setup skill's confirmed `--account`, validated `--host`, and `--api-version` values when available.
 
-Parse one `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` result from each command. Preserve `backend`, `outcome`, `stage`, `productFamily`, `identity`, and `error` as internal evidence. The probe outcomes are:
+Parse one `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` result from each command. Preserve `backend`, `outcome`, `stage`, `productFamily`, `productIdentity`, `identity`, and `error` as internal evidence. A native probe whose direct agent metadata omits schema reads the exact agent's component identity before classifying its product family. The probe outcomes are:
 
 - `found` — that identity store returned the exact agent.
 - `not-found` — that exact identity endpoint returned HTTP 404.
@@ -72,15 +72,16 @@ Apply the first matching rule:
 
 1. When both probes returned `found`, stop before any realm or ALM operation. Say that both supported identity stores returned an agent for the same ID, so setup cannot safely choose a backend. Preserve both observations; do not select one from the URL hint.
 2. When exactly one probe returned `found`, that observation proves existence and backend even if the other probe returned `not-found`, an access outcome, or an uncertainty outcome. Preserve a backend-hint mismatch as internal evidence, use the backend that actually returned the agent, and do not call the agent missing.
-3. For a native `found` DA-GA observation, continue at the next DA-GA setup operation. Only this result makes native ALM realm inspection applicable.
-4. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
-5. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
-6. For any `found` custom or unknown observation, follow **Unsupported agent** below.
-7. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
-8. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
-9. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection.
+3. When the authoritative `found` observation has `productIdentity.outcome` equal to `uncertain`, say that the agent was found in that backend but its product family could not be established. Preserve the component-identity error internally. Do not call the agent missing or unsupported and do not continue to realm inspection.
+4. For a native `found` DA-GA observation, continue at the next DA-GA setup operation. Only this result makes native ALM realm inspection applicable.
+5. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
+6. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
+7. For any `found` custom or unknown observation with a non-empty schema name, follow **Unsupported agent** below.
+8. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
+9. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
+10. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection.
 
-Rules 1, 4, 6, 7, 8, and 9 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
+Rules 1, 3, 5, 7, 8, 9, and 10 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
 
 ## Use the compatible kit
 
