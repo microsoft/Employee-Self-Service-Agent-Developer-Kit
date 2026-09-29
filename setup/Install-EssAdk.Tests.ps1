@@ -572,6 +572,24 @@ Test 'install-ess-adk.sh skips the Maker/Developer prompt in FlightCheck-only mo
         throw "FLIGHTCHECK_ONLY must coerce INSTALL_MODE from 'prompt' to 'maker' before the interactive prompt"
     }
 }
+Test 'bootstrap-flightcheck.ps1 derives SourceBaseUrl from -Branch (no hardcoded main)' {
+    # Regression: bootstrap-flightcheck.ps1 defaulted SourceBaseUrl to a
+    # main-pinned URL, so passing -Branch <feature> downloaded Install-EssAdk.ps1
+    # from main and never exercised the branch under test. Match the other
+    # bootstraps (bootstrap.ps1, bootstrap-lite.ps1, bootstrap-dev.ps1) which
+    # derive SourceBaseUrl from $Branch by default.
+    $bsPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+    $bsSrc = Get-Content $bsPath -Raw
+    if ($bsSrc -match "\[string\]\s*\`$SourceBaseUrl\s*=\s*'https://raw\.githubusercontent\.com/.+/main/setup'") {
+        throw "bootstrap-flightcheck.ps1 must not hardcode SourceBaseUrl default to main/setup"
+    }
+    if ($bsSrc -notmatch 'if\s*\(\s*-not\s+\$SourceBaseUrl\s*\)') {
+        throw "bootstrap-flightcheck.ps1 must fall back to a branch-derived SourceBaseUrl when the caller does not pass one"
+    }
+    if ($bsSrc -notmatch '/\$Branch/setup') {
+        throw "bootstrap-flightcheck.ps1 branch-derived SourceBaseUrl fallback should interpolate `$Branch"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # JSON dump suppression - regression for the "wall of JSON after env list" bug
