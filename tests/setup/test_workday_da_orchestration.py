@@ -95,6 +95,28 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
     assert "do not mark the passing outcome as recommended" in form_text
 
 
+def test_employee_validation_uses_stable_remediation_contract() -> None:
+    text = (_WORKDAY_DA / "verify-connection.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    for remediation_id in (
+        "WD-E2E-001",
+        "WD-E2E-002",
+        "WD-E2E-003",
+        "WD-E2E-004",
+        "WD-E2E-005",
+        "WD-E2E-006",
+        "WD-E2E-007",
+        "WD-E2E-999",
+    ):
+        assert remediation_id in text
+    assert "Do not invent a remediation ID" in normalized
+    assert "rejects arbitrary IDs, mismatched categories" in normalized
+    assert "cannot publish the agent, impersonate an employee" in normalized
+
+
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     import workday_connect as controller
 

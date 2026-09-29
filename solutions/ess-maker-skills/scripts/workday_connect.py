@@ -510,12 +510,17 @@ def _record_validation_failure(
         "blocked",
         blocker={
             "operation": "record-validation-failure",
+            "remediationId": evidence["remediationId"],
             "errorType": evidence["failureCategory"],
             "message": evidence["remediation"],
             "capturedAt": evidence["timestamp"],
         },
     )
-    return {"recorded": True, "status": store.status()}
+    return {
+        "recorded": True,
+        "remediationId": evidence["remediationId"],
+        "status": store.status(),
+    }
 
 
 def _preflight(

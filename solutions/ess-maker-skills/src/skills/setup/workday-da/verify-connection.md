@@ -31,7 +31,10 @@ Use `vscode_askQuestions` for the test result:
       { "label": "Failed - connector error" },
       { "label": "Failed - flow error" },
       { "label": "Failed - employee mismatch" },
-      { "label": "Failed - network error" }
+      { "label": "Failed - network error" },
+      { "label": "Failed - Workday access denied" },
+      { "label": "Failed - agent not published or unavailable" },
+      { "label": "Failed - another issue" }
     ],
     "allowFreeformInput": false
   }
@@ -72,17 +75,33 @@ verified `outcome`. Use a non-maker employee category and a
 timezone-qualified ISO-8601 timestamp. The controller rejects additional
 fields. Never record employee data or credentials.
 
-On failure, record only a safe `failureCategory`, a timezone-qualified
-ISO-8601 `timestamp`, and a concise non-sensitive `remediation` in
+On failure, map the selected result to exactly one stable contract below. Do
+not invent a remediation ID, category, or alternate wording.
+
+| Selected result | `remediationId` | `failureCategory` | Canonical `remediation` |
+| --- | --- | --- | --- |
+| Failed - repeated sign-in | `WD-E2E-001` | `employee-authentication` | `Verify the employee assignment and identify which sign-in surface is prompting again.` |
+| Failed - connector error | `WD-E2E-002` | `workday-connection` | `Verify the selected Workday connection is authenticated and targets the reviewed Workday resource.` |
+| Failed - flow error | `WD-E2E-003` | `runtime-flow` | `Inspect the failed Workday flow run and reverify delegated authorization before retrying.` |
+| Failed - employee mismatch | `WD-E2E-004` | `employee-context` | `Verify the employee NameID and User Context V2 mapping before retrying.` |
+| Failed - network error | `WD-E2E-005` | `network` | `Verify the required Workday REST and SOAP hosts are reachable from the configured runtime.` |
+| Failed - Workday access denied | `WD-E2E-006` | `workday-access` | `Ask a Workday administrator to verify the test employee's functional-area and domain access.` |
+| Failed - agent not published or unavailable | `WD-E2E-007` | `publish-or-agent` | `Publish the selected agent and verify the employee is testing the reviewed agent in the target environment.` |
+| Failed - another issue | `WD-E2E-999` | `unknown` | `Capture the failing surface without employee data and route it to ESS support for classification.` |
+
+Record only the selected `remediationId`, its exact `failureCategory`, a
+timezone-qualified ISO-8601 `timestamp`, and the exact canonical
+`remediation` in
 `.local/connect/workday-da/employee-validation-failure.json`, then run:
 
 ```powershell
 python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\employee-validation-failure.json"
 ```
 
-This marks Employee validation blocked and persists one current blocker while
-keeping completed prerequisite phases intact. Use the failing surface to
-choose the next check:
+The controller rejects arbitrary IDs, mismatched categories, changed
+remediation wording, and additional fields. This marks Employee validation
+blocked and persists the stable remediation ID while keeping completed
+prerequisite phases intact. Use the failing surface to choose the next check:
 
 - sign-in loop -> identify which credential store prompted and whether the
   account or tenant differs;

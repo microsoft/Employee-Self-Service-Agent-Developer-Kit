@@ -34,6 +34,66 @@ class WorkdayConnectContractError(WorkdayConnectModelError):
     """Raised when an exact Entra or Workday contract cannot be produced."""
 
 
+EMPLOYEE_VALIDATION_REMEDIATIONS: dict[str, dict[str, str]] = {
+    "WD-E2E-001": {
+        "failureCategory": "employee-authentication",
+        "remediation": (
+            "Verify the employee assignment and identify which sign-in "
+            "surface is prompting again."
+        ),
+    },
+    "WD-E2E-002": {
+        "failureCategory": "workday-connection",
+        "remediation": (
+            "Verify the selected Workday connection is authenticated and "
+            "targets the reviewed Workday resource."
+        ),
+    },
+    "WD-E2E-003": {
+        "failureCategory": "runtime-flow",
+        "remediation": (
+            "Inspect the failed Workday flow run and reverify delegated "
+            "authorization before retrying."
+        ),
+    },
+    "WD-E2E-004": {
+        "failureCategory": "employee-context",
+        "remediation": (
+            "Verify the employee NameID and User Context V2 mapping before "
+            "retrying."
+        ),
+    },
+    "WD-E2E-005": {
+        "failureCategory": "network",
+        "remediation": (
+            "Verify the required Workday REST and SOAP hosts are reachable "
+            "from the configured runtime."
+        ),
+    },
+    "WD-E2E-006": {
+        "failureCategory": "workday-access",
+        "remediation": (
+            "Ask a Workday administrator to verify the test employee's "
+            "functional-area and domain access."
+        ),
+    },
+    "WD-E2E-007": {
+        "failureCategory": "publish-or-agent",
+        "remediation": (
+            "Publish the selected agent and verify the employee is testing "
+            "the reviewed agent in the target environment."
+        ),
+    },
+    "WD-E2E-999": {
+        "failureCategory": "unknown",
+        "remediation": (
+            "Capture the failing surface without employee data and route it "
+            "to ESS support for classification."
+        ),
+    },
+}
+
+
 def _required_text(
     document: Mapping[str, Any],
     key: str,
@@ -1113,7 +1173,12 @@ def validate_employee_failure_evidence(
         raise WorkdayConnectContractError(
             "Employee validation failure must contain a JSON object."
         )
-    allowed = {"failureCategory", "timestamp", "remediation"}
+    allowed = {
+        "remediationId",
+        "failureCategory",
+        "timestamp",
+        "remediation",
+    }
     unexpected = sorted(set(evidence) - allowed)
     if unexpected:
         raise WorkdayConnectContractError(
@@ -1121,6 +1186,25 @@ def validate_employee_failure_evidence(
             + ", ".join(unexpected)
         )
     result = {key: _required_text(evidence, key, key) for key in allowed}
+    remediation_id = result["remediationId"].upper()
+    contract = EMPLOYEE_VALIDATION_REMEDIATIONS.get(remediation_id)
+    if contract is None:
+        raise WorkdayConnectContractError(
+            "Employee validation remediationId must be one of: "
+            + ", ".join(EMPLOYEE_VALIDATION_REMEDIATIONS)
+            + "."
+        )
+    if result["failureCategory"] != contract["failureCategory"]:
+        raise WorkdayConnectContractError(
+            f"Employee validation failureCategory for {remediation_id} must "
+            f"be '{contract['failureCategory']}'."
+        )
+    if result["remediation"] != contract["remediation"]:
+        raise WorkdayConnectContractError(
+            f"Employee validation remediation for {remediation_id} must use "
+            "the canonical safe text."
+        )
+    result["remediationId"] = remediation_id
     result["timestamp"] = _normalized_timestamp(
         result["timestamp"],
         "Employee validation failure timestamp",

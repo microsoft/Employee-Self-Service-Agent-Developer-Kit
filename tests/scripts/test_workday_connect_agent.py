@@ -661,9 +661,13 @@ def test_record_validation_failure_blocks_employee_phase(
     evidence_file.write_text(
         json.dumps(
             {
-                "failureCategory": "workday-access-denied",
+                "remediationId": "WD-E2E-006",
+                "failureCategory": "workday-access",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": "Verify the employee's Workday access.",
+                "remediation": (
+                    "Ask a Workday administrator to verify the test "
+                    "employee's functional-area and domain access."
+                ),
             }
         ),
         encoding="utf-8",
@@ -675,7 +679,9 @@ def test_record_validation_failure_blocks_employee_phase(
     )
 
     assert result["recorded"] is True
+    assert result["remediationId"] == "WD-E2E-006"
     phase = store.load()["phases"]["employee-validation"]
     assert phase["status"] == "blocked"
-    assert phase["blocker"]["errorType"] == "workday-access-denied"
+    assert phase["blocker"]["remediationId"] == "WD-E2E-006"
+    assert phase["blocker"]["errorType"] == "workday-access"
     assert phase["blocker"]["capturedAt"] == "2026-09-25T00:00:00Z"
