@@ -82,6 +82,25 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "actionApplied = true" in recorded_section
     assert "without creating rollback state" in recorded_section
 
+    regression_section = runner.split(
+        "4. If any checkpoint resolves to a status",
+        1,
+    )[1].split("## L.3", 1)[0]
+    failed_branch = regression_section.split(
+        "- For `Failed`/`Error`",
+        1,
+    )[1].split("- For every other regression", 1)[0]
+    repairable_branch = regression_section.split(
+        "- For every other regression",
+        1,
+    )[1]
+    assert "set the phase to `blocked`" in failed_branch
+    assert "stop for remediation" in failed_branch
+    assert "set the phase to `in-progress`" in repairable_branch
+    assert "continue to L.3 in this same" in repairable_branch
+    assert "interactive question" in repairable_branch
+    assert "do not end the turn" in repairable_branch
+
 
 def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     contract = json.loads(

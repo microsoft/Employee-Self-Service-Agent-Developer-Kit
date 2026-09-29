@@ -98,3 +98,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "safely rolled-back update is still a failed action" in topics
     assert "committed" in topics
     assert "already-active" in topics
+    assert "vscode_askQuestions" in topics
+    assert "while the\n  question is pending" in topics
+    assert "Absence of\n  an answer is not cancellation" in topics
+    assert "explicitly selects\n  **Not now**" in topics

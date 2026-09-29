@@ -152,18 +152,26 @@ For every phase in that contiguous `done` prefix:
    persisted acknowledgement matching the checkpoint and current status, the
    cached completion has regressed. This includes `Warning`, `Skipped`,
    `NotConfigured`, and unacknowledged `Manual`/`Warning` results — not only
-   `Failed`/`Error`. Set the phase to `blocked` for `Failed`/`Error`, otherwise
-   set it to `in-progress`, and set **every phase after it** back to `pending`
-   (later phases may have depended on this one still holding). Clear
-   `actionApplied`, `lastActionAt`, and `rollbackPushGlob` on this phase and
-   every later phase so a `"once"` action can run again through a fresh gate
-   and fresh rollback checkpoint. Persist the current checkpoint results,
-   render the result
-   without executing L.4b rollback, and stop. A rollback checkpoint from an
-   earlier invocation must never be reused after drift.
+   `Failed`/`Error`. Set **every phase after it** back to `pending` (later
+   phases may have depended on this one still holding). Clear `actionApplied`,
+   `lastActionAt`, and `rollbackPushGlob` on this phase and every later phase
+   so a `"once"` action can run again through a fresh gate
+   and fresh rollback checkpoint. A rollback checkpoint from an earlier
+   invocation must never be reused after drift.
 
-Once every previously-`done` phase is confirmed (or the loop stopped early on
-a regression), continue to L.3.
+   - For `Failed`/`Error`, set the phase to `blocked`, persist the current
+     checkpoint results, render the result without executing L.4b rollback,
+     and stop for remediation.
+   - For every other regression, set the phase to `in-progress`, persist the
+     current checkpoint results, and render the result without executing L.4b
+     rollback. End the completed-prefix scan and continue to L.3 in this same
+     invocation. L.4 must run the reset phase's provider action before its
+     checkpoints, including any interactive question in the action document;
+     do not end the turn merely because the cached completion regressed.
+
+Once every previously-`done` phase is confirmed, or the prefix scan ends on a
+non-fatal regression, continue to L.3. A `Failed`/`Error` regression already
+stopped above.
 
 ---
 
