@@ -32,6 +32,13 @@ path, or the word "checkpoint"/"contract"/"state file" to the user.
 Read `src/skills/connect/{PROVIDER}/contract.json`. If it does not exist,
 **stop and report** — the calling file named a provider with no contract.
 
+Resolve `contractRevision` as the positive integer in the contract, defaulting
+to `1`. If the canonical state file already exists and the contract has
+`stateMigrationCommand`, run that exact checked-in command before reading the
+state. A migration failure is blocking; do not discard or recreate the state.
+Do not run a migration command on a first run, because the plan must be
+accepted before the initial state file is written.
+
 If the contract has `connectConfig` and that file exists, add
 `--connect-config "{connectConfig}"` to every FlightCheck command in this
 runner. If it does not exist, omit the argument; do not substitute another
@@ -43,7 +50,8 @@ mutation and validation must never fall back to scanning every local agent.
 Read `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json`. If it
 does not exist, this is a first run: initialize it in memory with
 `provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: false`,
-`roleAttestations: {}`, and every phase from the contract at
+`acceptedContractRevision: 0`, `roleAttestations: {}`, and every phase from
+the contract at
 `status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
 (write only after the plan is shown, in L.1).
 
@@ -55,6 +63,13 @@ For backward compatibility, treat a missing `roleAttestations` object in an
 older state file as `{}`. Do not infer an attestation from `attested`,
 `attestedAt`, a completed phase, or a prior action.
 
+Merge contract evolution without deleting provider-owned state: for every
+contract phase absent from `phases`, add
+`{status: "pending", checkpointResults: {}}`. Preserve every existing phase,
+evidence object, transaction, admin-operation record, and unknown
+forward-compatible key. The runner owns only generic lifecycle keys beneath
+`phases`; provider commands own their evidence and operation state.
+
 Initialize an invocation-local empty set named `executedActionPhases`. Add a
 phase ID after its action returns `applied` or `recorded`; this prevents an
 `every-invocation` action from running twice during L.2 and L.4 of the same
@@ -62,9 +77,12 @@ invocation.
 
 ---
 
-## L.1 — Show the plan and get attestation (first run only)
+## L.1 — Show the plan and get attestation
 
-Skip this section entirely if the state file already has `attested: true`.
+Skip this section only when the state file has `attested: true` and
+`acceptedContractRevision` equals the current contract revision. A contract
+revision change must show the new complete plan before a newly introduced
+phase runs.
 
 Build the plan from the contract, in phase order:
 - One line per phase using its `label` verbatim.
@@ -101,14 +119,24 @@ Use the `vscode_askQuestions` tool:
 ]
 ```
 
-**If "Not now":** Stop here. Do not write the state file — the next
-invocation should show this same plan again.
+**If "Not now":** Stop here. On a first run, do not write the state file. On a
+contract-revision re-attestation, preserve the existing state unchanged. The
+next invocation should show this same plan again.
 
-**If "Yes, let's go":** Write
+**If "Yes, let's go" on a first run:** Write
 `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` now with
 `provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: true`,
-`attestedAt` = current UTC timestamp, `roleAttestations: {}`, and every phase
-at `status: "pending"`. Continue to L.2. Accepting the plan does not claim a
+`attestedAt` = current UTC timestamp,
+`acceptedContractRevision: contractRevision`, `roleAttestations: {}`, and
+every phase at `status: "pending"`.
+
+**If "Yes, let's go" after a contract revision changed:** update only
+`attested`, `attestedAt`, and `acceptedContractRevision`, plus missing phases
+initialized in L.0. Do not reset or delete existing phase status, action
+receipts, evidence, transactions, role attestations, or provider-owned admin
+progress.
+
+Continue to L.2. Accepting the plan does not claim a
 role; the first required role gate remains explicit.
 
 ---
@@ -248,6 +276,13 @@ Then read the phase's `actionDoc` file and follow it completely — it contains
 its own Message blocks and tool calls and must return an explicit
 `ACTION_RESULT`:
 
+An admin-owned high-level phase has exactly one pause boundary per attempt.
+Its action must present the phase purpose, responsible role, complete bundled
+instructions, completion criteria, and requested non-secret evidence before
+asking one completion question. It must not persist or ask separate questions
+for checklist items inside that phase. On resume, accept the one phase return,
+run the phase's complete verification set, and only then advance.
+
 - **`"applied"`** — the mutation or verified no-op completed successfully.
   Set `phases.{id}.actionApplied = true`. If the phase has
   `rollbackPushGlobFromAction: true`, require the action to return
@@ -266,6 +301,12 @@ its own Message blocks and tool calls and must return an explicit
   phase action as executed in the invocation-local set, and write the state
   file immediately. This does not complete the phase; continue to its
   checkpoints.
+- **`"waiting"`** — a delegated administrator operation or interactive
+  question is still pending. Keep `actionApplied = false`, leave the phase
+  `in-progress`, preserve all provider-owned question, discovery, decision,
+  and operation evidence exactly, write the state file, and stop. This is a
+  resumable pause, not cancellation, failure, or completion. An unanswered
+  question remains pending and is not cancellation.
 - **`"cancelled"`** — the user declined before mutation. Keep
   `actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, leave
   the phase `in-progress`, write the state file, and stop. Do not run the phase

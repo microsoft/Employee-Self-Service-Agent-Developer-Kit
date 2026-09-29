@@ -11,11 +11,12 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,7 +41,26 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 PROVIDER_KEY = "servicenow-da-hrsd"
 PROFILE_KEY = "hrsd"
-LIFECYCLE_SCHEMA_VERSION = 2
+LIFECYCLE_SCHEMA_VERSION = 3
+ADMIN_SETUP_SCHEMA_VERSION = 1
+AUTH_MODE = "entraIDUserLogin"
+SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
+PREFLIGHT_SCENARIOS = {
+    "connected",
+    "app-oidc",
+    "plugins-only",
+    "scratch",
+    "unsure",
+}
+REUSE_DECISIONS = {"reuse-discovered", "configure-missing"}
+ADMIN_PHASES = {
+    "preflight",
+    "plugin-prerequisites",
+    "entra-registration",
+    "servicenow-oidc",
+    "credential",
+}
+_SAFE_USER_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 class ServiceNowConnectError(RuntimeError):
@@ -91,6 +111,124 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
+
+
+def normalize_client_id(value: str) -> str:
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise ServiceNowConnectError(
+            "Application client ID must be a GUID."
+        ) from exc
+
+
+def normalize_instance_name(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ServiceNowConnectError("ServiceNow instance name is required.")
+    if "://" in candidate:
+        parsed = urlparse(candidate)
+        if (
+            parsed.scheme.casefold() != "https"
+            or parsed.username
+            or parsed.password
+            or parsed.port not in (None, 443)
+            or parsed.path not in ("", "/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow instance URL must be a plain HTTPS origin."
+            )
+        hostname = parsed.hostname or ""
+    else:
+        hostname = candidate.rstrip("/")
+    suffix = ".service-now.com"
+    if hostname.casefold().endswith(suffix):
+        hostname = hostname[: -len(suffix)]
+    if "." in hostname or not re.fullmatch(r"[A-Za-z0-9-]+", hostname):
+        raise ServiceNowConnectError(
+            "ServiceNow instance must be an instance name or a "
+            "https://<instance>.service-now.com URL."
+        )
+    return hostname.casefold()
+
+
+def required_servicenow_prerequisites(
+    scope: str,
+    auth_mode: str = AUTH_MODE,
+) -> list[dict[str, Any]]:
+    normalized_scope = scope.strip().casefold()
+    if normalized_scope not in {"hrsd", "itsm"}:
+        raise ServiceNowConnectError(
+            "ServiceNow scope must be hrsd or itsm."
+        )
+    if auth_mode != AUTH_MODE:
+        raise ServiceNowConnectError(
+            "Only Microsoft Entra ID User Login is supported."
+        )
+    requirements: list[dict[str, Any]] = []
+    if normalized_scope == "hrsd":
+        requirements.append(
+            {
+                "id": "hr-core",
+                "aliases": ["com.sn_hr_core", "sn_hr_core"],
+                "requiredFor": ["hrsd"],
+            }
+        )
+    requirements.append(
+        {
+            "id": "oidc-capability",
+            "aliases": ["Multi-Provider SSO", "OIDC"],
+            "requiredFor": [AUTH_MODE],
+        }
+    )
+    return requirements
+
+
+def _empty_admin_setup() -> dict[str, Any]:
+    return {
+        "schemaVersion": ADMIN_SETUP_SCHEMA_VERSION,
+        "scope": PROFILE_KEY,
+        "authMode": AUTH_MODE,
+        "preflight": {
+            "scenario": None,
+            "reuseDecision": None,
+            "discovery": {},
+        },
+        "phaseHandoffs": {
+            phase: {"status": "pending"}
+            for phase in sorted(ADMIN_PHASES)
+        },
+    }
+
+
+def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
+    setup = state.setdefault("adminSetup", _empty_admin_setup())
+    if not isinstance(setup, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow admin setup state must be an object."
+        )
+    setup.setdefault("schemaVersion", ADMIN_SETUP_SCHEMA_VERSION)
+    setup.setdefault("scope", PROFILE_KEY)
+    setup.setdefault("authMode", AUTH_MODE)
+    preflight = setup.setdefault("preflight", {})
+    if not isinstance(preflight, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow preflight state must be an object."
+        )
+    preflight.setdefault("scenario", None)
+    preflight.setdefault("reuseDecision", None)
+    preflight.setdefault("discovery", {})
+    handoffs = setup.setdefault("phaseHandoffs", {})
+    if not isinstance(handoffs, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow admin phase handoffs must be an object."
+        )
+    for phase in sorted(ADMIN_PHASES):
+        handoffs.setdefault(phase, {"status": "pending"})
+    return setup
 
 
 def _legacy_state_path(agent_id: str) -> Path:
@@ -705,6 +843,7 @@ def _state_base(
         "reference": summary["reference"],
         "phases": {},
         "evidence": {},
+        "adminSetup": _empty_admin_setup(),
         "transactions": {"topics": {}},
         "migration": {},
         "updatedAt": _utc_now(),
@@ -734,6 +873,101 @@ def _validate_state_identity(
             raise ServiceNowConnectError(
                 f"ServiceNow lifecycle {key} does not match the active agent."
             )
+
+
+def _migrate_lifecycle_schema(
+    context: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    version = state.get("schemaVersion")
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle schemaVersion must be an integer."
+        )
+    if version > LIFECYCLE_SCHEMA_VERSION:
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle state was written by a newer kit version."
+        )
+    if version < 2:
+        raise ServiceNowConnectError(
+            "Unsupported canonical ServiceNow lifecycle schema."
+        )
+    if version == LIFECYCLE_SCHEMA_VERSION:
+        _admin_setup(state)
+        return state
+
+    source_sha256 = _canonical_json_hash(state)
+    phases = state.setdefault("phases", {})
+    if not isinstance(phases, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle phases must be an object."
+        )
+    added_phase_ids = [
+        "preflight",
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+    ]
+    for phase_id in added_phase_ids:
+        phases.setdefault(
+            phase_id,
+            {
+                "status": "pending",
+                "checkpointResults": {},
+                "checkpointAcknowledgements": {},
+            },
+        )
+
+    invalidated_phase_ids: list[str] = []
+    credential = phases.setdefault(
+        "credential",
+        {"status": "pending", "checkpointResults": {}},
+    )
+    if not isinstance(credential, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow credential phase must be an object."
+        )
+    credential["status"] = "in-progress"
+    credential["checkpointResults"] = {}
+    credential["checkpointAcknowledgements"] = {}
+    for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
+        credential.pop(key, None)
+    invalidated_phase_ids.append("credential")
+
+    for phase_id in (
+        "topics",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ):
+        phase = phases.get(phase_id)
+        if not isinstance(phase, dict):
+            continue
+        phase["status"] = "pending"
+        phase["checkpointResults"] = {}
+        phase["checkpointAcknowledgements"] = {}
+        phase.pop("lastVerifiedAt", None)
+        invalidated_phase_ids.append(phase_id)
+
+    state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+    state.setdefault("acceptedContractRevision", 1)
+    _admin_setup(state)
+    migration = state.setdefault("migration", {})
+    if not isinstance(migration, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle migration state must be an object."
+        )
+    migration["schemaV3"] = {
+        "from": version,
+        "to": LIFECYCLE_SCHEMA_VERSION,
+        "sourceSha256": source_sha256,
+        "migratedAt": _utc_now(),
+        "addedPhaseIds": added_phase_ids,
+        "invalidatedPhaseIds": invalidated_phase_ids,
+        "reuseApprovalInferred": False,
+    }
+    return state
 
 
 def _migrate_legacy_state(
@@ -840,6 +1074,7 @@ def _load_lifecycle_state(
     if path.exists():
         state = _load_json(path)
         _validate_state_identity(context, state)
+        state = _migrate_lifecycle_schema(context, state)
     elif components is not None:
         state = _state_base(context, components)
     else:
@@ -855,6 +1090,7 @@ def _load_lifecycle_state(
             "ring": context["environment"].get("ring"),
             "phases": {},
             "evidence": {},
+            "adminSetup": _empty_admin_setup(),
             "transactions": {"topics": {}},
             "migration": {},
         }
@@ -877,6 +1113,7 @@ def _load_lifecycle_state(
             state[key] = current[key]
     state.setdefault("phases", {})
     state.setdefault("evidence", {})
+    _admin_setup(state)
     state.setdefault("transactions", {}).setdefault("topics", {})
     state.setdefault("migration", {})
     return state
@@ -1041,6 +1278,187 @@ def _inspection_progress(
     }
 
 
+def record_preflight_scenario(
+    context: dict[str, Any],
+    *,
+    scenario: str,
+    instance_url: str,
+) -> dict[str, Any]:
+    if scenario not in PREFLIGHT_SCENARIOS:
+        raise ServiceNowConnectError("Unsupported ServiceNow preflight scenario.")
+    instance_name = normalize_instance_name(instance_url)
+    state = _load_lifecycle_state(context)
+    preflight = _admin_setup(state)["preflight"]
+    preflight.update(
+        {
+            "scenario": scenario,
+            "instanceName": instance_name,
+            "instanceOrigin": (
+                f"https://{instance_name}.service-now.com"
+            ),
+            "recordedAt": _utc_now(),
+        }
+    )
+    preflight["reuseDecision"] = None
+    _write_lifecycle_state(context, state)
+    return copy.deepcopy(preflight)
+
+
+def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
+    state = _load_lifecycle_state(context)
+    setup = _admin_setup(state)
+    connections = [
+        connection_summary(record)
+        for record in _connectivity_client(context).list_connections()
+    ]
+    user_login_connections = [
+        connection
+        for connection in connections
+        if connection.get("authMode") == AUTH_MODE
+    ]
+    handoffs = setup["phaseHandoffs"]
+    app_record = handoffs.get("entra-registration")
+    client_id = None
+    if isinstance(app_record, dict):
+        client_id = (app_record.get("evidence") or {}).get("clientId")
+    discovery = {
+        "source": "connectivity-readonly",
+        "observedAt": _utc_now(),
+        "scope": setup["scope"],
+        "authMode": setup["authMode"],
+        "instanceName": setup["preflight"].get("instanceName"),
+        "requiredPlugins": required_servicenow_prerequisites(
+            setup["scope"],
+            setup["authMode"],
+        ),
+        "entraClientId": client_id,
+        "connectionCandidates": user_login_connections,
+        "connectionCandidateSetHash": _canonical_json_hash(
+            user_login_connections
+        ),
+        "limitations": [
+            "ServiceNow plugin and OIDC security objects require admin "
+            "confirmation when no supported read-only API is available.",
+            "Entra application details are verified by the phase's Microsoft "
+            "Graph checkpoints after a client ID is supplied.",
+        ],
+    }
+    setup["preflight"]["discovery"] = discovery
+    _write_lifecycle_state(context, state)
+    return discovery
+
+
+def record_reuse_decision(
+    context: dict[str, Any],
+    *,
+    decision: str,
+) -> dict[str, Any]:
+    if decision not in REUSE_DECISIONS:
+        raise ServiceNowConnectError("Unsupported ServiceNow reuse decision.")
+    state = _load_lifecycle_state(context)
+    preflight = _admin_setup(state)["preflight"]
+    discovery = preflight.get("discovery")
+    if not isinstance(discovery, dict) or not discovery.get("observedAt"):
+        raise ServiceNowConnectError(
+            "Run read-only admin setup discovery before recording reuse."
+        )
+    record = {
+        "decision": decision,
+        "approvedBy": "maker-attested",
+        "approvedAt": _utc_now(),
+        "discoveryHash": _canonical_json_hash(discovery),
+    }
+    preflight["reuseDecision"] = record
+    setup = _admin_setup(state)
+    setup["phaseHandoffs"]["preflight"] = {
+        "status": "completed",
+        "evidence": {
+            "kind": "maker-reuse-decision",
+            "scenario": preflight.get("scenario"),
+            "instanceName": preflight.get("instanceName"),
+            "decision": decision,
+            "discoveryHash": record["discoveryHash"],
+            "recordedAt": record["approvedAt"],
+        },
+    }
+    _write_lifecycle_state(context, state)
+    return record
+
+
+def record_admin_phase(
+    context: dict[str, Any],
+    *,
+    phase: str,
+    status: str,
+    client_id: str | None = None,
+    claim: str | None = None,
+    user_field: str | None = None,
+) -> dict[str, Any]:
+    if phase not in ADMIN_PHASES:
+        raise ServiceNowConnectError("Unsupported ServiceNow admin phase.")
+    if status not in {"completed", "reused"}:
+        raise ServiceNowConnectError(
+            "Admin operation status must be completed or reused."
+        )
+    state = _load_lifecycle_state(context)
+    setup = _admin_setup(state)
+    if status == "reused" and not setup["preflight"].get("reuseDecision"):
+        raise ServiceNowConnectError(
+            "Explicit Maker reuse approval is required before reusing setup."
+        )
+
+    evidence: dict[str, Any] = {
+        "kind": "structured-admin-attestation",
+        "ownerBoundary": "admin-owned-guided-workflow",
+        "recordedAt": _utc_now(),
+    }
+    if phase == "entra-registration":
+        if not client_id:
+            raise ServiceNowConnectError(
+                "The non-secret Application client ID is required."
+            )
+        evidence["clientId"] = normalize_client_id(client_id)
+    elif client_id is not None:
+        raise ServiceNowConnectError(
+            "Application client ID is accepted only for entra-registration."
+        )
+
+    if phase == "servicenow-oidc":
+        normalized_claim = (claim or "").strip()
+        normalized_user_field = (user_field or "").strip()
+        if not _SAFE_USER_FIELD.fullmatch(normalized_claim):
+            raise ServiceNowConnectError(
+                "OIDC claim must be a non-secret token claim identifier."
+            )
+        if not _SAFE_USER_FIELD.fullmatch(normalized_user_field):
+            raise ServiceNowConnectError(
+                "ServiceNow user field must be a field identifier."
+            )
+        evidence.update(
+            {
+                "claim": normalized_claim,
+                "userField": normalized_user_field,
+            }
+        )
+    elif claim is not None or user_field is not None:
+        raise ServiceNowConnectError(
+            "Claim mapping values are accepted only for servicenow-oidc."
+        )
+
+    record = {
+        "status": status,
+        "evidence": evidence,
+        "verifiedBy": (
+            "read-only-checkpoint-pending"
+            if phase == "entra-registration"
+            else "structured-attestation"
+        ),
+    }
+    setup["phaseHandoffs"][phase] = record
+    _write_lifecycle_state(context, state)
+    return copy.deepcopy(record)
+
+
 def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]:
     if offline:
         components = _load_json(context["snapshotPath"])
@@ -1097,8 +1515,26 @@ def prepare_manual_connection(
     )
     summary = summarize_components(components)
     reference = summary["reference"]
-    instance_name = instance_name or reference.get("instanceName")
-    resource_uri = resource_uri or reference.get("resourceUri")
+    state = _state_for_components(context, components)
+    setup = _admin_setup(state)
+    app_record = setup["phaseHandoffs"].get("entra-registration")
+    app_evidence = (
+        app_record.get("evidence")
+        if isinstance(app_record, dict)
+        else {}
+    )
+    if not isinstance(app_evidence, dict):
+        app_evidence = {}
+    instance_name = (
+        instance_name
+        or setup["preflight"].get("instanceName")
+        or reference.get("instanceName")
+    )
+    resource_uri = (
+        resource_uri
+        or app_evidence.get("clientId")
+        or reference.get("resourceUri")
+    )
     if not instance_name or not resource_uri:
         missing_fields = []
         if not instance_name:
@@ -1120,7 +1556,12 @@ def prepare_manual_connection(
                 "value required to create the ServiceNow connection."
             ),
         }
-    state = _state_for_components(context, components)
+    instance_name = normalize_instance_name(str(instance_name))
+    if str(resource_uri).casefold().startswith("api://"):
+        raise ServiceNowConnectError(
+            "Resource URI must be the Application client ID, not api:// URI."
+        )
+    resource_uri = normalize_client_id(str(resource_uri))
     preparation = {
         "connectionId": None,
         "displayName": (
@@ -1179,6 +1620,45 @@ def _healthy_connection(
             "The physical ServiceNow connection must use Microsoft Entra ID "
             "User Login."
         )
+    state = _load_lifecycle_state(context)
+    setup = _admin_setup(state)
+    expected_instance = setup["preflight"].get("instanceName")
+    app_record = setup["phaseHandoffs"].get("entra-registration")
+    app_evidence = (
+        app_record.get("evidence")
+        if isinstance(app_record, dict)
+        else {}
+    )
+    if not isinstance(app_evidence, dict):
+        app_evidence = {}
+    expected_client_id = app_evidence.get("clientId")
+    values = physical.get("parameterValues")
+    if not isinstance(values, dict):
+        values = {}
+    actual_instance = values.get("token:InstanceName") or values.get("instance")
+    actual_resource = values.get("token:ResourceUri")
+    if expected_instance:
+        if not actual_instance:
+            raise ServiceNowConnectError(
+                "The physical ServiceNow connection did not expose its "
+                "Instance Name for exact verification."
+            )
+        if normalize_instance_name(str(actual_instance)) != expected_instance:
+            raise ServiceNowConnectError(
+                "The physical ServiceNow connection targets a different "
+                "Instance Name."
+            )
+    if expected_client_id:
+        if not actual_resource:
+            raise ServiceNowConnectError(
+                "The physical ServiceNow connection did not expose its "
+                "Resource URI for exact verification."
+            )
+        if normalize_client_id(str(actual_resource)) != expected_client_id:
+            raise ServiceNowConnectError(
+                "The physical ServiceNow connection Resource URI does not "
+                "match the verified Application client ID."
+            )
     return physical
 
 
@@ -1190,6 +1670,12 @@ def record_credential_selection(
     components = _agentbuilder_client(context).fetch_components(
         context["agent"]["id"]
     )
+    state = _load_lifecycle_state(context, components)
+    setup = _admin_setup(state)
+    values = physical.get("parameterValues")
+    values = values if isinstance(values, dict) else {}
+    instance_name = values.get("token:InstanceName") or values.get("instance")
+    resource_uri = values.get("token:ResourceUri")
     normalized_connection_id = uuid.UUID(connection_id).hex
     evidence = {
         "connectionId": normalized_connection_id,
@@ -1200,12 +1686,37 @@ def record_credential_selection(
         "environmentId": context["environment"]["id"],
         "selectedAt": _utc_now(),
         "lastVerifiedAt": _utc_now(),
+        "instanceName": (
+            normalize_instance_name(str(instance_name))
+            if instance_name
+            else setup["preflight"].get("instanceName")
+        ),
+        "resourceUri": (
+            normalize_client_id(str(resource_uri))
+            if resource_uri
+            else (
+                (
+                    setup["phaseHandoffs"]
+                    .get("entra-registration", {})
+                    .get("evidence", {})
+                    .get("clientId")
+                )
+            )
+        ),
         "parameterMetadata": copy.deepcopy(
             physical.get("parameterValues") or {}
         ),
     }
-    state = _load_lifecycle_state(context, components)
     state.setdefault("evidence", {})["credential"] = evidence
+    setup["phaseHandoffs"]["credential"] = {
+        "status": "completed",
+        "evidence": {
+            "kind": "maker-connection-return",
+            "connectionId": normalized_connection_id,
+            "displayName": physical.get("displayName"),
+            "recordedAt": _utc_now(),
+        },
+    }
     _write_lifecycle_state(context, state)
     return evidence
 
@@ -1957,10 +2468,7 @@ def record_test_attestation(
 
 
 def migrate_state(context: dict[str, Any]) -> dict[str, Any]:
-    components = _agentbuilder_client(context).fetch_components(
-        context["agent"]["id"]
-    )
-    state = _load_lifecycle_state(context, components)
+    state = _load_lifecycle_state(context)
     _write_lifecycle_state(context, state)
     return {
         "status": "migrated",
@@ -1984,6 +2492,46 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the cached component snapshot and skip live APIs.",
     )
+    subparsers.add_parser(
+        "inspect-admin-setup",
+        help="Discover reusable ServiceNow admin setup with read-only APIs.",
+    )
+    preflight_parser = subparsers.add_parser(
+        "record-preflight",
+        help="Record what the Maker says already exists.",
+    )
+    preflight_parser.add_argument(
+        "--scenario",
+        required=True,
+        choices=tuple(sorted(PREFLIGHT_SCENARIOS)),
+    )
+    preflight_parser.add_argument("--instance-url", required=True)
+    reuse_parser = subparsers.add_parser(
+        "record-reuse-decision",
+        help="Record the Maker's explicit reuse or configure-missing decision.",
+    )
+    reuse_parser.add_argument(
+        "--decision",
+        required=True,
+        choices=tuple(sorted(REUSE_DECISIONS)),
+    )
+    phase_parser = subparsers.add_parser(
+        "record-admin-phase",
+        help="Record one complete non-secret delegated admin phase.",
+    )
+    phase_parser.add_argument(
+        "--phase",
+        required=True,
+        choices=tuple(sorted(ADMIN_PHASES)),
+    )
+    phase_parser.add_argument(
+        "--status",
+        required=True,
+        choices=("completed", "reused"),
+    )
+    phase_parser.add_argument("--client-id")
+    phase_parser.add_argument("--claim")
+    phase_parser.add_argument("--user-field")
 
     create_parser = subparsers.add_parser(
         "create",
@@ -2079,6 +2627,28 @@ def main(argv: list[str] | None = None) -> int:
         context = load_context()
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
+        elif args.command == "inspect-admin-setup":
+            result = inspect_admin_setup(context)
+        elif args.command == "record-preflight":
+            result = record_preflight_scenario(
+                context,
+                scenario=args.scenario,
+                instance_url=args.instance_url,
+            )
+        elif args.command == "record-reuse-decision":
+            result = record_reuse_decision(
+                context,
+                decision=args.decision,
+            )
+        elif args.command == "record-admin-phase":
+            result = record_admin_phase(
+                context,
+                phase=args.phase,
+                status=args.status,
+                client_id=args.client_id,
+                claim=args.claim,
+                user_field=args.user_field,
+            )
         elif args.command == "create":
             result = prepare_manual_connection(
                 context,

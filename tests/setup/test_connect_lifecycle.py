@@ -74,6 +74,12 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "Keep valid lifecycle-scoped\nrole attestations unchanged" in runner
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
+    assert 'acceptedContractRevision' in runner
+    assert "Do not run a migration command on a first run" in runner
+    assert '**`"waiting"`**' in runner
+    assert "provider-owned question, discovery, decision" in runner
+    assert "exactly one pause boundary per attempt" in runner
+    assert "must not persist or ask separate questions" in runner
 
     recorded_section = runner.split('- **`"recorded"`**', 1)[1].split(
         '- **`"cancelled"`**',
@@ -111,19 +117,31 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["attestedRoleScope"] == "lifecycle"
+    assert contract["contractRevision"] == 2
+    assert contract["stateMigrationCommand"].endswith("migrate-state")
     assert [phase["id"] for phase in contract["phases"]] == [
-        "topics",
+        "preflight",
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
         "credential",
+        "topics",
         "agent-connection",
         "parameter-sharing",
         "publish",
         "test",
     ]
-    assert contract["phases"][2]["actionExecution"] == "every-invocation"
-    assert contract["phases"][3]["actionExecution"] == "every-invocation"
-    assert contract["phases"][5]["actionExecution"] == "every-invocation"
-    assert contract["phases"][5]["mutates"] is False
-    assert contract["phases"][5]["completionStatuses"] == ["Manual"]
+    by_id = {phase["id"]: phase for phase in contract["phases"]}
+    assert by_id["credential"]["actionExecution"] == "every-invocation"
+    assert by_id["agent-connection"]["actionExecution"] == "every-invocation"
+    assert by_id["parameter-sharing"]["actionExecution"] == "every-invocation"
+    assert by_id["test"]["actionExecution"] == "every-invocation"
+    assert by_id["test"]["mutates"] is False
+    assert by_id["test"]["completionStatuses"] == ["Manual"]
+    assert by_id["entra-registration"]["completionStatuses"] == [
+        "Passed",
+        "Manual",
+    ]
 
     workday = json.loads(
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")

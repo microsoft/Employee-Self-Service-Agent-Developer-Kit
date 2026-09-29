@@ -16,11 +16,14 @@ from flightcheck.checks.servicenow_da_hrsd import (
 from flightcheck.runner import Status
 
 import connect_servicenow_da as snow
+from tests.conftest import require_validated_mock
+from tests.mocks import graph as graph_mock
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000000040008000000000003333"
+APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
 AGENT_SLUG = "employee-self-service-hr"
 
 
@@ -53,7 +56,15 @@ def _components() -> dict:
                     "displayName": "ServiceNow",
                     "connectionId": CONNECTION_ID,
                     "sharedConnectionParameters": json.dumps(
-                        {"name": "entraIDUserLogin", "values": {}}
+                        {
+                            "name": "entraIDUserLogin",
+                            "values": {
+                                "token:InstanceName": {"value": "dev123"},
+                                "token:ResourceUri": {
+                                    "value": APP_CLIENT_ID
+                                },
+                            },
+                        }
                     ),
                 }
             }
@@ -69,7 +80,13 @@ def _connection() -> dict:
             "apiId": snow.CONNECTOR_ID,
             "displayName": "ServiceNow",
             "statuses": [{"target": "token", "status": "Connected"}],
-            "connectionParametersSet": {"name": "entraIDUserLogin"},
+            "connectionParametersSet": {
+                "name": "entraIDUserLogin",
+                "values": {
+                    "token:InstanceName": {"value": "dev123"},
+                    "token:ResourceUri": {"value": APP_CLIENT_ID},
+                },
+            },
         },
     }
 
@@ -106,6 +123,45 @@ def _runner(components: dict):
     )
 
 
+def _graph_client(*, missing_claims: bool = False):
+    require_validated_mock(graph_mock)
+    application = graph_mock.application(
+        app_id=APP_CLIENT_ID,
+        connector_app_id=snow.SERVICENOW_CONNECTOR_APP_ID,
+        optional_claim_names=(
+            ("email",) if missing_claims else ("email", "upn")
+        ),
+    )
+    service_principal = graph_mock.service_principal(
+        app_id=APP_CLIENT_ID,
+        sp_id="00000000-0000-4000-8000-000000007777",
+        application_template_id=None,
+    )
+    grant = graph_mock.oauth2_permission_grant(
+        client_id=service_principal["id"],
+    )
+
+    class FakeGraph:
+        def get_all(
+            self,
+            path: str,
+            params: dict | None = None,
+            *,
+            raise_on_permission_error: bool = False,
+        ) -> list[dict]:
+            del params, raise_on_permission_error
+            if path == "/applications":
+                return [application]
+            if path == "/oauth2PermissionGrants":
+                return [grant]
+            raise AssertionError(f"Unexpected Graph path: {path}")
+
+        def get_service_principals(self, **_kwargs) -> list[dict]:
+            return [service_principal]
+
+    return FakeGraph()
+
+
 def _write_state(root: Path, components: dict) -> None:
     path = (
         root
@@ -118,13 +174,50 @@ def _write_state(root: Path, components: dict) -> None:
     )
     path.parent.mkdir(parents=True)
     component_hash = snow._component_hash(components)
+    discovery = {
+        "source": "connectivity-readonly",
+        "observedAt": "2026-09-29T00:00:00Z",
+        "connectionCandidates": [],
+    }
+    handoffs = {
+        phase: {
+            "status": "completed",
+            "evidence": {
+                "kind": "structured-admin-attestation",
+                "recordedAt": "2026-09-29T00:00:00Z",
+            },
+        }
+        for phase in snow.ADMIN_PHASES
+    }
+    handoffs["entra-registration"]["evidence"]["clientId"] = APP_CLIENT_ID
+    handoffs["servicenow-oidc"]["evidence"].update(
+        {"claim": "upn", "userField": "user_name"}
+    )
     path.write_text(
         json.dumps(
             {
+                "schemaVersion": 3,
                 "provider": snow.PROVIDER_KEY,
                 "agentSlug": AGENT_SLUG,
                 "agentId": AGENT_ID,
                 "environmentId": ENVIRONMENT_ID,
+                "adminSetup": {
+                    "schemaVersion": 1,
+                    "scope": "hrsd",
+                    "authMode": "entraIDUserLogin",
+                    "preflight": {
+                        "scenario": "connected",
+                        "instanceName": "dev123",
+                        "discovery": discovery,
+                        "reuseDecision": {
+                            "decision": "reuse-discovered",
+                            "discoveryHash": snow._canonical_json_hash(
+                                discovery
+                            ),
+                        },
+                    },
+                    "phaseHandoffs": handoffs,
+                },
                 "evidence": {
                     "credential": {"connectionId": CONNECTION_ID},
                     "agentConnection": {
@@ -185,6 +278,131 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
     )
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
+
+
+def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+    runner.graph = _graph_client()
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    statuses = {result.checkpoint_id: result.status for result in results}
+
+    assert statuses["SN-DA-HRSD-ADMIN-PREFLIGHT-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-PLUGIN-001"] == Status.MANUAL.value
+    for suffix in (
+        "APP",
+        "CLAIMS",
+        "SCOPE",
+        "PREAUTH",
+        "PERMISSIONS",
+        "CONSENT",
+    ):
+        assert (
+            statuses[f"SN-DA-HRSD-ENTRA-{suffix}-001"]
+            == Status.PASSED.value
+        )
+    assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
+
+
+def test_graph_failure_cannot_be_overridden_by_admin_attestation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+    runner.graph = _graph_client(missing_claims=True)
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    claim_result = next(
+        result
+        for result in results
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-CLAIMS-001"
+    )
+
+    assert claim_result.status == Status.FAILED.value
+    assert "upn" in claim_result.result
+    assert "correct this exact application setting" in claim_result.remediation
+
+
+def test_graph_unavailable_uses_manual_fallback_only_with_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+    runner.graph = None
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    app = next(
+        result
+        for result in results
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-APP-001"
+    )
+    assert app.status == Status.MANUAL.value
+    assert "Structured admin evidence is present" in app.result
+
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["phaseHandoffs"]["entra-registration"] = {
+        "status": "pending"
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    app = next(
+        result
+        for result in results
+        if result.checkpoint_id == "SN-DA-HRSD-ENTRA-APP-001"
+    )
+    assert app.status == Status.NOT_CONFIGURED.value
+    assert "No Application client ID" in app.result
+
+
+def test_credential_rejects_resource_uri_mismatch(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    connection = _connection()
+    connection["properties"]["connectionParametersSet"]["values"][
+        "token:ResourceUri"
+    ]["value"] = "00000000-0000-4000-8000-000000009999"
+    runner = _runner(components)
+    runner.connectivity = SimpleNamespace(
+        list_connector_connections=lambda _environment_id, _connector: [
+            connection
+        ],
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        item
+        for item in run_servicenow_da_hrsd_checks(runner)
+        if item.checkpoint_id == "SN-DA-HRSD-CREDENTIAL-001"
+    )
+
+    assert result.status == Status.FAILED.value
+    assert "different Instance Name or Resource URI" in result.result
+    assert "exact Application client ID" in result.result
 
 
 def test_hrsd_checks_use_connector_scoped_connections_only(

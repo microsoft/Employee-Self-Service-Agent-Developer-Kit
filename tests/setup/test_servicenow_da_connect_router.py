@@ -75,6 +75,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "connect/shared/lifecycle-runner.md" in skill
     assert 'PROVIDER = "servicenow-da-hrsd"' in skill
     assert "topic mutation and publish require" in skill
+    assert "source-of-truth for the end-to-end admin runbook" in skill
+    assert "current Microsoft Learn ServiceNow" in skill
+    assert "connector documentation" in skill
+    assert "stop and ask the user rather than silently diverging" in skill
 
     actions = (
         _SOLUTION
@@ -90,6 +94,19 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     test = (actions / "test-connection.md").read_text(encoding="utf-8")
     topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")
+    preflight = (actions / "admin-preflight.md").read_text(encoding="utf-8")
+    plugins = (actions / "verify-plugin-prerequisites.md").read_text(
+        encoding="utf-8"
+    )
+    entra = (actions / "guide-entra-registration.md").read_text(
+        encoding="utf-8"
+    )
+    oidc = (actions / "guide-servicenow-oidc.md").read_text(
+        encoding="utf-8"
+    )
+    credential = (actions / "prepare-credential.md").read_text(
+        encoding="utf-8"
+    )
     assert "record-agent-connection" in agent
     assert "ACTION_RESULT = \"cancelled\"" in agent
     assert "record-parameter-sharing --status enabled" in parameter
@@ -102,3 +119,30 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "while the\n  question is pending" in topics
     assert "Absence of\n  an answer is not cancellation" in topics
     assert "explicitly selects\n  **Not now**" in topics
+    assert "exactly-one candidate is still not approval" in preflight
+    assert 'ACTION_RESULT = "waiting"' in preflight
+    assert "Local state absence is not evidence" in preflight
+    assert "com.sn_hr_core" in plugins
+    assert "ITSM must not inherit" in plugins
+    assert "Never run `az ad app create`" in entra
+    assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra
+    assert "`Failed` or `Error`" in entra
+    assert "cannot be overridden" in entra
+    assert "upn" in oidc
+    assert "matching Active" in oidc
+    assert "Do not return the employee's" in oidc
+    assert "Resource URI" in credential
+    assert "verified App A Application client ID" in credential
+    assert "api://<client-id>" in credential
+    assert "one bundled question form" in preflight
+    assert "Ask one question only" in plugins
+    assert "pause exactly once" in entra
+    assert "pause exactly once" in oidc
+    assert "Do not pause between" in entra
+    assert "Do not pause between" in oidc
+    assert "record-admin-phase --phase plugin-prerequisites" in plugins
+    assert "record-admin-phase --phase entra-registration" in entra
+    assert "record-admin-phase --phase servicenow-oidc" in oidc
+    assert "record-admin-operation" not in plugins + entra + oidc
+    assert "one complete high-level step" in credential
+    assert "one completion question" in credential

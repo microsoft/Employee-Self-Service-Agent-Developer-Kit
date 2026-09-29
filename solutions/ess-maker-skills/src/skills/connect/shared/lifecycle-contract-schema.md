@@ -20,10 +20,12 @@ reads a contract, runs the checkpoints it names, and renders results.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
+| `contractRevision` | positive integer | no (default `1`) | Increment when an existing provider changes its ordered plan in a way the Maker must see. The runner records `acceptedContractRevision` and re-shows the complete plan on mismatch without discarding progress. |
 | `provider` | string | yes | Short key, lower-case, no spaces (e.g. `"workday"`). Must match the folder name under `src/skills/connect/{provider}/` and the state folder under `.local/connect/{provider}/`. |
 | `displayName` | string | yes | Human name shown to the user (e.g. `"Workday"`). |
 | `detect` | object | yes | How the runner's caller decides this lifecycle applies at all — see "Detect block" below. |
 | `connectConfig` | string | no | Provider-specific config JSON to pass to FlightCheck as `--connect-config`. Use this when provider state intentionally lives outside `.local/config.json`; the explicit file prevents architecture-specific state from being guessed or merged. |
+| `stateMigrationCommand` | string | no | Exact checked-in command that upgrades provider state before the runner reads it. It must be idempotent, atomic, identity-safe, and non-secret. Failure blocks the lifecycle; the runner never replaces the file with blank state. |
 | `attestedRoleScope` | string | no (default `"phase"`) | Controls reuse of successful `gateMode: "attested"` role gates. `"phase"` preserves the historical behavior: each mutating phase asks separately. `"lifecycle"` persists one attestation per required role for this exact provider + agent lifecycle and reuses it across later mutating phases and resumes. Programmatic gates are never reused through this field. |
 | `phases` | array | yes | Ordered list of phase objects — see "Phase fields" below. Executed strictly in array order; a phase never starts until every phase before it is `done` (or `skipped`, see below). |
 
@@ -65,6 +67,12 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
 | `rollbackPushGlob` | string | no | Static path used when the action always pushes the same local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` value when publishing the rollback. |
 | `rollbackPushGlobFromAction` | boolean | no | Set to `true` when the action resolves the pushed path dynamically. The action must return `ACTION_ROLLBACK_PUSH_GLOB`; the runner validates and persists it before checkpoint verification. Do not combine this with `rollbackPushGlob`. |
+
+For an admin-owned high-level phase, one `actionDoc` represents one complete
+handoff and one pause boundary. It must bundle every internal checklist item,
+the responsible admin role, completion criteria, and requested non-secret
+evidence. Internal checklist items are not separate lifecycle phases,
+persisted questions, or sequential pause turns.
 
 ### Evolving a phase's checkpoint list
 
@@ -109,6 +117,7 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   "agentSlug": "employee-self-service-hr",
   "attested": true,
   "attestedAt": "2026-09-15T14:02:00Z",
+  "acceptedContractRevision": 1,
   "roleAttestations": {},
   "currentPhase": "agent-wiring",
   "phases": {
@@ -131,6 +140,9 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 - `attested` — `true` once the user has seen the up-front plan (phase labels +
   required roles) and agreed to proceed. Set once; never reset by a resume.
   This plan attestation is not itself a role attestation.
+- `acceptedContractRevision` — the provider contract revision whose complete
+  plan the Maker accepted. A mismatch re-shows the plan and updates this value
+  after acceptance while preserving existing progress and provider evidence.
 - `roleAttestations.{requiredRole}` — used only when the contract opts into
   `attestedRoleScope: "lifecycle"`. A valid entry records
   `{verifiedBy: "attested", provider, agentSlug, attestedAt, note}`. It is
@@ -154,6 +166,11 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   accepted `Manual`/`Warning` results. Each value records the acknowledged
   status and UTC `acknowledgedAt`. A resume may reuse the acknowledgement only
   when the live status still matches; a changed status requires a new decision.
+- Providers may add `phaseHandoffs.{phaseId}` (or an equivalently named
+  provider-owned object) for one bundled admin return per high-level phase.
+  Do not model each internal checklist item as a separate persisted question
+  or phase. The shared runner preserves these provider-owned records but does
+  not mark phases complete from them.
 
 The `agentSlug` and state-file path are mandatory isolation boundaries. A
 provider may be connected to multiple agents in one workspace; no agent may
@@ -188,6 +205,9 @@ Provider action documents return one explicit result:
 
 - `ACTION_RESULT = "applied"` — a mutation or verified no-op completed.
 - `ACTION_RESULT = "recorded"` — non-mutating evidence was captured.
+- `ACTION_RESULT = "waiting"` — a delegated admin operation or question is
+  still pending. The phase remains resumable `in-progress`, provider-owned
+  evidence is preserved, and checkpoints do not run.
 - `ACTION_RESULT = "cancelled"` — the maker declined or is unavailable.
 
 Neither `applied` nor `recorded` completes a phase by itself. The phase's live

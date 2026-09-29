@@ -489,6 +489,7 @@ def application(
     preauthorize_connector: bool = True,
     connector_app_id: str = WORKDAY_CONNECTOR_APP_ID,
     graph_permissions: bool = True,
+    optional_claim_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build a single Graph /applications record for the Workday app.
 
@@ -514,6 +515,8 @@ def application(
                 id (Edm.String, key — the object id)
                 appId (Edm.String)
                 displayName (Edm.String)
+                optionalClaims (optionalClaims) — accessToken
+                  Collection(optionalClaim), name (Edm.String)
                 api (apiApplication) — fields used:
                   oauth2PermissionScopes (Collection(permissionScope)):
                     id (Edm.Guid), value (Edm.String),
@@ -565,6 +568,14 @@ def application(
         "displayName": display_name,
         "signInAudience": "AzureADMyOrg",
         "identifierUris": [f"api://{app_id}"],
+        "optionalClaims": {
+            "accessToken": [
+                {"name": name, "source": None, "essential": False}
+                for name in optional_claim_names
+            ],
+            "idToken": [],
+            "saml2Token": [],
+        },
         "api": {
             "oauth2PermissionScopes": scopes,
             "preAuthorizedApplications": preauth,

@@ -1,8 +1,10 @@
 {
+  "contractRevision": 2,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
   "attestedRoleScope": "lifecycle",
+  "stateMigrationCommand": "python scripts/connect_servicenow_da.py migrate-state",
   "detect": {
     "checkpoint": "SN-DA-HRSD-PKG-001",
     "meansInstalled": "Passed",
@@ -10,22 +12,63 @@
   },
   "phases": [
     {
+      "id": "preflight",
+      "label": "Discover existing ServiceNow admin setup and approve what may be reused",
+      "checkpoints": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/admin-preflight.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "plugin-prerequisites",
+      "label": "Confirm the scope-derived ServiceNow plugins and OIDC capability",
+      "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "entra-registration",
+      "label": "Guide and verify the Microsoft Entra User Login application setup",
+      "checkpoints": [
+        "SN-DA-HRSD-ENTRA-APP-001",
+        "SN-DA-HRSD-ENTRA-CLAIMS-001",
+        "SN-DA-HRSD-ENTRA-SCOPE-001",
+        "SN-DA-HRSD-ENTRA-PREAUTH-001",
+        "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+        "SN-DA-HRSD-ENTRA-CONSENT-001"
+      ],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "servicenow-oidc",
+      "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "checkpoints": ["SN-DA-HRSD-OIDC-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-servicenow-oidc.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "credential",
+      "label": "Create or explicitly reuse the exact ServiceNow physical connection",
+      "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
       "id": "topics",
       "label": "Prepare the ServiceNow HRSD topics for this agent",
       "checkpoints": ["SN-DA-HRSD-TOPICS-001"],
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
-      "actionExecution": "once",
-      "mutates": true,
-      "requiredRole": "ESS Maker / Agent Developer",
-      "gateMode": "attested"
-    },
-    {
-      "id": "credential",
-      "label": "Create or select a healthy ServiceNow HRSD credential",
-      "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
-      "completionStatuses": ["Passed"],
-      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
       "actionExecution": "once",
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",

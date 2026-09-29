@@ -17,6 +17,7 @@ import connect_servicenow_da as snow
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000-0000-4000-8000-000000003333"
+APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
 AGENT_SLUG = "employee-self-service-hr"
 
 
@@ -104,7 +105,7 @@ def _components(connection_id: str | None = None) -> dict:
                         {
                             "name": "entraIDUserLogin",
                             "values": {
-                                "token:ResourceUri": {"value": "resource-id"},
+                                "token:ResourceUri": {"value": APP_CLIENT_ID},
                                 "token:InstanceName": {"value": "dev123"},
                             },
                         }
@@ -131,7 +132,7 @@ def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
     assert result["invokeFlowActionCount"] == 1
     assert result["cloudFlowDefinitionCount"] == 0
     assert result["reference"]["instanceName"] == "dev123"
-    assert result["reference"]["resourceUri"] == "resource-id"
+    assert result["reference"]["resourceUri"] == APP_CLIENT_ID
 
 
 def test_summarize_components_requires_active_state_and_status() -> None:
@@ -377,7 +378,7 @@ def test_connection_summary_prefers_token_status() -> None:
                     "name": "entraIDUserLogin",
                     "values": {
                         "token:InstanceName": {"value": "dev123"},
-                        "token:ResourceUri": {"value": "resource-id"},
+                        "token:ResourceUri": {"value": APP_CLIENT_ID},
                         "password": {"value": "must-not-be-returned"},
                     },
                 },
@@ -388,7 +389,7 @@ def test_connection_summary_prefers_token_status() -> None:
     assert result["status"] == "Connected"
     assert result["statusTarget"] == "token"
     assert result["parameterValues"]["token:InstanceName"] == "dev123"
-    assert result["parameterValues"]["token:ResourceUri"] == "resource-id"
+    assert result["parameterValues"]["token:ResourceUri"] == APP_CLIENT_ID
     assert "password" not in result["parameterValues"]
 
 
@@ -901,6 +902,258 @@ def test_connectivity_scopes_are_read_only() -> None:
     assert not any(scope.endswith(".Write") for scope in scopes)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("dev123", "dev123"),
+        ("https://dev123.service-now.com", "dev123"),
+        ("https://DEV123.service-now.com/", "dev123"),
+    ],
+)
+def test_normalize_instance_name(value: str, expected: str) -> None:
+    assert snow.normalize_instance_name(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://dev123.service-now.com",
+        "https://dev123.service-now.com/path",
+        "https://example.com",
+        "dev123.example.com",
+    ],
+)
+def test_normalize_instance_name_rejects_unsafe_values(value: str) -> None:
+    with pytest.raises(snow.ServiceNowConnectError):
+        snow.normalize_instance_name(value)
+
+
+def test_plugin_requirements_are_scope_and_auth_dynamic() -> None:
+    hrsd = snow.required_servicenow_prerequisites("hrsd")
+    itsm = snow.required_servicenow_prerequisites("itsm")
+
+    assert [item["id"] for item in hrsd] == [
+        "hr-core",
+        "oidc-capability",
+    ]
+    assert [item["id"] for item in itsm] == ["oidc-capability"]
+    assert hrsd[0]["aliases"] == ["com.sn_hr_core", "sn_hr_core"]
+    with pytest.raises(snow.ServiceNowConnectError):
+        snow.required_servicenow_prerequisites("hrsd", "oauth2ServiceNow")
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["connected", "app-oidc", "plugins-only", "scratch", "unsure"],
+)
+def test_preflight_paths_require_discovery_and_explicit_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    scenario: str,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [
+                {
+                    "name": CONNECTION_ID.replace("-", ""),
+                    "properties": {
+                        "displayName": "Existing ServiceNow",
+                        "statuses": [
+                            {"target": "token", "status": "Connected"}
+                        ],
+                        "connectionParametersSet": {
+                            "name": snow.AUTH_MODE,
+                            "values": {
+                                "token:InstanceName": {"value": "dev123"},
+                                "token:ResourceUri": {
+                                    "value": APP_CLIENT_ID
+                                },
+                            },
+                        },
+                    },
+                }
+            ]
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    preflight = snow.record_preflight_scenario(
+        _context(),
+        scenario=scenario,
+        instance_url="https://dev123.service-now.com",
+    )
+    assert preflight["reuseDecision"] is None
+    discovery = snow.inspect_admin_setup(_context())
+    decision = snow.record_reuse_decision(
+        _context(),
+        decision="reuse-discovered",
+    )
+
+    assert discovery["connectionCandidates"][0]["status"] == "Connected"
+    assert decision["decision"] == "reuse-discovered"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["adminSetup"]["preflight"]["scenario"] == scenario
+    assert (
+        state["adminSetup"]["preflight"]["reuseDecision"]["discoveryHash"]
+        == snow._canonical_json_hash(discovery)
+    )
+
+
+def test_reuse_and_reused_operations_require_explicit_preflight_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(snow.ServiceNowConnectError, match="discovery"):
+        snow.record_reuse_decision(
+            _context(),
+            decision="reuse-discovered",
+        )
+    with pytest.raises(snow.ServiceNowConnectError, match="reuse approval"):
+        snow.record_admin_phase(
+            _context(),
+            phase="plugin-prerequisites",
+            status="reused",
+        )
+
+
+def test_admin_operation_records_only_non_secret_identity_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    app = snow.record_admin_phase(
+        _context(),
+        phase="entra-registration",
+        status="completed",
+        client_id=APP_CLIENT_ID,
+    )
+    mapping = snow.record_admin_phase(
+        _context(),
+        phase="servicenow-oidc",
+        status="completed",
+        claim="upn",
+        user_field="user_name",
+    )
+
+    assert app["evidence"]["clientId"] == APP_CLIENT_ID
+    assert mapping["evidence"]["claim"] == "upn"
+    assert mapping["evidence"]["userField"] == "user_name"
+    serialized = _lifecycle_path(tmp_path).read_text(encoding="utf-8")
+    assert "secret" not in serialized.casefold()
+    assert "password" not in serialized.casefold()
+    assert "token" not in serialized.casefold()
+
+
+def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "attested": True,
+                "phases": {
+                    phase_id: {
+                        "status": "done",
+                        "actionApplied": True,
+                        "checkpointResults": {"old": "Passed"},
+                    }
+                    for phase_id in (
+                        "topics",
+                        "credential",
+                        "agent-connection",
+                        "parameter-sharing",
+                        "publish",
+                        "test",
+                    )
+                },
+                "evidence": {
+                    "credential": {"connectionId": CONNECTION_ID},
+                    "custom": {"mustSurvive": True},
+                },
+                "transactions": {
+                    "topics": {"operation": {"status": "committed"}}
+                },
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = snow._load_lifecycle_state(_context())
+    snow._write_lifecycle_state(_context(), state)
+    first_bytes = state_path.read_bytes()
+    state_again = snow._load_lifecycle_state(_context())
+    snow._write_lifecycle_state(_context(), state_again)
+
+    assert state["schemaVersion"] == 3
+    assert state["acceptedContractRevision"] == 1
+    assert state["adminSetup"]["preflight"]["reuseDecision"] is None
+    assert set(state["adminSetup"]["phaseHandoffs"]) == {
+        "preflight",
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+        "credential",
+    }
+    assert "operations" not in state["adminSetup"]
+    assert state["phases"]["preflight"]["status"] == "pending"
+    assert state["phases"]["credential"]["status"] == "in-progress"
+    assert "actionApplied" not in state["phases"]["credential"]
+    for phase_id in (
+        "topics",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ):
+        assert state["phases"][phase_id]["status"] == "pending"
+    assert state["evidence"]["custom"]["mustSurvive"] is True
+    assert state["transactions"]["topics"]["operation"]["status"] == "committed"
+    assert state["migration"]["schemaV3"]["reuseApprovalInferred"] is False
+    assert first_bytes == state_path.read_bytes()
+
+
+def test_future_lifecycle_schema_fails_without_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    original = json.dumps(
+        {
+            "schemaVersion": snow.LIFECYCLE_SCHEMA_VERSION + 1,
+            "provider": snow.PROVIDER_KEY,
+            "agentSlug": AGENT_SLUG,
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+        }
+    )
+    state_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(snow.ServiceNowConnectError, match="newer kit"):
+        snow._load_lifecycle_state(_context())
+
+    assert state_path.read_text(encoding="utf-8") == original
+
+
 def test_prepare_manual_connection_returns_exact_maker_guidance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -941,7 +1194,7 @@ def test_prepare_manual_connection_returns_exact_maker_guidance(
 
     assert result["creationMode"] == "manual"
     assert result["connection"]["instanceName"] == "dev123"
-    assert result["connection"]["resourceUri"] == "resource-id"
+    assert result["connection"]["resourceUri"] == APP_CLIENT_ID
     assert any(
         "Connection settings" in instruction
         for instruction in result["instructions"]
@@ -1006,6 +1259,30 @@ def test_prepare_manual_connection_requests_missing_metadata(
         / "state.json"
     ).exists()
     assert not _lifecycle_path(tmp_path).exists()
+
+
+def test_prepare_manual_connection_rejects_api_identifier_uri(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return _components()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(snow.ServiceNowConnectError, match="not api://"):
+        snow.prepare_manual_connection(
+            _context(),
+            instance_name="https://dev123.service-now.com",
+            resource_uri=f"api://{APP_CLIENT_ID}",
+            display_name=None,
+        )
 
 
 def test_record_test_attestation_persists_result(

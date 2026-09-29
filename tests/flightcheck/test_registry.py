@@ -230,9 +230,17 @@ class TestTransitiveRequirements:
             ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
         ]
 
+        entra = registry.transitive_requirements(
+            "SN-DA-HRSD-ENTRA-CONSENT-001"
+        )
+        assert entra.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
+        )
+        assert entra.requires_dataverse_endpoint is False
+
         test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
         assert test.clients == frozenset(
-            {registry.AGENTBUILDER, registry.CONNECTIVITY}
+            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
         )
         assert test.requires_dataverse_endpoint is False
         assert [label for label, _ in test.ordered_fns] == [

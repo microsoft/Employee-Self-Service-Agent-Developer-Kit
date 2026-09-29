@@ -1,0 +1,70 @@
+# Guide the ServiceNow OIDC trust and user mapping
+
+Treat ServiceNow OIDC/auth setup as one complete high-level step. Give the
+Maker the full runbook, owner role, completion conditions, and non-secret
+evidence requirements, then pause exactly once. Do not pause between role
+elevation, provider registration, metadata, claim mapping, and user checks.
+
+Never create or patch ServiceNow security objects.
+
+## Goal and owner
+
+- **Goal:** make ServiceNow trust App A's delegated user token and resolve the
+  signed-in employee to one matching Active ServiceNow user.
+- **Owner role:** ServiceNow `admin` or `security_admin`, elevated to
+  `security_admin`.
+
+## Complete admin instructions
+
+1. From the profile menu, select **Elevate role** and elevate to
+   `security_admin`. If **New** is missing in the security configuration, the
+   role is not elevated.
+2. Open **All -> System OAuth -> Application Registry -> New -> Configure an
+   OIDC provider to verify ID tokens**.
+3. Create or reuse the ESS OIDC entity:
+   - Client ID = verified App A Application client ID;
+   - if the form requires **Client secret**, the connector does not use that
+     value for this flow; the admin enters a tenant-approved placeholder
+     locally and never returns or persists it;
+   - Scope Restriction = Broadly scoped;
+   - entity Active.
+4. In **OAuth OIDC Provider Configuration**, set:
+   - metadata URL =
+     `https://login.microsoftonline.com/<tenant-id>/.well-known/openid-configuration`;
+   - cache lifespan = `120`;
+   - Application = `Global`;
+   - JTI verification = disabled.
+5. Set **User Claim** and **User Field**. Prefer `upn` mapped to the
+   ServiceNow field containing the same UPN (commonly `user_name` or `email`).
+   An evidence-based alternative is allowed only when claim and field values
+   match exactly.
+6. Open **All -> User Administration -> Users** and confirm a real signed-in
+   test user has one matching Active record. Do not return the employee's
+   identifier to the skill.
+
+Do not use a Graph Connector app-only OIDC configuration. Use the Application
+client ID, not the object ID, `api://` URI, connector app ID, secret, or
+certificate.
+
+## Completion signal and evidence
+
+The Maker should return once, after the entire step is complete, with:
+
+- the non-secret claim identifier;
+- the non-secret ServiceNow user-field identifier; and
+- confirmation that the OIDC entity is Active and a matching Active user
+  exists.
+
+Ask one completion question for the whole ServiceNow OIDC step. While the
+question is pending, do not return an action result. If the admin is not done,
+return `ACTION_RESULT = "waiting"`.
+
+After completion, record one bundled phase handoff:
+
+```text
+python scripts/connect_servicenow_da.py record-admin-phase --phase servicenow-oidc --status <completed|reused> --claim <claim> --user-field <field>
+```
+
+Return `ACTION_RESULT = "recorded"` after the phase handoff is persisted. The
+phase's `Manual` result is structured attestation because no supported
+read-only ServiceNow security-object API is used.

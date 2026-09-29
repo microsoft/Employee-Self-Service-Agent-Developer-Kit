@@ -11,9 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from connect_servicenow_da import (
+    AUTH_MODE,
     CONNECTOR_NAME,
     HR_SCHEMA_NAME,
     PROVIDER_KEY,
+    SERVICENOW_CONNECTOR_APP_ID,
+    normalize_client_id,
+    normalize_instance_name,
+    required_servicenow_prerequisites,
     summarize_components,
 )
 
@@ -23,8 +28,12 @@ from ..runner import CheckResult, Priority, Role, Status
 
 _CATEGORY = "ServiceNow DA HRSD"
 _ROLES = [Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value]
-
-
+_MS_GRAPH_RESOURCE_APP_ID = "00000003-0000-0000-c000-000000000000"
+_GRAPH_DELEGATED_SCOPE_IDS = {
+    "openid": "37f7f235-527c-4136-accd-4a02d197296e",
+    "profile": "14dad69e-099b-42c9-810b-d002981feec1",
+    "User.Read": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+}
 def _result(
     checkpoint_id: str,
     status: str,
@@ -187,6 +196,8 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     state = _load_state(slug)
     evidence = state.get("evidence")
     evidence = evidence if isinstance(evidence, dict) else {}
+    admin_setup = state.get("adminSetup")
+    admin_setup = admin_setup if isinstance(admin_setup, dict) else {}
     component_hash = _hash(components)
     connections: list[dict[str, Any]] = []
     connectivity_error = ""
@@ -207,10 +218,20 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
 
     return [
         _package_result(slug, summary),
+        _preflight_result(admin_setup),
+        _plugin_result(admin_setup),
+        *_entra_results(getattr(runner, "graph", None), admin_setup),
+        _oidc_result(admin_setup),
         _topics_result(summary, evidence, component_hash),
-        _credential_result(evidence, connections, connectivity_error),
+        _credential_result(
+            evidence,
+            admin_setup,
+            connections,
+            connectivity_error,
+        ),
         _agent_connection_result(
             evidence,
+            admin_setup,
             connections,
             connectivity_error,
             component_hash,
@@ -228,6 +249,15 @@ def _all_unavailable(
 ) -> list[CheckResult]:
     ids = (
         "PKG",
+        "ADMIN-PREFLIGHT",
+        "PLUGIN",
+        "ENTRA-APP",
+        "ENTRA-CLAIMS",
+        "ENTRA-SCOPE",
+        "ENTRA-PREAUTH",
+        "ENTRA-PERMISSIONS",
+        "ENTRA-CONSENT",
+        "OIDC",
         "TOPICS",
         "CREDENTIAL",
         "AGENT-CONNECTION",
@@ -260,6 +290,496 @@ def _package_result(slug: str, summary: dict[str, Any]) -> CheckResult:
         (
             "Install the ServiceNow HRSD extension for this exact HR agent."
             if not count
+            else ""
+        ),
+    )
+
+
+def _phase_handoffs(admin_setup: dict[str, Any]) -> dict[str, Any]:
+    value = admin_setup.get("phaseHandoffs")
+    return value if isinstance(value, dict) else {}
+
+
+def _phase_handoff(
+    admin_setup: dict[str, Any],
+    phase: str,
+) -> dict[str, Any]:
+    value = _phase_handoffs(admin_setup).get(phase)
+    return value if isinstance(value, dict) else {}
+
+
+def _phase_attested(
+    admin_setup: dict[str, Any],
+    phase: str,
+) -> bool:
+    return _phase_handoff(admin_setup, phase).get("status") in {
+        "completed",
+        "reused",
+    }
+
+
+def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
+    preflight = admin_setup.get("preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    discovery = preflight.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    decision = preflight.get("reuseDecision")
+    decision = decision if isinstance(decision, dict) else {}
+    if not _phase_attested(admin_setup, "preflight"):
+        status = Status.NOT_CONFIGURED.value
+        result = "The bundled preflight/reuse handoff is incomplete."
+    elif not preflight.get("scenario"):
+        status = Status.NOT_CONFIGURED.value
+        result = "The Maker has not described which remote setup already exists."
+    elif not discovery.get("observedAt"):
+        status = Status.NOT_CONFIGURED.value
+        result = "Read-only remote setup discovery has not run."
+    elif not decision.get("decision"):
+        status = Status.NOT_CONFIGURED.value
+        result = "The Maker has not approved reuse or configuration of the gaps."
+    elif decision.get("discoveryHash") != _hash(discovery):
+        status = Status.NOT_CONFIGURED.value
+        result = "Remote discovery changed after the Maker's reuse decision."
+    else:
+        status = Status.PASSED.value
+        result = (
+            "Read-only discovery completed and the Maker explicitly approved "
+            f"'{decision['decision']}'."
+        )
+    return _result(
+        "SN-DA-HRSD-ADMIN-PREFLIGHT-001",
+        status,
+        "ServiceNow admin setup preflight and reuse decision",
+        result,
+        (
+            "Run the admin preflight, review every discovered remote item, "
+            "then explicitly choose reuse or configure the missing items."
+            if status != Status.PASSED.value
+            else ""
+        ),
+    )
+
+
+def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
+    requirements = required_servicenow_prerequisites(
+        str(admin_setup.get("scope") or "hrsd"),
+        str(admin_setup.get("authMode") or AUTH_MODE),
+    )
+    missing = [] if _phase_attested(
+        admin_setup,
+        "plugin-prerequisites",
+    ) else [requirement["id"] for requirement in requirements]
+    status = (
+        Status.MANUAL.value if not missing else Status.NOT_CONFIGURED.value
+    )
+    return _result(
+        "SN-DA-HRSD-PLUGIN-001",
+        status,
+        "Scope-derived ServiceNow plugin prerequisites",
+        (
+            "The ServiceNow admin confirmed HR Core and OIDC capability."
+            if not missing
+            else "Missing admin confirmation for: " + ", ".join(missing) + "."
+        ),
+        (
+            "Ask a ServiceNow admin to confirm every scope-derived plugin or "
+            "capability is installed and Active."
+            if missing
+            else ""
+        ),
+    )
+
+
+def _entra_client_id(admin_setup: dict[str, Any]) -> str:
+    evidence = _phase_handoff(
+        admin_setup,
+        "entra-registration",
+    ).get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    value = evidence.get("clientId")
+    return str(value or "")
+
+
+def _entra_manual_or_missing(
+    admin_setup: dict[str, Any],
+    checkpoint_id: str,
+    description: str,
+    reason: str,
+) -> CheckResult:
+    attested = _phase_attested(admin_setup, "entra-registration")
+    return _result(
+        checkpoint_id,
+        Status.MANUAL.value if attested else Status.NOT_CONFIGURED.value,
+        description,
+        (
+            f"{reason} Structured admin evidence is present."
+            if attested
+            else f"{reason} Structured admin evidence is also missing."
+        ),
+        (
+            "Have the Entra admin complete or confirm the full registration, "
+            "then rerun with Microsoft Graph read access when available."
+        ),
+    )
+
+
+def _entra_error_results(message: str) -> list[CheckResult]:
+    rows = (
+        ("APP", "Entra application registration exists"),
+        ("CLAIMS", "Entra access-token optional claims"),
+        ("SCOPE", "Entra identifier URI and user_impersonation scope"),
+        ("PREAUTH", "ServiceNow connector pre-authorization"),
+        ("PERMISSIONS", "Microsoft Graph delegated permissions"),
+        ("CONSENT", "Tenant-wide admin consent"),
+    )
+    return [
+        _result(
+            f"SN-DA-HRSD-ENTRA-{suffix}-001",
+            Status.ERROR.value,
+            description,
+            message,
+            "Restore read-only Microsoft Graph access and retry.",
+        )
+        for suffix, description in rows
+    ]
+
+
+def _entra_results(
+    graph,
+    admin_setup: dict[str, Any],
+) -> list[CheckResult]:
+    client_id = _entra_client_id(admin_setup)
+    rows = (
+        (
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "Entra application registration exists",
+        ),
+        (
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "Entra access-token optional claims",
+        ),
+        (
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "Entra identifier URI and user_impersonation scope",
+        ),
+        (
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+            "ServiceNow connector pre-authorization",
+        ),
+        (
+            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+            "Microsoft Graph delegated permissions",
+        ),
+        (
+            "SN-DA-HRSD-ENTRA-CONSENT-001",
+            "Tenant-wide admin consent",
+        ),
+    )
+    if not client_id:
+        return [
+            _result(
+                checkpoint_id,
+                Status.NOT_CONFIGURED.value,
+                description,
+                "No Application client ID has been recorded.",
+                "Record only the non-secret Application client ID.",
+            )
+            for checkpoint_id, description in rows
+        ]
+    try:
+        normalized_client_id = normalize_client_id(client_id)
+    except Exception as exc:
+        return _entra_error_results(str(exc))
+    if graph is None:
+        return [
+            _entra_manual_or_missing(
+                admin_setup,
+                checkpoint_id,
+                description,
+                "Microsoft Graph verification is unavailable.",
+            )
+            for checkpoint_id, description in rows
+        ]
+
+    try:
+        applications = graph.get_all(
+            "/applications",
+            params={
+                "$filter": f"appId eq '{normalized_client_id}'",
+                "$select": (
+                    "id,appId,displayName,signInAudience,identifierUris,"
+                    "optionalClaims,api,requiredResourceAccess"
+                ),
+            },
+            raise_on_permission_error=True,
+        )
+    except PermissionError:
+        return [
+            _entra_manual_or_missing(
+                admin_setup,
+                checkpoint_id,
+                description,
+                "Microsoft Graph denied read-only application access.",
+            )
+            for checkpoint_id, description in rows
+        ]
+    except Exception as exc:
+        return _entra_error_results(
+            f"Unable to query Microsoft Graph: {type(exc).__name__}: {exc}"
+        )
+
+    if not applications:
+        return [
+            _result(
+                checkpoint_id,
+                Status.FAILED.value,
+                description,
+                (
+                    "Microsoft Graph confirms that no application with the "
+                    f"recorded client ID {normalized_client_id} exists."
+                ),
+                "Correct the client ID or have the Entra admin create the app.",
+            )
+            for checkpoint_id, description in rows
+        ]
+    application = applications[0]
+    api = application.get("api")
+    api = api if isinstance(api, dict) else {}
+    scopes = api.get("oauth2PermissionScopes")
+    scopes = scopes if isinstance(scopes, list) else []
+    scope = next(
+        (
+            value
+            for value in scopes
+            if isinstance(value, dict)
+            and value.get("value") == "user_impersonation"
+            and value.get("isEnabled", True)
+        ),
+        None,
+    )
+    scope_id = str((scope or {}).get("id") or "")
+    optional_claims = application.get("optionalClaims")
+    optional_claims = (
+        optional_claims if isinstance(optional_claims, dict) else {}
+    )
+    access_token_claims = optional_claims.get("accessToken")
+    access_token_claims = (
+        access_token_claims if isinstance(access_token_claims, list) else []
+    )
+    claim_names = {
+        str(value.get("name") or "").casefold()
+        for value in access_token_claims
+        if isinstance(value, dict)
+    }
+    missing_claims = sorted({"email", "upn"} - claim_names)
+    identifiers = {
+        str(value).casefold()
+        for value in application.get("identifierUris") or []
+    }
+    scope_ok = (
+        f"api://{normalized_client_id}".casefold() in identifiers
+        and bool(scope_id)
+    )
+    preauthorized = any(
+        isinstance(value, dict)
+        and str(value.get("appId") or "").casefold()
+        == SERVICENOW_CONNECTOR_APP_ID.casefold()
+        and scope_id
+        in {
+            str(permission_id)
+            for permission_id in value.get("delegatedPermissionIds") or []
+        }
+        for value in api.get("preAuthorizedApplications") or []
+    )
+    graph_access_ids: set[str] = set()
+    for resource in application.get("requiredResourceAccess") or []:
+        if (
+            isinstance(resource, dict)
+            and str(resource.get("resourceAppId") or "").casefold()
+            == _MS_GRAPH_RESOURCE_APP_ID.casefold()
+        ):
+            graph_access_ids.update(
+                str(value.get("id") or "").casefold()
+                for value in resource.get("resourceAccess") or []
+                if isinstance(value, dict) and value.get("type") == "Scope"
+            )
+    missing_permissions = sorted(
+        name
+        for name, permission_id in _GRAPH_DELEGATED_SCOPE_IDS.items()
+        if permission_id.casefold() not in graph_access_ids
+    )
+
+    def programmatic(
+        checkpoint_id: str,
+        description: str,
+        passed: bool,
+        failure: str,
+    ) -> CheckResult:
+        if not passed:
+            return _result(
+                checkpoint_id,
+                Status.FAILED.value,
+                description,
+                failure,
+                "Have the Entra admin correct this exact application setting.",
+            )
+        if not _phase_attested(admin_setup, "entra-registration"):
+            return _result(
+                checkpoint_id,
+                Status.NOT_CONFIGURED.value,
+                description,
+                "Microsoft Graph verifies the setting, but explicit Maker reuse approval is not recorded.",
+                "Confirm this exact existing setting with the admin and record it as reused.",
+            )
+        return _result(
+            checkpoint_id,
+            Status.PASSED.value,
+            description,
+            "Microsoft Graph read-only verification passed.",
+        )
+
+    results = [
+        programmatic(
+            rows[0][0],
+            rows[0][1],
+            (
+                str(application.get("appId") or "").casefold()
+                == normalized_client_id.casefold()
+                and application.get("signInAudience") == "AzureADMyOrg"
+            ),
+            "The application is missing or is not single-tenant.",
+        ),
+        programmatic(
+            rows[1][0],
+            rows[1][1],
+            not missing_claims,
+            "Missing access-token optional claim(s): "
+            + ", ".join(missing_claims)
+            + ".",
+        ),
+        programmatic(
+            rows[2][0],
+            rows[2][1],
+            scope_ok,
+            (
+                "The application must expose api://<client-id> and an enabled "
+                "user_impersonation scope."
+            ),
+        ),
+        programmatic(
+            rows[3][0],
+            rows[3][1],
+            preauthorized,
+            (
+                "The ServiceNow connector application is not pre-authorized "
+                "for the user_impersonation scope."
+            ),
+        ),
+        programmatic(
+            rows[4][0],
+            rows[4][1],
+            not missing_permissions,
+            "Missing Graph delegated permission(s): "
+            + ", ".join(missing_permissions)
+            + ".",
+        ),
+    ]
+
+    try:
+        service_principals = graph.get_service_principals(
+            filter_expr=f"appId eq '{normalized_client_id}'",
+            select="id,appId",
+            raise_on_permission_error=True,
+        )
+        grants = (
+            graph.get_all(
+                "/oauth2PermissionGrants",
+                params={
+                    "$filter": (
+                        f"clientId eq '{service_principals[0]['id']}'"
+                    )
+                },
+                raise_on_permission_error=True,
+            )
+            if service_principals
+            else []
+        )
+    except PermissionError:
+        results.append(
+            _entra_manual_or_missing(
+                admin_setup,
+                rows[5][0],
+                rows[5][1],
+                "Microsoft Graph denied read-only consent access.",
+            )
+        )
+        return results
+    except Exception as exc:
+        results.append(
+            _result(
+                rows[5][0],
+                Status.ERROR.value,
+                rows[5][1],
+                f"Unable to verify admin consent: {type(exc).__name__}: {exc}",
+                "Restore read-only Microsoft Graph access and retry.",
+            )
+        )
+        return results
+    granted_scopes: set[str] = set()
+    for grant in grants:
+        if (
+            isinstance(grant, dict)
+            and grant.get("consentType") == "AllPrincipals"
+        ):
+            granted_scopes.update(
+                str(grant.get("scope") or "").casefold().split()
+            )
+    required_scopes = {name.casefold() for name in _GRAPH_DELEGATED_SCOPE_IDS}
+    missing_consent = sorted(required_scopes - granted_scopes)
+    results.append(
+        programmatic(
+            rows[5][0],
+            rows[5][1],
+            bool(service_principals) and not missing_consent,
+            (
+                "Tenant-wide admin consent is missing for: "
+                + ", ".join(missing_consent)
+                + "."
+                if service_principals
+                else "The application service principal does not exist."
+            ),
+        )
+    )
+    return results
+
+
+def _oidc_result(admin_setup: dict[str, Any]) -> CheckResult:
+    handoff = _phase_handoff(admin_setup, "servicenow-oidc")
+    missing = not _phase_attested(admin_setup, "servicenow-oidc")
+    mapping = handoff.get("evidence")
+    mapping = mapping if isinstance(mapping, dict) else {}
+    if missing:
+        status = Status.NOT_CONFIGURED.value
+        result = "The complete ServiceNow OIDC admin handoff is missing."
+    elif not mapping.get("claim") or not mapping.get("userField"):
+        status = Status.NOT_CONFIGURED.value
+        result = "The OIDC claim-to-user-field mapping is incomplete."
+    else:
+        status = Status.MANUAL.value
+        result = (
+            "The ServiceNow admin confirmed security_admin elevation, OIDC "
+            f"provider metadata, {mapping['claim']} -> "
+            f"{mapping['userField']} mapping, and a matching Active user."
+        )
+    return _result(
+        "SN-DA-HRSD-OIDC-001",
+        status,
+        "ServiceNow OIDC provider and active-user mapping",
+        result,
+        (
+            "Complete the full guided ServiceNow OIDC step, then record only "
+            "the non-secret claim and user-field identifiers."
+            if status != Status.MANUAL.value
             else ""
         ),
     )
@@ -318,6 +838,7 @@ def _selected_connection(
 
 def _credential_result(
     evidence: dict[str, Any],
+    admin_setup: dict[str, Any],
     connections: list[dict[str, Any]],
     error: str,
 ) -> CheckResult:
@@ -325,6 +846,9 @@ def _credential_result(
     if error:
         status = Status.ERROR.value
         result = error
+    elif not _phase_attested(admin_setup, "credential"):
+        status = Status.NOT_CONFIGURED.value
+        result = "The bundled physical-connection handoff is incomplete."
     elif not credential.get("connectionId"):
         status = Status.NOT_CONFIGURED.value
         result = "No ServiceNow credential has been selected."
@@ -333,7 +857,7 @@ def _credential_result(
         result = "The selected ServiceNow credential is not visible."
     elif (
         _connection_status(match) != "Connected"
-        or _auth_mode(match) != "entraIDUserLogin"
+        or _auth_mode(match) != AUTH_MODE
     ):
         status = Status.FAILED.value
         result = (
@@ -341,8 +865,65 @@ def _credential_result(
             "Entra ID User Login connection."
         )
     else:
-        status = Status.PASSED.value
-        result = "The selected ServiceNow credential is Connected and uses Entra."
+        properties = match.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        parameter_set = properties.get("connectionParametersSet")
+        parameter_set = (
+            parameter_set if isinstance(parameter_set, dict) else {}
+        )
+        values = parameter_set.get("values")
+        values = values if isinstance(values, dict) else {}
+
+        def parameter(name: str) -> Any:
+            value = values.get(name)
+            return value.get("value") if isinstance(value, dict) else None
+
+        expected_instance = (
+            (admin_setup.get("preflight") or {}).get("instanceName")
+            if isinstance(admin_setup.get("preflight"), dict)
+            else None
+        )
+        expected_client_id = _entra_client_id(admin_setup)
+        actual_instance = parameter("token:InstanceName") or parameter(
+            "instance"
+        )
+        actual_resource = parameter("token:ResourceUri")
+        if not expected_instance or not expected_client_id:
+            status = Status.NOT_CONFIGURED.value
+            result = (
+                "The lifecycle does not have a confirmed Instance Name and "
+                "Application client ID for exact connection verification."
+            )
+        elif not actual_instance or not actual_resource:
+            status = Status.FAILED.value
+            result = (
+                "Direct connector inventory did not expose the connection's "
+                "Instance Name and Resource URI."
+            )
+        else:
+            try:
+                values_match = (
+                    normalize_instance_name(str(actual_instance))
+                    == expected_instance
+                    and normalize_client_id(str(actual_resource))
+                    == expected_client_id
+                )
+            except Exception:
+                values_match = False
+            if not values_match:
+                status = Status.FAILED.value
+                result = (
+                    "The Connected credential targets a different Instance "
+                    "Name or Resource URI. Resource URI must be the exact "
+                    "Application client ID, not an api:// URI or object ID."
+                )
+            else:
+                status = Status.PASSED.value
+                result = (
+                    "Direct connector inventory verifies Connected "
+                    "entraIDUserLogin with the exact Instance Name and "
+                    "Application client ID."
+                )
     return _result(
         "SN-DA-HRSD-CREDENTIAL-001",
         status,
@@ -399,11 +980,17 @@ def _binding_current(
 
 def _agent_connection_result(
     evidence: dict[str, Any],
+    admin_setup: dict[str, Any],
     connections: list[dict[str, Any]],
     error: str,
     component_hash: str,
 ) -> CheckResult:
-    credential_check = _credential_result(evidence, connections, error)
+    credential_check = _credential_result(
+        evidence,
+        admin_setup,
+        connections,
+        error,
+    )
     record = evidence.get("agentConnection")
     if credential_check.status not in {
         Status.PASSED.value,
