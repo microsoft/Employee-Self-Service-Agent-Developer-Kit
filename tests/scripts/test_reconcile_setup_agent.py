@@ -90,11 +90,15 @@ def test_native_probe_returns_identity_without_dataverse_probe(
     monkeypatch.setattr(
         reconcile,
         "_probe_native_agent",
-        lambda *_args, **_kwargs: {
-            "fullBotName": "Employee Self-Service HR",
-            "schemaName": "gptagent_copilotforemployeeselfservicehr",
-            "managedProperties": {"isManaged": True},
-        },
+        lambda *_args, **_kwargs: (
+            {
+                "fullBotName": "Employee Self-Service HR",
+                "schemaName": "gptagent_copilotforemployeeselfservicehr",
+                "managedProperties": {"isManaged": True},
+            },
+            "minimalbot-direct",
+            None,
+        ),
     )
     monkeypatch.setattr(
         reconcile,
@@ -122,6 +126,122 @@ def test_native_probe_returns_identity_without_dataverse_probe(
             "isManaged": True,
         },
     }
+
+
+def test_native_probe_uses_component_identity_when_direct_schema_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def get_agent(self, agent_id: str) -> dict[str, object]:
+            assert agent_id == AGENT_ID
+            return {
+                "fullBotName": "Employee Self-Service (HR)",
+                "schemaName": "",
+            }
+
+        def fetch_components(self, agent_id: str) -> dict[str, object]:
+            assert agent_id == AGENT_ID
+            return {
+                "bot": {
+                    "cdsBotId": AGENT_ID,
+                    "schemaName": (
+                        "gptagent_copilotforemployeeselfservicehr"
+                    ),
+                }
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "derive_environment_host",
+        lambda *_args, **_kwargs: "https://environment.example.com",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "AgentBuilderClient",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="preprod",
+    )
+
+    assert result == {
+        "backend": "native",
+        "outcome": "found",
+        "evidence": "minimalbot-components",
+        "productFamily": "da-ga",
+        "identity": {
+            "displayName": "Employee Self-Service (HR)",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+    }
+
+
+def test_native_probe_preserves_found_when_component_identity_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def get_agent(self, agent_id: str) -> dict[str, object]:
+            assert agent_id == AGENT_ID
+            return {
+                "fullBotName": "Employee Self-Service (HR)",
+                "schemaName": "",
+            }
+
+        def fetch_components(self, agent_id: str) -> dict[str, object]:
+            assert agent_id == AGENT_ID
+            return {
+                "bot": {
+                    "cdsBotId": "00000000-0000-4000-8000-000000009999",
+                    "schemaName": (
+                        "gptagent_copilotforemployeeselfservicehr"
+                    ),
+                }
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "derive_environment_host",
+        lambda *_args, **_kwargs: "https://environment.example.com",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "AgentBuilderClient",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="preprod",
+    )
+
+    assert result["backend"] == "native"
+    assert result["outcome"] == "found"
+    assert result["evidence"] == "minimalbot-direct"
+    assert result["productFamily"] == "unknown"
+    assert result["identity"] == {
+        "displayName": "Employee Self-Service (HR)",
+        "schemaName": "",
+    }
+    assert result["productIdentity"]["outcome"] == "uncertain"
+    assert result["productIdentity"]["stage"] == "component-identity"
+    assert (
+        result["productIdentity"]["error"]["causes"][0]["message"]
+        == "Component fetch returned identity for a different agent."
+    )
 
 
 @pytest.mark.parametrize(
