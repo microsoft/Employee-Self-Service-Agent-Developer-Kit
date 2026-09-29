@@ -790,6 +790,7 @@ _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
     "tokenHost",
     "vertical",
     "verticals",
+    "workdaySamlEntityId",
 })
 
 
@@ -808,6 +809,25 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
         overlay = json.load(f)
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
+
+    if overlay.get("schemaVersion") in {2, 3, 4, 5}:
+        scope = overlay.get("scope") or {}
+        identifiers = overlay.get("identifiers") or {}
+        endpoints = overlay.get("endpoints") or {}
+        overlay = {
+            **overlay,
+            **identifiers,
+            **endpoints,
+            "tenant": scope.get("workdayTenant"),
+            "tenantId": scope.get("entraTenantId"),
+            "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
+            "appIdUri": identifiers.get("entraAppIdUri"),
+            "tokenEndpoint": (
+                endpoints.get("tokenEndpoint")
+                or endpoints.get("oauthTokenUrl")
+                or overlay.get("tokenEndpoint")
+            ),
+        }
 
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:
         if key in overlay:
@@ -1054,7 +1074,14 @@ def _run_single_checkpoint(args):
         if not quiet_auth:
             print("Authenticating to Dataverse...")
         try:
-            dv_token = authenticate(env_url)
+            dv_token = authenticate(
+                env_url,
+                preferred_username=getattr(
+                    args,
+                    "preferred_username",
+                    None,
+                ),
+            )
             if not quiet_auth:
                 print("  Dataverse: OK")
         except Exception as e:
@@ -1535,6 +1562,14 @@ def main():
         ),
     )
     parser.add_argument(
+        "--preferred-username",
+        default=None,
+        help=(
+            "Require Dataverse authentication to use this exact account for "
+            "a single checkpoint."
+        ),
+    )
+    parser.add_argument(
         "--agent-slug",
         default=None,
         help=(
@@ -1760,7 +1795,14 @@ def main():
             from auth import authenticate, discover_tenant
 
             print("Authenticating to Dataverse (runtime-reachability probe)...")
-            dv_token = authenticate(env_url)
+            dv_token = authenticate(
+                env_url,
+                preferred_username=getattr(
+                    args,
+                    "preferred_username",
+                    None,
+                ),
+            )
             tenant_id = discover_tenant(env_url)
 
             print("Authenticating to Power Platform Admin API...")
@@ -1844,7 +1886,10 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(env_url)
+        dv_token = authenticate(
+            env_url,
+            preferred_username=getattr(args, "preferred_username", None),
+        )
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")
