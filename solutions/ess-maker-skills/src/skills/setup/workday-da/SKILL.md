@@ -128,36 +128,6 @@ resumed setup must still make its remaining administrator dependencies clear.
 > administrator with the exact steps and wait for verified evidence. The
 > environment isn't ready until the signed-in Workday scenario succeeds.
 
-After showing the briefing, use this exact `vscode_askQuestions` form before
-running any lifecycle command:
-
-```json
-[
-  {
-    "header": "Required access",
-    "question": "Are the people needed for every applicable role above available to help when their phase begins?",
-    "options": [
-      { "label": "Yes, required people are available" },
-      { "label": "No, someone is unavailable" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Leave the selection unset. This is an availability self-attestation for
-planning, not proof that the signed-in account has a required role. The
-phase-specific permission checks and verified evidence remain authoritative.
-
-If the maker selects **No, someone is unavailable**, stop before running
-`status` or any phase command. Explain that no setup progress was changed and
-ask them to return when the required person can participate. Do not request
-the person's name, credentials, or other identifying information, and do not
-offer to bypass the role requirement.
-
-If the maker selects **Yes, required people are available**, continue with the
-status check below.
-
 Run:
 
 ```powershell
@@ -184,6 +154,62 @@ After the readiness briefing:
 
 Do not render internal action IDs, hashes, or the full JSON state. Do not
 replace the phase explanation with only `Next phase: {title}`.
+
+If controller status is `ready`, skip the availability question and show the
+completion message below.
+
+For a non-ready lifecycle, determine the next phase's required participants
+from `nextPhaseId`:
+
+| `nextPhaseId` | People required before this phase begins |
+| --- | --- |
+| `preflight` | Power Platform Environment Maker with package installation access |
+| `entra` | Run discovery and tenant-foundation reuse checks first; require an Application Administrator or Cloud Application Administrator only when an Entra portal action remains, plus a consent-capable administrator only when the handoff requires consent |
+| `workday-admin` | Workday Administrator |
+| `connections` | Power Platform Environment Maker |
+| `runtime` | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization |
+| `employee-validation` | Environment Maker and Workday test employee |
+
+When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
+form below. That phase performs read-only discovery and tenant-foundation
+reconciliation first, then asks about administrator availability only when a
+portal action remains.
+
+For every other returned `nextPhaseId`, show only its row and use this exact
+`vscode_askQuestions` form before dispatching that phase:
+
+```json
+[
+  {
+    "header": "Required access",
+    "question": "Are the people needed for the next phase available to help when that phase begins?",
+    "options": [
+      { "label": "Yes, required people are available" },
+      { "label": "No, someone is unavailable" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This is an availability self-attestation for
+planning, not proof that the signed-in account has a required role. The
+phase-specific permission checks and verified evidence remain authoritative.
+Do not include people from completed phases or remediation-only roles that are
+not currently required. In particular, require the Workday Administrator only
+when `nextPhaseId` is `workday-admin`; a healthy reused tenant foundation
+continues at Connections without that role.
+
+If the maker selects **No, someone is unavailable**, stop before dispatching
+the next phase. Explain that no phase progress or target configuration was
+changed and ask them to return when the required person can participate. Do
+not request the person's name, credentials, or other identifying information,
+and do not offer to bypass the role requirement.
+
+If the maker selects **Yes, required people are available**, dispatch the next
+phase below. Within the same invocation, do not repeat the question while
+`nextPhaseId` remains unchanged. After a phase completes and `status` returns
+a different `nextPhaseId`, evaluate and ask for that new phase.
 
 Dispatch from `nextPhaseId`:
 

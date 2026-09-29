@@ -40,31 +40,70 @@ def test_orchestrator_resumes_from_controller_status() -> None:
     assert "controller status is `ready`" in text
 
 
-def test_role_availability_is_attested_before_lifecycle_execution() -> None:
+def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
     tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
 
     briefing = skill.index("> Here's who may be needed")
-    attestation = skill.index('"header": "Required access"')
     status = skill.index("python scripts/workday_connect.py status")
+    attestation = skill.index('"header": "Required access"')
+    dispatch = skill.index("Dispatch from `nextPhaseId`")
 
-    assert briefing < attestation < status
-    assert (
-        '"question": "Are the people needed for every applicable role above '
-        'available to help when their phase begins?"'
-    ) in skill
-    assert '"label": "Yes, required people are available"' in skill
-    assert '"label": "No, someone is unavailable"' in skill
-    assert '"allowFreeformInput": false' in skill
+    assert briefing < status < attestation < dispatch
+    form_match = re.search(
+        r"use this exact\s+`vscode_askQuestions` form before dispatching "
+        r"that phase:\s+```json\s+(.*?)\s+```",
+        skill,
+        re.DOTALL,
+    )
+    assert form_match is not None
+    assert json.loads(form_match.group(1)) == [
+        {
+            "header": "Required access",
+            "question": (
+                "Are the people needed for the next phase available to help "
+                "when that phase begins?"
+            ),
+            "options": [
+                {"label": "Yes, required people are available"},
+                {"label": "No, someone is unavailable"},
+            ],
+            "allowFreeformInput": False,
+        }
+    ]
+    assert "If controller status is `ready`, skip the availability question" in skill
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        assert f"| `{phase_id}` |" in skill
     assert "Leave the selection unset" in skill
-    assert "availability self-attestation for\nplanning" in skill
     assert "not proof that the signed-in account has a required role" in skill
     assert "phase-specific permission checks and verified evidence remain" in skill
-    assert "stop before running\n`status` or any phase command" in skill
-    assert "no setup progress was changed" in skill
-    assert "do not\noffer to bypass the role requirement" in skill
+    assert "Do not include people from completed phases" in skill
+    assert "remediation-only roles that are\nnot currently required" in skill
+    assert "only\nwhen `nextPhaseId` is `workday-admin`" in skill
+    assert "healthy reused tenant foundation\ncontinues at Connections" in skill
+    assert "When `nextPhaseId` is `entra`, dispatch" in skill
+    assert "tenant-foundation\nreconciliation first" in skill
+    assert "stop before dispatching\nthe next phase" in skill
+    assert "no phase progress or target configuration was\nchanged" in skill
+    assert "do not offer to bypass the role requirement" in " ".join(skill.split())
+    assert "do not repeat the question while\n`nextPhaseId` remains unchanged" in skill
+    assert (
+        "Before showing any administrator portal action that remains after discovery"
+        in entra
+    )
+    assert "tenant-foundation reconciliation" in entra
+    assert '"header": "Microsoft Entra administrator"' in entra
+    assert "availability answer is not authorization evidence" in entra
     assert "Do not add another availability confirmation in\nthis phase" in tenant
-    assert "lifecycle-level self-attestation already covers it" in tenant
+    assert "phase-boundary self-attestation already covers it" in tenant
 
 
 def test_every_controller_command_is_documented() -> None:
