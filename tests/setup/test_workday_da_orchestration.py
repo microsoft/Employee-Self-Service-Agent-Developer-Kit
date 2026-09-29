@@ -105,6 +105,13 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
 
     documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
     assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
+    documented_result_ids = dict(
+        re.findall(
+            r"\|\s*(Failed - [^|]+?)\s*\|\s*`(WD-E2E-\d{3})`\s*\|",
+            text,
+        )
+    )
+    assert documented_result_ids == contracts.EMPLOYEE_VALIDATION_RESULT_IDS
     documented_surfaces = {
         value
         for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
@@ -113,11 +120,34 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
     assert documented_surfaces == set(
         contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
     )
+    surface_section = text.split(
+        '"header": "Failure surface"',
+        maxsplit=1,
+    )[1].split("Map those choices respectively to", maxsplit=1)[0]
+    surface_labels = re.findall(
+        r'\{ "label": "([^"]+)" \}',
+        surface_section,
+    )
+    documented_surface_choices = dict(
+        zip(
+            surface_labels,
+            re.findall(
+                r"`([a-z]+(?:-[a-z]+)*)`",
+                text.split("Map those choices respectively to", maxsplit=1)[1],
+            )[: len(surface_labels)],
+            strict=True,
+        )
+    )
+    assert (
+        documented_surface_choices
+        == contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES
+    )
     assert "`failureCategory`" not in text
     assert "Canonical `remediation`" not in text
     assert "Do not invent a remediation ID" in normalized
     assert "derives the safe category and canonical remediation" in normalized
     assert "migrates existing three-field failure files" in normalized
+    assert "legacy free-form remediation text is discarded" in normalized
     assert "cannot publish the agent, impersonate an employee" in normalized
 
 

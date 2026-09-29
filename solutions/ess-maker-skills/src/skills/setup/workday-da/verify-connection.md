@@ -127,7 +127,9 @@ python scripts/workday_connect.py record-validation-failure --evidence-file ".lo
 For `WD-E2E-999`, also record the selected bounded `failureSurface`. The
 controller derives the safe category and canonical remediation from the ID;
 do not copy those strings into the file. It also migrates existing
-three-field failure files created by earlier kit versions. Arbitrary IDs,
+three-field failure files created by earlier kit versions. Unrecognized
+legacy categories widen to `WD-E2E-999` with the `other` surface, and the
+legacy free-form remediation text is discarded. Arbitrary IDs,
 unbounded failure surfaces, and unknown fields are rejected.
 
 This marks Employee validation blocked and persists the stable remediation ID

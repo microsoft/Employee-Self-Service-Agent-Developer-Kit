@@ -102,17 +102,30 @@ EMPLOYEE_VALIDATION_REMEDIATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+EMPLOYEE_VALIDATION_RESULT_IDS = {
+    "Failed - repeated sign-in": "WD-E2E-001",
+    "Failed - connector error": "WD-E2E-002",
+    "Failed - flow error": "WD-E2E-003",
+    "Failed - employee mismatch": "WD-E2E-004",
+    "Failed - network error": "WD-E2E-005",
+    "Failed - Workday access denied": "WD-E2E-006",
+    "Failed - agent not published or unavailable": "WD-E2E-007",
+    "Failed - another issue": "WD-E2E-999",
+}
+
+EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES = {
+    "Agent chat": "agent-chat",
+    "Authentication prompt": "authentication-prompt",
+    "Workday connection": "workday-connection",
+    "Flow run": "flow-run",
+    "Network path": "network-path",
+    "Workday response": "workday-response",
+    "Agent availability": "agent-availability",
+    "Other": "other",
+}
+
 EMPLOYEE_VALIDATION_FAILURE_SURFACES = frozenset(
-    {
-        "agent-chat",
-        "authentication-prompt",
-        "workday-connection",
-        "flow-run",
-        "network-path",
-        "workday-response",
-        "agent-availability",
-        "other",
-    }
+    EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES.values()
 )
 
 _LEGACY_EMPLOYEE_FAILURE_IDS = {

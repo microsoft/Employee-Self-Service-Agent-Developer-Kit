@@ -681,3 +681,77 @@ def test_record_validation_failure_blocks_employee_phase(
     assert phase["blocker"]["errorType"] == "workday-access"
     assert phase["blocker"]["failureSurface"] == "workday-response"
     assert phase["blocker"]["capturedAt"] == "2026-09-25T00:00:00Z"
+
+
+def test_invalid_validation_retry_preserves_stable_failure_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pytest
+
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    store.set_phase_status(
+        "employee-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation-failure",
+            "remediationId": "WD-E2E-006",
+            "errorType": "workday-access",
+            "failureSurface": "workday-response",
+            "message": "Canonical guidance",
+            "capturedAt": "2026-09-25T00:00:00Z",
+        },
+    )
+    evidence_file = tmp_path / "invalid-validation.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "scenarioName": "Worker profile",
+                "testUserCategory": "non-maker employee",
+                "outcome": "verified",
+                "timestamp": "not-a-timestamp",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "record-validation",
+            "--evidence-file",
+            str(evidence_file),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+
+    assert exc.value.code == 1
+    blocker = store.load()["phases"]["employee-validation"]["blocker"]
+    assert blocker["remediationId"] == "WD-E2E-006"
+    assert blocker["failureSurface"] == "workday-response"
+    assert blocker["capturedAt"] == "2026-09-25T00:00:00Z"
+    assert blocker["operation"] == "record-validation"
