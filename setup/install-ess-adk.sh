@@ -611,7 +611,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         # Filter machine-parseable JSON dump lines that discover.py emits for
         # programmatic consumers (skills parse these; a maker running the
         # installer just sees an unreadable wall of JSON).
-        echo "$ENV_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
+        echo "$ENV_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if echo "$ENV_OUTPUT" | grep -q "^ERROR:"; then
             err "Environment listing failed."
@@ -654,7 +654,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo ""
 
         AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) && AGENT_EXIT=0 || AGENT_EXIT=$?
-        echo "$AGENT_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
+        echo "$AGENT_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
             warn "Agent discovery failed. Config will be created without a bot ID."

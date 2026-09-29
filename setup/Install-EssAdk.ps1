@@ -1274,7 +1274,7 @@ if ($FlightCheckOnly) {
             # emits for programmatic consumers (skills read these; a maker
             # running the installer just sees an unreadable wall of JSON).
             foreach ($line in $output) {
-                if ($line -match '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
                 Write-Host $line
             }
             if ($LASTEXITCODE -ne 0) {
@@ -1315,7 +1315,7 @@ if ($FlightCheckOnly) {
             $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
             $output = Invoke-Native { & $pyCmd @agentListArgs }
             foreach ($line in $output) {
-                if ($line -match '^(ENVIRONMENT_LIST_JSON|ESS_AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
                 Write-Host $line
             }
             if ($LASTEXITCODE -ne 0) {

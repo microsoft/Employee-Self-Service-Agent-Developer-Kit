@@ -595,7 +595,7 @@ Test 'bootstrap-flightcheck.ps1 derives SourceBaseUrl from -Branch (no hardcoded
 # JSON dump suppression - regression for the "wall of JSON after env list" bug
 # reported by Senthil on 2026-09-29 (ADO 7965470).
 #
-# discover.py emits ENVIRONMENT_LIST_JSON: / ESS_AGENT_DISCOVERY_JSON: lines
+# discover.py emits ENVIRONMENT_LIST_JSON: / AGENT_DISCOVERY_JSON: lines
 # on stdout for programmatic consumers (setup skills parse them). When the
 # installer echoes discover.py output verbatim to the user, the maker sees an
 # unreadable single-line JSON blob right after the environment/agent tables.
@@ -606,13 +606,13 @@ Write-Host "`nJSON dump suppression (Install-EssAdk.ps1 + install-ess-adk.sh):" 
 
 Test 'Install-EssAdk.ps1 filters ENVIRONMENT_LIST_JSON from user-visible env-list echo' {
     # Both PS echo sites (env-list and agent-list) must filter the marker lines.
-    $filterHits = [regex]::Matches($src, "if\s*\(\s*\`$line\s+-match\s+'\^\(ENVIRONMENT_LIST_JSON\|ESS_AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON\):'\s*\)\s*\{\s*continue\s*\}").Count
+    $filterHits = [regex]::Matches($src, "if\s*\(\s*\`$line\s+-match\s+'\^\(ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON\):'\s*\)\s*\{\s*continue\s*\}").Count
     if ($filterHits -lt 2) {
         throw "expected 2 marker-line filters (env-list + agent-list echoes), found $filterHits"
     }
 }
 
-Test 'Install-EssAdk.ps1 filters ESS_AGENT_DISCOVERY_JSON from user-visible agent-list echo' {
+Test 'Install-EssAdk.ps1 filters AGENT_DISCOVERY_JSON from user-visible agent-list echo' {
     # Agent-list echo must not naively call Write-Host on every line.
     if ($src -match "\`$agentListArgs\s*=[^\n]*\n[^\n]*Invoke-Native[^\n]*\n\s*foreach\s*\(\s*\`$line\s+in\s+\`$output\s*\)\s*\{\s*Write-Host\s+\`$line\s*\}") {
         throw 'agent-list echo still writes every discover.py line unfiltered'
@@ -620,10 +620,10 @@ Test 'Install-EssAdk.ps1 filters ESS_AGENT_DISCOVERY_JSON from user-visible agen
 }
 
 Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-list echo' {
-    if ($macInstaller -notmatch "ENV_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|ESS_AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
+    if ($macInstaller -notmatch "ENV_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
         throw 'env-list echo in install-ess-adk.sh does not filter JSON marker lines'
     }
-    if ($macInstaller -notmatch "AGENT_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|ESS_AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
+    if ($macInstaller -notmatch "AGENT_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
         throw 'agent-list echo in install-ess-adk.sh does not filter JSON marker lines'
     }
 }
