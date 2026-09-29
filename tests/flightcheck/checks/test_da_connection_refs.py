@@ -141,6 +141,91 @@ def test_read_active_change_without_reference_is_tolerated():
     assert reader.read_active_agent_connection_references(runner) == []
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [
+        # connectionReferenceLogicalName absent entirely.
+        {"connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"},
+        # connectionReferenceLogicalName null.
+        {
+            "connectionReferenceLogicalName": None,
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+        # connectionReferenceLogicalName blank / whitespace-only.
+        {
+            "connectionReferenceLogicalName": "   ",
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+        # connectionReferenceLogicalName not a string.
+        {
+            "connectionReferenceLogicalName": 123,
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+    ],
+)
+def test_read_active_missing_logical_name_raises(reference):
+    # A dict that parses but lacks a usable connectionReferenceLogicalName is
+    # malformed (PR #304 review F-1): surfaced, not appended as a row that a
+    # downstream consumer would silently drop as "not found".
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": reference}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError, match="connectionReferenceLogicalName"):
+        reader.read_active_agent_connection_references(runner)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        # connectorId absent entirely.
+        {"connectionReferenceLogicalName": "ns.shared_workdaysoap"},
+        # connectorId null.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": None,
+        },
+        # connectorId blank / whitespace-only.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": "  ",
+        },
+        # connectorId not a string.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": ["/providers/Microsoft.PowerApps/apis/shared_workdaysoap"],
+        },
+    ],
+)
+def test_read_active_missing_connector_id_raises(reference):
+    # Same F-1 hardening for connectorId: a present-but-blank connector id is a
+    # malformed reference, not a legitimate absence.
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": reference}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError, match="connectorId"):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_null_connection_id_is_preserved():
+    # connectionId is the one identity field that may legitimately be null (an
+    # unbound reference); the row is still emitted with both required fields.
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id=None)]
+    )
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    rows = reader.read_active_agent_connection_references(runner)
+    assert len(rows) == 1
+    assert rows[0]["connectionid"] is None
+    assert rows[0]["connectionreferencelogicalname"]
+    assert rows[0]["connectorid"].endswith("/apis/shared_workdaysoap")
+
+
 # --------------------------------------------------------------------------
 # read_all_agents_connection_references (ENV-004 surface: env-wide, de-duped)
 # --------------------------------------------------------------------------

@@ -1,463 +1,313 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# DA-3 — Configure the Workday Tenant
+# Phase 3 - Workday administrator
 
-Role: **Workday Administrator**. This step performs the Workday-tenant-side
-configuration the simplified setup requires: the SAML X.509 signing certificate,
-Tenant Setup – Security, the Workday API client, and the authentication policy.
-It owns master-checklist rows **DA3.1 through DA3.4**.
+This phase never modifies Workday. The skill generates one handoff, validates
+the administrator's non-secret response, derives deterministic endpoints, and
+records evidence. All Workday tenant changes are performed by the Workday
+administrator.
 
-Depends on DA-2 (the Entra app must already exist — this step reads its
-`entraAppId` / `appIdUri` and the activated signing-cert thumbprint). It is
-**Workday-only**: none of these tasks is reachable through a Microsoft admin API,
-and standing up a Workday connection to self-verify would be **circular** (it
-needs the same Entra-app + tenant configuration the ESS agent itself needs). So
-every step here is a **manual Workday-admin task**, and its flightcheck reports
-`MANUAL` — it echoes what the operator captured and names the Workday screen to
-verify, but it never marks a row done on its own. None of this differs from how a
-CEA Employee Self-Service agent's Workday tenant is configured — the Workday side
-of the connection doesn't know or care what agent architecture is calling it —
-only the persisted state paths differ.
+Generate one administrator handoff:
 
-Every **Message** block is the exact text to show the user. Copy it verbatim. Do
-not rephrase, add commentary, or tell the user what tools you are calling or what
-files you are reading. **Never** show internal variable names or IDs in chat.
-
-**Checkpoints this step drives (run each in isolation):**
-
-| Step | Checkpoint | Gate |
-|------|-----------|------|
-| DA3.1 | `WD-API-CLIENT-001` — Workday API client registered (SAML ****** grant, functional areas, Include Workday Owned Scope = Yes) | attest |
-| DA3.2 | `WD-API-CLIENT-001` — Workday connection fields captured with the registered API client | attest |
-| DA3.3 | `WD-TENANT-001` — signed-in employee SAML authentication policy verified | attest |
-| DA3.4 | `WD-CONN-102` *(reuse)* — Workday X.509 signing cert matches the Entra one | manual/attest |
-
-Run any one with:
-
-```
-python scripts/flightcheck/cli.py --checkpoint <ID>
+```powershell
+python scripts/workday_connect.py workday-admin-packet
 ```
 
-**After every checkpoint run, show its result in chat first.** As soon as a
-`--checkpoint` run returns, render the result to the user per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
-its full verification steps — **before** you show any later **Message** or ask any
-attestation question. Single-checkpoint runs never open the HTML report, so this
-in-chat render is the only place the user sees the manual steps; never ask a user
-to attest to steps they have not been shown.
+Show the packet once as a single ordered task list. Do not split it into
+repeated confirmations or rerun manual-only FlightChecks that merely repeat
+the same instructions.
 
-Both `WD-API-CLIENT-001` and `WD-TENANT-001` are always `MANUAL` — they read only
-`.local/connect/workday-da/config.json` and echo the captured values. A `MANUAL`
-result is **never** completion: each attest row also needs the user's explicit
-acknowledgement (enforced by
-[`shared/checklist-updater.md`](shared/checklist-updater.md)).
+If `record-entra` reports `tenantFoundationReused: true`, do not show this
+handoff and do not require the Workday administrator again. Continue at
+Connections. Show only the affected Workday remediation step if a later
+connection or employee test proves that the stored foundation has drifted.
 
-**Build order.** These tasks must happen in Workday's natural order, which is
-**not** the row-number order: sign-in cert (DA3.0c) → Tenant Setup – Security
-(DA3.0d) → **register the API client (DA3.1 + DA3.2)** → **verify the
-signed-in employee authentication policy (DA3.3)**. Each section states which
-checklist row(s) it completes.
+When no matching foundation can be reused, guide the Workday administrator
+through these steps in order. Do not add a separate availability confirmation;
+if the administrator is not available, present the handoff and pause before
+showing the response form.
 
-**On every resume, always re-run DA3.0 (Workday-admin gate) and DA3.0b
-(single-tenant SAML pre-gate) first — both are idempotent/read-only — before
-working the first incomplete row.** The SAML pre-gate is a safety check that
-must run before any tenant change; skipping it on resume risks silently
-overwriting an active federation. After re-running DA3.0 and DA3.0b, skip any row
-whose `setupStatus` state is already `done`.
+1. **Protect the existing federation.** In Workday, run **Edit Tenant Setup -
+   Security** and find **SAML Setup**. In **SAML Identity Providers**, locate
+   the enabled row whose **Used for Environments** value matches the employee
+   environment being connected. Use `identityProviderQuestion` and
+   `issuerConfirmationQuestion` from the packet to populate the corresponding
+   fields in the consolidated response form below. Do not present them as
+   separate questions. The domain examples are recognition clues, not proof.
 
----
+   Handle the answer as follows:
 
-## DA3.0 — Workday administrator gate
+   - **Microsoft Entra ID** - continue. If the administrator confirms that the
+     displayed Issuer exactly matches the value shown in the form,
+     record `identityProviderOutcome` as `verified-entra-issuer`; do not make
+     them retype the value. If it differs, collect the exact displayed
+     **Issuer** in the single response form. Do not infer a match from the
+     provider choice alone.
+   - **Okta**, **Ping Identity**, or **Another sign-in provider** - stop before
+     changing the row. Explain that the current row belongs to an existing
+     sign-in configuration and must not be replaced. Ask the Workday and
+     identity administrators to decide whether a separate Microsoft Entra row
+     can be added safely for this environment.
+   - **No enabled SAML row** - continue with the Microsoft Entra setup below.
+     After the new row is saved and enabled, ask the administrator to copy its
+     exact **Issuer** value.
+   - **I'm not sure** - explain that Microsoft Entra issuers commonly contain
+     `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
+     contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
+     `pingidentity.com`, or an organization-specific Ping host. If the value
+     is still unclear, stop and ask the identity administrator rather than
+     guessing.
 
-Every task in this step is a **manual Workday-tenant change** — the SAML signing
-certificate, Tenant Setup – Security, the Workday API client, and the
-authentication policy. None is reachable through a Microsoft admin API, and the
-person running this kit (the maker) is often **not** a Workday administrator. So
-these steps must be performed **together with a Workday administrator**. Before
-making any tenant change, confirm one is lined up.
+   After the supported Microsoft Entra row is identified or created, verify
+   its Issuer and Service Provider ID.
+2. **Install the Entra signing certificate.** In Entra, open **Enterprise
+   applications -> the exact Workday application -> Single sign-on -> SAML
+   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
+   **Create x509 Public Key**, paste that public certificate, give it a
+   customer-chosen recognizable name, and save it. Return to the enabled
+   Microsoft Entra row and select that key in its **X509 Certificate** field.
 
-This is the attested gate for **DA3.1** (`GATE_MODE = "attested"`, `STEP_ID =
-"DA3.1"`, per [`shared/permission-gate.md`](shared/permission-gate.md)) — Workday
-has **no directory the kit can query**, so it is an explicit confirmation, not a
-programmatic check.
+   Use `certificateSelectionQuestion` and `certificateValidityQuestion` from
+   the packet to populate the corresponding fields in the consolidated form.
+   Do not present them separately. Never suggest, prefill, or ask the administrator to confirm
+   a guessed certificate name such as “Microsoft Azure Federated SSO
+   Certificate.”
 
-**Message:**
+   Handle the answer as follows:
 
-The next steps change your Workday tenant directly — the SAML signing
-certificate, Tenant Setup – Security, the Workday API client, and the
-authentication policy. These are Workday-administrator tasks, so they should be
-done **together with a Workday administrator** (if that isn't you). Before we
-start, please confirm you have a Workday administrator ready to work through these
-steps with you.
+   - **The new certificate created from the Entra Base64 file** - record
+     `certificateSelectionOutcome` as
+     `entra-signing-certificate-selected`. If both displayed dates exactly
+     match the verified Entra dates shown in the form, record
+     `certificateValidityOutcome` as
+     `matches-verified-entra-certificate`. The customer-created certificate
+     display name is optional support context, not a completion gate.
+   - **A different existing Workday certificate** - stop. Do not replace or
+     reuse it until the Workday and identity administrators confirm it is the
+     same active Entra signing certificate.
+   - **No certificate is selected** - ask the administrator to select the new
+     Workday public key created from the Entra Base64 certificate, then return
+     to this question.
+   - **I'm not sure** - direct the administrator to the enabled Microsoft Entra
+     SAML row's **X509 Certificate** field. If they still cannot identify the
+     selected key, stop rather than guessing.
 
-**End message.**
+   Never collect the certificate body in chat.
+3. **Configure tenant security.** Return to **Edit Tenant Setup - Security**.
+   Enable **OAuth 2.0 Clients Enabled** and **SAML**. In SAML Setup, set the
+   exact Service Provider ID to
+   `http://www.workday.com/{workdayTenant}`. Do not use
+   `api://{entraAppId}` in that Workday field.
+4. **Register the employee API client.** Run **Register API Client**. Set
+   **Client Grant Type** to **SAML Bearer**. Under **Scope (Functional Areas)**,
+   select **Core Payroll**, **Organizations and Roles**, **Staffing**, and
+   **Time Off and Leave**. Set **Include Workday Owned Scope** to **Yes**, then
+   save.
+5. **Capture non-secret connection values.** Open **View API Client** for that
+   client and record the OAuth client ID and token endpoint. Record the tenant’s
+   REST base URL ending exactly at `/ccx/api` and its SOAP service base URL.
+   Do not return a client secret, password, token, cookie, or certificate body.
+6. **Verify employee authentication.** Open **Manage Authentication Policies**
+   for the employee environment. Confirm an active rule allows **SAML** for the
+   intended employees. Do not replace administrator safeguards, existing
+   network restrictions, or route this user-delegated setup through an
+   Integration System User rule.
+7. **Confirm network readiness.** Give the REST and SOAP host names from step 5
+   to the network administrator when organizational egress filtering applies.
+   Record either that both hosts are allowed or that no customer-managed
+   firewall change is required. Do not wait until final employee validation to
+   discover a known allowlist requirement.
 
-Use the `vscode_askQuestions` tool:
+Collect exactly one response form using one structured
+`vscode_askQuestions` call. Do not collapse these fields into a multiline text
+box, ask the administrator to edit a prose template, or ask for these values
+as a sequence of separate chat questions:
+
+- confirmation that the enabled issuer exactly matches the displayed verified
+  Entra issuer, or the exact different Issuer value;
+- enabled Service Provider ID;
+- confirmation that the Entra-derived certificate is selected;
+- confirmation that its displayed validity dates exactly match the verified
+  Entra dates;
+- optional Workday certificate display name;
+- Workday OAuth client ID;
+- OAuth token URL;
+- REST base URL ending at `/ccx/api`;
+- SOAP base URL;
+- authentication-policy outcome;
+- network-readiness outcome.
+
+Use this exact form, substituting the packet's expected issuer, Service
+Provider ID, and verified certificate dates:
 
 ```json
 [
   {
-    "header": "Workday administrator",
-    "question": "Have you looped in a Workday admin to perform the Workday side of configuration?",
+    "header": "Identity provider",
+    "question": "Which sign-in provider does the enabled Workday SAML row use?",
     "options": [
-      { "label": "Yes, I have", "recommended": true },
-      { "label": "No, I have not" }
+      { "label": "Microsoft Entra ID", "description": "Issuer commonly contains login.microsoftonline.com or sts.windows.net" },
+      { "label": "Okta", "description": "Issuer commonly contains okta.com" },
+      { "label": "Ping Identity", "description": "Issuer commonly contains pingone.com, pingidentity.com, or an organization-specific Ping host" },
+      { "label": "Another sign-in provider" },
+      { "label": "No enabled SAML row" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Issuer",
+    "question": "Does the enabled Microsoft Entra SAML row's Issuer exactly match {EXPECTED_ENTRA_ISSUER}?",
+    "options": [
+      { "label": "Yes, it matches exactly" },
+      { "label": "No, the displayed Issuer is different" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Different issuer",
+    "question": "If the Issuer is different, enter the exact displayed value. Otherwise leave this blank."
+  },
+  {
+    "header": "Service Provider ID",
+    "question": "Enter the enabled Service Provider ID. Expected value: {EXPECTED_SERVICE_PROVIDER_ID}"
+  },
+  {
+    "header": "Certificate",
+    "question": "Which certificate is selected on the enabled Microsoft Entra SAML row in Workday?",
+    "options": [
+      { "label": "The new certificate created from the Entra Base64 file" },
+      { "label": "A different existing Workday certificate" },
+      { "label": "No certificate is selected" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Certificate dates",
+    "question": "Do the selected Workday certificate dates exactly match {CERTIFICATE_VALID_FROM} through {CERTIFICATE_VALID_TO}?",
+    "options": [
+      { "label": "Yes, both dates match exactly" },
+      { "label": "No, one or both dates are different" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Certificate name",
+    "question": "Optional: enter the Workday certificate display name, or leave this blank."
+  },
+  {
+    "header": "OAuth client ID",
+    "question": "Enter the non-secret OAuth client ID shown by Workday."
+  },
+  {
+    "header": "OAuth token URL",
+    "question": "Enter the OAuth token URL shown by Workday."
+  },
+  {
+    "header": "REST base URL",
+    "question": "Enter the Workday REST base URL ending at /ccx/api."
+  },
+  {
+    "header": "SOAP base URL",
+    "question": "Enter the Workday SOAP service base URL."
+  },
+  {
+    "header": "Authentication policy",
+    "question": "What did the administrator verify for the employee authentication policy?",
+    "options": [
+      { "label": "An existing active policy allows SAML" },
+      { "label": "A reviewed policy was activated" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Network readiness",
+    "question": "What did the administrator verify for the Workday service hosts?",
+    "options": [
+      { "label": "Both Workday hosts are allowed" },
+      { "label": "No customer-managed firewall change is required" },
+      { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-**If the user chose "Yes, I have":**
-- Set `GATE_RESULT = "pass"` and
-  `GATE_EVIDENCE = { "method": "attested", "outcome": "pass", "provenance": "user-attestation", "note": "user confirmed a Workday administrator is available to perform DA3.1–DA3.4 with them", "capturedAt": "<current UTC timestamp>" }`.
-- Carry `GATE_EVIDENCE` forward (recorded when the DA3 rows are updated), and
-  continue to DA3.0b.
+Leave every field and option initially unset. Do not add `recommended`,
+`default`, suggested-answer wording, or any equivalent preselection. The
+expected values in the question text are comparison references, not answers.
 
-**If the user chose "No, I have not":**
+Map the submitted fields to the controller response object:
 
-**Message:**
+- **Microsoft Entra ID** plus **Yes, it matches exactly** ->
+  `identityProviderOutcome: verified-entra-issuer`;
+- a different Issuer -> `activeIdentityProviderIssuer`, then stop for identity
+  administrator review instead of submitting successful evidence;
+- **The new certificate created from the Entra Base64 file** ->
+  `certificateSelectionOutcome: entra-signing-certificate-selected`;
+- matching certificate dates ->
+  `certificateValidityOutcome: matches-verified-entra-certificate`;
+- the optional display name -> `certificateName`;
+- the six entered connection/policy fields -> their corresponding controller
+  keys;
+- existing active policy -> `existing-active-policy`;
+- reviewed and activated policy -> `reviewed-policy-activated`;
+- both hosts allowed -> `confirmed-hosts-allowed`;
+- no firewall change required ->
+  `no-customer-firewall-change-required`.
 
-No problem — these steps have to be done with a Workday administrator. Line one up
-(or ask whoever holds that role to join you), then come back and run this skill
-again.
+Any unsupported provider, mismatch, missing certificate, date mismatch, or
+**I'm not sure** answer is a remediation outcome, not successful evidence.
+Show the affected remediation step and keep the phase waiting.
 
-**End message.**
+If the administrator omits a required value or replies only with wording such
+as "done", "all good", "continue", or "proceed", do not move to another field,
+search workspace files, inspect environment variables, or infer the missing
+evidence. Reopen the same structured form with only the missing or invalid
+fields; never replace it with a free-text request for several numbered answers.
+Preserve progress and stop until the structured form is complete.
 
-- Set `GATE_RESULT = "stop"` and **halt** — do not continue.
+Never collect a secret, password, token, cookie, certificate body, or private
+key. Write the response directly to
+`.local/connect/workday-da/workday-admin-response.json` using a structured
+file-write tool; never interpolate administrator-entered values into a
+generated shell command. Pass the response once:
 
-> An attested `"pass"` records that a Workday administrator was **confirmed
-> available**, not directory-proven. It satisfies the *gate*, but it does **not**
-> by itself complete any DA3 row — each row still needs its own captured evidence
-> and acknowledgement per
-> [`shared/checklist-updater.md`](shared/checklist-updater.md).
-
----
-
-## DA3.0b — Single-tenant SAML pre-gate *(do this before any tenant change)*
-
-Workday supports exactly **one** active Entra-tenant SAML federation at a time.
-Pointing a second Entra tenant at the same Workday tenant silently breaks the
-first. Before changing anything, identify and record the **current active SAML
-IdP** so a later step never overwrites an unrelated federation.
-
-**Message:**
-
-Before I change any Workday security settings, I need to check the tenant's
-current SAML sign-on. In Workday, search for and open the **Edit Tenant Setup –
-Security** task and find the **SAML Setup** section. Tell me, for the currently
-enabled Identity Provider row: the **Issuer** (or IdP name), the **Service
-Provider ID**, and the **x509 Certificate** name plus its **Valid From** /
-**Valid To** dates (Workday shows no thumbprint). If there is
-no active SAML IdP yet, just say **none**.
-
-**End message.**
-
-Wait for the user's answer, then record it as the pre-gate evidence
-(`SAML_ISSUER`, `SAML_SP_ID`, `SAML_CERT`).
-
-- **If an IdP is already active AND it is not the Entra app DA-2 provisioned**
-  (the Issuer / Service Provider ID does not match this tenant's `appIdUri` /
-  `entraAppId` from `.local/connect/workday-da/config.json`):
-
-  **Message:**
-
-  This Workday tenant already has a **different** SAML identity provider active.
-  Workday only allows one at a time, and replacing it would break the existing
-  sign-on for its users. I'm stopping here so nothing is overwritten — please
-  confirm with whoever owns that federation before continuing, then come back.
-
-  **End message.**
-
-  **Halt.** Do not proceed.
-
-- **Otherwise** (no active IdP, or the active one is this tenant's own Entra app)
-  → continue.
-
----
-
-## DA3.0c — Upload the X.509 signing certificate & confirm certificate parity *(completes DA3.4)*
-
-Create the Workday **X.509 Public Key** from the Entra signing certificate DA-2
-activated, then confirm the certificate matches — a mismatch means the wrong
-certificate was uploaded and SSO will fail.
-
-**Message:**
-
-In Entra, open **Enterprise applications → your Workday app → Single sign-on →
-SAML Signing Certificate**, and download the **Certificate (Base64)**. Then in
-Workday, run the **Create x509 Public Key** task and paste that certificate. Type
-**done** when the key is created.
-
-**End message.**
-
-Wait for the user, then verify the certificate parity against the certificate
-DA-2 activated in Entra.
-
-**Message:**
-
-Now I'll compare the certificate you uploaded in Workday against the one activated
-in Entra to make sure they match.
-
-**End message.**
-
-**Verify (WD-CONN-102):**
-
-```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
+```powershell
+python scripts/workday_connect.py record-workday-admin --response-file ".local\connect\workday-da\workday-admin-response.json"
 ```
 
-`WD-CONN-102` reports the Entra-side certificate health and returns `MANUAL` for
-the Workday-side comparison (the Workday cert field is not API-reachable).
+Use these exact outcome values:
 
-If FlightCheck's Microsoft Graph token has expired or the cache was cleared, this
-command **opens a browser window for a Graph sign-in** before it returns. That is
-expected — do **not** cancel or re-run it while it pauses; it is blocked on the
-sign-in, not hung, and continues once you complete it.
+- `authenticationPolicyOutcome`: `existing-active-policy` or
+  `reviewed-policy-activated`;
+- `networkReadinessOutcome`: `confirmed-hosts-allowed` or
+  `no-customer-firewall-change-required`.
 
-**Show the `WD-CONN-102` result in chat first.** It always returns `MANUAL` for
-the Workday-side comparison, so render it per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-result table **and** its full verification steps — **before** the
-certificate-parity question below. Never ask the user to attest to a comparison
-they have not been shown.
-
-**Message:**
-
-Workday doesn't display a certificate thumbprint, so we compare another way.
-Confirm you uploaded the exact **Certificate (Base64)** from your Workday app in
-Entra (Single sign-on → SAML Signing Certificate), and that the **Valid From** /
-**Valid To** dates shown on the Workday x509 Public Key match that Entra
-certificate's validity dates. Do they match?
-
-**End message.**
-
-Use the `vscode_askQuestions` tool:
+For example:
 
 ```json
-[
-  {
-    "header": "Certificate parity",
-    "question": "Does the uploaded Workday certificate (and its Valid From / Valid To dates) match the Entra signing certificate?",
-    "options": [
-      { "label": "Yes, they match", "recommended": true },
-      { "label": "No / not sure" }
-    ],
-    "allowFreeformInput": false
-  }
-]
+{
+  "identityProviderOutcome": "verified-entra-issuer",
+  "enabledServiceProviderId": "http://www.workday.com/{workdayTenant}",
+  "certificateSelectionOutcome": "entra-signing-certificate-selected",
+  "certificateValidityOutcome": "matches-verified-entra-certificate",
+  "oauthClientId": "{non-secret Workday OAuth client ID}",
+  "oauthTokenUrl": "https://{workday-host}/ccx/oauth2/{tenant}/token",
+  "restBaseUrl": "https://{workday-host}/ccx/api",
+  "soapBaseUrl": "https://{workday-host}/ccx/service/{tenant}",
+  "authenticationPolicyOutcome": "existing-active-policy",
+  "networkReadinessOutcome": "confirmed-hosts-allowed"
+}
 ```
 
-- **"Yes, they match"** → update **DA3.4** via
-  [`shared/checklist-updater.md`](shared/checklist-updater.md) with
-  `STEP_ID="DA3.4"`, `GATE="manual"`, `CHECKPOINT_RESULT="MANUAL"`, `ACK=true`,
-  `ROW_EVIDENCE` recording the compared thumbprints and confirmation, and the
-  carried `GATE_EVIDENCE`.
-- **"No / not sure"** → leave DA3.4 `in-progress`; have the user re-upload the
-  correct Base64 certificate from Entra and re-check. Do not continue to DA3.0d
-  with a mismatched cert.
-
----
-
-## DA3.0d — Edit Tenant Setup – Security
-
-Configure the tenant's security so OAuth and SAML sign-on work. This is captured
-as part of the `WD-TENANT-001` attestation (verified at the end of DA3.3).
-
-**Message:**
-
-In Workday, run **Edit Tenant Setup – Security**. Set the **Redirect URL** for
-the sign-on, and enable both **OAuth 2.0 Clients Enabled** and **SAML**. In the
-SAML Setup, confirm the **Service Provider ID** matches your Entra app's
-**Identifier (Entity ID)** — they must be identical. Type **done** when saved.
-
-**End message.**
-
-Wait for the user, then continue to DA3.1.
-
----
-
-## DA3.1 + DA3.2 — Register the API client & capture the connection fields
-
-Register the Workday API client, then capture the connection identifiers the
-Workday extension package's connection form needs.
-
-**Message:**
-
-In Workday, run the **Register API Client** task with **Client Grant Type = SAML
-******. Under **Scope (Functional Areas)** select **Core Payroll**,
-**Organizations and Roles**, **Staffing**, and **Time Off and Leave**, and set
-**Include Workday Owned Scope = Yes** (this is required for the REST
-`/workers/me` call). Save it, then open **View API Client** for the client you
-just created. Type **done** when you're on the View API Client screen.
-
-**End message.**
-
-**Message:**
-
-This setup uses each signed-in employee's Workday identity. It does **not** use
-an Integration System User, a RaaS report, or an Integration System Security
-Group. The functional areas above define which Workday APIs the client can call;
-the employee's existing Workday security determines which employee data those
-calls may return. There is no separate domain-to-integration-security-group
-mapping step in this setup.
-
-**End message.**
-
-Wait for the user. Then **capture and validate the connection fields** using the
-shared [`shared/connection-fields.md`](shared/connection-fields.md) (sections
-C.1–C.6), passing whatever is already known from
-`.local/connect/workday-da/config.json`:
-
-- `OAUTH_CLIENT_ID`, `TOKEN_ENDPOINT` — from the **View API Client** screen.
-- `WD_TENANT`, `WD_BASE_URL`, `WD_TOKEN_HOST` — read from
-  `.local/connect/workday-da/config.json` if already captured, otherwise gathered
-  here from the Workday tenant URL (the token endpoint on the View API Client
-  screen has the form `https://{WD_TOKEN_HOST}/ccx/oauth2/{WD_TENANT}/token`).
-- `APP_ID_URI` — the Entra `appIdUri` from DA-2.
-
-`shared/connection-fields.md` derives the **SOAP base URL** from the Workday web
-host (with a user-prompt fallback), trims the **REST base URL** to `/api`, and
-persists `oauthClientId`, `tokenEndpoint`, `soapBaseUrl`, `restBaseUrl`, and
-`appIdUri` back to `.local/connect/workday-da/config.json` (round-trip merge —
-never drop fields owned by other steps).
-
-**Message:**
-
-Now I'll confirm the Workday API client you registered was captured correctly.
-
-**End message.**
-
-**Verify (WD-API-CLIENT-001):**
-
-```
-python scripts/flightcheck/cli.py --checkpoint WD-API-CLIENT-001 --connect-config ".local/connect/workday-da/config.json"
-```
-
-This echoes the captured `oauthClientId` / `tokenEndpoint` and restates the
-registration facts to confirm. `WD-API-CLIENT-001` always returns `MANUAL`, so
-render its result in chat per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-result table **and** its full verification steps — **before** you ask the user
-to acknowledge the row. Then:
-
-- Confirm the row via [`shared/checklist-updater.md`](shared/checklist-updater.md)
-  with `STEP_ID="DA3.1"`, `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`,
-  `ACK=true` once the user acknowledges the client is registered correctly,
-  plus `ROW_EVIDENCE` recording the confirmed registration facts and the
-  carried `GATE_EVIDENCE`.
-- Then update **DA3.2** (connection fields captured) via
-  [`shared/checklist-updater.md`](shared/checklist-updater.md) with
-  `STEP_ID="DA3.2"`, `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`, `ACK=true` —
-  using the persisted fields as `ROW_EVIDENCE` and carrying `GATE_EVIDENCE`.
-
-If the user says the client is wrong or fields are missing, leave DA3.1/DA3.2
-`in-progress` and re-capture before continuing.
-
----
-
-## DA3.3 — Verify the signed-in employee authentication policy
-
-Verify that the Workday environment permits SAML authentication for the intended
-employee population. Workday tenants vary in how authentication policies are
-organized, and the policy screens may not expose an OAuth-client condition.
-Never invent one, never route this signed-in employee setup through an ISU rule,
-and never enable a disabled policy only to satisfy this checklist.
-
-**Message:**
-
-In Workday, open **Manage Authentication Policies** for the environment your
-employees use. With your Workday administrator, verify that an active rule allows
-**SAML** for the intended employee population.
-
-- Do not use an ISU or integration-system security-group rule for this setup.
-- Do not look for an OAuth-client restriction if this tenant's policy screen
-  does not provide one.
-- Preserve administrator access, employee coverage, and existing network/IP
-  restrictions.
-- If the current active policy already allows employee SAML sign-in, no change
-  is needed.
-- If a change is required, review all pending authentication-policy changes
-  before activating them.
-
-**End message.**
-
-Use the `vscode_askQuestions` tool:
-
-```json
-[
-  {
-    "header": "Employee SAML policy",
-    "question": "What did the Workday administrator confirm for the employee authentication policy?",
-    "options": [
-      {
-        "label": "Existing active policy already allows employee SAML",
-        "description": "No policy change or activation was needed",
-        "recommended": true
-      },
-      {
-        "label": "Reviewed policy change was activated",
-        "description": "The admin preserved employee/admin access and existing network restrictions"
-      },
-      {
-        "label": "Not confirmed yet",
-        "description": "Keep this step in progress"
-      }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-For either confirmed option, capture the selected policy name or rule and whether
-the existing configuration was reused or a reviewed change was activated. For
-**Not confirmed yet**, leave DA3.3 `in-progress` and stop without blocking or
-resetting completed rows.
-
-Then verify the whole tenant configuration.
-
-**Message:**
-
-Now I'll confirm your Workday tenant security and authentication-policy settings
-are in place.
-
-**End message.**
-
-**Verify (WD-TENANT-001):**
-
-```
-python scripts/flightcheck/cli.py --checkpoint WD-TENANT-001 --connect-config ".local/connect/workday-da/config.json"
-```
-
-This echoes the captured `tenant` / `restBaseUrl` / `soapBaseUrl` / `appIdUri`
-and restates the Tenant Setup – Security and signed-in employee
-authentication-policy facts to confirm.
-`WD-TENANT-001` always returns `MANUAL`, so render its result in chat per
-[`shared/checklist-updater.md`](shared/checklist-updater.md) §U.0–U.0a — the
-result table **and** its full verification steps — **before** you ask the user to
-confirm. Then update **DA3.3** via
-[`shared/checklist-updater.md`](shared/checklist-updater.md) with
-`STEP_ID="DA3.3"`, `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`, `ACK=true` once
-the user confirms one of the two supported outcomes above. Pass that selected
-policy/rule and whether it was reused or activated as `ROW_EVIDENCE`, together
-with the carried `GATE_EVIDENCE`.
-
-The **functional** proof of all of this comes downstream, when the Workday
-extension package's Dataverse connection authenticates successfully — not
-from any standalone Workday call here. Verifying that connection end-to-end is
-outside this skill's current scope; see DA-4 for what is and isn't checked.
-
----
-
-## Done
-
-When DA3.1–DA3.4 are all `done`, return control to the orchestrator (`SKILL.md`)
-to resume at the next unverified row.
-
-**Message:**
-
-Your Workday tenant is configured — the signing certificate, Tenant Security, the
-API client, and signed-in employee authentication policy are all set. Next I'll
-review your Workday connection and let you know what's left.
-
-**End message.**
+The controller validates the verified Entra issuer, Service Provider ID, HTTPS
+endpoints, exact REST base suffix, certificate selection, and certificate-date
+match before recording the non-secret identifiers, endpoints, and evidence
+atomically. It captures the completed Entra and Workday phases as a tenant
+foundation that can be reused for another environment or ESS HR agent. If the
+administrator is not available, stop here; rerun
+`workday-admin-packet` later without losing deployment progress.

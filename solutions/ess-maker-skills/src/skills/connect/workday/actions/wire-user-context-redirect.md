@@ -12,40 +12,47 @@ Every **Message** block is the exact text to show the user. Copy it verbatim.
 ## A.0 — Role gate (Environment Maker)
 
 The lifecycle runner already applied `permission-gate.md` before reading this
-file — see `src/skills/connect/shared/lifecycle-runner.md` section L.4a, which
-uses `GATE_MODE = "programmatic"` with the same Dataverse security-role query
-`src/skills/setup/workday/install-workday-extension-pack.md` section P5.0
-uses for this exact role. This file starts from a passed gate; it does not
-re-check it.
+file using the exact programmatic Dataverse security-role query and accepted
+role names declared for this phase in `contract.json`. This file starts from a
+passed gate; it does not re-check it.
 
 ## A.1 — Explain what's about to change
 
 **Message:**
 
-I'll wire your agent's **User Context** topic to call Workday on every
-conversation. Without this, Workday topics respond with "This feature isn't
-available yet."
+I'll connect your agent's **User Context** setup to Workday so it can identify
+the signed-in employee when a Workday request begins.
 
 **End message.**
 
 ---
 
-## A.2 — Resolve the installed system topic
+## A.2 — Resolve both topics from the workspace map
 
-Find the installed Workday "Set User Context" system topic's dialog id under
-`.local/agents/{AGENT_SLUG}/topics/`. Use the actual installed topic's
-`schemaName` — do not assume a fixed name, since it varies by install path
-(for example, `WorkdaySystemGetUserContextV2` on the current extension pack).
-This installed tree is read-only package evidence. The editable redirect
-remains in `workspace/agents/{AGENT_SLUG}/topics/`.
+Read `workspace/agents/{AGENT_SLUG}/.component-map.json`.
+
+- Find exactly one entry whose `displayName` is
+  `[Admin] - User Context - Setup`. Save its map key as
+  `{USER_CONTEXT_TOPIC_PATH}`.
+- Find exactly one entry whose `displayName` is
+  `Workday [System] - 1: Set User Context V2`. Save its `schemaName` as
+  `{USER_CONTEXT_DIALOG}`.
+
+Both entries must be `DialogComponent` records and both mapped files must
+exist. Stop on missing or duplicate matches. Do not assume either filename:
+current native agents commonly use `topics/Setusercontext.mcs.yml`, while
+older materialized workspaces may use `topics/user-context-setup.mcs.yml`.
 
 ---
 
 ## A.3 — Edit the redirect
 
-Set the agent's
-`workspace/agents/{AGENT_SLUG}/topics/user-context-setup.mcs.yml`
-`OnRedirect` to a `BeginDialog` calling that dialog id:
+Read `workspace/agents/{AGENT_SLUG}/{USER_CONTEXT_TOPIC_PATH}`. Continue only
+when it is either the empty `OnRedirect` scaffold or already contains the
+exact redirect below. Refuse to overwrite any other actions or custom
+content.
+
+Set its `OnRedirect` to a `BeginDialog` calling the resolved dialog id:
 
 ```yaml
 kind: AdaptiveDialog
@@ -70,11 +77,14 @@ before continuing.
 Preview and push:
 
 ```
-python scripts/push.py --only "topics/user-context-setup.mcs.yml" --dry-run
+python scripts/push.py --only "{USER_CONTEXT_TOPIC_PATH}" --dry-run --preferred-username "{POWER_PLATFORM_MAKER}"
 ```
 
-Review the preview. The preview must contain only the `user-context-setup` topic. If any other
-file appears, stop and report it instead of publishing unrelated work.
+Run this command from the solution root containing `.local/config.json`.
+Review the preview. It must contain only the setup topic. This action updates
+the redirect but deliberately does not activate Workday topics; activation
+runs only after flow connection and parameter sharing are complete. If any
+other file appears, stop and report it instead of publishing unrelated work.
 
 Use the `vscode_askQuestions` tool:
 
@@ -84,7 +94,7 @@ Use the `vscode_askQuestions` tool:
     "header": "Publish Workday wiring",
     "question": "Publish this scoped User Context topic change to the active agent?",
     "options": [
-      { "label": "Publish", "recommended": true },
+      { "label": "Publish" },
       { "label": "Not now" }
     ],
     "allowFreeformInput": false
@@ -92,12 +102,15 @@ Use the `vscode_askQuestions` tool:
 ]
 ```
 
+Leave the selection unset. Publishing is an explicit mutation approval, not a
+recommended answer.
+
 If the user selects **Not now**, set `ACTION_RESULT = "cancelled"`, return to
 the lifecycle runner without pushing, and leave the phase `in-progress`. If
 the user selects **Publish**, run:
 
 ```
-python scripts/push.py --only "topics/user-context-setup.mcs.yml" --yes
+python scripts/push.py --only "{USER_CONTEXT_TOPIC_PATH}" --yes --preferred-username "{POWER_PLATFORM_MAKER}"
 ```
 
 The explicit question above is the approval for this concrete scoped change;
@@ -109,7 +122,9 @@ If it fails, stop and report the failure; do not return an applied result.
 
 ## A.5 — Return
 
-Return `ACTION_RESULT` to the lifecycle runner. It re-runs `WD-REST-002` for
-`AGENT_SLUG` only after an `"applied"` result and decides whether to advance
-or use the named restore point — this file does not re-run the checkpoint
-itself.
+Return `ACTION_RESULT` to the lifecycle runner. With an `"applied"` result,
+also return the exact `{USER_CONTEXT_TOPIC_PATH}` as
+`ACTION_ROLLBACK_PUSH_GLOB`. Do not return a wildcard or directory. The runner
+re-runs `WD-REST-002` for `AGENT_SLUG` only after an `"applied"` result and
+decides whether to advance or use the named restore point — this file does not
+re-run the checkpoint itself.
