@@ -397,6 +397,19 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
     ),
+    # WD-CONN-013 reads the selected agent's connection-reference parameter
+    # sharing configuration directly from Dataverse. It does not call BAP or
+    # Power Automate APIs, so do not prompt for those additional audiences.
+    CheckpointSpec(
+        key="WD-CONN-013",
+        category_fn=run_workday_checks,
+        category_label="Workday",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value,),
+    ),
     # ---- Workday dynamic families ----
     # WD-CONN-* — the generic connection enumerator (connections.py emits
     # WD-CONN-001 summary + WD-CONN-{i+2:03d} per connection). Exact-first
@@ -671,7 +684,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "ENV-CAPACITY-001",
             "DA-AGENT-001",
             "DA-CONTENT-001",
-            "ESS-SOLN-001",
             "WD-DA-PKG-001",
         ),
     ),
@@ -682,7 +694,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "ENV-001",
             "ENV-002",
             "ENV-009",
-            "ESS-SOLN-001",
             "WD-DA-PKG-001",
             "WD-FLOW",
             "DV-CONN-001",
@@ -739,7 +750,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "DA-AGENT-001",
             "DA-CONTENT-001",
             "DA-CONN",
-            "ESS-SOLN-001",
             "WD-DA-PKG-001",
             "WD-ENTRA-SCOPE-001",
             "WD-ENTRA-CONSENT-001",

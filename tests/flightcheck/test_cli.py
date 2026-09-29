@@ -539,3 +539,60 @@ class TestPvaScopeGating:
 
         assert exc.value.code == 0
         assert _RecordingPVA.instantiated is True
+
+
+class TestTerminalBlockedSummary:
+    """Regression (ADO 7943641): a blocked-only run must surface as blocking
+    in the terminal summary.
+
+    Before the fix ``_print_prioritized_summary`` computed the NOT_READY
+    headline as ``failed + errors`` (excluding blocked), had no Blocked field
+    in the counts strip, and ``_status_tag`` had no BLOCKED mapping — so a
+    blocked-only run printed "0 issues need attention" and rendered the
+    blocked row as "[?   ]".
+    """
+
+    @staticmethod
+    def _blocked_result():
+        from flightcheck.runner import CheckResult, Priority, RunResult, Status
+
+        blocked_row = CheckResult(
+            checkpoint_id="WD-CONN-999",
+            category="Workday",
+            priority=Priority.CRITICAL.value,
+            status=Status.BLOCKED.value,
+            description="Essential Workday capability",
+            result="Workday connector unavailable in this environment",
+            remediation="Provision the Workday connection, then re-run.",
+            roles=["Workday Admin"],
+        )
+        return RunResult(
+            scope="workday-da:final",
+            started="2026-01-01T00:00:00Z",
+            duration_secs=1.0,
+            results=[blocked_row],
+            total=1,
+            blocked=1,
+            overall="NOT_READY",
+        )
+
+    def test_status_tag_has_blocked_mapping(self):
+        from flightcheck.runner import Status
+
+        assert cli._status_tag(Status.BLOCKED.value) == "[BLK ]"
+
+    def test_blocked_only_headline_counts_the_block(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        # Headline must count the blocked row, not report zero.
+        assert "1 issue needs attention" in out
+        assert "0 issue" not in out
+
+    def test_blocked_counts_strip_and_row_tag(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        assert "Blocked: 1" in out
+        # The blocked row surfaces under ACTION REQUIRED with the [BLK ] tag.
+        assert "[BLK ]" in out
+        assert "WD-CONN-999" in out
+        assert "[?   ]" not in out
