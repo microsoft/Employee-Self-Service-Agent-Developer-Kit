@@ -93,6 +93,8 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [ValidateSet('prod', 'preprod', 'test')]
+    [string] $Ring = 'prod',
     [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
     [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
@@ -102,6 +104,13 @@ param(
 # -InstallMode is passed. This preserves the old behaviour where the
 # switch was the only way to say "no chat-first layout".
 if ($SkipMakerProfile) { $InstallMode = 'developer' }
+
+# Normalize -Ring casing before forwarding: [ValidateSet] on the param
+# is case-insensitive so `-Ring Prod` binds, but `flightcheck/cli.py`
+# uses argparse `choices=["prod","preprod","test"]` (case-sensitive)
+# and would reject the mixed-case value. Lowercase up-front so the
+# forwarded --ring literal always matches cli.py's contract.
+$Ring = $Ring.ToLowerInvariant()
 
 # Back-compat: legacy value aliases from the pre-rename installer
 # (bootstrap-lite.ps1 previously pinned 'lite'; -SkipMakerProfile alias
@@ -116,6 +125,14 @@ if ($InstallMode -eq 'standard') { $InstallMode = 'developer' }
 # choice deterministic: the answer is applied to essMaker.mode before
 # any editor UI appears, so there's no race with the theme picker or
 # GitHub Copilot sign-in that VS Code renders on first launch.
+#
+# FlightCheck-only mode skips VS Code entirely (see step 5c guard on
+# $FlightCheckOnly and the `if (-not $FlightCheckOnly)` around the
+# workspace launch), so the maker/developer choice has no effect there.
+# Suppressing the prompt keeps the FlightCheck-only path a single
+# straight-through experience for customers who just want the readiness
+# check.
+if ($FlightCheckOnly -and $InstallMode -eq 'prompt') { $InstallMode = 'maker' }
 if ($InstallMode -eq 'prompt') {
     $nonInteractive = $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or [Console]::IsInputRedirected
     if ($nonInteractive) {
@@ -1260,7 +1277,13 @@ if ($FlightCheckOnly) {
         try {
             $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
             $output = Invoke-Native { & $pyCmd @discoverArgs }
-            foreach ($line in $output) { Write-Host $line }
+            # Filter out the machine-parseable JSON dump lines that discover.py
+            # emits for programmatic consumers (skills read these; a maker
+            # running the installer just sees an unreadable wall of JSON).
+            foreach ($line in $output) {
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                Write-Host $line
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw 'Environment listing failed.'
             }
@@ -1298,7 +1321,10 @@ if ($FlightCheckOnly) {
 
             $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
             $output = Invoke-Native { & $pyCmd @agentListArgs }
-            foreach ($line in $output) { Write-Host $line }
+            foreach ($line in $output) {
+                if ($line -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):') { continue }
+                Write-Host $line
+            }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
                 $botId = ''
@@ -1440,19 +1466,27 @@ if ($FlightCheckOnly) {
             # but let output stream directly to console (FlightCheck is interactive)
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
+            # --ring <ring>: the FlightCheck-only installer discovers
+            # environments via BAP prod (api.bap.microsoft.com) by default,
+            # so we target the prod service ring unless the caller (typically
+            # a PM validating a preprod/test environment) overrode -Ring.
+            # Without this flag FlightCheck's --scope full aborts with
+            # "The Power Platform environment ring is unavailable" because
+            # the installer-authored config.json only carries dataverseEndpoint
+            # (no powerPlatformApiEndpoint from which FC could infer the ring).
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always'
+        Write-Warn2 "  python scripts/flightcheck/cli.py --scope full --select-targets always --ring $Ring"
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well
