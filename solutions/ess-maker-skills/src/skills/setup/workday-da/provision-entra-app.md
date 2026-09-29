@@ -68,6 +68,32 @@ If a check fails, show only the affected remediation step from the
 administrator guide. Do not present the entire guide as mandatory merely
 because the user selected another environment, agent, or maker account.
 
+Before showing any administrator portal action that remains after discovery
+and tenant-foundation reconciliation, show the exact required Entra role. Add
+a consent-capable administrator only when the handoff says administrator
+consent is still required. Then use this exact `vscode_askQuestions` form:
+
+```json
+[
+  {
+    "header": "Microsoft Entra administrator",
+    "question": "Is the required Microsoft Entra administrator available to complete the remaining portal action?",
+    "options": [
+      { "label": "Yes, the administrator is available" },
+      { "label": "No, the administrator is unavailable" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. If the administrator is unavailable, pause before
+showing the portal instructions. Explain that no Entra portal change was made
+and that the lifecycle will resume from the same phase. Do not request the
+administrator's name, credentials, or other identifying information. This
+availability answer is not authorization evidence; the stable role-template
+check and verified Graph reread remain authoritative.
+
 If `requiresRediscovery` is `true`, ask an Entra administrator to open
 **Microsoft Entra admin center -> Enterprise applications -> New application**,
 find the official **Workday** gallery application, and create it in the selected
