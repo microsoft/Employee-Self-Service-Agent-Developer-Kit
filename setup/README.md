@@ -110,6 +110,24 @@ Re-run the same command — it will ask if you want to reconfigure:
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
+### Targeting a non-prod ring
+
+The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`:
+
+**Windows** (PowerShell):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -Ring preprod
+```
+
+**macOS** (Terminal):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --ring preprod
+```
+
+Accepted values: `prod`, `preprod`, `test`.
+
 ### Running FlightCheck again (after initial setup)
 
 Once you've run the installer once, you can re-run FlightCheck directly without going through setup again. The HTML report opens in your default browser when the run finishes — pass `--no-open` to skip (useful for CI / headless / SSH sessions).
