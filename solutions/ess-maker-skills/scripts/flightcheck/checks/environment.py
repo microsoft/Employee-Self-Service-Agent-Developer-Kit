@@ -156,26 +156,16 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
 
     mismatches: list[tuple[str, str]] = []
     missing_commit: list[str] = []
+    # Collect per-bot read failures instead of early-returning: a confirmed
+    # commit mismatch on one agent (FAILED) must not be masked by a later
+    # agent's transient read error (WARNING). FAILED wins over WARNING.
+    read_errors: list[tuple[str, str]] = []
     for bot_id in bot_ids:
         try:
             data = client.get_realm_configuration(bot_id, realm)
         except Exception as e:  # noqa: BLE001 — surface a read failure as WARNING
-            return CheckResult(
-                roles=[Role.ESS_MAKER.value],
-                checkpoint_id="ENV-004-GRS",
-                category="Environment",
-                priority=Priority.HIGH.value,
-                status=Status.WARNING.value,
-                description=_ENV004_GRS_DESCRIPTION,
-                result=(
-                    f"Could not read minimalBots ALM configure for realm "
-                    f"{realm_name}: {type(e).__name__}: {e}"
-                ),
-                remediation=(
-                    "Ensure the agent is opted into minimalBots ALM for this realm "
-                    "and that FlightCheck is signed in to Copilot Studio (AgentBuilder)."
-                ),
-            )
+            read_errors.append((bot_id, f"{type(e).__name__}: {e}"))
+            continue
         observed_commit = (data or {}).get("commitSha") or ""
         if not observed_commit:
             missing_commit.append(bot_id)
@@ -205,6 +195,27 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
                 "Publish or import the ESS agent solution built from the expected "
                 "commit, or update expectedGrsCommitSha only after confirming the "
                 "new commit is the intended release."
+            ),
+        )
+
+    if read_errors:
+        detail = "; ".join(
+            f"botId {bot_id}: {msg}" for bot_id, msg in read_errors
+        )
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS",
+            category="Environment",
+            priority=Priority.HIGH.value,
+            status=Status.WARNING.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result=(
+                f"Could not read minimalBots ALM configure for realm "
+                f"{realm_name}: {detail}"
+            ),
+            remediation=(
+                "Ensure the agent is opted into minimalBots ALM for this realm "
+                "and that FlightCheck is signed in to Copilot Studio (AgentBuilder)."
             ),
         )
 

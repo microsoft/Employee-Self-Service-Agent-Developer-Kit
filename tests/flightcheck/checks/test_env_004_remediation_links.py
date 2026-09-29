@@ -88,6 +88,30 @@ class _FakeAgentBuilder:
         return self._configuration
 
 
+class _PerBotAgentBuilder:
+    """AgentBuilder fake that returns a distinct configure result per botId.
+
+    Lets a test set up one agent that reports a mismatched commit and another
+    whose configure read raises, to prove a confirmed mismatch (FAILED) wins
+    over a later agent's transient read error (WARNING) across agents.
+    """
+
+    def __init__(self, *, components, configs=None, errors=None):
+        self._components = components
+        self._configs = configs or {}
+        self._errors = errors or {}
+
+    def fetch_components(self, _agent_id):
+        return self._components
+
+    def get_realm_configuration(self, agent_id, realm):
+        if type(realm) is not int:
+            raise ValueError("Realm must be the numeric Dev/Test/Prod value.")
+        if agent_id in self._errors:
+            raise self._errors[agent_id]
+        return self._configs.get(agent_id)
+
+
 def _runner(*, agentbuilder=None, config=_MISSING, env_id="env-deeplinks"):
     return SimpleNamespace(
         agentbuilder=agentbuilder,
@@ -308,6 +332,40 @@ class TestGrsCommitPin:
             "Publish or import the ESS agent solution"
             in by_id["ENV-004"].remediation
         )
+
+    def test_mismatch_wins_over_later_read_error_across_agents(self):
+        """A confirmed commit mismatch must not be masked by a later agent's
+        transient configure read error.
+
+        Regression: the GRS loop used to early-return WARNING on the first
+        read error, so a real mismatch on an earlier agent was downgraded to
+        a soft warning when a subsequent agent's read flaked. FAILED (a
+        confirmed bad deploy) must win over WARNING (a transient read error).
+        """
+        components = ab.components_with_references(references=[_bound()])
+        runner = _runner(
+            agentbuilder=_PerBotAgentBuilder(
+                components=components,
+                configs={"bot-mismatch": ab.configuration(commit_sha="deadbeef")},
+                errors={"bot-readfail": RuntimeError("boom")},
+            ),
+            config={
+                "agents": [
+                    {"slug": "hr", "botId": "bot-mismatch"},
+                    {"slug": "it", "botId": "bot-readfail"},
+                ],
+                "expectedGrsCommitSha": ab.COMMIT_SHA,
+            },
+        )
+        by_id = _by_id(_check(runner))
+
+        grs = by_id["ENV-004-GRS"]
+        assert grs.status == "Failed"
+        assert "deadbeef" in grs.result
+        assert "Publish or import the ESS agent solution" in grs.remediation
+        # The GRS mismatch forces the ENV-004 summary to FAILED, not WARNING.
+        assert by_id["ENV-004"].status == "Failed"
+        assert "GRS commit pin: Failed" in by_id["ENV-004"].result
 
     def test_missing_commit_in_configure_fails(self):
         components = ab.components_with_references(references=[_bound()])
