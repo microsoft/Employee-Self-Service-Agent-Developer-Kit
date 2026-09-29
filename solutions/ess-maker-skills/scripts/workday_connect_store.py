@@ -7,16 +7,23 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import time
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
+import uuid
 
 from workday_connect_model import (
     LEGACY_PHASE_ROWS,
+    LIFECYCLE_BLOCKER_CATEGORIES,
+    LIFECYCLE_EVENT_TYPES,
+    LIFECYCLE_JOURNAL_MAX_EVENTS,
+    LIFECYCLE_OUTCOMES,
     PHASE_BY_ID,
     PHASE_DEFINITIONS,
     PHASE_REQUIRED_ACTIONS,
@@ -25,6 +32,7 @@ from workday_connect_model import (
     TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS,
     PhaseStatus,
     WorkdayConnectModelError,
+    default_lifecycle_state,
     default_state,
     next_phase_summary,
     plan_hash,
@@ -72,6 +80,57 @@ _OPERATOR_PHASES = {
     "entraAdmin": "entra",
     "workdayAdmin": "workday-admin",
 }
+_LIFECYCLE_TARGET_SCOPE_KEYS = {
+    "agent",
+    "dataverseUrl",
+    "environmentId",
+    "entraTenantId",
+    "workdayTenant",
+}
+_BLOCKER_CATEGORY_KEYWORDS = (
+    ("timeout", ("timeout", "timedout")),
+    (
+        "permissions",
+        (
+            "permission",
+            "access",
+            "authorization",
+            "unauthorized",
+            "consent",
+            "forbidden",
+            "role",
+        ),
+    ),
+    (
+        "auth",
+        ("auth", "credential", "signin", "sign-in", "token", "entra"),
+    ),
+    (
+        "connection",
+        ("connection", "network", "endpoint", "dns", "ssl", "http"),
+    ),
+    (
+        "validation",
+        ("validation", "contract", "evidence", "invalid"),
+    ),
+    ("state", ("state", "store", "schema", "migration", "planchanged")),
+    (
+        "platform",
+        ("platform", "preflight", "dataverse", "package", "solution"),
+    ),
+    ("runtime", ("runtime", "flow", "topic", "agent")),
+)
+_BLOCKER_CATEGORY_EXACT = {
+    "employee-authentication": "auth",
+    "workday-connection": "connection",
+    "runtime-flow": "runtime",
+    "employee-context": "validation",
+    "network": "connection",
+    "workday-access": "permissions",
+    "publish-or-agent": "runtime",
+    "unknown": "unknown",
+}
+_REMEDIATION_ID_RE = re.compile(r"^WD-E2E-\d{3}$")
 
 
 class WorkdayConnectStoreError(RuntimeError):
@@ -80,6 +139,313 @@ class WorkdayConnectStoreError(RuntimeError):
 
 class WorkdayConnectPlanChangedError(WorkdayConnectStoreError):
     """Raised when an approved plan no longer matches the current plan."""
+
+
+def _blocker_category(blocker: Mapping[str, Any] | None) -> str:
+    if not blocker:
+        return ""
+    raw = str(
+        blocker.get("category")
+        or blocker.get("failureCategory")
+        or blocker.get("errorType")
+        or "unknown"
+    ).strip().casefold()
+    if raw in LIFECYCLE_BLOCKER_CATEGORIES:
+        return raw
+    if raw in _BLOCKER_CATEGORY_EXACT:
+        return _BLOCKER_CATEGORY_EXACT[raw]
+    compact = "".join(character for character in raw if character.isalnum())
+    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
+        if any(
+            "".join(character for character in keyword if character.isalnum())
+            in compact
+            for keyword in keywords
+        ):
+            return category
+    return "unknown"
+
+
+def _remediation_id(blocker: Mapping[str, Any] | None) -> str:
+    if not blocker:
+        return ""
+    value = str(blocker.get("remediationId") or "").strip().upper()
+    return value if _REMEDIATION_ID_RE.fullmatch(value) else ""
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def _phase_active_segment_ms(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> int:
+    lifecycle = state.get("lifecycle") or {}
+    started = _parse_timestamp(
+        (lifecycle.get("activePhaseStartedAt") or {}).get(phase_id)
+    )
+    finished = _parse_timestamp(utc_now())
+    if started is None or finished is None:
+        return 0
+    return max(0, int((finished - started).total_seconds() * 1000))
+
+
+def _phase_total_duration_ms(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> int:
+    lifecycle = state.get("lifecycle") or {}
+    paused_duration = max(
+        0,
+        int(
+            (lifecycle.get("phaseDurationsMs") or {}).get(phase_id)
+            or 0
+        ),
+    )
+    return paused_duration + _phase_active_segment_ms(state, phase_id)
+
+
+def _append_lifecycle_event(
+    state: dict[str, Any],
+    event: str,
+    *,
+    phase: str = "",
+    outcome: str = "",
+    blocker_category: str = "",
+    remediation_id: str = "",
+    duration_ms: int = 0,
+    increment_retry: bool = False,
+    increment_resume: bool = False,
+) -> dict[str, Any]:
+    if event not in LIFECYCLE_EVENT_TYPES:
+        raise WorkdayConnectStoreError(
+            f"Unknown Workday lifecycle event: {event}."
+        )
+    if phase not in {"", *PHASE_BY_ID}:
+        raise WorkdayConnectStoreError(
+            f"Unknown Workday lifecycle event phase: {phase}."
+        )
+    if outcome not in LIFECYCLE_OUTCOMES:
+        raise WorkdayConnectStoreError(
+            f"Unknown Workday lifecycle event outcome: {outcome}."
+        )
+    lifecycle = state["lifecycle"]
+    if increment_retry:
+        lifecycle["retryCount"] += 1
+    if increment_resume:
+        lifecycle["resumeCount"] += 1
+    journal = lifecycle["journal"]
+    sequence = int(journal[-1]["sequence"]) + 1 if journal else 1
+    timestamp = utc_now()
+    record = {
+        "sequence": sequence,
+        "correlationId": lifecycle["correlationId"],
+        "event": event,
+        "phase": phase,
+        "outcome": outcome,
+        "blockerCategory": blocker_category,
+        "remediationId": remediation_id,
+        "durationMs": max(0, int(duration_ms)),
+        "retryCount": lifecycle["retryCount"],
+        "resumeCount": lifecycle["resumeCount"],
+        "timestamp": timestamp,
+    }
+    if phase:
+        active_starts = lifecycle["activePhaseStartedAt"]
+        phase_durations = lifecycle["phaseDurationsMs"]
+        if event in {"phase-started", "phase-resumed"}:
+            active_starts[phase] = timestamp
+        elif event == "phase-paused":
+            phase_durations[phase] += record["durationMs"]
+            active_starts[phase] = None
+        elif event == "phase-completed":
+            phase_durations[phase] = record["durationMs"]
+            active_starts[phase] = None
+    journal.append(record)
+    lifecycle["journal"] = journal[-LIFECYCLE_JOURNAL_MAX_EVENTS:]
+    marker = f"{event}|{phase}"
+    if marker not in lifecycle["eventMarkers"]:
+        lifecycle["eventMarkers"].append(marker)
+    return record
+
+
+def _has_lifecycle_event(
+    state: Mapping[str, Any],
+    event: str,
+    phase: str,
+) -> bool:
+    lifecycle = state.get("lifecycle") or {}
+    return f"{event}|{phase}" in (lifecycle.get("eventMarkers") or [])
+
+
+def _current_phase_id(state: Mapping[str, Any]) -> str:
+    phases = state.get("phases") or {}
+    for definition in PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        if (phases.get(phase_id) or {}).get("status") != PhaseStatus.COMPLETE.value:
+            return phase_id
+    return ""
+
+
+def _target_scope_changed(
+    state: Mapping[str, Any],
+    values: Mapping[str, Any],
+    changed_keys: set[str],
+) -> bool:
+    scope = state.get("scope") or {}
+    for key in changed_keys & _LIFECYCLE_TARGET_SCOPE_KEYS:
+        previous = scope.get(key)
+        if previous in (None, "", (), [], {}):
+            continue
+        if key == "agent":
+            previous_agent = previous if isinstance(previous, Mapping) else {}
+            next_value = values.get(key)
+            next_agent = next_value if isinstance(next_value, Mapping) else {}
+            previous_identity = (
+                str(previous_agent.get("slug") or "").casefold(),
+                str(previous_agent.get("botId") or "").casefold(),
+                str(previous_agent.get("schemaName") or "").casefold(),
+            )
+            next_identity = (
+                str(next_agent.get("slug") or "").casefold(),
+                str(next_agent.get("botId") or "").casefold(),
+                str(next_agent.get("schemaName") or "").casefold(),
+            )
+            if previous_identity != next_identity:
+                return True
+            continue
+        return True
+    return False
+
+
+def _rotate_lifecycle(state: dict[str, Any]) -> None:
+    lifecycle = state["lifecycle"]
+    was_invoked = _has_lifecycle_event(state, "invoked", "")
+    has_progress = bool(lifecycle["journal"]) or any(
+        phase["status"] != PhaseStatus.PENDING.value
+        for phase in state["phases"].values()
+    )
+    if state.get("status") != "ready" and has_progress:
+        _append_lifecycle_event(
+            state,
+            "abandoned",
+            phase=_current_phase_id(state),
+            outcome="cancelled",
+        )
+    lifecycle["correlationId"] = str(uuid.uuid4())
+    lifecycle["startedAt"] = utc_now()
+    lifecycle["retryCount"] = 0
+    lifecycle["resumeCount"] = 0
+    lifecycle["phaseDurationsMs"] = {
+        phase_id: 0 for phase_id in PHASE_BY_ID
+    }
+    lifecycle["activePhaseStartedAt"] = {
+        phase_id: None for phase_id in PHASE_BY_ID
+    }
+    lifecycle["eventMarkers"] = []
+    if was_invoked:
+        _append_lifecycle_event(state, "invoked")
+
+
+def _normalize_current_state(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = copy.deepcopy(dict(document))
+    lifecycle = state.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return state
+    correlation_id = lifecycle.get("correlationId")
+    journal = lifecycle.get("journal")
+    if not isinstance(correlation_id, str) or not isinstance(journal, list):
+        return state
+    markers: list[str] = []
+    phase_durations = {phase_id: 0 for phase_id in PHASE_BY_ID}
+    active_starts = {phase_id: None for phase_id in PHASE_BY_ID}
+    for record in journal:
+        if not isinstance(record, dict):
+            continue
+        record.setdefault("correlationId", correlation_id)
+        record.setdefault("remediationId", "")
+        raw_category = record.get("blockerCategory")
+        if raw_category:
+            record["blockerCategory"] = _blocker_category(
+                {"category": raw_category}
+            )
+        if record.get("correlationId") != correlation_id:
+            continue
+        event = str(record.get("event") or "")
+        phase = str(record.get("phase") or "")
+        marker = f"{event}|{phase}"
+        if marker not in markers:
+            markers.append(marker)
+        if phase not in phase_durations:
+            continue
+        if event in {"phase-started", "phase-resumed"}:
+            active_starts[phase] = record.get("timestamp")
+        elif event == "phase-paused":
+            phase_durations[phase] += max(
+                0,
+                int(record.get("durationMs") or 0),
+            )
+            active_starts[phase] = None
+        elif event == "phase-completed":
+            phase_durations[phase] = max(
+                0,
+                int(record.get("durationMs") or 0),
+            )
+            active_starts[phase] = None
+    existing_durations = lifecycle.get("phaseDurationsMs")
+    if isinstance(existing_durations, dict):
+        merged_durations: dict[str, Any] = {}
+        for phase_id in PHASE_BY_ID:
+            existing_duration = existing_durations.get(phase_id)
+            if (
+                isinstance(existing_duration, int)
+                and not isinstance(existing_duration, bool)
+                and existing_duration >= 0
+            ):
+                merged_durations[phase_id] = max(
+                    existing_duration,
+                    phase_durations[phase_id],
+                )
+            else:
+                merged_durations[phase_id] = existing_duration
+        lifecycle["phaseDurationsMs"] = merged_durations
+    else:
+        lifecycle["phaseDurationsMs"] = phase_durations
+    existing_starts = lifecycle.get("activePhaseStartedAt")
+    if isinstance(existing_starts, dict):
+        lifecycle["activePhaseStartedAt"] = {
+            phase_id: (
+                existing_starts.get(phase_id)
+                or active_starts[phase_id]
+            )
+            for phase_id in PHASE_BY_ID
+        }
+    else:
+        lifecycle["activePhaseStartedAt"] = active_starts
+    existing_markers = lifecycle.get("eventMarkers")
+    lifecycle["eventMarkers"] = list(
+        dict.fromkeys(
+            [
+                *(
+                    existing_markers
+                    if isinstance(existing_markers, list)
+                    else []
+                ),
+                *markers,
+            ]
+        )
+    )
+    return state
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -463,6 +829,8 @@ def _upgrade_or_migrate_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     source_version = document.get("schemaVersion")
+    if source_version == 5:
+        return upgrade_v5_state(document)
     if source_version == 4:
         return upgrade_v4_state(document)
     if source_version == 3:
@@ -522,6 +890,8 @@ def _upgrade_structured_state(
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
     state["schemaVersion"] = STATE_SCHEMA_VERSION
+    if "lifecycle" not in state:
+        state["lifecycle"] = default_lifecycle_state()
     if "tenantFoundation" not in state:
         state["tenantFoundation"] = _tenant_foundation_from_state(state)
     first_incomplete: str | None = None
@@ -578,6 +948,10 @@ def upgrade_v4_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_structured_state(document, source_version=4)
 
 
+def upgrade_v5_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_structured_state(document, source_version=5)
+
+
 class WorkdayConnectStore:
     """Own the single durable Workday connect state file."""
 
@@ -586,12 +960,18 @@ class WorkdayConnectStore:
         workspace_root: Path,
         *,
         lock_timeout: float = 5.0,
+        event_sink: (
+            Callable[[Mapping[str, Any], Mapping[str, Any]], None] | None
+        ) = None,
     ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.config_path = self.workspace_root / CONFIG_PATH
         self.lock_path = self.config_path.with_name("state.lock")
-        self.backup_path = self.config_path.with_name("config.pre-v5.json")
+        self.backup_path = self.config_path.with_name(
+            f"config.pre-v{STATE_SCHEMA_VERSION}.json"
+        )
         self.lock_timeout = lock_timeout
+        self.event_sink = event_sink
 
     def initialize(self) -> dict[str, Any]:
         with _file_lock(self.lock_path, self.lock_timeout):
@@ -601,7 +981,11 @@ class WorkdayConnectStore:
                 _atomic_write_json(self.config_path, state)
                 return state
             if existing.get("schemaVersion") == STATE_SCHEMA_VERSION:
-                return validate_state(existing)
+                state = _normalize_current_state(existing)
+                validate_state(state)
+                if state != existing:
+                    _atomic_write_json(self.config_path, state)
+                return state
             if not self.backup_path.exists():
                 self.backup_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.config_path, self.backup_path)
@@ -615,9 +999,13 @@ class WorkdayConnectStore:
         current = _read_json(self.config_path)
         if current.get("schemaVersion") != STATE_SCHEMA_VERSION:
             return self.initialize()
-        return validate_state(current)
+        normalized = _normalize_current_state(current)
+        if normalized != current:
+            return self.initialize()
+        return validate_state(normalized)
 
     def _mutate(self, mutation) -> dict[str, Any]:
+        new_events: list[dict[str, Any]] = []
         with _file_lock(self.lock_path, self.lock_timeout):
             current = _read_json(self.config_path)
             if not current:
@@ -626,7 +1014,11 @@ class WorkdayConnectStore:
                 if not self.backup_path.exists():
                     shutil.copy2(self.config_path, self.backup_path)
                 current = _upgrade_or_migrate_state(current)
+            else:
+                current = _normalize_current_state(current)
             state = copy.deepcopy(validate_state(current))
+            journal = state["lifecycle"]["journal"]
+            previous_sequence = int(journal[-1]["sequence"]) if journal else 0
             mutation(state)
             state["status"] = (
                 "ready"
@@ -639,7 +1031,55 @@ class WorkdayConnectStore:
             state["updatedAt"] = utc_now()
             validate_state(state)
             _atomic_write_json(self.config_path, state)
-            return state
+            new_events = [
+                copy.deepcopy(record)
+                for record in state["lifecycle"]["journal"]
+                if int(record["sequence"]) > previous_sequence
+            ]
+        self._publish_events(state, new_events)
+        return state
+
+    def _publish_events(
+        self,
+        state: Mapping[str, Any],
+        events: list[Mapping[str, Any]],
+    ) -> None:
+        if self.event_sink is None:
+            return
+        for event in events:
+            try:
+                self.event_sink(state, event)
+            except Exception:  # noqa: BLE001 - telemetry cannot break lifecycle
+                continue
+
+    def record_lifecycle_event(
+        self,
+        event: str,
+        *,
+        phase: str = "",
+        outcome: str = "",
+        blocker_category: str = "",
+        remediation_id: str = "",
+        duration_ms: int = 0,
+        once_per_lifecycle: bool = False,
+    ) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            if (
+                once_per_lifecycle
+                and _has_lifecycle_event(state, event, phase)
+            ):
+                return
+            _append_lifecycle_event(
+                state,
+                event,
+                phase=phase,
+                outcome=outcome,
+                blocker_category=blocker_category,
+                remediation_id=remediation_id,
+                duration_ms=duration_ms,
+            )
+
+        return self._mutate(mutation)
 
     def merge_section(
         self,
@@ -663,9 +1103,35 @@ class WorkdayConnectStore:
                 section,
                 changed_keys,
             )
+            if (
+                section == "scope"
+                and _target_scope_changed(state, values, changed_keys)
+            ):
+                _rotate_lifecycle(state)
             if invalidation_phase:
                 _invalidate_from_phase(state, invalidation_phase)
             state[section].update(dict(values))
+            if section == "operators":
+                phases = {
+                    _OPERATOR_PHASES.get(key, "preflight")
+                    for key in changed_keys
+                }
+                for definition in PHASE_DEFINITIONS:
+                    phase_id = definition.identifier.value
+                    if (
+                        phase_id in phases
+                        and not _has_lifecycle_event(
+                            state,
+                            "roles-attested",
+                            phase_id,
+                        )
+                    ):
+                        _append_lifecycle_event(
+                            state,
+                            "roles-attested",
+                            phase=phase_id,
+                            outcome="success",
+                        )
 
         return self._mutate(mutation)
 
@@ -772,9 +1238,77 @@ class WorkdayConnectStore:
                         f"Phase '{phase_id}' is missing required verified "
                         "actions: " + ", ".join(missing) + "."
                     )
+            previous_status = phase["status"]
             phase["status"] = status
             phase["blocker"] = dict(blocker) if blocker else None
             phase["updatedAt"] = utc_now()
+            if status == PhaseStatus.BLOCKED.value:
+                if previous_status == PhaseStatus.PENDING.value:
+                    _append_lifecycle_event(
+                        state,
+                        "phase-started",
+                        phase=phase_id,
+                    )
+                    previous_status = PhaseStatus.ACTIVE.value
+                if previous_status == PhaseStatus.ACTIVE.value:
+                    _append_lifecycle_event(
+                        state,
+                        "phase-paused",
+                        phase=phase_id,
+                        outcome="blocked",
+                        duration_ms=_phase_active_segment_ms(
+                            state,
+                            phase_id,
+                        ),
+                    )
+                _append_lifecycle_event(
+                    state,
+                    "blocked",
+                    phase=phase_id,
+                    outcome="blocked",
+                    blocker_category=_blocker_category(blocker),
+                    remediation_id=_remediation_id(blocker),
+                )
+            elif (
+                status == PhaseStatus.ACTIVE.value
+                and previous_status == PhaseStatus.BLOCKED.value
+            ):
+                _append_lifecycle_event(
+                    state,
+                    "phase-resumed",
+                    phase=phase_id,
+                    increment_retry=True,
+                    increment_resume=True,
+                )
+            elif (
+                status == PhaseStatus.ACTIVE.value
+                and previous_status != PhaseStatus.ACTIVE.value
+            ):
+                _append_lifecycle_event(
+                    state,
+                    "phase-started",
+                    phase=phase_id,
+                )
+            elif (
+                status == PhaseStatus.COMPLETE.value
+                and previous_status != PhaseStatus.COMPLETE.value
+            ):
+                _append_lifecycle_event(
+                    state,
+                    "phase-completed",
+                    phase=phase_id,
+                    outcome="success",
+                    duration_ms=_phase_total_duration_ms(state, phase_id),
+                )
+                if all(
+                    item["status"] == PhaseStatus.COMPLETE.value
+                    for item in state["phases"].values()
+                ):
+                    _append_lifecycle_event(
+                        state,
+                        "completed",
+                        outcome="success",
+                    )
 
         return self._mutate(mutation)
 
@@ -819,6 +1353,7 @@ class WorkdayConnectStore:
                         "capturedAt": utc_now(),
                     }
                 )
+            previous_status = phase["status"]
             if phase["status"] in {
                 PhaseStatus.PENDING.value,
                 PhaseStatus.BLOCKED.value,
@@ -826,6 +1361,20 @@ class WorkdayConnectStore:
                 phase["status"] = PhaseStatus.ACTIVE.value
             phase["blocker"] = None
             phase["updatedAt"] = utc_now()
+            if previous_status == PhaseStatus.BLOCKED.value:
+                _append_lifecycle_event(
+                    state,
+                    "phase-resumed",
+                    phase=phase_id,
+                    increment_retry=True,
+                    increment_resume=True,
+                )
+            elif previous_status == PhaseStatus.PENDING.value:
+                _append_lifecycle_event(
+                    state,
+                    "phase-started",
+                    phase=phase_id,
+                )
 
         return self._mutate(mutation)
 
@@ -856,6 +1405,7 @@ class WorkdayConnectStore:
                     f"Complete '{prerequisite.value}' before approving '{phase_id}'."
                 )
             phase = state["phases"][phase_id]
+            previous_status = phase["status"]
             if phase["status"] == PhaseStatus.COMPLETE.value:
                 _invalidate_after_phase(state, phase_id)
             phase["approvedPlan"] = dict(plan)
@@ -863,6 +1413,20 @@ class WorkdayConnectStore:
             phase["status"] = PhaseStatus.ACTIVE.value
             phase["blocker"] = None
             phase["updatedAt"] = utc_now()
+            if previous_status == PhaseStatus.BLOCKED.value:
+                _append_lifecycle_event(
+                    state,
+                    "phase-resumed",
+                    phase=phase_id,
+                    increment_retry=True,
+                    increment_resume=True,
+                )
+            elif previous_status != PhaseStatus.ACTIVE.value:
+                _append_lifecycle_event(
+                    state,
+                    "phase-started",
+                    phase=phase_id,
+                )
 
         return self._mutate(mutation), approved_hash
 
