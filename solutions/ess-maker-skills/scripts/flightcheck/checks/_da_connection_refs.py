@@ -11,8 +11,9 @@ stacked DA re-point PRs, so nothing in this branch imports it yet):
   * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
     environment-wide and de-duped by logical name, via
     ``read_all_agents_connection_references``.
-  * The Workday shared-parameter checks (checks/workday.py) -> per-agent Workday
-    ``sharedConnectionParameters`` via ``workday_shared_connection_parameters``.
+  * The Workday shared-parameter checks (checks/workday.py) -> the active
+    agent's Workday ``sharedConnectionParameters`` via
+    ``workday_shared_connection_parameters``.
 
 Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
 ``agentbuilder_readiness.yaml``, the same endpoint + shape the shipped native
@@ -178,9 +179,8 @@ def _all_agents_connection_references(runner) -> list[dict[str, Any]] | None:
     single-agent config), preserving per-agent rows, or ``None`` when the
     AgentBuilder client is unavailable or no agent botId is configured.
 
-    Intended for the Workday shared-parameter sweep, which must inspect each
-    configured agent's own Workday reference rather than only the active one.
-    Raises ``ValueError`` for malformed components payloads.
+    Used by the environment-wide ``ENV-004`` reader. Raises ``ValueError`` for
+    malformed components payloads.
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
@@ -203,8 +203,7 @@ def read_all_agents_connection_references(
 
     Intended for ``ENV-004`` (checks/environment.py), which is environment-wide
     across every agent under check and reports one row per distinct logical
-    name. The per-agent (non-de-duped) view is ``_all_agents_connection_references``,
-    which the Workday shared-parameter sweep uses instead.
+    name.
     """
     refs = _all_agents_connection_references(runner)
     if refs is None:
@@ -273,16 +272,17 @@ def shared_connection_parameter_values(ref: dict[str, Any]) -> dict[str, str]:
 def workday_shared_connection_parameters(
     runner,
 ) -> tuple[dict[str, str] | None, str]:
-    """Return Workday ``sharedConnectionParameters.values`` from components.
+    """Return the active agent's Workday parameters from components.
 
     ``values is None`` means the check could not run because AgentBuilder or a
-    botId is unavailable. ``values == {}`` means the check ran and observed a
-    missing Workday reference or missing shared parameters.
+    configured active-agent botId is unavailable. ``values == {}`` means the
+    check ran and observed a missing Workday reference or missing shared
+    parameters on the active agent.
     """
-    refs = _all_agents_connection_references(runner)
+    refs = read_active_agent_connection_references(runner)
     if refs is None:
         return None, (
-            "AgentBuilder client or a configured agent botId not available"
+            "AgentBuilder client or active-agent botId not available"
         )
 
     found_workday_ref = False

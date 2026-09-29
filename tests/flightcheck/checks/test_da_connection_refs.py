@@ -31,8 +31,10 @@ class _FakeClient:
 
     def __init__(self, payload_by_bot: dict[str, dict[str, Any]]):
         self._payload_by_bot = payload_by_bot
+        self.calls: list[str] = []
 
     def fetch_components(self, bot_id: str) -> dict[str, Any]:
+        self.calls.append(bot_id)
         return self._payload_by_bot.get(bot_id, {})
 
 
@@ -316,6 +318,49 @@ def test_wscp_workday_reference_not_found():
     values, message = reader.workday_shared_connection_parameters(runner)
     assert values == {}
     assert "not found" in message.lower()
+
+
+def test_wscp_does_not_use_sibling_agent_values():
+    sibling_ref = ab.workday_connection_reference(
+        shared_connection_parameters=ab.shared_connection_parameters_json_string()
+    )
+    client = _FakeClient(
+        {
+            "ACTIVE": ab.components(),
+            "SIBLING": ab.components_with_references(references=[sibling_ref]),
+        }
+    )
+    runner = _FakeRunner(
+        client,
+        {
+            "agent": {"botId": "ACTIVE"},
+            "agents": [{"botId": "ACTIVE"}, {"botId": "SIBLING"}],
+        },
+    )
+
+    values, message = reader.workday_shared_connection_parameters(runner)
+
+    assert values == {}
+    assert message == reader.WORKDAY_REF_NOT_FOUND
+    assert client.calls == ["ACTIVE"]
+
+
+def test_wscp_requires_active_agent_bot_id():
+    sibling_ref = ab.workday_connection_reference(
+        shared_connection_parameters=ab.shared_connection_parameters_json_string()
+    )
+    client = _FakeClient(
+        {
+            "SIBLING": ab.components_with_references(references=[sibling_ref]),
+        }
+    )
+    runner = _FakeRunner(client, {"agents": [{"botId": "SIBLING"}]})
+
+    values, message = reader.workday_shared_connection_parameters(runner)
+
+    assert values is None
+    assert "active-agent botId" in message
+    assert client.calls == []
 
 
 def test_wscp_none_when_client_unavailable():

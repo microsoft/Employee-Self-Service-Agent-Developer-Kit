@@ -14,7 +14,7 @@ Coverage per emitter:
     Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
     echo via the ``validated`` pp_admin mock.
   * WD-REST-001 — AgentBuilder components check
-    (sharedConnectionParameters.values.restBaseUri trimmed to '/api').
+    (sharedConnectionParameters.values.restBaseUri / baseUri trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
   * WD-NET-001 — always-MANUAL InfoSec/IT attestation (never PASSED).
@@ -467,6 +467,63 @@ class TestRestBaseUrl:
         assert "trimmed to '/api'" in r.result
         assert "https://wd.example.com/ccx/api" in r.result
 
+    def test_base_uri_only_passes(self):
+        params = ab.shared_connection_parameters(rest_base_uri=None)
+        params["values"]["baseUri"] = {
+            "value": "https://wd.example.com/ccx/api"
+        }
+        runner = _runner_with_refs(
+            [
+                ab.workday_connection_reference(
+                    shared_connection_parameters=params
+                )
+            ]
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+        assert "https://wd.example.com/ccx/api" in r.result
+
+    def test_rest_base_uri_wins_when_both_keys_are_present(self):
+        params = ab.shared_connection_parameters(
+            rest_base_uri="https://primary.example.com/ccx/api"
+        )
+        params["values"]["baseUri"] = {
+            "value": "https://fallback.example.com/ccx/api/invalid"
+        }
+        runner = _runner_with_refs(
+            [
+                ab.workday_connection_reference(
+                    shared_connection_parameters=params
+                )
+            ]
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+        assert "https://primary.example.com/ccx/api" in r.result
+        assert "fallback.example.com" not in r.result
+
+    def test_empty_rest_base_uri_falls_back_to_base_uri(self):
+        params = ab.shared_connection_parameters(rest_base_uri="")
+        params["values"]["baseUri"] = {
+            "value": "https://wd.example.com/ccx/api"
+        }
+        runner = _runner_with_refs(
+            [
+                ab.workday_connection_reference(
+                    shared_connection_parameters=params
+                )
+            ]
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+        assert "https://wd.example.com/ccx/api" in r.result
+
     def test_trimmed_url_can_be_on_later_workday_ref(self):
         runner = _runner_with_refs(
             [
@@ -527,8 +584,8 @@ class TestRestBaseUrl:
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
         assert r.status == Status.FAILED.value
-        assert "restBaseUri is missing or empty" in r.result
-        assert "restBaseUri is captured" in r.remediation
+        assert "restBaseUri and baseUri are missing or empty" in r.result
+        assert "restBaseUri or baseUri is captured" in r.remediation
 
     def test_no_workday_ref_is_not_configured(self):
         """No Workday connection reference at all means Workday was never set

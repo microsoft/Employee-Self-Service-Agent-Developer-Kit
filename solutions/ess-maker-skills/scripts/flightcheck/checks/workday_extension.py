@@ -26,7 +26,7 @@ via ``--checkpoint``:
     can confirm it is their **own** account. Programmatic PASS/FAIL on a
     documented-tier Dataverse ``connectionreferences`` read.
   * ``WD-REST-001`` (S5.5) — the Workday connection reference's
-    ``sharedConnectionParameters.values.restBaseUri`` is present and
+    ``sharedConnectionParameters.values.restBaseUri`` or ``baseUri`` is present and
     **trimmed to** ``/api``. Read through the same AgentBuilder components
     payload used by ``DV-CONN-001``.
   * ``WD-REST-002`` (S5.7) — the agent's ``user-context-setup.mcs.yml`` topic
@@ -46,7 +46,7 @@ Design invariants (per ``scripts/flightcheck/AGENTS.md``):
   * **One CheckResult per checkpoint** (principle 7).
   * **No guessed API shapes** — the API-backed checks read documented fields
     only (Dataverse ``connectionid`` / ``statuscode`` for DV-CONN-001;
-    minimalBots ``sharedConnectionParameters.values.restBaseUri`` for
+    minimalBots ``sharedConnectionParameters.values.restBaseUri`` / ``baseUri`` for
     WD-REST-001; BAP ``connectionParametersSet.name`` / ``createdBy``), and
     degrade gracefully when a client is unavailable.
   * **Every** ``CheckResult`` declares ``roles=`` (enforced by
@@ -639,7 +639,7 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    rest = values.get("restBaseUri")
+    rest = values.get("restBaseUri") or values.get("baseUri")
 
     if unavailable_reason == WORKDAY_REF_NOT_FOUND:
         return [CheckResult(roles=_MAKER_ROLES,
@@ -654,8 +654,9 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
             remediation=(
                 "If this environment is meant to use Workday, install/repair "
                 "the Workday extension pack and connect the Workday "
-                "connection from Copilot Studio so restBaseUri is captured "
-                "and trimmed to end at '/api' (e.g. https://<host>/ccx/api). "
+                "connection from Copilot Studio so restBaseUri or baseUri is "
+                "captured and trimmed to end at '/api' "
+                "(e.g. https://<host>/ccx/api). "
                 "If Workday is not used here, no action is needed."
             ),
             doc_link=_DOC_SIMPLIFIED,
@@ -667,12 +668,12 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REST_URL_DESC,
             result=(
-                "Workday sharedConnectionParameters.values.restBaseUri is "
-                f"missing or empty. {unavailable_reason}".strip()
+                "Workday sharedConnectionParameters.values.restBaseUri and "
+                f"baseUri are missing or empty. {unavailable_reason}".strip()
             ),
             remediation=(
                 "Reconnect the Workday connection from Copilot Studio so "
-                "restBaseUri is captured and trimmed to end at '/api' "
+                "restBaseUri or baseUri is captured and trimmed to end at '/api' "
                 "(e.g. https://<host>/ccx/api)."
             ),
             doc_link=_DOC_SIMPLIFIED,
@@ -697,9 +698,9 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
             "must end at '/api' with no trailing path or version segment."
         ),
         remediation=(
-            "Edit the Workday connection's restBaseUri so it ends at '/api' "
-            "(e.g. https://<host>/ccx/api) — remove any trailing path, "
-            "version, or resource segment."
+            "Edit the Workday connection's restBaseUri or baseUri so it ends "
+            "at '/api' (e.g. https://<host>/ccx/api) — remove any trailing "
+            "path, version, or resource segment."
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]
