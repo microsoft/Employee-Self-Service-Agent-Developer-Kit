@@ -510,12 +510,18 @@ def _record_validation_failure(
         "blocked",
         blocker={
             "operation": "record-validation-failure",
+            "remediationId": evidence["remediationId"],
             "errorType": evidence["failureCategory"],
+            "failureSurface": evidence["failureSurface"],
             "message": evidence["remediation"],
             "capturedAt": evidence["timestamp"],
         },
     )
-    return {"recorded": True, "status": store.status()}
+    return {
+        "recorded": True,
+        "remediationId": evidence["remediationId"],
+        "status": store.status(),
+    }
 
 
 def _preflight(
@@ -611,14 +617,27 @@ def main() -> None:
         blocker_persistence_error = None
         if phase_id:
             try:
+                blocker = {
+                    "operation": args.command,
+                    "errorType": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if phase_id == "employee-validation":
+                    existing_phase = (
+                        store.load().get("phases", {}).get(phase_id, {})
+                    )
+                    existing_blocker = existing_phase.get("blocker") or {}
+                    for key in (
+                        "remediationId",
+                        "failureSurface",
+                        "capturedAt",
+                    ):
+                        if key in existing_blocker:
+                            blocker[key] = existing_blocker[key]
                 store.set_phase_status(
                     phase_id,
                     "blocked",
-                    blocker={
-                        "operation": args.command,
-                        "errorType": type(exc).__name__,
-                        "message": str(exc),
-                    },
+                    blocker=blocker,
                 )
             except (
                 OSError,
