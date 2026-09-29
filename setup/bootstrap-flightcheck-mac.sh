@@ -24,8 +24,17 @@ done
 SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
 # Forward the ring choice to install-ess-adk.sh via the RING env var. Explicit
 # --ring wins over an inherited RING env from the caller so a mistake in the
-# shell environment can't silently override the one-liner argument.
+# shell environment can't silently override the one-liner argument. Validate
+# up front so a typo fails fast at the bootstrap step (matches Windows
+# `-Ring`'s ValidateSet behavior) instead of exiting mid-install.
 if [[ -n "$RING_ARG" ]]; then
+    case "$RING_ARG" in
+        prod|preprod|test) ;;
+        *)
+            echo "ERROR: --ring must be prod, preprod, or test (got '$RING_ARG')" >&2
+            exit 2
+            ;;
+    esac
     export RING="$RING_ARG"
 fi
 

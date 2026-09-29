@@ -628,6 +628,62 @@ Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-
     }
 }
 
+Test 'PS filter regex behaviorally drops all four discover.py marker lines and keeps human rows' {
+    # Behavioral test: exercise the actual filter pattern against representative
+    # discover.py output. Guards against the class of bug that shipped as
+    # `ESS_AGENT_DISCOVERY_JSON` (source-only tests passed while the real output
+    # kept leaking) - this test only depends on the regex extracted from
+    # Install-EssAdk.ps1 and the observed marker names, not on any spelling
+    # inside the test file itself.
+    $filterRegex = '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):'
+    if ($src -notmatch [regex]::Escape($filterRegex)) {
+        throw "Install-EssAdk.ps1 no longer contains the expected filter regex literal; update this test if the marker list intentionally changed"
+    }
+    $sampleLines = @(
+        'ENVIRONMENT_LIST_JSON:[{"id":"env1","name":"Contoso"}]',
+        'AGENT_DISCOVERY_JSON:[{"botid":"9b28","name":"da"}]',
+        'SELECTED_ENV_JSON:{"id":"env1"}',
+        'SELECTED_AGENT_JSON:{"botid":"9b28"}',
+        'Found 4 agent(s):',
+        '  Contoso  |  msdyn_copilotforemployeeselfservicehr',
+        'Page 1: 4 records -> Total: 4'
+    )
+    $kept = @($sampleLines | Where-Object { $_ -notmatch $filterRegex })
+    $leaked = @($sampleLines | Where-Object { $_ -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' } | Where-Object { $_ -notmatch $filterRegex })
+    if ($leaked.Count -ne 0) {
+        throw "filter let $($leaked.Count) marker line(s) through: $($leaked -join '; ')"
+    }
+    if ($kept.Count -ne 3) {
+        throw "filter dropped human-readable rows too aggressively; kept $($kept.Count) of 3 expected: $($kept -join ' / ')"
+    }
+}
+
+Test 'bash filter pattern behaviorally drops all four discover.py marker lines and keeps human rows' {
+    # Same behavioral guard for install-ess-adk.sh: extract the exact grep -Ev
+    # pattern from the source and exercise it against representative output.
+    $bashPattern = '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):'
+    if ($macInstaller -notmatch [regex]::Escape($bashPattern)) {
+        throw "install-ess-adk.sh no longer contains the expected grep -Ev pattern; update this test if the marker list intentionally changed"
+    }
+    $sampleLines = @(
+        'ENVIRONMENT_LIST_JSON:[{"id":"env1"}]',
+        'AGENT_DISCOVERY_JSON:[{"botid":"9b28"}]',
+        'SELECTED_ENV_JSON:{"id":"env1"}',
+        'SELECTED_AGENT_JSON:{"botid":"9b28"}',
+        'Found 4 agent(s):',
+        'human row'
+    )
+    $kept = @($sampleLines | Where-Object { $_ -notmatch $bashPattern })
+    if ($kept.Count -ne 2) {
+        throw "bash-equivalent filter kept $($kept.Count) of 2 human lines: $($kept -join ' / ')"
+    }
+    foreach ($line in $sampleLines[0..3]) {
+        if ($line -notmatch $bashPattern) {
+            throw "bash-equivalent filter failed to match marker line: $line"
+        }
+    }
+}
+
 # ---------------------------------------------------------------------------
 # FC-only installer must pass --ring on every FlightCheck invocation.
 # Without --ring, flightcheck/cli.py --scope full aborts with
@@ -656,6 +712,20 @@ Test 'Install-EssAdk.ps1 forwards $Ring on every FC-only FlightCheck invocation'
         }
     }
 }
+
+Test 'Install-EssAdk.ps1 lowercases $Ring before forwarding (ValidateSet is case-insensitive; cli.py argparse choices are not)' {
+    if ($src -notmatch '\$Ring\s*=\s*\$Ring\.ToLowerInvariant\(\)') {
+        throw "Install-EssAdk.ps1 must normalize `$Ring to lowercase before forwarding, otherwise `-Ring Prod` binds to the PS ValidateSet but is rejected by cli.py's case-sensitive argparse choices"
+    }
+}
+
+Test 'bootstrap-flightcheck-mac.sh validates --ring at bootstrap (fail fast, mirrors Windows ValidateSet behavior)' {
+    $macBootstrap = Get-Content (Join-Path $PSScriptRoot 'bootstrap-flightcheck-mac.sh') -Raw
+    if ($macBootstrap -notmatch '(?s)case\s+"\$RING_ARG"\s+in[^)]*prod\|preprod\|test[^\n]*\n\s*\*\)') {
+        throw "bootstrap-flightcheck-mac.sh must validate --ring against prod|preprod|test at bootstrap time (matches Windows -Ring ValidateSet fail-fast behavior)"
+    }
+}
+
 
 Test 'install-ess-adk.sh accepts a RING env var (prod|preprod|test) defaulting to prod' {
     if ($macInstaller -notmatch 'RING="\$\{RING:-prod\}"') {

@@ -105,6 +105,13 @@ param(
 # switch was the only way to say "no chat-first layout".
 if ($SkipMakerProfile) { $InstallMode = 'developer' }
 
+# Normalize -Ring casing before forwarding: [ValidateSet] on the param
+# is case-insensitive so `-Ring Prod` binds, but `flightcheck/cli.py`
+# uses argparse `choices=["prod","preprod","test"]` (case-sensitive)
+# and would reject the mixed-case value. Lowercase up-front so the
+# forwarded --ring literal always matches cli.py's contract.
+$Ring = $Ring.ToLowerInvariant()
+
 # Back-compat: legacy value aliases from the pre-rename installer
 # (bootstrap-lite.ps1 previously pinned 'lite'; -SkipMakerProfile alias
 # previously coerced to 'standard'). Coerce to the new canonical names
