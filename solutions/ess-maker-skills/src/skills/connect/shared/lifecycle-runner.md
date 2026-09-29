@@ -249,6 +249,8 @@ its own Message blocks and tool calls and must return an explicit
   be repeated without a known exact rollback scope. With a valid path, write
   the state file immediately.
 - **`"recorded"`** — a non-mutating evidence action completed successfully.
+  Set `phases.{id}.actionApplied = true`; this preserves the default
+  `"once"` execution contract without creating rollback state.
 
   For either successful result, set `phases.{id}.lastActionAt` = now, mark the
   phase action as executed in the invocation-local set, and write the state

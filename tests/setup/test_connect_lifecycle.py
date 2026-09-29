@@ -68,6 +68,13 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "actual current status values" in runner
     assert "provider plan passed" not in runner
 
+    recorded_section = runner.split('- **`"recorded"`**', 1)[1].split(
+        '- **`"cancelled"`**',
+        1,
+    )[0]
+    assert "actionApplied = true" in recorded_section
+    assert "without creating rollback state" in recorded_section
+
 
 def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     contract = json.loads(
