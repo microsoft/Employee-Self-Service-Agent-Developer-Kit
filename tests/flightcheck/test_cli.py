@@ -584,7 +584,7 @@ class TestTerminalBlockedSummary:
         cli._print_prioritized_summary(self._blocked_result())
         out = capsys.readouterr().out
         # Headline must count the blocked row, not report zero.
-        assert "1 issue need attention" in out
+        assert "1 issue needs attention" in out
         assert "0 issue" not in out
 
     def test_blocked_counts_strip_and_row_tag(self, capsys):

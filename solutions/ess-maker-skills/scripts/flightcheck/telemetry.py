@@ -899,7 +899,7 @@ def derive_connector_from_scope(scope: str) -> str:
     # ("wd-conn-012") carry the connector in their leading token. Cross-connector
     # or non-connector scopes ("full", "dv-conn-001", "env-001") fall through
     # to "" and drill down via the per-check connector dimension.
-    lead = re.split(r"[-:]", s, 1)[0]
+    lead = re.split(r"[-:]", s, maxsplit=1)[0]
     if lead in _WORKDAY_LEAD_TOKENS:
         return "workday"
     if lead in _SERVICENOW_LEAD_TOKENS:

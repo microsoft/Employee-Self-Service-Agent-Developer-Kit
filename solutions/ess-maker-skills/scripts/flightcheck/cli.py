@@ -2242,7 +2242,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
         # manual-verification section and aren't blockers.
         failing = result.failed + result.errors + result.blocked
         word = "issue" if failing == 1 else "issues"
-        print(f"  [FAIL]  Not ready -- {failing} {word} need "
+        verb = "needs" if failing == 1 else "need"
+        print(f"  [FAIL]  Not ready -- {failing} {word} {verb} "
               "attention")
 
     print()
