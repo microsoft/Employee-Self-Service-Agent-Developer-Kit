@@ -3634,10 +3634,13 @@ def _with_wd_run_passive_context(
         if suffix not in row.result:
             row.result += suffix
         if probe_reached and inconclusive_hypotheses:
-            # Passed rows intentionally have no remediation, so keep neutral
-            # hypotheses in result and reserve remediation for actionable rows.
+            # This is a narrow, intentional exception to the result/remediation
+            # split: PASSED remediation is suppressed, while WD-RUN-001 requires
+            # visible neutral guidance for the inconclusive probe. Actionable
+            # rows keep the troubleshooting steps in remediation.
             if row.status == Status.PASSED.value:
-                row.result += f"\n\n{inconclusive_hypotheses}"
+                if inconclusive_hypotheses not in row.result:
+                    row.result += f"\n\n{inconclusive_hypotheses}"
             elif inconclusive_checks:
                 row.remediation = (
                     f"{row.remediation}\n\n{inconclusive_checks}".strip()
@@ -3810,7 +3813,7 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
     action = live_egress_probe.ConnectorProbeAction(
         connector_api_id=_WD_CONNECTOR_API_ID,
         connection_id=connection_id,
-        operation_id=operation_id or _WD_DEFAULT_READ_OPERATION,
+        operation_id=operation_id,
         parameters=params,
         action_name=_WD_PROBE_ACTION_NAME,
         connection_ref_key=_WD_CONNECTOR_NAME,
@@ -3861,7 +3864,7 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             # This guidance describes the user-context contract specifically;
             # custom read operations retain the generic indeterminate fallback.
             get_worker_me_probe = (
-                (operation_id or _WD_DEFAULT_READ_OPERATION).lower()
+                operation_id.lower()
                 == _WD_DEFAULT_READ_OPERATION.lower()
             )
             hypotheses = ""

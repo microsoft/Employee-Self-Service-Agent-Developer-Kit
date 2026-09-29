@@ -16,7 +16,10 @@ from tests.conftest import require_validated_mock
 from tests.mocks import power_automate as pa
 from tests.mocks import pp_admin as pp
 
-from flightcheck.checks.workday import _check_workday_run_health
+from flightcheck.checks.workday import (
+    _check_workday_run_health,
+    _with_wd_run_passive_context,
+)
 from flightcheck.runner import Status
 
 require_validated_mock(pa)
@@ -241,6 +244,47 @@ class TestWorkdayActiveProbeMatrix:
         assert row.remediation == ""
         # A Workday call WAS made, so the copy must not claim otherwise.
         assert "No new Workday call was made" not in row.result
+
+    def test_passed_passive_context_appends_hypothesis_once(self) -> None:
+        row = _run_single(_runner(runtime_reachability=False))
+
+        for _ in range(2):
+            _with_wd_run_passive_context(
+                [row],
+                reason="test inconclusive response",
+                probe_reached=True,
+                inconclusive_hypotheses="Neutral test hypothesis.",
+            )
+
+        assert row.status == Status.PASSED.value
+        assert row.result.count("Neutral test hypothesis.") == 1
+        assert row.remediation == ""
+
+    @responses.activate
+    def test_http_400_preserves_failed_passive_history(self) -> None:
+        _register_connector_lifecycle(
+            action_status="Failed",
+            status_code=400,
+            error_code="BadRequest",
+        )
+        failed_run = pp.flow_run(
+            run_id="bad",
+            flow_id=_FLOW_ID,
+            status="Failed",
+        )
+
+        row = _run_single(_runner(pp_client=_PP(runs=[failed_run])))
+
+        assert row.status == Status.FAILED.value
+        assert "All 1 most recent Workday flow run(s) FAILED" in row.result
+        assert "inconclusive" in row.result
+        assert "HTTP 400" in row.result
+        assert "one possible hypothesis" not in row.result
+        assert "Every recent Workday call is failing" in row.remediation
+        assert "Workday resource permissions" in row.remediation
+        assert "HTTP 400 alone does not confirm any of these causes" in (
+            row.remediation
+        )
 
     @responses.activate
     def test_http_400_without_history_does_not_fabricate_verdict(self) -> None:
