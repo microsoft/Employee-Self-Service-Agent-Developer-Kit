@@ -1367,6 +1367,7 @@ def _servicenow_topic_components(
 def _component_content_hash(component: dict[str, Any]) -> str:
     normalized = copy.deepcopy(component)
     normalized.pop("version", None)
+    normalized.pop("auditInfo", None)
     return _canonical_json_hash(normalized)
 
 

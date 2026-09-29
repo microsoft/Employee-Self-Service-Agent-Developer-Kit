@@ -1173,6 +1173,55 @@ def test_enable_all_topics_rolls_back_ambiguous_partial_mutation(
     assert list(transaction["topics"].values()) == ["restored"]
 
 
+def test_enable_all_topics_accepts_server_managed_audit_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    topic = components["botComponentChanges"][0]["component"]
+    topic["state"] = "Inactive"
+    topic["status"] = "Inactive"
+    topic["auditInfo"] = {
+        "modifiedAt": "2026-09-28T00:00:00Z",
+        "modifiedBy": "before",
+    }
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return json.loads(json.dumps(components))
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updated = payload["botComponentChanges"][0]["component"]
+            topic.update(updated)
+            topic["version"] = int(topic["version"]) + 1
+            topic["auditInfo"] = {
+                "modifiedAt": "2026-09-28T00:01:00Z",
+                "modifiedBy": "platform",
+            }
+            components["changeToken"] = "token-2"
+            return {}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.enable_all_servicenow_topics(
+        _context(),
+        confirmed=True,
+    )
+
+    assert result["transactionStatus"] == "committed"
+    assert result["after"] == {"total": 1, "active": 1, "inactive": 0}
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = next(iter(state["transactions"]["topics"].values()))
+    target = transaction["targets"][topic["id"]]
+    assert target["ownershipStatus"] == "owned"
+    assert target["changedByOperation"] is True
+
+
 def test_topic_rollback_does_not_overwrite_concurrent_external_edit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
