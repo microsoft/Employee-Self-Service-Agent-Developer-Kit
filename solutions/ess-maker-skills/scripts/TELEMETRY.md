@@ -82,6 +82,23 @@ run using `correlation_id`. Its bounded dimensions include `lifecycle_event`,
 `blocker_category`. It does not contain free-form errors, URLs, connection
 identifiers, or employee data.
 
+`phase` is restricted to the six Workday phases (normalized with underscores)
+or `unknown`. `blocker_category` is restricted to `auth`, `permissions`,
+`connection`, `runtime`, `validation`, `state`, `timeout`, `platform`, or
+`unknown`. Arbitrary caller values are never slugged into dimensions.
+
+One `invoked` event is recorded when the controller's outer `status` boundary
+starts a `/connect` conversation, not for each internal controller command.
+Blocking an active phase records `phase_paused` followed by `blocked`; a later
+retry records `phase_resumed`. `phase_completed.duration_ms` is cumulative
+active time across all paused/resumed segments for that phase.
+
+Changing an existing target environment, agent identity, Entra tenant, or
+Workday tenant starts a new correlation ID. An in-progress prior run records
+`abandoned` before rotation. Journal records retain their own correlation IDs,
+so bounded history can safely contain events from both the previous and current
+target without combining them in Kusto.
+
 ---
 
 ## Investigation workflow: "was tenant X on an up-to-date ADK when this happened?"

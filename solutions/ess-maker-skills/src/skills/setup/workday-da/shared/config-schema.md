@@ -45,7 +45,11 @@ they must not edit this file directly or create a Markdown state mirror.
   evidence scoped to one exact Entra tenant, Workday tenant, application,
   signing certificate, and endpoint set.
 - `lifecycle` contains the bounded privacy-safe transition journal and its
-  random correlation ID. It never contains free-form errors or customer data.
+  random current correlation ID. Each journal record retains the correlation
+  ID active when that event occurred. Changing an existing target environment,
+  agent identity, Entra tenant, or Workday tenant rotates the current ID while
+  preserving bounded prior history. The journal never contains free-form
+  errors or customer data.
 - `phases` contains exactly the six controller phases.
 
 Each phase stores status, completed action keys, optional runtime approval,

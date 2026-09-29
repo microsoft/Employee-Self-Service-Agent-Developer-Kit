@@ -292,6 +292,30 @@ CONNECT_LIFECYCLE_OUTCOMES = (
 )
 _CONNECT_LIFECYCLE_OUTCOME_SET = frozenset(CONNECT_LIFECYCLE_OUTCOMES)
 CONNECT_LIFECYCLE_OUTCOME_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_PHASES = (
+    "preflight",
+    "entra",
+    "workday_admin",
+    "connections",
+    "runtime",
+    "employee_validation",
+)
+_CONNECT_LIFECYCLE_PHASE_SET = frozenset(CONNECT_LIFECYCLE_PHASES)
+CONNECT_LIFECYCLE_PHASE_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_BLOCKER_CATEGORIES = (
+    "auth",
+    "permissions",
+    "connection",
+    "runtime",
+    "validation",
+    "state",
+    "timeout",
+    "platform",
+    "unknown",
+)
+_CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET = frozenset(
+    CONNECT_LIFECYCLE_BLOCKER_CATEGORIES
+)
 _CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -334,13 +358,22 @@ def normalize_connect_lifecycle_outcome(outcome: str) -> str:
     return CONNECT_LIFECYCLE_OUTCOME_UNKNOWN
 
 
-def _bounded_slug(value: str, limit: int = 64) -> str:
-    normalized = re.sub(
-        r"[^a-z0-9]+",
-        "_",
-        str(value or "").strip().lower(),
-    ).strip("_")
-    return normalized[:limit]
+def normalize_connect_lifecycle_phase(phase: str) -> str:
+    normalized = str(phase or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_PHASE_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_PHASE_UNKNOWN
+
+
+def normalize_connect_lifecycle_blocker_category(category: str) -> str:
+    normalized = str(category or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET:
+        return normalized
+    return "unknown"
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -1418,12 +1451,16 @@ def emit_connect_lifecycle(
             "lifecycle_event": normalize_connect_lifecycle_event(
                 lifecycle_event
             ),
-            "phase": _bounded_slug(phase),
+            "phase": normalize_connect_lifecycle_phase(phase),
             "outcome": normalize_connect_lifecycle_outcome(outcome),
             "duration_ms": max(0, int(duration_ms)),
             "retry_count": max(0, int(retry_count)),
             "resume_count": max(0, int(resume_count)),
-            "blocker_category": _bounded_slug(blocker_category),
+            "blocker_category": (
+                normalize_connect_lifecycle_blocker_category(
+                    blocker_category
+                )
+            ),
             "correlation_id": normalized_correlation,
         }
     )

@@ -641,7 +641,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
         duration_ms=1250,
         retry_count=2,
         resume_count=1,
-        blocker_category="Workday Access Denied",
+        blocker_category="permissions",
         correlation_id=correlation_id,
         agent_id="bot-id",
         block=True,
@@ -656,7 +656,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     assert envelope["data"]["duration_ms"] == 1250
     assert envelope["data"]["retry_count"] == 2
     assert envelope["data"]["resume_count"] == 1
-    assert envelope["data"]["blocker_category"] == "workday_access_denied"
+    assert envelope["data"]["blocker_category"] == "permissions"
     assert envelope["data"]["correlation_id"] == correlation_id
     assert envelope["data"]["agent_id"] == "bot-id"
 
@@ -674,8 +674,10 @@ def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
     data = captured_post[0][1][0]["data"]
     assert data["lifecycle_event"] == "unknown"
     assert data["outcome"] == "unknown"
-    assert data["phase"] == "runtime_https_example_test_path"
-    assert data["blocker_category"] == "c_customer_secret_txt"
+    assert data["phase"] == "unknown"
+    assert data["blocker_category"] == "unknown"
+    assert "example" not in data["phase"]
+    assert "customer" not in data["blocker_category"]
     assert data["correlation_id"] == ""
 
 

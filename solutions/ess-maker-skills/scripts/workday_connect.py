@@ -254,8 +254,21 @@ def _record_entra(
             "checks": result["evidence"]["checks"],
         },
     )
+    store.record_lifecycle_event(
+        "roles-attested",
+        phase="entra",
+        outcome="success",
+        once_per_lifecycle=True,
+    )
     store.set_phase_status("entra", "complete")
     _, reused = store.restore_workday_foundation()
+    if reused:
+        store.record_lifecycle_event(
+            "roles-attested",
+            phase="workday-admin",
+            outcome="success",
+            once_per_lifecycle=True,
+        )
     return {
         "verified": True,
         "tenantFoundationReused": reused,
@@ -284,6 +297,12 @@ def _record_workday_admin(
         "workday-admin",
         "administrator-response-validated",
         evidence={"outcome": "verified", **result["evidence"]},
+    )
+    store.record_lifecycle_event(
+        "roles-attested",
+        phase="workday-admin",
+        outcome="success",
+        once_per_lifecycle=True,
     )
     store.set_phase_status("workday-admin", "complete")
     store.capture_tenant_foundation()
@@ -611,10 +630,8 @@ def main() -> None:
         event_sink=emit_lifecycle_event,
     )
     try:
-        store.record_lifecycle_event(
-            "invoked",
-            phase=_COMMAND_PHASES.get(args.command, ""),
-        )
+        if args.command == "status":
+            store.record_lifecycle_event("invoked")
         handler = _COMMAND_HANDLERS.get(args.command)
         if handler is None:
             parser.error(f"Unsupported command: {args.command}")

@@ -234,6 +234,43 @@ def test_controller_persists_phase_blocker(
     assert status["blocker"]["operation"] == "set-workday-tenant"
 
 
+def test_controller_records_invocation_only_at_status_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "status",
+        ],
+    )
+    workday_connect.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "set-workday-tenant",
+            "--tenant",
+            "contoso_impl",
+        ],
+    )
+    workday_connect.main()
+
+    events = WorkdayConnectStore(tmp_path).load()["lifecycle"]["journal"]
+    assert [event["event"] for event in events] == ["invoked"]
+
+
 def test_controller_surfaces_blocker_persistence_failure(
     tmp_path: Path,
     monkeypatch,

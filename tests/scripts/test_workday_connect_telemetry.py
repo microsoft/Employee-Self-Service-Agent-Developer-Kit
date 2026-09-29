@@ -30,7 +30,8 @@ def test_workday_projection_uses_only_safe_bounded_event_fields(monkeypatch):
         "durationMs": 200,
         "retryCount": 1,
         "resumeCount": 2,
-        "blockerCategory": "runtime-verification",
+        "blockerCategory": "runtime",
+        "correlationId": "9c7f8f9c-1234-4abc-9def-0123456789ab",
         "message": "https://customer.example/secret",
     }
 
@@ -44,9 +45,9 @@ def test_workday_projection_uses_only_safe_bounded_event_fields(monkeypatch):
         "duration_ms": 200,
         "retry_count": 1,
         "resume_count": 2,
-        "blocker_category": "runtime-verification",
-        "correlation_id": "6f7c8f9c-1234-4abc-9def-0123456789ab",
-        "agent_id": "bot-id",
+        "blocker_category": "runtime",
+        "correlation_id": "9c7f8f9c-1234-4abc-9def-0123456789ab",
+        "agent_id": "",
     }
 
 

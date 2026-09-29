@@ -11,14 +11,15 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import tempfile
 import time
 from typing import Any, Callable, Iterator, Mapping
+import uuid
 
 from workday_connect_model import (
     LEGACY_PHASE_ROWS,
+    LIFECYCLE_BLOCKER_CATEGORIES,
     LIFECYCLE_EVENT_TYPES,
     LIFECYCLE_JOURNAL_MAX_EVENTS,
     LIFECYCLE_OUTCOMES,
@@ -78,6 +79,45 @@ _OPERATOR_PHASES = {
     "entraAdmin": "entra",
     "workdayAdmin": "workday-admin",
 }
+_LIFECYCLE_TARGET_SCOPE_KEYS = {
+    "agent",
+    "dataverseUrl",
+    "environmentId",
+    "entraTenantId",
+    "workdayTenant",
+}
+_BLOCKER_CATEGORY_KEYWORDS = (
+    ("timeout", ("timeout", "timedout")),
+    (
+        "permissions",
+        (
+            "permission",
+            "access",
+            "authorization",
+            "consent",
+            "forbidden",
+            "role",
+        ),
+    ),
+    (
+        "auth",
+        ("auth", "credential", "signin", "sign-in", "token", "entra"),
+    ),
+    (
+        "connection",
+        ("connection", "network", "endpoint", "dns", "ssl", "http"),
+    ),
+    (
+        "validation",
+        ("validation", "contract", "evidence", "invalid"),
+    ),
+    ("state", ("state", "store", "schema", "migration", "planchanged")),
+    (
+        "platform",
+        ("platform", "preflight", "dataverse", "package", "solution"),
+    ),
+    ("runtime", ("runtime", "flow", "topic", "agent")),
+)
 
 
 class WorkdayConnectStoreError(RuntimeError):
@@ -97,8 +137,17 @@ def _blocker_category(blocker: Mapping[str, Any] | None) -> str:
         or blocker.get("errorType")
         or "unknown"
     ).strip().casefold()
-    normalized = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
-    return (normalized or "unknown")[:64]
+    if raw in LIFECYCLE_BLOCKER_CATEGORIES:
+        return raw
+    compact = "".join(character for character in raw if character.isalnum())
+    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
+        if any(
+            "".join(character for character in keyword if character.isalnum())
+            in compact
+            for keyword in keywords
+        ):
+            return category
+    return "unknown"
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -110,19 +159,42 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
 
 
-def _phase_duration_ms(state: Mapping[str, Any], phase_id: str) -> int:
+def _phase_active_segment_ms(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> int:
     journal = (state.get("lifecycle") or {}).get("journal") or []
+    correlation_id = (state.get("lifecycle") or {}).get("correlationId")
     for record in reversed(journal):
-        if (
-            record.get("phase") == phase_id
-            and record.get("event") in {"phase-started", "phase-resumed"}
-        ):
+        if record.get("correlationId") != correlation_id:
+            continue
+        if record.get("phase") != phase_id:
+            continue
+        if record.get("event") == "phase-paused":
+            return 0
+        if record.get("event") in {"phase-started", "phase-resumed"}:
             started = _parse_timestamp(record.get("timestamp"))
             finished = _parse_timestamp(utc_now())
             if started is None or finished is None:
                 return 0
             return max(0, int((finished - started).total_seconds() * 1000))
     return 0
+
+
+def _phase_total_duration_ms(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> int:
+    lifecycle = state.get("lifecycle") or {}
+    correlation_id = lifecycle.get("correlationId")
+    paused_duration = sum(
+        max(0, int(record.get("durationMs") or 0))
+        for record in lifecycle.get("journal") or []
+        if record.get("correlationId") == correlation_id
+        and record.get("phase") == phase_id
+        and record.get("event") == "phase-paused"
+    )
+    return paused_duration + _phase_active_segment_ms(state, phase_id)
 
 
 def _append_lifecycle_event(
@@ -157,6 +229,7 @@ def _append_lifecycle_event(
     sequence = int(journal[-1]["sequence"]) + 1 if journal else 1
     record = {
         "sequence": sequence,
+        "correlationId": lifecycle["correlationId"],
         "event": event,
         "phase": phase,
         "outcome": outcome,
@@ -169,6 +242,101 @@ def _append_lifecycle_event(
     journal.append(record)
     lifecycle["journal"] = journal[-LIFECYCLE_JOURNAL_MAX_EVENTS:]
     return record
+
+
+def _has_lifecycle_event(
+    state: Mapping[str, Any],
+    event: str,
+    phase: str,
+) -> bool:
+    lifecycle = state.get("lifecycle") or {}
+    correlation_id = lifecycle.get("correlationId")
+    return any(
+        record.get("correlationId") == correlation_id
+        and record.get("event") == event
+        and record.get("phase") == phase
+        for record in lifecycle.get("journal") or []
+    )
+
+
+def _current_phase_id(state: Mapping[str, Any]) -> str:
+    phases = state.get("phases") or {}
+    for definition in PHASE_DEFINITIONS:
+        phase_id = definition.identifier.value
+        if (phases.get(phase_id) or {}).get("status") != PhaseStatus.COMPLETE.value:
+            return phase_id
+    return ""
+
+
+def _target_scope_changed(
+    state: Mapping[str, Any],
+    values: Mapping[str, Any],
+    changed_keys: set[str],
+) -> bool:
+    scope = state.get("scope") or {}
+    for key in changed_keys & _LIFECYCLE_TARGET_SCOPE_KEYS:
+        previous = scope.get(key)
+        if previous in (None, "", (), [], {}):
+            continue
+        if key == "agent":
+            previous_agent = previous if isinstance(previous, Mapping) else {}
+            next_value = values.get(key)
+            next_agent = next_value if isinstance(next_value, Mapping) else {}
+            previous_identity = (
+                str(previous_agent.get("botId") or "").casefold(),
+                str(previous_agent.get("schemaName") or "").casefold(),
+            )
+            next_identity = (
+                str(next_agent.get("botId") or "").casefold(),
+                str(next_agent.get("schemaName") or "").casefold(),
+            )
+            if previous_identity != next_identity:
+                return True
+            continue
+        return True
+    return False
+
+
+def _rotate_lifecycle(state: dict[str, Any]) -> None:
+    lifecycle = state["lifecycle"]
+    has_progress = bool(lifecycle["journal"]) or any(
+        phase["status"] != PhaseStatus.PENDING.value
+        for phase in state["phases"].values()
+    )
+    if state.get("status") != "ready" and has_progress:
+        _append_lifecycle_event(
+            state,
+            "abandoned",
+            phase=_current_phase_id(state),
+            outcome="cancelled",
+        )
+    lifecycle["correlationId"] = str(uuid.uuid4())
+    lifecycle["startedAt"] = utc_now()
+    lifecycle["retryCount"] = 0
+    lifecycle["resumeCount"] = 0
+
+
+def _normalize_current_state(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = copy.deepcopy(dict(document))
+    lifecycle = state.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return state
+    correlation_id = lifecycle.get("correlationId")
+    journal = lifecycle.get("journal")
+    if not isinstance(correlation_id, str) or not isinstance(journal, list):
+        return state
+    for record in journal:
+        if not isinstance(record, dict):
+            continue
+        record.setdefault("correlationId", correlation_id)
+        raw_category = record.get("blockerCategory")
+        if raw_category:
+            record["blockerCategory"] = _blocker_category(
+                {"category": raw_category}
+            )
+    return state
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -704,7 +872,10 @@ class WorkdayConnectStore:
                 _atomic_write_json(self.config_path, state)
                 return state
             if existing.get("schemaVersion") == STATE_SCHEMA_VERSION:
-                return validate_state(existing)
+                state = _normalize_current_state(existing)
+                if state != existing:
+                    _atomic_write_json(self.config_path, state)
+                return validate_state(state)
             if not self.backup_path.exists():
                 self.backup_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(self.config_path, self.backup_path)
@@ -718,7 +889,10 @@ class WorkdayConnectStore:
         current = _read_json(self.config_path)
         if current.get("schemaVersion") != STATE_SCHEMA_VERSION:
             return self.initialize()
-        return validate_state(current)
+        normalized = _normalize_current_state(current)
+        if normalized != current:
+            return self.initialize()
+        return validate_state(normalized)
 
     def _mutate(self, mutation) -> dict[str, Any]:
         new_events: list[dict[str, Any]] = []
@@ -730,6 +904,8 @@ class WorkdayConnectStore:
                 if not self.backup_path.exists():
                     shutil.copy2(self.config_path, self.backup_path)
                 current = _upgrade_or_migrate_state(current)
+            else:
+                current = _normalize_current_state(current)
             state = copy.deepcopy(validate_state(current))
             journal = state["lifecycle"]["journal"]
             previous_sequence = int(journal[-1]["sequence"]) if journal else 0
@@ -774,8 +950,14 @@ class WorkdayConnectStore:
         outcome: str = "",
         blocker_category: str = "",
         duration_ms: int = 0,
+        once_per_lifecycle: bool = False,
     ) -> dict[str, Any]:
         def mutation(state: dict[str, Any]) -> None:
+            if (
+                once_per_lifecycle
+                and _has_lifecycle_event(state, event, phase)
+            ):
+                return
             _append_lifecycle_event(
                 state,
                 event,
@@ -809,9 +991,35 @@ class WorkdayConnectStore:
                 section,
                 changed_keys,
             )
+            if (
+                section == "scope"
+                and _target_scope_changed(state, values, changed_keys)
+            ):
+                _rotate_lifecycle(state)
             if invalidation_phase:
                 _invalidate_from_phase(state, invalidation_phase)
             state[section].update(dict(values))
+            if section == "operators":
+                phases = {
+                    _OPERATOR_PHASES.get(key, "preflight")
+                    for key in changed_keys
+                }
+                for definition in PHASE_DEFINITIONS:
+                    phase_id = definition.identifier.value
+                    if (
+                        phase_id in phases
+                        and not _has_lifecycle_event(
+                            state,
+                            "roles-attested",
+                            phase_id,
+                        )
+                    ):
+                        _append_lifecycle_event(
+                            state,
+                            "roles-attested",
+                            phase=phase_id,
+                            outcome="success",
+                        )
 
         return self._mutate(mutation)
 
@@ -923,13 +1131,23 @@ class WorkdayConnectStore:
             phase["blocker"] = dict(blocker) if blocker else None
             phase["updatedAt"] = utc_now()
             if status == PhaseStatus.BLOCKED.value:
+                if previous_status == PhaseStatus.ACTIVE.value:
+                    _append_lifecycle_event(
+                        state,
+                        "phase-paused",
+                        phase=phase_id,
+                        outcome="blocked",
+                        duration_ms=_phase_active_segment_ms(
+                            state,
+                            phase_id,
+                        ),
+                    )
                 _append_lifecycle_event(
                     state,
                     "blocked",
                     phase=phase_id,
                     outcome="blocked",
                     blocker_category=_blocker_category(blocker),
-                    duration_ms=_phase_duration_ms(state, phase_id),
                 )
             elif (
                 status == PhaseStatus.ACTIVE.value
@@ -960,7 +1178,7 @@ class WorkdayConnectStore:
                     "phase-completed",
                     phase=phase_id,
                     outcome="success",
-                    duration_ms=_phase_duration_ms(state, phase_id),
+                    duration_ms=_phase_total_duration_ms(state, phase_id),
                 )
                 if all(
                     item["status"] == PhaseStatus.COMPLETE.value

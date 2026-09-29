@@ -18,6 +18,8 @@ def emit_lifecycle_event(
         scope = state.get("scope") or {}
         agent = scope.get("agent") or {}
         lifecycle = state.get("lifecycle") or {}
+        event_correlation = str(event.get("correlationId") or "")
+        current_correlation = str(lifecycle.get("correlationId") or "")
         adk_telemetry.emit_connect_lifecycle(
             str(event.get("event") or ""),
             connector="workday",
@@ -27,8 +29,17 @@ def emit_lifecycle_event(
             retry_count=int(event.get("retryCount") or 0),
             resume_count=int(event.get("resumeCount") or 0),
             blocker_category=str(event.get("blockerCategory") or ""),
-            correlation_id=str(lifecycle.get("correlationId") or ""),
-            agent_id=str(agent.get("botId") or ""),
+            correlation_id=str(
+                event_correlation
+                or current_correlation
+                or ""
+            ),
+            agent_id=(
+                str(agent.get("botId") or "")
+                if not event_correlation
+                or event_correlation == current_correlation
+                else ""
+            ),
         )
     except Exception:  # noqa: BLE001 - telemetry cannot break /connect
         return

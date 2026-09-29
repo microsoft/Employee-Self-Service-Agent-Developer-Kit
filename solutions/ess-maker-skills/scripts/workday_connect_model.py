@@ -59,6 +59,20 @@ LIFECYCLE_EVENT_TYPES = frozenset(
 LIFECYCLE_OUTCOMES = frozenset(
     {"", "success", "blocked", "failure", "cancelled"}
 )
+LIFECYCLE_BLOCKER_CATEGORIES = frozenset(
+    {
+        "",
+        "auth",
+        "permissions",
+        "connection",
+        "runtime",
+        "validation",
+        "state",
+        "timeout",
+        "platform",
+        "unknown",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -218,7 +232,6 @@ _CORRELATION_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
-_BLOCKER_CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SECRET_KEYS = {
     "password",
     "clientsecret",
@@ -425,6 +438,7 @@ def _validate_lifecycle_state(value: Any) -> None:
             )
         event_required = {
             "sequence",
+            "correlationId",
             "event",
             "phase",
             "outcome",
@@ -450,6 +464,14 @@ def _validate_lifecycle_state(value: Any) -> None:
                 "Workday lifecycle event sequences must increase."
             )
         previous_sequence = sequence
+        event_correlation_id = record["correlationId"]
+        if (
+            not isinstance(event_correlation_id, str)
+            or not _CORRELATION_ID_RE.fullmatch(event_correlation_id)
+        ):
+            raise WorkdayConnectModelError(
+                "Workday lifecycle event correlationId must be a UUID."
+            )
         if record["event"] not in LIFECYCLE_EVENT_TYPES:
             raise WorkdayConnectModelError(
                 f"Unknown Workday lifecycle event: {record['event']!r}."
@@ -463,12 +485,13 @@ def _validate_lifecycle_state(value: Any) -> None:
                 f"Unknown Workday lifecycle event outcome: {record['outcome']!r}."
             )
         blocker_category = record["blockerCategory"]
-        if blocker_category and (
+        if (
             not isinstance(blocker_category, str)
-            or not _BLOCKER_CATEGORY_RE.fullmatch(blocker_category)
+            or blocker_category not in LIFECYCLE_BLOCKER_CATEGORIES
         ):
             raise WorkdayConnectModelError(
-                "Workday lifecycle blockerCategory must be a bounded slug."
+                "Workday lifecycle blockerCategory must use the bounded "
+                "taxonomy."
             )
         for field in ("durationMs", "retryCount", "resumeCount"):
             if (
@@ -479,14 +502,6 @@ def _validate_lifecycle_state(value: Any) -> None:
                 raise WorkdayConnectModelError(
                     f"Workday lifecycle event {field} must be non-negative."
                 )
-        if record["retryCount"] > value["retryCount"]:
-            raise WorkdayConnectModelError(
-                "Workday lifecycle event retryCount exceeds the current count."
-            )
-        if record["resumeCount"] > value["resumeCount"]:
-            raise WorkdayConnectModelError(
-                "Workday lifecycle event resumeCount exceeds the current count."
-            )
         if not isinstance(record["timestamp"], str) or not record["timestamp"]:
             raise WorkdayConnectModelError(
                 "Workday lifecycle event timestamp is required."
