@@ -75,33 +75,64 @@ verified `outcome`. Use a non-maker employee category and a
 timezone-qualified ISO-8601 timestamp. The controller rejects additional
 fields. Never record employee data or credentials.
 
-On failure, map the selected result to exactly one stable contract below. Do
-not invent a remediation ID, category, or alternate wording.
+On failure, map the selected result to exactly one stable ID below. Do not
+invent a remediation ID.
 
-| Selected result | `remediationId` | `failureCategory` | Canonical `remediation` |
-| --- | --- | --- | --- |
-| Failed - repeated sign-in | `WD-E2E-001` | `employee-authentication` | `Verify the employee assignment and identify which sign-in surface is prompting again.` |
-| Failed - connector error | `WD-E2E-002` | `workday-connection` | `Verify the selected Workday connection is authenticated and targets the reviewed Workday resource.` |
-| Failed - flow error | `WD-E2E-003` | `runtime-flow` | `Inspect the failed Workday flow run and reverify delegated authorization before retrying.` |
-| Failed - employee mismatch | `WD-E2E-004` | `employee-context` | `Verify the employee NameID and User Context V2 mapping before retrying.` |
-| Failed - network error | `WD-E2E-005` | `network` | `Verify the required Workday REST and SOAP hosts are reachable from the configured runtime.` |
-| Failed - Workday access denied | `WD-E2E-006` | `workday-access` | `Ask a Workday administrator to verify the test employee's functional-area and domain access.` |
-| Failed - agent not published or unavailable | `WD-E2E-007` | `publish-or-agent` | `Publish the selected agent and verify the employee is testing the reviewed agent in the target environment.` |
-| Failed - another issue | `WD-E2E-999` | `unknown` | `Capture the failing surface without employee data and route it to ESS support for classification.` |
+| Selected result | `remediationId` |
+| --- | --- |
+| Failed - repeated sign-in | `WD-E2E-001` |
+| Failed - connector error | `WD-E2E-002` |
+| Failed - flow error | `WD-E2E-003` |
+| Failed - employee mismatch | `WD-E2E-004` |
+| Failed - network error | `WD-E2E-005` |
+| Failed - Workday access denied | `WD-E2E-006` |
+| Failed - agent not published or unavailable | `WD-E2E-007` |
+| Failed - another issue | `WD-E2E-999` |
 
-Record only the selected `remediationId`, its exact `failureCategory`, a
-timezone-qualified ISO-8601 `timestamp`, and the exact canonical
-`remediation` in
+For `WD-E2E-999`, ask where the failure was observed using this separate
+structured choice:
+
+```json
+[
+  {
+    "header": "Failure surface",
+    "question": "Where was the other issue observed?",
+    "options": [
+      { "label": "Agent chat" },
+      { "label": "Authentication prompt" },
+      { "label": "Workday connection" },
+      { "label": "Flow run" },
+      { "label": "Network path" },
+      { "label": "Workday response" },
+      { "label": "Agent availability" },
+      { "label": "Other" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Map those choices respectively to `agent-chat`, `authentication-prompt`,
+`workday-connection`, `flow-run`, `network-path`, `workday-response`,
+`agent-availability`, or `other`.
+
+Record the selected `remediationId` and a timezone-qualified ISO-8601
+`timestamp` in
 `.local/connect/workday-da/employee-validation-failure.json`, then run:
 
 ```powershell
 python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\employee-validation-failure.json"
 ```
 
-The controller rejects arbitrary IDs, mismatched categories, changed
-remediation wording, and additional fields. This marks Employee validation
-blocked and persists the stable remediation ID while keeping completed
-prerequisite phases intact. Use the failing surface to choose the next check:
+For `WD-E2E-999`, also record the selected bounded `failureSurface`. The
+controller derives the safe category and canonical remediation from the ID;
+do not copy those strings into the file. It also migrates existing
+three-field failure files created by earlier kit versions. Arbitrary IDs,
+unbounded failure surfaces, and unknown fields are rejected.
+
+This marks Employee validation blocked and persists the stable remediation ID
+and bounded failure surface while keeping completed prerequisite phases
+intact. Use the failing surface to choose the next check:
 
 - sign-in loop -> identify which credential store prompted and whether the
   account or tenant differs;

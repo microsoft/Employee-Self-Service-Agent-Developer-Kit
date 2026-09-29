@@ -96,24 +96,28 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
 
 
 def test_employee_validation_uses_stable_remediation_contract() -> None:
+    import workday_connect_contracts as contracts
+
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
-    for remediation_id in (
-        "WD-E2E-001",
-        "WD-E2E-002",
-        "WD-E2E-003",
-        "WD-E2E-004",
-        "WD-E2E-005",
-        "WD-E2E-006",
-        "WD-E2E-007",
-        "WD-E2E-999",
-    ):
-        assert remediation_id in text
+    documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
+    assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
+    documented_surfaces = {
+        value
+        for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
+        if value in contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    }
+    assert documented_surfaces == set(
+        contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    )
+    assert "`failureCategory`" not in text
+    assert "Canonical `remediation`" not in text
     assert "Do not invent a remediation ID" in normalized
-    assert "rejects arbitrary IDs, mismatched categories" in normalized
+    assert "derives the safe category and canonical remediation" in normalized
+    assert "migrates existing three-field failure files" in normalized
     assert "cannot publish the agent, impersonate an employee" in normalized
 
 

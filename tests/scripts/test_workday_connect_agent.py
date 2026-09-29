@@ -662,12 +662,7 @@ def test_record_validation_failure_blocks_employee_phase(
         json.dumps(
             {
                 "remediationId": "WD-E2E-006",
-                "failureCategory": "workday-access",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": (
-                    "Ask a Workday administrator to verify the test "
-                    "employee's functional-area and domain access."
-                ),
             }
         ),
         encoding="utf-8",
@@ -684,4 +679,5 @@ def test_record_validation_failure_blocks_employee_phase(
     assert phase["status"] == "blocked"
     assert phase["blocker"]["remediationId"] == "WD-E2E-006"
     assert phase["blocker"]["errorType"] == "workday-access"
+    assert phase["blocker"]["failureSurface"] == "workday-response"
     assert phase["blocker"]["capturedAt"] == "2026-09-25T00:00:00Z"

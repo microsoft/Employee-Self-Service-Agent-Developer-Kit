@@ -512,6 +512,7 @@ def _record_validation_failure(
             "operation": "record-validation-failure",
             "remediationId": evidence["remediationId"],
             "errorType": evidence["failureCategory"],
+            "failureSurface": evidence["failureSurface"],
             "message": evidence["remediation"],
             "capturedAt": evidence["timestamp"],
         },

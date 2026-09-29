@@ -851,35 +851,95 @@ def test_employee_evidence_rejects_maker_and_invalid_timestamp():
         )
 
 
-def test_employee_failure_evidence_requires_safe_structured_fields():
+def test_employee_failure_evidence_derives_safe_canonical_fields():
     for remediation_id, contract in (
         contracts.EMPLOYEE_VALIDATION_REMEDIATIONS.items()
     ):
+        evidence = {
+            "remediationId": remediation_id.lower(),
+            "timestamp": "2026-09-25T00:00:00+00:00",
+        }
+        if remediation_id == "WD-E2E-999":
+            evidence["failureSurface"] = "agent-chat"
         assert validate_employee_failure_evidence(
-            {
-                "remediationId": remediation_id.lower(),
-                "failureCategory": contract["failureCategory"],
-                "timestamp": "2026-09-25T00:00:00+00:00",
-                "remediation": contract["remediation"],
-            }
+            evidence
         ) == {
             "remediationId": remediation_id,
             "failureCategory": contract["failureCategory"],
+            "failureSurface": (
+                "agent-chat"
+                if remediation_id == "WD-E2E-999"
+                else contract["failureSurface"]
+            ),
             "timestamp": "2026-09-25T00:00:00Z",
             "remediation": contract["remediation"],
         }
 
+
+def test_employee_failure_evidence_migrates_legacy_files():
+    assert validate_employee_failure_evidence(
+        {
+            "failureCategory": "workday-access-denied",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "remediation": "Customer-specific wording is discarded.",
+        }
+    ) == {
+        "remediationId": "WD-E2E-006",
+        "failureCategory": "workday-access",
+        "failureSurface": "workday-response",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "remediation": (
+            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
+                "WD-E2E-006"
+            ]["remediation"]
+        ),
+    }
+    assert validate_employee_failure_evidence(
+        {
+            "failureCategory": "previous-custom-category",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "remediation": "Visit https://customer.example/employee.",
+        }
+    ) == {
+        "remediationId": "WD-E2E-999",
+        "failureCategory": "unknown",
+        "failureSurface": "other",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "remediation": (
+            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
+                "WD-E2E-999"
+            ]["remediation"]
+        ),
+    }
+
+
+def test_employee_failure_evidence_ignores_redundant_caller_text():
+    assert validate_employee_failure_evidence(
+        {
+            "remediationId": "WD-E2E-006",
+            "failureCategory": "network",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "remediation": "Visit https://customer.example/employee.",
+        }
+    ) == {
+        "remediationId": "WD-E2E-006",
+        "failureCategory": "workday-access",
+        "failureSurface": "workday-response",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "remediation": (
+            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
+                "WD-E2E-006"
+            ]["remediation"]
+        ),
+    }
+
+
+def test_employee_failure_evidence_rejects_unsafe_fields():
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
         validate_employee_failure_evidence(
             {
                 "remediationId": "WD-E2E-006",
-                "failureCategory": "workday-access",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": (
-                    contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                        "WD-E2E-006"
-                    ]["remediation"]
-                ),
                 "accessToken": "must-not-be-recorded",
             }
         )
@@ -888,39 +948,39 @@ def test_employee_failure_evidence_requires_safe_structured_fields():
         validate_employee_failure_evidence(
             {
                 "remediationId": "WD-E2E-123",
-                "failureCategory": "unknown",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": "Investigate.",
             }
         )
 
     with pytest.raises(
         WorkdayConnectContractError,
-        match="failureCategory for WD-E2E-006",
+        match="accepted only for WD-E2E-999",
     ):
         validate_employee_failure_evidence(
             {
                 "remediationId": "WD-E2E-006",
-                "failureCategory": "network",
+                "failureSurface": "workday-response",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": (
-                    contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                        "WD-E2E-006"
-                    ]["remediation"]
-                ),
             }
         )
 
     with pytest.raises(
         WorkdayConnectContractError,
-        match="canonical safe text",
+        match="failureSurface must be one of",
     ):
         validate_employee_failure_evidence(
             {
-                "remediationId": "WD-E2E-006",
-                "failureCategory": "workday-access",
+                "remediationId": "WD-E2E-999",
+                "failureSurface": "https://customer.example/employee",
                 "timestamp": "2026-09-25T00:00:00Z",
-                "remediation": "Visit https://customer.example/employee.",
+            }
+        )
+
+    with pytest.raises(WorkdayConnectContractError, match="is required"):
+        validate_employee_failure_evidence(
+            {
+                "remediationId": "WD-E2E-999",
+                "timestamp": "2026-09-25T00:00:00Z",
             }
         )
 
