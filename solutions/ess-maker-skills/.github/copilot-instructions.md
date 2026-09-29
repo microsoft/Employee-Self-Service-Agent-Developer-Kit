@@ -380,9 +380,9 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says... | Pattern | What to create |
 |-----------------|---------|---------------|
-| "I need to look up X from ServiceNow/Workday" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to create a ticket/case/request" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to show the user their X data" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
+| "I need to look up X from ServiceNow/Workday" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to create a ticket/case/request" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to show the user their X data" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
 | "I need to call a non-ESS system (Jira, custom API)" | Standalone Topic + Workflow | Topic + new cloud flow (only for connectors without a shared orchestrator) |
 | "I need to add a step to an existing flow" | Modify topic | Edit the existing topic YAML |
 | "I need to change how the agent responds to X" | Modify topic | Update trigger phrases, messages, or conditions |
@@ -430,7 +430,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
-| Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
+| Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`) | `src/skills/connect/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |

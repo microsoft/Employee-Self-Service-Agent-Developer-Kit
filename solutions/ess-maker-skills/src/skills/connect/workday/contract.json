@@ -30,7 +30,7 @@
       "roleQueryPassNames": ["Environment Maker", "System Customizer", "System Administrator"],
       "actionDoc": "src/skills/connect/workday/actions/wire-user-context-redirect.md",
       "rollbackLabel": "Add User Context redirect to Workday",
-      "rollbackPushGlob": "topics/user-context-setup.mcs.yml"
+      "rollbackPushGlobFromAction": true
     },
     {
       "id": "validation",
