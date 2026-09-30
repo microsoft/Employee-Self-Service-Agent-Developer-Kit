@@ -72,8 +72,8 @@ SETUP_STEP_NOTES = {
         "DA-AGENT-001."
     ),
     "SETUP-02.2": (
-        "Copilot Studio message capacity verified by ENV-CAPACITY-001. "
-        "Non-queryable governance prerequisites remain maker-owned."
+        "Copilot Studio message capacity checked by ENV-CAPACITY-001. "
+        "Any known capacity risk remains visible in its evidence."
     ),
     "SETUP-03": (
         "Confirms the environment and exact editable Dev agent."
@@ -1031,6 +1031,16 @@ def maintain_setup_flightcheck(
         complete = True
     elif requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}
+    elif checkpoint == "ENV-CAPACITY-001":
+        run_blocked = (
+            payload.get("failed") != 0
+            or payload.get("errors") != 0
+        )
+        complete = (
+            not run_blocked
+            and bool(statuses)
+            and statuses <= {"Passed", "Warning"}
+        )
     else:
         run_blocked = (
             payload.get("failed") != 0
@@ -1042,7 +1052,13 @@ def maintain_setup_flightcheck(
     if complete:
         note = SETUP_STEP_NOTES[step_id]
         mode = "automated"
-        if manual_attested:
+        if checkpoint == "ENV-CAPACITY-001" and "Warning" in statuses:
+            note = (
+                "ENV-CAPACITY-001 recorded a Copilot Studio message capacity "
+                "risk. Setup continued because capacity allocation is not a "
+                "foundation setup blocker."
+            )
+        elif manual_attested:
             mode = "manual-attested"
             note = (
                 "A maker explicitly confirmed that Copilot Studio message "

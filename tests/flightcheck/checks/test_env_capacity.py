@@ -85,26 +85,31 @@ def test_passed_when_capacity_allocated():
     assert "25000" in r.result
 
 
-def test_failed_when_zero_capacity_no_payg():
+def test_warns_when_zero_capacity_no_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=False))
-    assert r.status == "Failed"
-    assert "runtime" in r.result.lower()
+    assert r.status == "Warning"
+    assert "not configured" in r.result
+    assert "no message capacity" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_with_payg():
+def test_warns_when_zero_capacity_with_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=True))
-    assert r.status == "Failed"
-    assert "does not satisfy" in r.result
+    assert r.status == "Warning"
+    assert "Pay-as-you-go billing is configured" in r.result
+    assert "will be billed through Azure Pay-as-you-go" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_unknown_payg():
+def test_warns_when_zero_capacity_unknown_payg():
     # No _payg_configured on the runner (PRE-005 did not run this scope).
     r = _run(_runner(powerplatform=_FakePP([])))
-    assert r.status == "Failed"
+    assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "cannot continue" in r.remediation.lower()
+    assert "message capacity is not confirmed" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
 
 
 def test_requires_manual_confirmation_when_no_powerplatform_client():

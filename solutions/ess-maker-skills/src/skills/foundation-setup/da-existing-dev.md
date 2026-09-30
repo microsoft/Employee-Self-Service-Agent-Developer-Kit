@@ -126,7 +126,7 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed` or `Failed` normally. When its status is `Manual`, present this guidance and confirmation before applying the result:
+Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed`, `Warning`, or `Failed` normally. A `Warning` records the missing-capacity runtime or billing risk and completes the setup checkpoint without hiding that risk. When its status is `Manual`, present this guidance and confirmation before applying the result:
 
 **Message:**
 
@@ -160,7 +160,7 @@ For **Yes — capacity is allocated**, apply the same current evidence with expl
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --manual-attested
 ```
 
-For **Not yet**, apply the result without `--manual-attested`. Leave capacity blocked, preserve the manual verification guidance, and return control to the maker.
+For **Not yet**, re-run `ENV-CAPACITY-001` so the known zero allocation is recorded as a `Warning`, apply that result without `--manual-attested`, and continue setup with the capacity risk visible.
 
 Resolve `{POWER_PLATFORM_ADMIN_ORIGIN}` from the selected service ring: `prod` is `https://admin.powerplatform.microsoft.com`, `preprod` is `https://admin.preprod.powerplatform.microsoft.com`, and `test` is `https://admin.test.powerplatform.microsoft.com`. Do not send a maker from a non-production setup ring to the production admin center.
 
@@ -186,7 +186,7 @@ For the exact registry-required row:
 
 When the registry declares no connection requirement for the resolved product, keep `SETUP-05` skipped and render Connections as **➖ Not required**. When the agent does not exactly match a registered product, also keep `SETUP-05` skipped, but state that no foundation connection requirement was applied because the product identity is not registered; do not claim that the registry declares no requirement for that product. A required connection does not prevent creation, attachment, or workspace materialization, but it does keep canonical `connectReady` false until its exact post-attachment evidence is ready.
 
-`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready** and `Failed` is **⛔ Action required**. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation and never overrides a known zero allocation or another failed result. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
+`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready**. `Warning` is **⚠️ Setup complete with capacity risk**: preserve the warning evidence and continue the remaining setup, but explain the runtime or billing impact before agent use. `Failed` is **⛔ Action required** for a checkpoint error that prevents trustworthy evaluation, such as an unavailable environment identity. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation and never overrides a known zero allocation or another failed result. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
 
 ## Interpret results
 
