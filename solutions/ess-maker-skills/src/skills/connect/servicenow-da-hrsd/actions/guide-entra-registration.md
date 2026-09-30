@@ -68,17 +68,17 @@ app and `completed` for an app that required configuration:
 python scripts/connect_servicenow_da.py record-admin-phase --phase entra-registration --status <completed|reused> --client-id <application-client-id>
 ```
 
-Then run all six read-only Graph checkpoints. A `Failed` or `Error` result is
-authoritative and cannot be overridden by the completion confirmation:
+Do not call FlightCheck from this action document. Runner-owned checkpoint
+target: `SN-DA-HRSD-ENTRA-*`. Return the action result below and let lifecycle
+runner L.4b invoke that registered family once.
 
-```text
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-APP-001 --agent-slug "{AGENT_SLUG}"
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-CLAIMS-001 --agent-slug "{AGENT_SLUG}"
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-SCOPE-001 --agent-slug "{AGENT_SLUG}"
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-PREAUTH-001 --agent-slug "{AGENT_SLUG}"
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-PERMISSIONS-001 --agent-slug "{AGENT_SLUG}"
-python scripts/flightcheck/cli.py --checkpoint SN-DA-HRSD-ENTRA-CONSENT-001 --agent-slug "{AGENT_SLUG}"
-```
+Do not run the six checkpoint IDs as separate CLI processes. The family
+invocation preserves their individual IDs, statuses, results, and remediation
+while sharing one category evaluation and one logical set of read-only API
+calls. A `Failed` or `Error` result is authoritative and cannot be overridden
+by the completion confirmation.
 
-Return `ACTION_RESULT = "recorded"` only when the whole step has current
-evidence and none of its read-only checks reports `Failed` or `Error`.
+Return `ACTION_RESULT = "recorded"` after the bundled phase handoff is
+persisted. Do not decide checkpoint success in this action: lifecycle runner
+L.4b invokes the family once, and its six member results are authoritative for
+phase completion or blocking.

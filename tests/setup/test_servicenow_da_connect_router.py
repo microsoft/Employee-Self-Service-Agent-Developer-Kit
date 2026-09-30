@@ -140,6 +140,19 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "application\n  owner may collaborate" in entra
     assert "`Failed` or `Error`" in entra
     assert "cannot be overridden" in entra
+    assert "Runner-owned checkpoint\ntarget: `SN-DA-HRSD-ENTRA-*`" in entra
+    assert "python scripts/flightcheck/cli.py" not in entra
+    for suffix in (
+        "APP",
+        "CLAIMS",
+        "SCOPE",
+        "PREAUTH",
+        "PERMISSIONS",
+        "CONSENT",
+    ):
+        assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
+    assert "one category evaluation" in entra
+    assert "Do not decide checkpoint success in this action" in entra
     assert "upn" in oidc
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc

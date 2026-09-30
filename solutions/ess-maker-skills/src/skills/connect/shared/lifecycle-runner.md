@@ -318,16 +318,21 @@ the action failure, write the state file, and stop.
 
 ### L.4b — Run the phase's checkpoints
 
-For each checkpoint ID the current phase lists, run:
+For each checkpoint target the current phase lists, run:
 
 ```
-python scripts/flightcheck/cli.py --checkpoint {ID}
+python scripts/flightcheck/cli.py --checkpoint {TARGET}
 ```
+
+When `TARGET` is a registered family/wildcard, start exactly one CLI process,
+consume and render every matching emitted row, and persist each result under
+its actual checkpoint ID. Do not invoke family members again as separate
+processes. A family that emits zero matching rows blocks the phase.
 
 If the contract has `connectConfig` and that file exists, add
-`--connect-config "{connectConfig}"`. For agent-local checkpoints, also add
-`--agent-slug "{AGENT_SLUG}"`. Use the same arguments when re-verifying
-completed phases in L.2.
+`--connect-config "{connectConfig}"`. For agent-local checkpoints or profiles,
+also add `--agent-slug "{AGENT_SLUG}"`. Use the same target and arguments when
+re-verifying completed phases in L.2.
 
 After each run, render the result using the exact U.0 and U.0a routines from
 `src/skills/setup/shared/checklist-updater.md` (read that file's U.0/U.0a

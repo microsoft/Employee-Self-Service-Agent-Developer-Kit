@@ -591,6 +591,72 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 0
 
+    def test_family_target_evaluates_category_once_and_keeps_all_members(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        target = "SN-DA-HRSD-ENTRA-*"
+        entra_ids = (
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+            "SN-DA-HRSD-ENTRA-CONSENT-001",
+        )
+        calls = 0
+        saved = {}
+
+        class _Spec:
+            category_label = "ServiceNow DA HRSD"
+            is_family = True
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [
+                    ("ServiceNow DA HRSD", self._run_category)
+                ]
+
+            @staticmethod
+            def _run_category(_runner):
+                nonlocal calls
+                calls += 1
+                return [
+                    *[
+                        _row(checkpoint_id, Status.PASSED.value)
+                        for checkpoint_id in entra_ids
+                    ],
+                    _row("SN-DA-HRSD-OIDC-001", Status.PASSED.value),
+                ]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, _output: saved.update(result=result),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args(target, tmp_path))
+
+        assert exc.value.code == 0
+        assert calls == 1
+        assert tuple(
+            result.checkpoint_id for result in saved["result"].results
+        ) == entra_ids
+
     def test_assigns_explicit_agent_slug_and_connect_config(
         self,
         tmp_path: Path,

@@ -222,6 +222,38 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_servicenow_entra_family_runs_one_shared_category(self):
+        assert registry.resolve("SN-DA-HRSD-ENTRA-*").key == (
+            "SN-DA-HRSD-ENTRA"
+        )
+        assert registry.resolve("SN-DA-HRSD-ENTRA-APP-001").key == (
+            "SN-DA-HRSD-ENTRA-APP-001"
+        )
+        plan = registry.transitive_requirements("SN-DA-HRSD-ENTRA-*")
+        assert plan.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
+        )
+        assert plan.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+        expected = {
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+            "SN-DA-HRSD-ENTRA-CONSENT-001",
+        }
+        emitted = expected | {
+            "SN-DA-HRSD-PLUGIN-001",
+            "SN-DA-HRSD-OIDC-001",
+        }
+        assert {
+            checkpoint_id
+            for checkpoint_id in emitted
+            if registry.matches("SN-DA-HRSD-ENTRA-*", checkpoint_id)
+        } == expected
+
     def test_servicenow_hrsd_checkpoints_use_native_read_clients(self):
         package = registry.transitive_requirements("SN-DA-HRSD-PKG-001")
         assert package.clients == frozenset({registry.AGENTBUILDER})

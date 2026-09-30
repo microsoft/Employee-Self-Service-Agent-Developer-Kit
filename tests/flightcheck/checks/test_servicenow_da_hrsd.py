@@ -326,6 +326,98 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
 
 
+def test_entra_phase_evaluation_uses_one_logical_read_set(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    counters = {
+        "agentbuilder": 0,
+        "connectivity": 0,
+        "applications": 0,
+        "app_service_principal": 0,
+        "graph_service_principal": 0,
+        "permission_grants": 0,
+    }
+    runner = _runner(components)
+
+    def fetch_components(_agent_id: str) -> dict:
+        counters["agentbuilder"] += 1
+        return components
+
+    def list_connector_connections(
+        environment_id: str,
+        connector: str,
+    ) -> list[dict]:
+        assert environment_id == ENVIRONMENT_ID
+        assert connector == snow.CONNECTOR_NAME
+        counters["connectivity"] += 1
+        return [_connection()]
+
+    base_graph = _graph_client()
+
+    class CountingGraph:
+        def get_all(
+            self,
+            path: str,
+            params: dict | None = None,
+            *,
+            raise_on_permission_error: bool = False,
+        ) -> list[dict]:
+            if path == "/applications":
+                counters["applications"] += 1
+            elif path == "/oauth2PermissionGrants":
+                counters["permission_grants"] += 1
+            return base_graph.get_all(
+                path,
+                params,
+                raise_on_permission_error=raise_on_permission_error,
+            )
+
+        def get_service_principals(
+            self,
+            *,
+            filter_expr: str = "",
+            **kwargs,
+        ) -> list[dict]:
+            if graph_mock.MS_GRAPH_RESOURCE_APP_ID in filter_expr:
+                counters["graph_service_principal"] += 1
+            else:
+                counters["app_service_principal"] += 1
+            return base_graph.get_service_principals(
+                filter_expr=filter_expr,
+                **kwargs,
+            )
+
+    runner.agentbuilder = SimpleNamespace(fetch_components=fetch_components)
+    runner.connectivity = SimpleNamespace(
+        list_connections=lambda _environment_id: pytest.fail(
+            "ServiceNow HRSD must not use environment-wide inventory."
+        ),
+        list_connector_connections=list_connector_connections,
+    )
+    runner.graph = CountingGraph()
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    entra_results = [
+        result
+        for result in results
+        if result.checkpoint_id.startswith("SN-DA-HRSD-ENTRA-")
+    ]
+
+    assert len(entra_results) == 6
+    assert counters == {
+        "agentbuilder": 1,
+        "connectivity": 1,
+        "applications": 1,
+        "app_service_principal": 1,
+        "graph_service_principal": 1,
+        "permission_grants": 1,
+    }
+
+
 def test_preflight_discovery_change_does_not_require_global_reapproval(
     monkeypatch,
     tmp_path: Path,

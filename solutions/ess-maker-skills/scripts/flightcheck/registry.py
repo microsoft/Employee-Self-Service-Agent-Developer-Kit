@@ -283,6 +283,18 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.SERVICENOW_ADMIN.value,),
     ),
     CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PLUGIN-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        is_family=True,
+    ),
+    CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-APP-001",
         category_fn=run_servicenow_da_hrsd_checks,
         category_label="ServiceNow DA HRSD",

@@ -32,14 +32,7 @@
     {
       "id": "entra-registration",
       "label": "Guide and verify the Microsoft Entra User Login application setup",
-      "checkpoints": [
-        "SN-DA-HRSD-ENTRA-APP-001",
-        "SN-DA-HRSD-ENTRA-CLAIMS-001",
-        "SN-DA-HRSD-ENTRA-SCOPE-001",
-        "SN-DA-HRSD-ENTRA-PREAUTH-001",
-        "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
-        "SN-DA-HRSD-ENTRA-CONSENT-001"
-      ],
+      "checkpoints": ["SN-DA-HRSD-ENTRA-*"],
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
       "actionExecution": "once",

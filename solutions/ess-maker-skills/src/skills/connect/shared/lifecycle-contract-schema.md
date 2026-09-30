@@ -76,12 +76,12 @@ persisted questions, or sequential pause turns.
 
 ### Evolving a phase's checkpoint list
 
-FlightCheck may later ship purpose-built "connect lifecycle" scoped profiles
-that replace a phase's individual checkpoint list with one pre-composed
-check. Until a profile exists, a contract simply lists the individual
-checkpoints that cover the same ground today — there's no separate field for
-this; it's just how `checkpoints` is populated in the meantime. When a
-consolidated profile ships, update the phase's `checkpoints` list to use it.
+When several checkpoint rows share one registered FlightCheck family, put the
+family wildcard (for example `SN-DA-HRSD-ENTRA-*`) in `checkpoints`. The
+runner invokes the family once, consumes every matching emitted row, and
+persists each row under its actual checkpoint ID. A family that emits zero
+matching rows is blocking, never an empty success. Pin the intended member IDs
+in tests so a future prefix expansion requires an explicit contract review.
 
 Never mark a phase `done` because a future profile is "assumed" to pass —
 only a real checkpoint run (or a real, attested manual step) advances a

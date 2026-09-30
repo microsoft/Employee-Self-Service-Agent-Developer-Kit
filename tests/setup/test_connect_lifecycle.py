@@ -150,6 +150,14 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "Passed",
         "Manual",
     ]
+    assert by_id["entra-registration"]["checkpoints"] == [
+        "SN-DA-HRSD-ENTRA-*"
+    ]
+    runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
+        encoding="utf-8"
+    )
+    assert "When `TARGET` is a registered family/wildcard" in runner
+    assert "Do not invoke family members again" in runner
 
     workday = json.loads(
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")
