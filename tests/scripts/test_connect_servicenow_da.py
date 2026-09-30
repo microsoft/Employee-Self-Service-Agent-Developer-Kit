@@ -946,7 +946,7 @@ def test_plugin_requirements_are_scope_and_auth_dynamic() -> None:
     "scenario",
     ["connected", "app-oidc", "plugins-only", "scratch", "unsure"],
 )
-def test_preflight_paths_require_discovery_and_explicit_reuse(
+def test_preflight_paths_record_discovery_without_global_choice(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     scenario: str,
@@ -981,17 +981,12 @@ def test_preflight_paths_require_discovery_and_explicit_reuse(
         lambda _context: FakeConnectivity(),
     )
 
-    preflight = snow.record_preflight_scenario(
+    snow.record_preflight_scenario(
         _context(),
         scenario=scenario,
         instance_url="https://dev123.service-now.com",
     )
-    assert preflight["reuseDecision"] is None
     discovery = snow.inspect_admin_setup(_context())
-    decision = snow.record_reuse_decision(
-        _context(),
-        decision="reuse-discovered",
-    )
     refreshed = snow.inspect_admin_setup(_context())
     snow.record_admin_phase(
         _context(),
@@ -1002,37 +997,38 @@ def test_preflight_paths_require_discovery_and_explicit_reuse(
     with_client_id = snow.inspect_admin_setup(_context())
 
     assert discovery["connectionCandidates"][0]["status"] == "Connected"
-    assert refreshed["fingerprint"] == discovery["fingerprint"]
-    assert with_client_id["fingerprint"] == discovery["fingerprint"]
+    assert "fingerprint" not in discovery
+    assert "fingerprint" not in refreshed
+    assert "fingerprint" not in with_client_id
     assert with_client_id["entraClientId"] == APP_CLIENT_ID
-    assert decision["decision"] == "reuse-discovered"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["adminSetup"]["preflight"]["scenario"] == scenario
-    assert (
-        state["adminSetup"]["preflight"]["reuseDecision"][
-            "discoveryFingerprint"
-        ]
-        == discovery["fingerprint"]
-    )
+    assert "reuseDecision" not in state["adminSetup"]["preflight"]
+    assert state["adminSetup"]["phaseHandoffs"]["preflight"] == {
+        "status": "completed",
+        "evidence": {
+            "kind": "read-only-resource-discovery",
+            "scenario": scenario,
+            "instanceName": "dev123",
+            "observedAt": with_client_id["observedAt"],
+        },
+    }
 
 
-def test_reuse_and_reused_operations_require_explicit_preflight_approval(
+def test_phase_local_reuse_does_not_require_global_preflight_choice(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(snow.ServiceNowConnectError, match="discovery"):
-        snow.record_reuse_decision(
-            _context(),
-            decision="reuse-discovered",
-        )
-    with pytest.raises(snow.ServiceNowConnectError, match="reuse approval"):
-        snow.record_admin_phase(
-            _context(),
-            phase="plugin-prerequisites",
-            status="reused",
-        )
+    record = snow.record_admin_phase(
+        _context(),
+        phase="plugin-prerequisites",
+        status="reused",
+    )
+
+    assert record["status"] == "reused"
+    assert "record-reuse-decision" not in snow.build_parser().format_help()
 
 
 def test_admin_operation_records_only_non_secret_identity_fields(
@@ -1064,7 +1060,7 @@ def test_admin_operation_records_only_non_secret_identity_fields(
     assert "token" not in serialized.casefold()
 
 
-def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
+def test_v2_lifecycle_migrates_to_v4_without_global_reuse_choice(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1115,9 +1111,9 @@ def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 3
+    assert state["schemaVersion"] == 4
     assert state["acceptedContractRevision"] == 1
-    assert state["adminSetup"]["preflight"]["reuseDecision"] is None
+    assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
         "preflight",
         "plugin-prerequisites",
@@ -1126,7 +1122,7 @@ def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
         "credential",
     }
     assert "operations" not in state["adminSetup"]
-    assert state["phases"]["preflight"]["status"] == "pending"
+    assert state["phases"]["preflight"]["status"] == "in-progress"
     assert state["phases"]["credential"]["status"] == "in-progress"
     assert "actionApplied" not in state["phases"]["credential"]
     for phase_id in (
@@ -1140,7 +1136,156 @@ def test_v2_lifecycle_migrates_to_v3_without_inferred_reuse(
     assert state["evidence"]["custom"]["mustSurvive"] is True
     assert state["transactions"]["topics"]["operation"]["status"] == "committed"
     assert state["migration"]["schemaV3"]["reuseApprovalInferred"] is False
+    assert state["migration"]["schemaV4"][
+        "removedGlobalReuseDecision"
+    ] is True
+    assert state["migration"]["schemaV4"][
+        "retainedCompletedPreflight"
+    ] is False
     assert first_bytes == state_path.read_bytes()
+
+
+def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 3,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {
+                    "preflight": {
+                        "status": "done",
+                        "actionApplied": True,
+                        "checkpointResults": {
+                            "SN-DA-HRSD-ADMIN-PREFLIGHT-001": "Passed"
+                        },
+                    }
+                },
+                "adminSetup": {
+                    "schemaVersion": 1,
+                    "scope": "hrsd",
+                    "authMode": snow.AUTH_MODE,
+                    "preflight": {
+                        "scenario": "connected",
+                        "instanceName": "dev123",
+                        "reuseDecision": {
+                            "decision": "configure-missing",
+                            "discoveryFingerprint": "old",
+                        },
+                        "discovery": {
+                            "source": "connectivity-readonly",
+                            "observedAt": "2026-09-29T00:00:00Z",
+                            "requiredPlugins": [],
+                            "connectionCandidates": [],
+                            "fingerprint": "old",
+                        },
+                    },
+                    "phaseHandoffs": {
+                        "preflight": {
+                            "status": "completed",
+                            "evidence": {
+                                "kind": "maker-reuse-decision",
+                                "decision": "configure-missing",
+                                "discoveryFingerprint": "old",
+                            },
+                        }
+                    },
+                },
+                "evidence": {"mustSurvive": True},
+                "transactions": {"topics": {"operation": {"status": "committed"}}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = snow._load_lifecycle_state(_context())
+
+    assert state["schemaVersion"] == 4
+    assert state["adminSetup"]["schemaVersion"] == 2
+    assert "reuseDecision" not in state["adminSetup"]["preflight"]
+    assert "fingerprint" not in state["adminSetup"]["preflight"]["discovery"]
+    assert state["adminSetup"]["phaseHandoffs"]["preflight"]["status"] == (
+        "completed"
+    )
+    evidence = state["adminSetup"]["phaseHandoffs"]["preflight"]["evidence"]
+    assert evidence["kind"] == "read-only-resource-discovery"
+    assert "decision" not in evidence
+    assert "discoveryFingerprint" not in evidence
+    assert state["phases"]["preflight"]["status"] == "done"
+    assert state["evidence"]["mustSurvive"] is True
+    assert state["transactions"]["topics"]["operation"]["status"] == "committed"
+    assert state["migration"]["schemaV4"][
+        "retainedCompletedPreflight"
+    ] is True
+
+
+def test_v3_migration_resets_incomplete_preflight_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 3,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {
+                    "preflight": {
+                        "status": "done",
+                        "actionApplied": True,
+                        "lastActionAt": "2026-09-29T00:00:00Z",
+                        "checkpointResults": {"old": "Passed"},
+                    },
+                    "plugin-prerequisites": {
+                        "status": "done",
+                        "checkpointResults": {"keep": "Manual"},
+                    },
+                },
+                "adminSetup": {
+                    "schemaVersion": 1,
+                    "scope": "hrsd",
+                    "authMode": snow.AUTH_MODE,
+                    "preflight": {
+                        "scenario": "connected",
+                        "reuseDecision": {"decision": "reuse-discovered"},
+                        "discovery": {},
+                    },
+                    "phaseHandoffs": {},
+                },
+                "evidence": {},
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = snow._load_lifecycle_state(_context())
+
+    assert state["phases"]["preflight"]["status"] == "in-progress"
+    assert state["phases"]["preflight"]["checkpointResults"] == {}
+    assert "actionApplied" not in state["phases"]["preflight"]
+    assert "lastActionAt" not in state["phases"]["preflight"]
+    assert state["phases"]["plugin-prerequisites"]["status"] == "done"
+    assert state["migration"]["schemaV4"][
+        "retainedCompletedPreflight"
+    ] is False
 
 
 @pytest.mark.parametrize(

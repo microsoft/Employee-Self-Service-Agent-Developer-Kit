@@ -13,7 +13,7 @@
   "phases": [
     {
       "id": "preflight",
-      "label": "Discover existing ServiceNow admin setup and approve what may be reused",
+      "label": "Discover existing ServiceNow admin setup and identify missing or unhealthy items",
       "checkpoints": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
       "completionStatuses": ["Passed"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/admin-preflight.md",

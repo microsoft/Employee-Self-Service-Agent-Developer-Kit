@@ -1,29 +1,27 @@
 # Discover existing admin setup before creating anything
 
-Treat preflight and reuse approval as one complete high-level step with one
-pause boundary.
+Treat preflight discovery and instance confirmation as one complete high-level
+step with one pause boundary.
 
-- **Goal:** discover remote setup first and decide what may be reused without
-  rebuilding valid remote objects.
+- **Goal:** discover remote setup first, automatically reuse each valid
+  existing item, and send only missing or unhealthy items to their owning
+  setup phase.
 - **Owner role:** Maker coordinating with the ServiceNow/Entra admins who know
   which tenant resources already exist.
 - **Completion evidence:** confirmed ServiceNow instance URL, existing-setup
-  scenario, and one explicit reuse-versus-configure-missing decision.
+  scenario, and current read-only resource discovery.
 
 Read `adminSetup.phaseHandoffs.preflight` first. If it is already
-`completed` or `reused`, refresh `inspect-admin-setup`, then compare the
-updated `preflight.discovery.fingerprint` directly with
-`preflight.reuseDecision.discoveryFingerprint`.
+`completed`, refresh `inspect-admin-setup`. If the stored scenario and
+instance are still present and stored phase checkpoint results are empty or
+all in this phase's `completionStatuses`, do not ask again; return
+`ACTION_RESULT = "recorded"` so the runner can reverify. Discovery changes do
+not require a global reuse decision: later phases own verification and repair
+for their individual resources.
 
-- If the decision is `reuse-discovered` and the fingerprints differ, present
-  the complete bundled preflight/reuse question now in this same invocation.
-  Do not return `recorded` and wait for a later checkpoint to discover drift.
-- If the decision is `configure-missing`, or the fingerprints still match,
-  and stored phase checkpoint results are empty or all in this phase's
-  `completionStatuses`, do not ask again; return
-  `ACTION_RESULT = "recorded"` so the runner can reverify.
-- Any other prior result outside `completionStatuses` also requires the
-  complete preflight/reuse step again with one new bundled pause.
+Any prior result outside `completionStatuses`, or missing scenario/instance
+evidence, requires the complete preflight step again with one new bundled
+pause.
 
 Run:
 
@@ -48,8 +46,8 @@ Local state absence is not evidence that a remote app, OIDC provider, plugin,
 or connection is absent. Never create, patch, or recreate a remote object from
 this action.
 
-Then use one bundled question form for the complete preflight/reuse step. It
-must collect:
+Then use one bundled question form for the complete preflight step. It must
+collect:
 
 1. which situation matches:
 
@@ -60,22 +58,25 @@ must collect:
 - unsure, discover what is visible.
 
 2. the confirmed ServiceNow public HTTPS instance URL, never credentials,
-   tokens, secrets, or a portal URL; and
-3. one explicit decision:
-   - **Reuse discovered setup and verify each item**; or
-   - **Configure only the missing or invalid items**.
+   tokens, secrets, or a portal URL.
 
-An exactly-one candidate is still not approval. While this one bundled form is
-pending, do not return an action result. If the Maker is not ready, return
-`ACTION_RESULT = "waiting"`.
+Do not ask whether to reuse or configure missing resources. These are not
+alternatives: every later phase must reuse a valid exact item and configure or
+repair only its missing or unhealthy item. A Connected physical connection
+does not prove that the Entra app, consent, plugins, OIDC provider, or user
+mapping are complete.
+
+While this one bundled form is pending, do not return an action result. If the
+Maker is not ready, return `ACTION_RESULT = "waiting"`.
 
 After the single Maker return, persist the scenario and normalized instance,
-refresh discovery, then persist the decision:
+then refresh discovery:
 
 ```text
 python scripts/connect_servicenow_da.py record-preflight --scenario <connected|app-oidc|plugins-only|scratch|unsure> --instance-url <https://instance.service-now.com>
 python scripts/connect_servicenow_da.py inspect-admin-setup
-python scripts/connect_servicenow_da.py record-reuse-decision --decision <reuse-discovered|configure-missing>
 ```
 
-Return `ACTION_RESULT = "recorded"` only after the decision is persisted.
+Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
+subsequent plugin, Entra, OIDC, and credential phases independently reverify
+their own evidence and automatically skip only the valid item they own.

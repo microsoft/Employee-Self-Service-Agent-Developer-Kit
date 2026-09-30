@@ -12,7 +12,7 @@ reverify the exact current connection. A prior result outside
 
 ## Goal and owner
 
-- **Goal:** create or explicitly reuse one exact Connected
+- **Goal:** automatically reuse one exact healthy Connected
   `entraIDUserLogin` ServiceNow physical connection.
 - **Owner role:** Power Platform Maker/Admin who can create the connection and
   complete Microsoft Entra sign-in.
@@ -23,9 +23,20 @@ Run:
 python scripts/connect_servicenow_da.py inspect-admin-setup
 ```
 
-Show every discovered `entraIDUserLogin` candidate. Never auto-select or
-auto-reuse an exactly-one result. Ask the Maker to choose an existing
-connection or create a new one.
+Match candidates against the confirmed Instance Name and verified App A
+Application client ID:
+
+- If exactly one candidate is Connected and both values match, automatically
+  reuse it and run `record-credential` with its connection ID. Do not ask the
+  Maker to choose between reuse and creating another connection.
+- If multiple exact healthy candidates match, ask the Maker to select only
+  among those matches.
+- If no exact healthy candidate matches, show the missing/unhealthy evidence
+  and continue to the normal create or repair handoff below.
+
+A Connected row with the wrong Instance Name, Resource URI, or auth mode is
+not reusable. Its existence also does not prove any Entra, plugin, OIDC, or
+user-mapping phase complete.
 
 For a new connection, run:
 

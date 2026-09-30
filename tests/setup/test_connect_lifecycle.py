@@ -133,6 +133,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     ]
     by_id = {phase["id"]: phase for phase in contract["phases"]}
     assert by_id["preflight"]["actionExecution"] == "every-invocation"
+    assert "missing or unhealthy" in by_id["preflight"]["label"]
     for phase_id in (
         "plugin-prerequisites",
         "entra-registration",

@@ -28,7 +28,9 @@ requires one new complete OIDC handoff.
    role is not elevated.
 2. Open **All -> System OAuth -> Application Registry -> New -> Configure an
    OIDC provider to verify ID tokens**.
-3. Create or reuse the ESS OIDC entity:
+3. Reuse the exact valid ESS OIDC entity when the ServiceNow Admin confirms it
+   matches the verified App A and settings below. Otherwise create or repair
+   the missing or unhealthy entity:
    - Client ID = verified App A Application client ID;
    - if the form requires **Client secret**, the connector does not use that
      value for this flow; the admin enters a tenant-approved placeholder
@@ -65,7 +67,9 @@ Ask one completion question for the whole ServiceNow OIDC step. While the
 question is pending, do not return an action result. If the admin is not done,
 return `ACTION_RESULT = "waiting"`.
 
-After completion, record one bundled phase handoff:
+After verification or completion, record one bundled phase handoff. Use
+`reused` for a valid existing mapping and `completed` when configuration or
+repair was required:
 
 ```text
 python scripts/connect_servicenow_da.py record-admin-phase --phase servicenow-oidc --status <completed|reused> --claim <claim> --user-field <field>

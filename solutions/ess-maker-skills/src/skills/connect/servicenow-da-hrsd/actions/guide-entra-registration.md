@@ -29,11 +29,13 @@ return corrected bundled evidence.
 
 ## Complete admin instructions
 
-1. In Microsoft Entra admin center, open **Identity -> Applications -> App
-   registrations -> New registration**. Create or identify one single-tenant
-   app; no redirect URI is required. Follow PR #217's deterministic display
-   name `ESS Copilot - ServiceNow OIDC (<instance-name>)` so an existing app
-   can be found by persisted app ID first and display name second.
+1. Resolve the single-tenant app by persisted Application client ID first,
+   then by PR #217's deterministic display name
+   `ESS Copilot - ServiceNow OIDC (<instance-name>)`. Automatically reuse one
+   exact valid app. If multiple exact matches exist, ask the Maker to select
+   only among those matches. Only when no valid match exists, open
+   **Identity -> Applications -> App registrations -> New registration** and
+   create it; no redirect URI is required.
 2. In **Token configuration -> Add optional claim -> Access**, add `email`
    and `upn`.
 3. In **Expose an API**, set Application ID URI to
@@ -58,8 +60,9 @@ Ask one completion question for the whole Entra registration step. While the
 question is pending, do not return an action result. If the admin is not done,
 return `ACTION_RESULT = "waiting"`.
 
-After completion, validate the Application client ID as a GUID, then record
-one bundled phase handoff:
+After verification or completion, validate the Application client ID as a
+GUID, then record one bundled phase handoff. Use `reused` for a valid existing
+app and `completed` for an app that required configuration:
 
 ```text
 python scripts/connect_servicenow_da.py record-admin-phase --phase entra-registration --status <completed|reused> --client-id <application-client-id>

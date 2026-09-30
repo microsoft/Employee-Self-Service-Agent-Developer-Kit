@@ -199,10 +199,8 @@ def _write_state(root: Path, components: dict) -> None:
         "source": "connectivity-readonly",
         "observedAt": "2026-09-29T00:00:00Z",
         "connectionCandidates": [],
+        "requiredPlugins": [],
     }
-    discovery["fingerprint"] = snow._canonical_json_hash(
-        {"connectionCandidates": []}
-    )
     handoffs = {
         phase: {
             "status": "completed",
@@ -220,23 +218,19 @@ def _write_state(root: Path, components: dict) -> None:
     path.write_text(
         json.dumps(
             {
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "provider": snow.PROVIDER_KEY,
                 "agentSlug": AGENT_SLUG,
                 "agentId": AGENT_ID,
                 "environmentId": ENVIRONMENT_ID,
                 "adminSetup": {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "scope": "hrsd",
                     "authMode": "entraIDUserLogin",
                     "preflight": {
                         "scenario": "connected",
                         "instanceName": "dev123",
                         "discovery": discovery,
-                        "reuseDecision": {
-                            "decision": "reuse-discovered",
-                            "discoveryFingerprint": discovery["fingerprint"],
-                        },
                     },
                     "phaseHandoffs": handoffs,
                 },
@@ -332,7 +326,7 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
 
 
-def test_preflight_candidate_drift_invalidates_reuse_approval(
+def test_preflight_discovery_change_does_not_require_global_reapproval(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -348,40 +342,9 @@ def test_preflight_candidate_drift_invalidates_reuse_approval(
         / "lifecycle.json"
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["adminSetup"]["preflight"]["discovery"]["fingerprint"] = "changed"
-    state_path.write_text(json.dumps(state), encoding="utf-8")
-    monkeypatch.chdir(tmp_path)
-
-    result = next(
-        item
-        for item in run_servicenow_da_hrsd_checks(_runner(components))
-        if item.checkpoint_id == "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
-    )
-
-    assert result.status == Status.NOT_CONFIGURED.value
-    assert "changed after the Maker's reuse decision" in result.result
-
-
-def test_configure_missing_allows_expected_candidate_change(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    components = _components()
-    _write_state(tmp_path, components)
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / snow.PROVIDER_KEY
-        / "agents"
-        / AGENT_SLUG
-        / "lifecycle.json"
-    )
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["adminSetup"]["preflight"]["reuseDecision"]["decision"] = (
-        "configure-missing"
-    )
-    state["adminSetup"]["preflight"]["discovery"]["fingerprint"] = "changed"
+    state["adminSetup"]["preflight"]["discovery"]["connectionCandidates"] = [
+        {"connectionId": "new-candidate", "status": "Connected"}
+    ]
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
@@ -392,7 +355,41 @@ def test_configure_missing_allows_expected_candidate_change(
     )
 
     assert result.status == Status.PASSED.value
-    assert "configure-missing" in result.result
+    assert "reused automatically" in result.result
+
+
+def test_connected_connection_does_not_complete_other_admin_phases(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    for phase in (
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+    ):
+        state["adminSetup"]["phaseHandoffs"][phase] = {"status": "pending"}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(_runner(components))
+    statuses = {item.checkpoint_id: item.status for item in results}
+
+    assert statuses["SN-DA-HRSD-ADMIN-PREFLIGHT-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-PLUGIN-001"] == Status.NOT_CONFIGURED.value
+    assert statuses["SN-DA-HRSD-ENTRA-APP-001"] == Status.NOT_CONFIGURED.value
+    assert statuses["SN-DA-HRSD-OIDC-001"] == Status.NOT_CONFIGURED.value
 
 
 def test_graph_failure_cannot_be_overridden_by_admin_attestation(

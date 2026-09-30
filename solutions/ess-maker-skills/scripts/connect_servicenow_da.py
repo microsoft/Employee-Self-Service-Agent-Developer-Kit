@@ -41,8 +41,8 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 PROVIDER_KEY = "servicenow-da-hrsd"
 PROFILE_KEY = "hrsd"
-LIFECYCLE_SCHEMA_VERSION = 3
-ADMIN_SETUP_SCHEMA_VERSION = 1
+LIFECYCLE_SCHEMA_VERSION = 4
+ADMIN_SETUP_SCHEMA_VERSION = 2
 AUTH_MODE = "entraIDUserLogin"
 SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 PREFLIGHT_SCENARIOS = {
@@ -52,7 +52,6 @@ PREFLIGHT_SCENARIOS = {
     "scratch",
     "unsure",
 }
-REUSE_DECISIONS = {"reuse-discovered", "configure-missing"}
 ADMIN_PHASES = {
     "preflight",
     "plugin-prerequisites",
@@ -194,7 +193,6 @@ def _empty_admin_setup() -> dict[str, Any]:
         "authMode": AUTH_MODE,
         "preflight": {
             "scenario": None,
-            "reuseDecision": None,
             "discovery": {},
         },
         "phaseHandoffs": {
@@ -210,7 +208,16 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
         raise ServiceNowConnectError(
             "ServiceNow admin setup state must be an object."
         )
-    setup.setdefault("schemaVersion", ADMIN_SETUP_SCHEMA_VERSION)
+    version = setup.get("schemaVersion", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise ServiceNowConnectError(
+            "ServiceNow admin setup schemaVersion must be an integer."
+        )
+    if version > ADMIN_SETUP_SCHEMA_VERSION:
+        raise ServiceNowConnectError(
+            "ServiceNow admin setup state was written by a newer kit version."
+        )
+    setup["schemaVersion"] = ADMIN_SETUP_SCHEMA_VERSION
     setup.setdefault("scope", PROFILE_KEY)
     setup.setdefault("authMode", AUTH_MODE)
     preflight = setup.setdefault("preflight", {})
@@ -219,8 +226,13 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
             "ServiceNow preflight state must be an object."
         )
     preflight.setdefault("scenario", None)
-    preflight.setdefault("reuseDecision", None)
-    preflight.setdefault("discovery", {})
+    preflight.pop("reuseDecision", None)
+    discovery = preflight.setdefault("discovery", {})
+    if not isinstance(discovery, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow preflight discovery state must be an object."
+        )
+    discovery.pop("fingerprint", None)
     handoffs = setup.setdefault("phaseHandoffs", {})
     if not isinstance(handoffs, dict):
         raise ServiceNowConnectError(
@@ -228,7 +240,75 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
         )
     for phase in sorted(ADMIN_PHASES):
         handoffs.setdefault(phase, {"status": "pending"})
+    preflight_handoff = handoffs.get("preflight")
+    if isinstance(preflight_handoff, dict):
+        evidence = preflight_handoff.get("evidence")
+        if isinstance(evidence, dict):
+            evidence.pop("decision", None)
+            evidence.pop("discoveryFingerprint", None)
+            if evidence.get("kind") == "maker-reuse-decision":
+                evidence["kind"] = "read-only-resource-discovery"
     return setup
+
+
+def _preflight_discovery_complete(setup: dict[str, Any]) -> bool:
+    preflight = setup.get("preflight")
+    if not isinstance(preflight, dict):
+        return False
+    discovery = preflight.get("discovery")
+    if not isinstance(discovery, dict):
+        return False
+    return all(
+        (
+            isinstance(preflight.get("scenario"), str),
+            bool(preflight.get("scenario")),
+            isinstance(preflight.get("instanceName"), str),
+            bool(preflight.get("instanceName")),
+            isinstance(discovery.get("observedAt"), str),
+            bool(discovery.get("observedAt")),
+            isinstance(discovery.get("connectionCandidates"), list),
+            isinstance(discovery.get("requiredPlugins"), list),
+        )
+    )
+
+
+def _normalize_preflight_handoff(
+    state: dict[str, Any],
+    setup: dict[str, Any],
+) -> bool:
+    complete = _preflight_discovery_complete(setup)
+    preflight = setup["preflight"]
+    handoffs = setup["phaseHandoffs"]
+    if complete:
+        discovery = preflight["discovery"]
+        handoffs["preflight"] = {
+            "status": "completed",
+            "evidence": {
+                "kind": "read-only-resource-discovery",
+                "scenario": preflight.get("scenario"),
+                "instanceName": preflight.get("instanceName"),
+                "observedAt": discovery.get("observedAt"),
+            },
+        }
+        return True
+
+    handoffs["preflight"] = {"status": "pending"}
+    phase = state.setdefault("phases", {}).setdefault("preflight", {})
+    if not isinstance(phase, dict):
+        raise ServiceNowConnectError(
+            "ServiceNow preflight phase must be an object."
+        )
+    phase["status"] = "in-progress"
+    phase["checkpointResults"] = {}
+    phase["checkpointAcknowledgements"] = {}
+    for key in (
+        "actionApplied",
+        "lastActionAt",
+        "lastVerifiedAt",
+        "rollbackPushGlob",
+    ):
+        phase.pop(key, None)
+    return False
 
 
 def _legacy_state_path(agent_id: str) -> Path:
@@ -928,70 +1008,83 @@ def _migrate_lifecycle_schema(
         raise ServiceNowConnectError(
             "ServiceNow lifecycle phases must be an object."
         )
-    added_phase_ids = [
-        "preflight",
-        "plugin-prerequisites",
-        "entra-registration",
-        "servicenow-oidc",
-    ]
-    for phase_id in added_phase_ids:
-        phases.setdefault(
-            phase_id,
-            {
-                "status": "pending",
-                "checkpointResults": {},
-                "checkpointAcknowledgements": {},
-            },
-        )
-
-    invalidated_phase_ids: list[str] = []
-    credential = phases.setdefault(
-        "credential",
-        {"status": "pending", "checkpointResults": {}},
-    )
-    if not isinstance(credential, dict):
-        raise ServiceNowConnectError(
-            "ServiceNow credential phase must be an object."
-        )
-    credential["status"] = "in-progress"
-    credential["checkpointResults"] = {}
-    credential["checkpointAcknowledgements"] = {}
-    for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
-        credential.pop(key, None)
-    invalidated_phase_ids.append("credential")
-
-    for phase_id in (
-        "topics",
-        "agent-connection",
-        "parameter-sharing",
-        "publish",
-        "test",
-    ):
-        phase = phases.get(phase_id)
-        if not isinstance(phase, dict):
-            continue
-        phase["status"] = "pending"
-        phase["checkpointResults"] = {}
-        phase["checkpointAcknowledgements"] = {}
-        phase.pop("lastVerifiedAt", None)
-        invalidated_phase_ids.append(phase_id)
-
-    state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
-    state.setdefault("acceptedContractRevision", 1)
-    _admin_setup(state)
     migration = state.setdefault("migration", {})
     if not isinstance(migration, dict):
         raise ServiceNowConnectError(
             "ServiceNow lifecycle migration state must be an object."
         )
-    migration["schemaV3"] = {
-        "from": version,
+
+    if version == 2:
+        added_phase_ids = [
+            "preflight",
+            "plugin-prerequisites",
+            "entra-registration",
+            "servicenow-oidc",
+        ]
+        for phase_id in added_phase_ids:
+            phases.setdefault(
+                phase_id,
+                {
+                    "status": "pending",
+                    "checkpointResults": {},
+                    "checkpointAcknowledgements": {},
+                },
+            )
+
+        invalidated_phase_ids: list[str] = []
+        credential = phases.setdefault(
+            "credential",
+            {"status": "pending", "checkpointResults": {}},
+        )
+        if not isinstance(credential, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow credential phase must be an object."
+            )
+        credential["status"] = "in-progress"
+        credential["checkpointResults"] = {}
+        credential["checkpointAcknowledgements"] = {}
+        for key in ("actionApplied", "lastActionAt", "lastVerifiedAt"):
+            credential.pop(key, None)
+        invalidated_phase_ids.append("credential")
+
+        for phase_id in (
+            "topics",
+            "agent-connection",
+            "parameter-sharing",
+            "publish",
+            "test",
+        ):
+            phase = phases.get(phase_id)
+            if not isinstance(phase, dict):
+                continue
+            phase["status"] = "pending"
+            phase["checkpointResults"] = {}
+            phase["checkpointAcknowledgements"] = {}
+            phase.pop("lastVerifiedAt", None)
+            invalidated_phase_ids.append(phase_id)
+
+        state["schemaVersion"] = 3
+        state.setdefault("acceptedContractRevision", 1)
+        migration["schemaV3"] = {
+            "from": version,
+            "to": 3,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "addedPhaseIds": added_phase_ids,
+            "invalidatedPhaseIds": invalidated_phase_ids,
+            "reuseApprovalInferred": False,
+        }
+
+    setup = _admin_setup(state)
+    retained_preflight = _normalize_preflight_handoff(state, setup)
+    state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
+    migration["schemaV4"] = {
+        "from": 3 if version == 2 else version,
         "to": LIFECYCLE_SCHEMA_VERSION,
         "sourceSha256": source_sha256,
         "migratedAt": _utc_now(),
-        "addedPhaseIds": added_phase_ids,
-        "invalidatedPhaseIds": invalidated_phase_ids,
-        "reuseApprovalInferred": False,
+        "removedGlobalReuseDecision": True,
+        "retainedCompletedPreflight": retained_preflight,
     }
     return state
 
@@ -1334,7 +1427,9 @@ def record_preflight_scenario(
             "recordedAt": _utc_now(),
         }
     )
-    preflight["reuseDecision"] = None
+    _admin_setup(state)["phaseHandoffs"]["preflight"] = {
+        "status": "pending"
+    }
     _write_lifecycle_state(context, state)
     return copy.deepcopy(preflight)
 
@@ -1362,7 +1457,9 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
     client_id = None
     if isinstance(app_record, dict):
         client_id = (app_record.get("evidence") or {}).get("clientId")
-    stable_discovery = {
+    discovery = {
+        "source": "connectivity-readonly",
+        "observedAt": _utc_now(),
         "scope": setup["scope"],
         "authMode": setup["authMode"],
         "instanceName": setup["preflight"].get("instanceName"),
@@ -1371,13 +1468,7 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
             setup["authMode"],
         ),
         "connectionCandidates": user_login_connections,
-    }
-    discovery = {
-        "source": "connectivity-readonly",
-        "observedAt": _utc_now(),
-        **stable_discovery,
         "entraClientId": client_id,
-        "fingerprint": _canonical_json_hash(stable_discovery),
         "limitations": [
             "ServiceNow plugin and OIDC security objects require admin "
             "confirmation when no supported read-only API is available.",
@@ -1386,45 +1477,9 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         ],
     }
     setup["preflight"]["discovery"] = discovery
+    _normalize_preflight_handoff(state, setup)
     _write_lifecycle_state(context, state)
     return discovery
-
-
-def record_reuse_decision(
-    context: dict[str, Any],
-    *,
-    decision: str,
-) -> dict[str, Any]:
-    if decision not in REUSE_DECISIONS:
-        raise ServiceNowConnectError("Unsupported ServiceNow reuse decision.")
-    state = _load_lifecycle_state(context)
-    preflight = _admin_setup(state)["preflight"]
-    discovery = preflight.get("discovery")
-    if not isinstance(discovery, dict) or not discovery.get("observedAt"):
-        raise ServiceNowConnectError(
-            "Run read-only admin setup discovery before recording reuse."
-        )
-    record = {
-        "decision": decision,
-        "approvedBy": "maker-attested",
-        "approvedAt": _utc_now(),
-        "discoveryFingerprint": discovery.get("fingerprint"),
-    }
-    preflight["reuseDecision"] = record
-    setup = _admin_setup(state)
-    setup["phaseHandoffs"]["preflight"] = {
-        "status": "completed",
-        "evidence": {
-            "kind": "maker-reuse-decision",
-            "scenario": preflight.get("scenario"),
-            "instanceName": preflight.get("instanceName"),
-            "decision": decision,
-            "discoveryFingerprint": record["discoveryFingerprint"],
-            "recordedAt": record["approvedAt"],
-        },
-    }
-    _write_lifecycle_state(context, state)
-    return record
 
 
 def record_admin_phase(
@@ -1444,10 +1499,6 @@ def record_admin_phase(
         )
     state = _load_lifecycle_state(context)
     setup = _admin_setup(state)
-    if status == "reused" and not setup["preflight"].get("reuseDecision"):
-        raise ServiceNowConnectError(
-            "Explicit Maker reuse approval is required before reusing setup."
-        )
 
     evidence: dict[str, Any] = {
         "kind": "structured-admin-attestation",
@@ -2548,15 +2599,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=tuple(sorted(PREFLIGHT_SCENARIOS)),
     )
     preflight_parser.add_argument("--instance-url", required=True)
-    reuse_parser = subparsers.add_parser(
-        "record-reuse-decision",
-        help="Record the Maker's explicit reuse or configure-missing decision.",
-    )
-    reuse_parser.add_argument(
-        "--decision",
-        required=True,
-        choices=tuple(sorted(REUSE_DECISIONS)),
-    )
     phase_parser = subparsers.add_parser(
         "record-admin-phase",
         help="Record one complete non-secret delegated admin phase.",
@@ -2676,11 +2718,6 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 scenario=args.scenario,
                 instance_url=args.instance_url,
-            )
-        elif args.command == "record-reuse-decision":
-            result = record_reuse_decision(
-                context,
-                decision=args.decision,
             )
         elif args.command == "record-admin-phase":
             result = record_admin_phase(

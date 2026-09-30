@@ -122,7 +122,11 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "while the\n  question is pending" in topics
     assert "Absence of\n  an answer is not cancellation" in topics
     assert "explicitly selects\n  **Not now**" in topics
-    assert "exactly-one candidate is still not approval" in preflight
+    assert "automatically reuse each valid" in preflight
+    assert "Do not ask whether to reuse or configure missing resources" in (
+        preflight
+    )
+    assert "Connected physical connection\ndoes not prove" in preflight
     assert 'ACTION_RESULT = "waiting"' in preflight
     assert "Local state absence is not evidence" in preflight
     assert "com.sn_hr_core" in plugins
@@ -145,12 +149,11 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
     assert "one bundled question form" in preflight
-    assert "compare the\nupdated `preflight.discovery.fingerprint` directly" in (
-        preflight
-    )
-    assert "present\n  the complete bundled preflight/reuse question now" in (
-        preflight
-    )
+    assert "record-reuse-decision" not in preflight
+    assert "reuse-discovered" not in preflight
+    assert "configure-missing" not in preflight
+    assert "automatically\n  reuse it" in credential
+    assert "wrong Instance Name, Resource URI, or auth mode" in credential
     assert "Ask one question only" in plugins
     assert "pause exactly once" in entra
     assert "pause exactly once" in oidc

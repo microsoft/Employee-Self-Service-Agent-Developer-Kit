@@ -323,44 +323,37 @@ def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
     preflight = preflight if isinstance(preflight, dict) else {}
     discovery = preflight.get("discovery")
     discovery = discovery if isinstance(discovery, dict) else {}
-    decision = preflight.get("reuseDecision")
-    decision = decision if isinstance(decision, dict) else {}
     if not _phase_attested(admin_setup, "preflight"):
         status = Status.NOT_CONFIGURED.value
-        result = "The bundled preflight/reuse handoff is incomplete."
+        result = "The bundled preflight discovery handoff is incomplete."
     elif not preflight.get("scenario"):
         status = Status.NOT_CONFIGURED.value
         result = "The Maker has not described which remote setup already exists."
     elif not discovery.get("observedAt"):
         status = Status.NOT_CONFIGURED.value
         result = "Read-only remote setup discovery has not run."
-    elif not decision.get("decision"):
+    elif not isinstance(discovery.get("connectionCandidates"), list):
         status = Status.NOT_CONFIGURED.value
-        result = "The Maker has not approved reuse or configuration of the gaps."
-    elif (
-        decision.get("decision") == "reuse-discovered"
-        and (
-            not discovery.get("fingerprint")
-            or decision.get("discoveryFingerprint")
-            != discovery.get("fingerprint")
-        )
-    ):
+        result = "Read-only physical-connection discovery is incomplete."
+    elif not isinstance(discovery.get("requiredPlugins"), list):
         status = Status.NOT_CONFIGURED.value
-        result = "Remote discovery changed after the Maker's reuse decision."
+        result = "Scope-derived prerequisite discovery is incomplete."
     else:
         status = Status.PASSED.value
         result = (
-            "Read-only discovery completed and the Maker explicitly approved "
-            f"'{decision['decision']}'."
+            "Read-only resource discovery completed. Valid existing items are "
+            "reused automatically; missing or unhealthy items continue to "
+            "their owning setup phase."
         )
     return _result(
         "SN-DA-HRSD-ADMIN-PREFLIGHT-001",
         status,
-        "ServiceNow admin setup preflight and reuse decision",
+        "ServiceNow admin setup preflight discovery",
         result,
         (
-            "Run the admin preflight, review every discovered remote item, "
-            "then explicitly choose reuse or configure the missing items."
+            "Run the admin preflight and review every discovered remote item. "
+            "Each later phase will verify and reuse valid items or configure "
+            "only the missing or unhealthy item it owns."
             if status != Status.PASSED.value
             else ""
         ),

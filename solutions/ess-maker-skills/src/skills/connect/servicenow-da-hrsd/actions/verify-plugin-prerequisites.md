@@ -44,7 +44,9 @@ If either item is missing, show the exact remediation above and return
 
 Ask one question only: whether the ServiceNow Admin completed the entire
 plugin-prerequisites step. While that question is pending, do not return an
-action result. After explicit completion or approved reuse, record the single phase handoff:
+action result. After explicit completion or verification of valid existing prerequisites,
+record the single phase handoff. Use `reused` when both existing prerequisites
+were verified and `completed` when the admin had to configure either item:
 
 ```text
 python scripts/connect_servicenow_da.py record-admin-phase --phase plugin-prerequisites --status <completed|reused>
