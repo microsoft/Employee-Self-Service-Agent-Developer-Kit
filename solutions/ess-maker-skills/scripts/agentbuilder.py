@@ -162,6 +162,22 @@ def minimal_bot_read_scope(ring: str) -> str:
     return f"{config['audience']}/CopilotStudio.MinimalBot.Read"
 
 
+def maker_operations_read_scope(ring: str) -> str:
+    """Return the read-only MakerOperations scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return f"{config['audience']}/CopilotStudio.MakerOperations.Read"
+
+
+def agent_inventory_read_scopes(ring: str) -> tuple[str, ...]:
+    """Return the scopes needed to list and classify native agents."""
+    return (
+        maker_operations_read_scope(ring),
+        minimal_bot_read_scope(ring),
+    )
+
+
 def connectivity_read_scopes(ring: str) -> tuple[str]:
     """Return the delegated scope for read-only connection inventory."""
     config = RING_CONFIG.get(ring)
@@ -541,6 +557,35 @@ def authenticate_selected_tenant(
     return token, tenant_id_from_access_token(token)
 
 
+def authenticate_agent_inventory(
+    ring: str,
+    *,
+    tenant_id: str | None = None,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+) -> tuple[str, str]:
+    """Acquire read-only scopes for agent collection and direct inspection."""
+    if tenant_id:
+        try:
+            normalized_tenant = str(uuid.UUID(tenant_id))
+        except ValueError as exc:
+            raise ValueError("Tenant ID must be a GUID.") from exc
+        authority = f"https://login.microsoftonline.com/{normalized_tenant}"
+    else:
+        normalized_tenant = None
+        authority = "https://login.microsoftonline.com/organizations"
+    token = _acquire_token(
+        authority=authority,
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=agent_inventory_read_scopes(ring),
+    )
+    return token, normalized_tenant or tenant_id_from_access_token(token)
+
+
 def authenticate_flightcheck(
     ring: str,
     *,
@@ -729,19 +774,65 @@ class AgentBuilderClient:
                 f"{operation} returned a non-JSON response."
             ) from exc
 
-    def list_agents(self) -> list[dict[str, Any]]:
-        body = self._json(
-            "GET",
-            "/copilotstudio/minimalBots/api",
-            "Agent listing",
+    def list_agents(
+        self,
+        *,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List environment agents through the MakerOperations collection."""
+        if max_pages <= 0:
+            raise ValueError("Max pages must be a positive integer.")
+        agents: list[dict[str, Any]] = []
+        continuation: str | None = None
+        seen_continuations: set[str] = set()
+        for _page in range(max_pages):
+            params = (
+                {"continuationToken": continuation}
+                if continuation is not None
+                else None
+            )
+            body = self._json(
+                "GET",
+                "/copilotstudio/agents",
+                "Agent listing",
+                params=params,
+            )
+            if not isinstance(body, dict):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid shape."
+                )
+            listed = (
+                body["Entities"]
+                if "Entities" in body
+                else body.get("entities")
+            )
+            if not isinstance(listed, list) or not all(
+                isinstance(item, dict) for item in listed
+            ):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid shape."
+                )
+            agents.extend(listed)
+            next_continuation = (
+                body["ContinuationToken"]
+                if "ContinuationToken" in body
+                else body.get("continuationToken")
+            )
+            if next_continuation in (None, ""):
+                return agents
+            if not isinstance(next_continuation, str):
+                raise AgentBuilderError(
+                    "Agent listing returned an invalid continuation token."
+                )
+            if next_continuation in seen_continuations:
+                raise AgentBuilderError(
+                    "Agent listing repeated a continuation token."
+                )
+            seen_continuations.add(next_continuation)
+            continuation = next_continuation
+        raise AgentBuilderError(
+            f"Agent listing exceeded {max_pages} pages."
         )
-        if isinstance(body, dict):
-            body = body.get("value")
-        if not isinstance(body, list) or not all(
-            isinstance(item, dict) for item in body
-        ):
-            raise AgentBuilderError("Agent listing returned an invalid shape.")
-        return body
 
     def list_starter_packages(
         self,

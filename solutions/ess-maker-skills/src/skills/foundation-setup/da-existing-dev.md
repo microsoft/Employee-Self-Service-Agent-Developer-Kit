@@ -91,7 +91,7 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_LIST_JSON:`. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices.
+Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio agent collection, then directly inspects every returned identity through the native agent API before classifying its realm. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices. A command failure or malformed collection is unavailable inventory evidence, not an empty environment; preserve the reported failure and use the existing target-recovery choices.
 
 When supported candidates are returned, show their display names and realms and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
 
