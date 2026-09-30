@@ -44,6 +44,7 @@ from setup_existing_da import (
 IMPORT_RECORDS = Path(".local/setup/alm-import")
 MAX_MANIFEST_BYTES = 1024 * 1024
 SAFE_RETRY_STATUSES = frozenset({"pre-dispatch-failure", "rejected"})
+CREATE_RECOVERY_STATUSES = frozenset({"ambiguous", "invalid-success"})
 
 
 class AlmImportSetupError(RuntimeError):
@@ -248,6 +249,48 @@ def _load_import_records(
             )
         records.append((path, record))
     return records
+
+
+def _validate_create_recovery_request(
+    kit_root: Path,
+    identity: dict[str, Any],
+) -> None:
+    """Require one eligible base receipt before a distinct create recovery."""
+    if "clientRequestId" not in identity:
+        return
+
+    base_identity = dict(identity)
+    base_identity.pop("clientRequestId")
+    base_path = _record_path(kit_root, base_identity)
+    if not base_path.exists():
+        raise AlmImportSetupError(
+            "A distinct create recovery request requires a matching "
+            "ambiguous or invalid-success create receipt."
+        )
+    base_record = _read_record(base_path, base_identity)
+    if base_record.get("status") not in CREATE_RECOVERY_STATUSES:
+        raise AlmImportSetupError(
+            "A distinct create recovery request is not allowed for this "
+            "completed create receipt."
+        )
+
+    for _record_path_value, record in _load_import_records(
+        kit_root / IMPORT_RECORDS
+    ):
+        prior_identity = record.get("input")
+        if (
+            not isinstance(prior_identity, dict)
+            or "clientRequestId" not in prior_identity
+            or prior_identity == identity
+        ):
+            continue
+        prior_base_identity = dict(prior_identity)
+        prior_base_identity.pop("clientRequestId")
+        if prior_base_identity == base_identity:
+            raise AlmImportSetupError(
+                "A distinct create recovery request already exists for this "
+                "create receipt."
+            )
 
 
 def _resume_create_after_cleanup(
@@ -732,6 +775,7 @@ def import_package_once(
         expected_alm_family_id=expected_family,
         client_request_id=normalized_request_id,
     )
+    _validate_create_recovery_request(resolved_kit_root, identity)
     record_path = _record_path(resolved_kit_root, identity)
     existing = (
         _read_record(record_path, identity)

@@ -31,6 +31,8 @@ Choice lists define the standard maker-facing UX for the current decision. Rende
 
 The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
 
+Typed intent may select only a documented setup route or bounded read-only recovery. It never authorizes an unlisted mutation or replaces an explicit confirmation required before create, import, replacement, reset, cleanup, or another consequential action.
+
 This is the DA-GA `/setup` entry point. It owns only:
 
 - maker authentication;
@@ -284,9 +286,11 @@ Next steps:
 
 Then end the request.
 
-Replace `{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}` with every
-applicable complete block from the detailed handoff, in the same order. Omit
-the placeholder when no block applies.
+Replace `{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}` with the
+body of every applicable block from the detailed handoff, in the same order.
+Omit each block's outer `**Message:**` and `**End message.**` markers so the
+durable snapshot remains one complete Message block. Omit the placeholder when
+no block applies.
 
 Build `{SUPPORTED_INTEGRATION_SHORTCUTS}` only from authoritative product
 identity and the active agent's supported connection routes. Include the

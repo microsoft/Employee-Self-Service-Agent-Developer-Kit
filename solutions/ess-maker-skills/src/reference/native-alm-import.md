@@ -185,14 +185,17 @@ Recovery is an operator procedure:
    previously approved target.
 5. If an exact agent is identified, use the read-only validator before
    attachment.
-6. If the outcome cannot be proven, stop and escalate with the receipt. Absence
-   from an eventually consistent listing is not proof that the mutation failed.
+6. For replacement, or when the create-only recovery requirements below are
+   not met, stop and escalate with the receipt when the outcome cannot be
+   proven. Absence from an eventually consistent listing is not proof that the
+   mutation failed.
 
 Never edit or remove a receipt to enable another POST. Create-only recovery may
-use an explicitly supplied new client request UUID, which creates a distinct
-operation record while preserving the earlier receipt. The caller must obtain
-maker approval and perform read-only reconciliation first. Replacement never
-accepts a client request UUID.
+use one explicitly supplied new client request UUID only when the matching base
+receipt is `ambiguous` or `invalid-success`. This creates one distinct operation
+record while preserving the earlier receipt. The caller must obtain maker
+approval and perform read-only reconciliation first. Replacement never accepts
+a client request UUID.
 
 ## Workspace handoff
 

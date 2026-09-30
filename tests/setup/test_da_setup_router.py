@@ -745,6 +745,9 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     )
     assert "carry the unresolved cleanup warning into the detailed and durable handoffs" in normalized
     assert "**Retry local package cleanup**" in text
+    assert "canonical setup state shows that attachment started" in normalized
+    assert "check whether `.local/setup/alm-export/active.json`" in normalized
+    assert "every resumed detailed and durable handoff" in normalized
     assert "Parse `DA_ALM_EXPORT_CLEANUP_JSON:`" in text
     assert "status: removed" in text
     assert "status: not-found" in text
@@ -1348,7 +1351,8 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
     assert "- Run `/connect` to add or change an integration." in completion_choices
     assert "{SUPPORTED_INTEGRATION_SHORTCUTS}" in completion_choices
     assert "{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}" in completion_choices
-    assert "every applicable complete block from the detailed handoff" in normalized
+    assert "body of every applicable block from the detailed handoff" in normalized
+    assert "Omit each block's outer `**Message:**` and `**End message.**` markers" in text
     assert "Omit the placeholder when no block applies" in normalized
     assert "Build `{SUPPORTED_INTEGRATION_SHORTCUTS}` only from authoritative product identity" in normalized
     assert "only for a supported HR architecture" in normalized
@@ -1561,6 +1565,30 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     assert "reserved for the separately approved create-only recovery" in normalized
 
 
+def test_foundation_typed_intent_preserves_mutation_confirmations() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Typed intent may select only a documented setup route" in normalized
+    assert "bounded read-only recovery" in normalized
+    assert "never authorizes an unlisted mutation" in normalized
+    assert "replaces an explicit confirmation" in normalized
+    for action in ("create", "import", "replacement", "reset", "cleanup"):
+        assert action in normalized
+
+
+def test_durable_snapshot_inserts_message_bodies_without_nested_markers() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    durable = text.split("After the maker selects it, show:", 1)[1].split(
+        "Then end the request.",
+        1,
+    )[0]
+
+    assert "{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}" in durable
+    assert "body of every applicable block" in text
+    assert "Omit each block's outer `**Message:**` and `**End message.**` markers" in text
+
+
 def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
@@ -1584,6 +1612,9 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "`connectReady: true`" in text
     assert "`devAgents` and `prodAgents` as supported setup-source candidates" in text
     assert "For a selected `devAgents` identity" in text
+    assert "with a non-empty returned schema" in text
+    assert "without a returned schema" in text
+    assert "Run both exact identity probes" in text
     assert "No visible Dev or Prod setup-source agents were listed in this environment" in text
     assert "A directly addressable agent may still be available" in text
     assert "including its **Use an agent URL** choice" in text

@@ -942,7 +942,6 @@ def test_ambiguous_create_can_start_distinct_confirmed_request(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
-        client_request_id="00000000-0000-4000-8000-000000000001",
     )
     client.error = agentbuilder.AgentBuilderHTTPError(
         "Native ALM import",
@@ -963,12 +962,113 @@ def test_ambiguous_create_can_start_distinct_confirmed_request(
         json.loads(path.read_text(encoding="utf-8"))
         for path in _records(tmp_path)
     ]
+    assert len(records) == 2
+    assert sum(
+        "clientRequestId" not in record["input"] for record in records
+    ) == 1
     assert {
-        record["input"]["clientRequestId"] for record in records
-    } == {
-        "00000000-0000-4000-8000-000000000001",
-        "00000000-0000-4000-8000-000000000002",
-    }
+        record["input"].get("clientRequestId")
+        for record in records
+        if "clientRequestId" in record["input"]
+    } == {"00000000-0000-4000-8000-000000000002"}
+
+
+def test_create_request_id_requires_eligible_base_receipt(
+    tmp_path: Path,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="requires a matching ambiguous or invalid-success",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            client_request_id="00000000-0000-4000-8000-000000000001",
+        )
+
+    assert client.import_calls == []
+    assert _records(tmp_path) == []
+
+
+def test_success_create_rejects_distinct_request_before_dispatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: _connection(),
+    )
+
+    first = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+    )
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="not allowed for this completed create receipt",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            client_request_id="00000000-0000-4000-8000-000000000001",
+        )
+
+    assert first["kind"] == "success"
+    assert len(client.import_calls) == 1
+    assert len(_records(tmp_path)) == 1
+
+
+def test_second_create_recovery_request_is_rejected_before_dispatch(
+    tmp_path: Path,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient(error=requests.ReadTimeout("lost response"))
+
+    first = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+    )
+    client.error = agentbuilder.AgentBuilderHTTPError(
+        "Native ALM import",
+        409,
+    )
+    recovery = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+        client_request_id="00000000-0000-4000-8000-000000000001",
+    )
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="recovery request already exists",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            client_request_id="00000000-0000-4000-8000-000000000002",
+        )
+
+    assert first["kind"] == "ambiguous"
+    assert recovery["kind"] == "conflict"
+    assert len(client.import_calls) == 2
+    assert len(_records(tmp_path)) == 2
 
 
 def test_record_failure_preserves_primary_operation_evidence(

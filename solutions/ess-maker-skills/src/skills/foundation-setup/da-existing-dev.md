@@ -95,7 +95,8 @@ Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio 
 
 When supported candidates are returned, show their display names and realms and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
 
-- For a selected `devAgents` identity, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
+- For a selected `devAgents` identity with a non-empty returned schema, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
+- For a selected `devAgents` identity without a returned schema, do not synthesize one or withhold the candidate. Run both exact identity probes in the parent's product-line reconciliation so its native component fallback can establish the schema before validation or attachment.
 - For a selected `prodAgents` identity, do not require a Dev schema from the list result. Run the parent's exact `inspect-agent` route and continue through its existing `da-prod-to-dev.md` handoff. Do not validate or attach the Prod ID as though it were Dev.
 
 When both `devAgents` and `prodAgents` are empty, say:
