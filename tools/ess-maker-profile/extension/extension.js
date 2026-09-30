@@ -966,6 +966,9 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
                 vscode.commands.executeCommand('workbench.view.extension.essMakerActions').then(() => {}, () => {});
             }, delay);
         }
+    } else {
+        // Keep Chat visible on subsequent Maker launches as well.
+        await tryRun('workbench.action.chat.open');
     }
 }
 
@@ -1674,6 +1677,7 @@ function activate(context) {
                 // user-driven — neither the installer nor the extension runs it.
                 if (!alreadyApplied) context.globalState.update(APPLIED_KEY, true);
                 setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
+                setTimeout(() => { tryRun('workbench.action.chat.open').catch(() => {}); }, 1800);
             } else if (!alreadyApplied) {
                 // First maker launch: activity bar + rail visible, walkthrough
                 // in the center, Copilot Chat on the right. Setup is user-driven

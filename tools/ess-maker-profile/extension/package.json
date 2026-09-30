@@ -13,8 +13,13 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "*"
+    "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {
     "commands": [
       {
