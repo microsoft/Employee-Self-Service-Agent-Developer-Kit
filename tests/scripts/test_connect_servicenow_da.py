@@ -338,6 +338,7 @@ def test_keep_current_topic_choice_records_without_mutation(
 
 def test_enable_all_topics_fails_when_refetch_is_still_inactive(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     components = _components()
     topic = components["botComponentChanges"][0]["component"]
@@ -351,6 +352,7 @@ def test_enable_all_topics_fails_when_refetch_is_still_inactive(
         def update_components(self, _agent_id: str, payload: dict) -> dict:
             return {}
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
