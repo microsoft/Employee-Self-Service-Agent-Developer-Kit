@@ -1052,6 +1052,48 @@ def test_publish_agent_uses_minimalbot_route_and_empty_json_body() -> None:
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
 
 
+def test_publish_agent_normalizes_uppercase_validation_pending() -> None:
+    session = FakeSession([FakeResponse({"ValidationPending": False})])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    result = client.publish_agent(AGENT_ID)
+
+    assert result["ValidationPending"] is False
+    assert result["validationPending"] is False
+
+
+def test_publish_agent_rejects_conflicting_validation_pending() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "ValidationPending": False,
+                    "validationPending": True,
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="conflicting ValidationPending",
+    ):
+        client.publish_agent(AGENT_ID)
+
+
 def test_publish_agent_preserves_validation_response_on_http_error() -> None:
     raw_response = FakeResponse(
         {

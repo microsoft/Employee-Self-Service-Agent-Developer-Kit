@@ -559,6 +559,210 @@ def test_record_agent_connection_validates_health_and_persists_attestation(
     assert state["migration"]["legacySourcePath"].endswith("state.json")
 
 
+def test_publish_receipt_uses_post_publish_component_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    before = _components(CONNECTION_ID)
+    after = copy.deepcopy(before)
+    after["changeToken"] = "published-token"
+
+    class FakeAgentBuilder:
+        def __init__(self) -> None:
+            self.fetch_count = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            self.fetch_count += 1
+            return before if self.fetch_count == 1 else after
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            return {"ValidationPending": False}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    result = snow.publish(_context(), confirmed=True)
+    receipt = result["evidence"]["publish"]
+
+    assert receipt["requestedComponentHash"] == snow._component_hash(before)
+    assert receipt["publishedComponentHash"] == snow._component_hash(after)
+    assert receipt["componentHash"] == snow._component_hash(after)
+    assert receipt["status"] == "completed"
+
+
+def test_publish_refetch_failure_requires_reconciliation_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    before = _components(CONNECTION_ID)
+
+    class FakeAgentBuilder:
+        def __init__(self) -> None:
+            self.fetch_count = 0
+            self.publish_count = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            self.fetch_count += 1
+            if self.fetch_count == 1:
+                return before
+            raise RuntimeError("post-publish read unavailable")
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            self.publish_count += 1
+            return {"validationPending": False}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Do not republish blindly",
+    ):
+        snow.publish(_context(), confirmed=True)
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    receipt = state["evidence"]["publish"]
+    assert receipt["status"] == "needs_remediation"
+    assert receipt["requestedComponentHash"] == snow._component_hash(before)
+    assert receipt["response"]["validationPending"] is False
+    assert client.publish_count == 1
+
+
+def test_publish_rejects_conflicting_validation_pending_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            return {
+                "ValidationPending": False,
+                "validationPending": True,
+            }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="conflicting ValidationPending",
+    ):
+        snow.publish(_context(), confirmed=True)
+
+
+def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    component_hash = snow._component_hash(components)
+    last_published_at = "2026-09-30T20:22:44.5041453Z"
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state = snow._state_base(_context(), components)
+    state["evidence"]["publish"] = {
+        "requestedAt": "2026-09-30T20:22:44.806391Z",
+        "completedAt": "2026-09-30T20:22:54.575668Z",
+        "status": "confirmation-required",
+        "componentHash": "a" * 64,
+        "response": {"validationPending": None},
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    class FakeAgentBuilder:
+        def get_agent(self, _agent_id: str) -> dict:
+            return {"lastPublishedAt": last_published_at}
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    inspected = snow.inspect_publish_state(_context())
+    reconciled = snow.reconcile_publish_receipt(
+        _context(),
+        expected_component_hash=inspected["componentHash"],
+        expected_last_published_at=inspected["serverLastPublishedAt"],
+        confirmed=True,
+    )
+
+    assert inspected["reconciliationEligible"] is True
+    assert reconciled["status"] == "confirmation-required"
+    assert reconciled["publishedComponentHash"] == component_hash
+    assert reconciled["componentHash"] == component_hash
+    assert reconciled["verifiedBy"] == "maker-attested-current-revision"
+    assert reconciled["legacyReceipt"]["componentHash"] == "a" * 64
+
+
+def test_reconcile_publish_receipt_rejects_revision_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state = snow._state_base(_context(), components)
+    state["evidence"]["publish"] = {
+        "requestedAt": "2026-09-30T20:22:44.806391Z",
+        "status": "confirmation-required",
+        "componentHash": "a" * 64,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    class FakeAgentBuilder:
+        def get_agent(self, _agent_id: str) -> dict:
+            return {"lastPublishedAt": "2026-09-30T20:22:44.5041453Z"}
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            changed = copy.deepcopy(components)
+            changed["changeToken"] = "changed-after-confirmation"
+            return changed
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="component revision changed",
+    ):
+        snow.reconcile_publish_receipt(
+            _context(),
+            expected_component_hash=snow._component_hash(components),
+            expected_last_published_at="2026-09-30T20:22:44.5041453Z",
+            confirmed=True,
+        )
+
+    unchanged = json.loads(state_path.read_text(encoding="utf-8"))
+    assert unchanged["evidence"]["publish"]["componentHash"] == "a" * 64
+
+
 def test_record_agent_connection_rejects_unsupported_auth_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

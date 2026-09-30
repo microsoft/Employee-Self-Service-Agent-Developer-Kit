@@ -1100,7 +1100,12 @@ def _publish_result(
     component_hash: str,
 ) -> CheckResult:
     record = evidence.get("publish")
-    if not isinstance(record, dict) or record.get("componentHash") != component_hash:
+    published_hash = (
+        record.get("publishedComponentHash") or record.get("componentHash")
+        if isinstance(record, dict)
+        else None
+    )
+    if not isinstance(record, dict) or published_hash != component_hash:
         status = Status.NOT_CONFIGURED.value
         result = "The current component revision has no publish receipt."
     elif record.get("status") == "completed":
@@ -1127,12 +1132,17 @@ def _test_result(
 ) -> CheckResult:
     record = evidence.get("test")
     publish = evidence.get("publish")
+    published_hash = (
+        publish.get("publishedComponentHash") or publish.get("componentHash")
+        if isinstance(publish, dict)
+        else None
+    )
     valid_binding = (
         isinstance(record, dict)
         and isinstance(record.get("binding"), dict)
         and isinstance(publish, dict)
         and record["binding"].get("publishedComponentHash") == component_hash
-        and publish.get("componentHash") == component_hash
+        and published_hash == component_hash
     )
     if not valid_binding:
         status = Status.NOT_CONFIGURED.value

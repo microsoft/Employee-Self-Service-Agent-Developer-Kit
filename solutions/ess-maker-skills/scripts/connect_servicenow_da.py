@@ -25,6 +25,7 @@ from urllib3.util.retry import Retry
 from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
+    AgentBuilderHTTPError,
     RING_CONFIG,
     authenticate,
     validate_environment_host,
@@ -2456,6 +2457,176 @@ def record_keep_current_topic_choice(
     return result
 
 
+def _publish_validation_pending(response: dict[str, Any]) -> bool | None:
+    upper = response.get("ValidationPending")
+    lower = response.get("validationPending")
+    if (
+        upper is not None
+        and lower is not None
+        and upper is not lower
+        and upper != lower
+    ):
+        raise ServiceNowConnectError(
+            "Publish response returned conflicting ValidationPending values."
+        )
+    value = lower if lower is not None else upper
+    if value is not None and not isinstance(value, bool):
+        raise ServiceNowConnectError(
+            "Publish response returned an invalid ValidationPending value."
+        )
+    return value
+
+
+def _publish_remote_snapshot(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    agentbuilder = _agentbuilder_client(context)
+    agent = agentbuilder.get_agent(context["agent"]["id"])
+    components = agentbuilder.fetch_components(context["agent"]["id"])
+    last_published_at = agent.get("lastPublishedAt")
+    return {
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "componentHash": _component_hash(components),
+        "serverLastPublishedAt": (
+            last_published_at
+            if isinstance(last_published_at, str) and last_published_at
+            else None
+        ),
+    }
+
+
+def inspect_publish_state(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    state = _load_lifecycle_state(context)
+    receipt = state.get("evidence", {}).get("publish")
+    receipt = receipt if isinstance(receipt, dict) else {}
+    snapshot = _publish_remote_snapshot(context)
+    return {
+        "status": "read-only",
+        **snapshot,
+        "receipt": {
+            "status": receipt.get("status"),
+            "requestedAt": receipt.get("requestedAt"),
+            "completedAt": receipt.get("completedAt"),
+            "componentHash": receipt.get("componentHash"),
+            "requestedComponentHash": receipt.get(
+                "requestedComponentHash"
+            ),
+            "publishedComponentHash": receipt.get(
+                "publishedComponentHash"
+            ),
+        },
+        "reconciliationEligible": bool(
+            snapshot["serverLastPublishedAt"]
+            and receipt.get("requestedAt")
+            and receipt.get("status")
+            in {"confirmation-required", "needs_remediation"}
+            and receipt.get("publishedComponentHash") is None
+        ),
+    }
+
+
+def _parse_utc_timestamp(value: str, label: str) -> dt.datetime:
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ServiceNowConnectError(
+            f"{label} must be an ISO 8601 timestamp."
+        ) from exc
+    if parsed.tzinfo is None:
+        raise ServiceNowConnectError(f"{label} must include a timezone.")
+    return parsed.astimezone(dt.UTC)
+
+
+def reconcile_publish_receipt(
+    context: dict[str, Any],
+    *,
+    expected_component_hash: str,
+    expected_last_published_at: str,
+    confirmed: bool,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Publish receipt reconciliation requires explicit confirmation."
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_component_hash):
+        raise ServiceNowConnectError(
+            "Expected component hash must be a lowercase SHA-256 value."
+        )
+    state = _load_lifecycle_state(context)
+    evidence = state.setdefault("evidence", {})
+    receipt = evidence.get("publish")
+    if not isinstance(receipt, dict):
+        raise ServiceNowConnectError(
+            "No legacy publish receipt is available to reconcile."
+        )
+    if receipt.get("publishedComponentHash") is not None:
+        raise ServiceNowConnectError(
+            "The publish receipt already has a post-publish component hash."
+        )
+    requested_at = receipt.get("requestedAt")
+    if not isinstance(requested_at, str) or not requested_at:
+        raise ServiceNowConnectError(
+            "The legacy publish receipt has no request timestamp."
+        )
+    expected_published = _parse_utc_timestamp(
+        expected_last_published_at,
+        "Expected server lastPublishedAt",
+    )
+    requested = _parse_utc_timestamp(
+        requested_at,
+        "Legacy publish requestedAt",
+    )
+    if abs((expected_published - requested).total_seconds()) > 300:
+        raise ServiceNowConnectError(
+            "The server publish timestamp does not match the legacy request."
+        )
+
+    snapshot = _publish_remote_snapshot(context)
+    if snapshot["componentHash"] != expected_component_hash:
+        raise ServiceNowConnectError(
+            "The current component revision changed after maker confirmation."
+        )
+    if snapshot["serverLastPublishedAt"] != expected_last_published_at:
+        raise ServiceNowConnectError(
+            "The server publish timestamp changed after maker confirmation."
+        )
+
+    legacy_receipt = {
+        key: copy.deepcopy(receipt.get(key))
+        for key in (
+            "requestedAt",
+            "completedAt",
+            "status",
+            "componentHash",
+            "requestedComponentHash",
+            "response",
+        )
+        if key in receipt
+    }
+    reconciled = {
+        **receipt,
+        "status": "confirmation-required",
+        "requestedComponentHash": (
+            receipt.get("requestedComponentHash")
+            or receipt.get("componentHash")
+        ),
+        "publishedComponentHash": expected_component_hash,
+        "componentHash": expected_component_hash,
+        "serverLastPublishedAt": expected_last_published_at,
+        "verifiedBy": "maker-attested-current-revision",
+        "attestedAt": _utc_now(),
+        "reconciledAt": _utc_now(),
+        "legacyReceipt": legacy_receipt,
+    }
+    evidence["publish"] = reconciled
+    state["componentHash"] = expected_component_hash
+    _write_lifecycle_state(context, state)
+    return reconciled
+
+
 def publish(
     context: dict[str, Any],
     *,
@@ -2467,37 +2638,88 @@ def publish(
         )
     agentbuilder = _agentbuilder_client(context)
     components = agentbuilder.fetch_components(context["agent"]["id"])
+    requested_component_hash = _component_hash(components)
     state = _load_lifecycle_state(context, components)
     requested_at = _utc_now()
     try:
         response = agentbuilder.publish_agent(context["agent"]["id"])
     except Exception as exc:
-        state.setdefault("evidence", {})["publish"] = {
+        publish_error = {
             "requestedAt": requested_at,
             "status": "needs_remediation",
             "mutationMayHaveOccurred": True,
-            "componentHash": _component_hash(components),
+            "componentHash": requested_component_hash,
             "errorCode": type(exc).__name__,
             "recordedAt": _utc_now(),
         }
+        detail = str(exc)
+        if isinstance(exc, AgentBuilderHTTPError):
+            publish_error.update(
+                {
+                    "httpStatus": exc.status_code,
+                    "serviceErrorCode": exc.error_code,
+                    "requestId": exc.request_id,
+                }
+            )
+        state.setdefault("evidence", {})["publish"] = publish_error
         _write_lifecycle_state(context, state)
         raise ServiceNowConnectError(
-            "Publish outcome is ambiguous. Review Copilot Studio publish "
-            "details before retrying; automatic unpublish is not available."
+            f"Publish outcome is ambiguous: {detail}. Review Copilot Studio "
+            "publish details before retrying; automatic unpublish is not "
+            "available."
         ) from exc
+    validation_pending = _publish_validation_pending(response)
+    try:
+        published_components = agentbuilder.fetch_components(
+            context["agent"]["id"]
+        )
+    except Exception as exc:
+        publish_error = {
+            "requestedAt": requested_at,
+            "acceptedAt": _utc_now(),
+            "status": "needs_remediation",
+            "mutationMayHaveOccurred": True,
+            "requestedComponentHash": requested_component_hash,
+            "componentHash": requested_component_hash,
+            "errorCode": type(exc).__name__,
+            "response": {
+                "validationPending": validation_pending,
+                "responseKeys": sorted(response.keys()),
+            },
+            "remediation": (
+                "Publish was accepted, but the post-publish component "
+                "revision could not be read. Do not republish blindly; "
+                "reconcile the current remote publish state first."
+            ),
+            "recordedAt": _utc_now(),
+        }
+        if isinstance(exc, AgentBuilderHTTPError):
+            publish_error.update(
+                {
+                    "httpStatus": exc.status_code,
+                    "serviceErrorCode": exc.error_code,
+                    "requestId": exc.request_id,
+                }
+            )
+        state.setdefault("evidence", {})["publish"] = publish_error
+        _write_lifecycle_state(context, state)
+        raise ServiceNowConnectError(publish_error["remediation"]) from exc
+    published_component_hash = _component_hash(published_components)
     publish_record = {
         "requestedAt": requested_at,
         "completedAt": _utc_now(),
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
-        "componentHash": _component_hash(components),
+        "requestedComponentHash": requested_component_hash,
+        "publishedComponentHash": published_component_hash,
+        "componentHash": published_component_hash,
         "response": {
-            "validationPending": response.get("validationPending"),
+            "validationPending": validation_pending,
             "responseKeys": sorted(response.keys()),
         },
         "status": (
             "completed"
-            if response.get("validationPending") is False
+            if validation_pending is False
             else "confirmation-required"
         ),
         "mutationMayHaveOccurred": True,
@@ -2549,7 +2771,10 @@ def record_test_attestation(
         "binding": {
             "connectionId": credential["connectionId"],
             "publishCompletedAt": publish_record.get("completedAt"),
-            "publishedComponentHash": publish_record.get("componentHash"),
+            "publishedComponentHash": (
+                publish_record.get("publishedComponentHash")
+                or publish_record.get("componentHash")
+            ),
             "environmentId": context["environment"]["id"],
             "agentId": context["agent"]["id"],
             "agentSlug": _agent_slug(context),
@@ -2686,6 +2911,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Publish the active Dev agent.",
     )
     publish_parser.add_argument("--yes", action="store_true")
+    subparsers.add_parser(
+        "inspect-publish",
+        help="Read the current remote publish marker and component revision.",
+    )
+    reconcile_publish_parser = subparsers.add_parser(
+        "reconcile-publish-receipt",
+        help="Record maker-confirmed current publish evidence without publishing.",
+    )
+    reconcile_publish_parser.add_argument(
+        "--expected-component-hash",
+        required=True,
+    )
+    reconcile_publish_parser.add_argument(
+        "--expected-last-published-at",
+        required=True,
+    )
+    reconcile_publish_parser.add_argument("--yes", action="store_true")
 
     test_parser = subparsers.add_parser(
         "record-test",
@@ -2769,6 +3011,15 @@ def main(argv: list[str] | None = None) -> int:
             result = record_keep_current_topic_choice(context)
         elif args.command == "publish":
             result = publish(context, confirmed=args.yes)
+        elif args.command == "inspect-publish":
+            result = inspect_publish_state(context)
+        elif args.command == "reconcile-publish-receipt":
+            result = reconcile_publish_receipt(
+                context,
+                expected_component_hash=args.expected_component_hash,
+                expected_last_published_at=args.expected_last_published_at,
+                confirmed=args.yes,
+            )
         elif args.command == "record-test":
             result = record_test_attestation(
                 context,

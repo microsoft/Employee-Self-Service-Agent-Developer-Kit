@@ -966,6 +966,20 @@ class AgentBuilderClient:
             raise AgentBuilderError(
                 "Native agent publish returned an invalid shape."
             )
+        upper = body.get("ValidationPending")
+        lower = body.get("validationPending")
+        if (
+            upper is not None
+            and lower is not None
+            and upper is not lower
+            and upper != lower
+        ):
+            raise AgentBuilderError(
+                "Native agent publish returned conflicting "
+                "ValidationPending values."
+            )
+        if lower is None and upper is not None:
+            body["validationPending"] = upper
         return body
 
     def get_realms(self, agent_id: str) -> dict[str, Any]:

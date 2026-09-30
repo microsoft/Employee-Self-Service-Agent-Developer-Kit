@@ -97,6 +97,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     test = (actions / "test-connection.md").read_text(encoding="utf-8")
     topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")
+    publish = (actions / "publish-agent.md").read_text(encoding="utf-8")
     preflight = (actions / "admin-preflight.md").read_text(encoding="utf-8")
     plugins = (actions / "verify-plugin-prerequisites.md").read_text(
         encoding="utf-8"
@@ -167,6 +168,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "configure-missing" not in preflight
     assert "automatically\n  reuse it" in credential
     assert "wrong Instance Name, Resource URI, or auth mode" in credential
+    assert "inspect-publish" in publish
+    assert "reconcile-publish-receipt" in publish
+    assert "It never publishes or mutates the remote agent" in publish
+    assert 'ACTION_RESULT = "recorded"' in publish
     assert "Ask one question only" in plugins
     assert "pause exactly once" in entra
     assert "pause exactly once" in oidc

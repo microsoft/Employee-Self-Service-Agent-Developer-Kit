@@ -326,6 +326,50 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
 
 
+def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_hash = snow._component_hash(components)
+    state["evidence"]["publish"] = {
+        "status": "completed",
+        "requestedComponentHash": "pre-publish-hash",
+        "publishedComponentHash": current_hash,
+        "componentHash": current_hash,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    current = run_servicenow_da_hrsd_checks(_runner(components))
+    publish = next(
+        row
+        for row in current
+        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
+    )
+    assert publish.status == Status.PASSED.value
+
+    components["changeToken"] = "later-edit"
+    drifted = run_servicenow_da_hrsd_checks(_runner(components))
+    publish = next(
+        row
+        for row in drifted
+        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
+    )
+    assert publish.status == Status.NOT_CONFIGURED.value
+
+
 def test_entra_phase_evaluation_uses_one_logical_read_set(
     monkeypatch,
     tmp_path: Path,
