@@ -70,6 +70,24 @@ def _deployment_lock(agent: Path):
         path.unlink()
 
 
+def _append_cleanup_warning(result: dict[str, Any], warning: str) -> None:
+    result["cleanupWarning"] = (
+        f"{result.get('cleanupWarning', '')} {warning}".strip()
+    )
+
+
+def _close_deployment_stack(
+    stack: ExitStack, result: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        stack.close()
+    except OSError as exc:
+        _append_cleanup_warning(
+            result, f"Primary deployment result preserved; lock cleanup failed: {exc}",
+        )
+    return result
+
+
 def _json_file(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -569,21 +587,21 @@ def deploy_evaluation_set(
                 try:
                     outcome = push.main(argv, config=config, verify=verify)
                 except SystemExit as exc:
-                    return {
+                    return _close_deployment_stack(stack, {
                         **_public(context, "failed"),
                         "error": f"Push stopped with exit code {exc.code}; local source retained.",
-                    }
+                    })
                 if outcome["status"] not in SUCCESS_STATUSES:
                     if outcome.get("pendingCreates"):
                         pending["candidateMap"] = {
                             **context["originalMap"], **outcome["pendingCreates"],
                         }
                         push._atomic_write_text(str(pending_path), json.dumps(pending, indent=2))
-                    return {
+                    return _close_deployment_stack(stack, {
                         **_public(context, outcome["status"]),
                         **{key: outcome[key] for key in ("error", "remoteCommitted")
                            if key in outcome},
-                    }
+                    })
             component_map = _json_file(agent / ".component-map.json")
             set_id = _verify_dataverse(
                 context, component_map, _rows(config, context["auth"].token)
@@ -610,28 +628,32 @@ def deploy_evaluation_set(
             try:
                 (agent / ".evaluation-preview.json").unlink(missing_ok=True)
             except OSError as exc:
-                result["cleanupWarning"] = f"Verified deployment; preview record retained: {exc}"
+                _append_cleanup_warning(
+                    result, f"Verified deployment; preview record retained: {exc}",
+                )
         if source != destination:
             try:
                 cleanup_workspace_set(context["workspace"], agent, source.name)
             except OSError as exc:
-                result["cleanupWarning"] = (
-                    result.get("cleanupWarning", "") + " " + str(exc)
-                ).strip()
-        return result
+                _append_cleanup_warning(result, str(exc))
+        return _close_deployment_stack(stack, result)
     except _INPUT_ERRORS as exc:
-        return {
+        return _close_deployment_stack(stack, {
             "status": "blocked" if stage == "preparation" else "failed",
             "stage": stage, "error": str(exc),
             "deploymentMayHaveCommitted": stage == "deployment",
-        }
+        })
     except SystemExit as exc:
-        return {
+        return _close_deployment_stack(stack, {
             "status": "failed", "stage": stage,
             "error": f"Configuration/authentication stopped ({exc.code}). See diagnostics.",
-        }
-    finally:
-        stack.close()
+        })
+    except BaseException as exc:
+        try:
+            stack.close()
+        except OSError as cleanup_exc:
+            exc.add_note(f"Deployment lock cleanup also failed: {cleanup_exc}")
+        raise
 
 
 def main() -> int:

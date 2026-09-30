@@ -603,6 +603,50 @@ def test_cleanup_failure_is_successful_deployment_with_warning(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("minimalbot", [False, True])
+def test_lock_cleanup_failure_preserves_deployment_result(tmp_path, monkeypatch, minimalbot):
+    config = config_for(tmp_path, minimalbot=minimalbot)
+    NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    original_unlink = Path.unlink
+
+    def fail_lock_cleanup(path, *args, **kwargs):
+        if path.name == ".evaluation-deployment.lock":
+            raise OSError("Lock file is busy")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_lock_cleanup)
+    result = execute(folder, config, tmp_path)
+    assert result["status"] == "pushed", result
+    assert result["sets"][0]["testSetId"]
+    assert result["cleanupWarning"] == (
+        "Primary deployment result preserved; lock cleanup failed: Lock file is busy"
+    )
+
+
+def test_lock_cleanup_failure_preserves_structured_failure(tmp_path, monkeypatch):
+    config = config_for(tmp_path)
+    DataverseState(monkeypatch)
+    folder = write_set(Path(config["agent"]["folder"]) / "evaluations" / "selected")
+    original_unlink = Path.unlink
+
+    def fail_lock_cleanup(path, *args, **kwargs):
+        if path.name == ".evaluation-deployment.lock":
+            raise OSError("Lock file is busy")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_lock_cleanup)
+    result = deployment.deploy_evaluation_set(
+        folder, config=config, solution_root=tmp_path,
+        confirmation_token="stale-token", yes=True,
+    )
+    assert result["status"] == "blocked", result
+    assert "changed after preview" in result["error"]
+    assert result["cleanupWarning"] == (
+        "Primary deployment result preserved; lock cleanup failed: Lock file is busy"
+    )
+
+
+@pytest.mark.parametrize("minimalbot", [False, True])
 def test_workspace_change_during_cleanup_blocks_continuation(tmp_path, monkeypatch, minimalbot):
     config = config_for(tmp_path, minimalbot=minimalbot)
     state = NativeState(monkeypatch, config) if minimalbot else DataverseState(monkeypatch)

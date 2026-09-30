@@ -16,12 +16,6 @@ from evaluation_csv import EvaluationCSVError, generate_set_csv, read_set_docume
 from evaluation_method_policy import EvaluationMethodError, validate_evaluation_documents
 
 
-MAKER_ACTIONS = (
-    "Mark this test set ready for review",
-    "Run this test set in Copilot Studio",
-    "Edit this test set",
-    "Run another quality review",
-)
 SECTIONS = (
     ("in_scope", "Positive cases / In scope",
      "These prompts cover supported requests, including imperfect wording where appropriate."),
@@ -71,8 +65,6 @@ def render_preview(
     rows: list[PreviewRow],
     csv_path: str | Path,
     groups: dict[str, str],
-    *,
-    include_actions: bool = False,
 ) -> str:
     """Group by explicit semantic context, never by filename or refusal text."""
     known_ids = {row.case_id for row in rows}
@@ -107,10 +99,6 @@ def render_preview(
         )
         lines.append("")
     lines.extend([f"[Download the evaluation CSV]({path.as_uri()})", ""])
-    if include_actions:
-        lines.extend(["What would you like to do next?", ""])
-        lines.extend(f"- **{action}**" for action in MAKER_ACTIONS)
-        lines.append("")
     return "\n".join(lines)
 
 
@@ -120,7 +108,6 @@ def main() -> int:
     parser.add_argument("--in-scope", action="append", default=[])
     parser.add_argument("--out-of-scope", action="append", default=[])
     parser.add_argument("--other-negative", action="append", default=[])
-    parser.add_argument("--include-actions", action="store_true")
     parser.add_argument("--list-rows", action="store_true")
     args = parser.parse_args()
     try:
@@ -138,7 +125,7 @@ def main() -> int:
                 groups[case_id] = key
         folder = Path(args.evaluation_folder)
         csv_path = generate_set_csv(folder, folder.parent / "exports")
-        print(render_preview(name, rows, csv_path, groups, include_actions=args.include_actions))
+        print(render_preview(name, rows, csv_path, groups))
     except (EvaluationPresentationError, EvaluationCSVError, EvaluationMethodError, OSError) as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}))
         return 1

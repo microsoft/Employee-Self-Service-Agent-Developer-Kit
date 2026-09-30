@@ -2,7 +2,6 @@ import pytest
 import yaml
 
 from evaluation_presentation import (
-    MAKER_ACTIONS,
     EvaluationPresentationError,
     PreviewRow,
     load_preview_rows,
@@ -24,7 +23,7 @@ def test_renders_all_rows_once_with_full_safe_assertions_and_actual_link(tmp_pat
         "positive:1": "in_scope", "typo:1": "in_scope",
         "out:1": "out_of_scope", "privacy:1": "other_negative",
     }
-    result = render_preview("Pay [scenario]", rows, csv_path, groups, include_actions=True)
+    result = render_preview("Pay [scenario]", rows, csv_path, groups)
     assert "### Eval generated - Pay \\[scenario\\]" in result
     assert "Return &lt;amount&gt;<br>Keep \\*full\\* assertion." in result
     assert result.count("pay &#124; lookup") == 2
@@ -34,9 +33,7 @@ def test_renders_all_rows_once_with_full_safe_assertions_and_actual_link(tmp_pat
     assert result.count("Unclassified prompt") == 1
     assert "Test Method" not in result and "File |" not in result
     assert csv_path.as_uri() in result
-    for action in MAKER_ACTIONS:
-        assert result.count(f"- **{action}**") == 1
-    assert "Push" not in result
+    assert "What would you like to do next?" not in result
 
 
 def test_unknown_group_does_not_silently_drop_or_classify_a_case(tmp_path):
