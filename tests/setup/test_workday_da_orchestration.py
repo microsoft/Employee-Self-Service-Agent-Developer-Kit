@@ -353,6 +353,13 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     ) in text
     assert "Create Workday connection" in text
     assert "Create Microsoft Dataverse connection" in text
+    assert text.index("Create Microsoft Dataverse connection") < text.index(
+        "Create Workday connection"
+    )
+    assert "Treat the two physical connections as sequential gates" in text
+    assert "The controller checks Microsoft Dataverse first" in text
+    assert "show only the Microsoft Dataverse guidance" in text
+    assert "continue\nto Workday only when Microsoft Dataverse resolves exactly" in text
     assert "Connections list fallback" in text
     assert "Power Apps maker portal" in text
     assert "Microsoft Entra ID Integrated" in text
@@ -391,6 +398,24 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "User Context V2" in text
     assert "activate-workday-topics.md" in text
     assert text.index("Allow permission") < text.index("activate-workday-topics.md")
+
+
+def test_workday_admin_handoff_renders_full_task_list_before_form() -> None:
+    text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+
+    packet = text.index("workday_connect.py workday-admin-packet")
+    task_list = text.index("Read `customerTaskList` directly")
+    detailed_steps = text.index("1. **Protect the existing federation.**")
+    form_gate = text.index(
+        "Do not show this response form until the complete numbered"
+    )
+    form = text.index('"header": "Identity provider"')
+
+    assert packet < task_list < detailed_steps < form_gate < form
+    assert "render **Workday Administrator Steps**" in text
+    assert "every\n`customerTaskList` item verbatim" in text
+    assert "Do not\nsummarize, combine, omit, or paraphrase" in text
+    assert "Do not replace the list with\na one-sentence overview" in text
 
 
 def test_workday_topic_activation_uses_complete_mapped_scope() -> None:

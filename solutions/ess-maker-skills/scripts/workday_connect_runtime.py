@@ -574,15 +574,15 @@ def _discover_physical_connections(
         runner=runner,
     )
     references_catalog = context["referencesCatalog"]
-    workday = _select_connection(
-        connections,
-        references_catalog["workday"]["connectorName"],
-        explicit_id=workday_connection_id,
-    )
     dataverse = _select_connection(
         connections,
         references_catalog["dataverse"]["connectorName"],
         explicit_id=dataverse_connection_id,
+    )
+    workday = _select_connection(
+        connections,
+        references_catalog["workday"]["connectorName"],
+        explicit_id=workday_connection_id,
     )
     return workday, dataverse
 

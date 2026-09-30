@@ -12,9 +12,14 @@ Generate one administrator handoff:
 python scripts/workday_connect.py workday-admin-packet
 ```
 
-Show the packet once as a single ordered task list. Do not split it into
-repeated confirmations or rerun manual-only FlightChecks that merely repeat
-the same instructions.
+Read `customerTaskList` directly from `WORKDAY_CONNECT_RESULT_JSON`. Before
+showing any response form, render **Workday Administrator Steps** and every
+`customerTaskList` item verbatim as one numbered Markdown list. Do not
+summarize, combine, omit, or paraphrase its items. Do not replace the list with
+a one-sentence overview, even when the administrator has already completed
+part of the work. Show the list once, then collect evidence. Do not split it
+into repeated confirmations or rerun manual-only FlightChecks that merely
+repeat the same instructions.
 
 If `record-entra` reports `tenantFoundationReused: true`, do not show this
 handoff and do not require the Workday administrator again. Continue at
@@ -117,6 +122,9 @@ showing the response form.
    Record either that both hosts are allowed or that no customer-managed
    firewall change is required. Do not wait until final employee validation to
    discover a known allowlist requirement.
+
+Do not show this response form until the complete numbered
+`customerTaskList` has been rendered in the conversation.
 
 Collect exactly one response form using one structured
 `vscode_askQuestions` call. Do not collapse these fields into a multiline text

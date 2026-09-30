@@ -649,6 +649,88 @@ def build_workday_admin_packet(
                 "I'm not sure",
             ],
         },
+        "customerTaskList": [
+            "In Workday, run Edit Tenant Setup - Security.",
+            (
+                "In SAML Setup, locate the enabled SAML Identity Providers row "
+                "for the employee environment being connected."
+            ),
+            (
+                "Confirm that the enabled row uses Microsoft Entra ID and that "
+                f"its Issuer is exactly {expected_issuer}."
+            ),
+            (
+                "If the enabled row belongs to Okta, Ping Identity, or another "
+                "provider, stop and do not replace it. Ask the Workday and "
+                "identity administrators whether a separate Microsoft Entra "
+                "row can be added safely."
+            ),
+            (
+                "In Microsoft Entra admin center, open the exact Workday "
+                "enterprise application, then Single sign-on, SAML Signing "
+                "Certificate, and download Certificate (Base64)."
+            ),
+            (
+                "In Workday, run Create x509 Public Key and create a public key "
+                "from the downloaded Entra Base64 certificate."
+            ),
+            (
+                "Give the Workday public key a recognizable customer-chosen "
+                "name and save it. Do not return the certificate body or a "
+                "private key."
+            ),
+            (
+                "Return to the enabled Microsoft Entra SAML row in Workday and "
+                "select the newly created public key in X509 Certificate."
+            ),
+            (
+                "Confirm that the selected Workday certificate dates exactly "
+                f"match {certificate_valid_from} through {certificate_valid_to}."
+            ),
+            f"Set Service Provider ID exactly to {entity_id}.",
+            (
+                "In Edit Tenant Setup - Security, enable SAML and OAuth 2.0 "
+                "Clients Enabled, then save."
+            ),
+            "In Workday, run Register API Client.",
+            "Set Client Grant Type to SAML Bearer.",
+            (
+                "Under Scope (Functional Areas), select Core Payroll, "
+                "Organizations and Roles, Staffing, and Time Off and Leave."
+            ),
+            "Set Include Workday Owned Scope to Yes.",
+            "Save the employee API client.",
+            (
+                "Open View API Client for the saved client and record the "
+                "non-secret OAuth client ID."
+            ),
+            (
+                "Record the exact OAuth token URL shown by Workday without its "
+                "field label."
+            ),
+            (
+                "Record the Workday REST base URL ending exactly at /ccx/api."
+            ),
+            (
+                "Record the Workday SOAP service base URL including the tenant "
+                f"path ending at /ccx/service/{tenant}."
+            ),
+            (
+                "Open Manage Authentication Policies for the employee "
+                "environment and confirm an active rule allows SAML for the "
+                "intended employees."
+            ),
+            (
+                "Do not replace administrator safeguards, existing network "
+                "restrictions, or use an Integration System User policy for "
+                "this employee-delegated setup."
+            ),
+            (
+                "If the organization filters outbound traffic, confirm that "
+                "the hosts from the REST and SOAP URLs are allowed; otherwise "
+                "confirm that no customer-managed firewall change is required."
+            ),
+        ],
         "actions": [
             "Identify which sign-in provider the enabled Workday SAML row "
             "uses before changing it",

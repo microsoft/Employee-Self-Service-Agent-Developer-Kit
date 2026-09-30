@@ -408,6 +408,29 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert "both dates match exactly" in (
         packet["certificateValidityQuestion"]["options"][0]
     )
+    customer_tasks = packet["customerTaskList"]
+    assert len(customer_tasks) == 23
+    assert customer_tasks[0] == "In Workday, run Edit Tenant Setup - Security."
+    assert "https://sts.windows.net/00000000-0000-0000-0000-000000000000/" in (
+        customer_tasks[2]
+    )
+    assert "Certificate (Base64)" in customer_tasks[4]
+    assert "2026-01-01 through 2027-01-01" in customer_tasks[8]
+    assert customer_tasks[9] == (
+        "Set Service Provider ID exactly to "
+        "http://www.workday.com/contoso_impl."
+    )
+    assert customer_tasks.index("In Workday, run Register API Client.") < (
+        customer_tasks.index("Set Client Grant Type to SAML Bearer.")
+    )
+    assert customer_tasks.index(
+        "Record the Workday REST base URL ending exactly at /ccx/api."
+    ) < customer_tasks.index(
+        "Record the Workday SOAP service base URL including the tenant path "
+        "ending at /ccx/service/contoso_impl."
+    )
+    assert "Integration System User policy" in customer_tasks[21]
+    assert "firewall change" in customer_tasks[22]
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
 

@@ -50,7 +50,31 @@ When both required connections resolve exactly, this read-only pass returns
 `requiresConfirmation: true` with safe connection display names and the saved
 non-secret Workday target values. It does not mark the phase complete.
 
-If the Workday connection is missing or disconnected, read the already
+Treat the two physical connections as sequential gates:
+
+1. Create or verify Microsoft Dataverse.
+2. Only after Microsoft Dataverse is connected, create or verify Workday.
+
+The controller checks Microsoft Dataverse first. If it is missing,
+disconnected, or ambiguous, show only the Microsoft Dataverse guidance below.
+Do not show the Workday connection values, link, or confirmation form in the
+same response. After the maker returns, rerun `record-connections`; continue
+to Workday only when Microsoft Dataverse resolves exactly.
+
+If the Microsoft Dataverse connection is missing or disconnected:
+
+1. Show a **Create Microsoft Dataverse connection** link using the
+   environment-scoped Microsoft Dataverse URL above.
+2. If the direct link does not open, use the Connections list fallback or open
+   the Power Apps maker portal, select the exact environment, open
+   **Connections**, select **New connection**, and choose **Microsoft
+   Dataverse**.
+3. Create or repair the connection using the selected maker account.
+4. Confirm that it shows **Connected**.
+
+After Microsoft Dataverse is connected, rerun `record-connections`.
+
+If the Workday connection is then missing or disconnected, read the already
 validated values from the Workday state and show them with these
 customer-facing labels:
 
@@ -85,15 +109,6 @@ Then give the maker this creation process:
 Do not request or collect a Workday password, client secret, access token,
 refresh token, or cookie. The maker completes authentication in the connector
 sign-in window.
-
-If the Microsoft Dataverse connection is missing or disconnected:
-
-1. Show a **Create Microsoft Dataverse connection** link using the
-   environment-scoped Microsoft Dataverse URL above.
-2. If the direct link does not open, use the Connections list fallback, select
-   **New connection**, and choose **Microsoft Dataverse**.
-3. Create or repair the connection using the selected maker account.
-4. Confirm that it shows **Connected**.
 
 Reuse a healthy existing connection when one already exists. Do not create
 duplicates merely to satisfy the phase, and do not ask the maker to paste
