@@ -87,7 +87,7 @@ def test_native_readiness_clients_follow_validated_contract() -> None:
     assert agent_client.get_agent(native.MOCK_AGENT_ID)["realm"] == "dev"
     assert (
         agent_client.get_dev_configuration(native.MOCK_AGENT_ID)["schemaName"]
-        == "gptagent_mockemployeeselfservice"
+        == native.MOCK_SCHEMA_NAME
     )
     assert (
         agent_client.fetch_components(native.MOCK_AGENT_ID)[
