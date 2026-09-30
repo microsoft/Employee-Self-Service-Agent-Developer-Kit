@@ -164,7 +164,7 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
     for bot_id in bot_ids:
         try:
             data = client.get_realm_configuration(bot_id, realm)
-        except Exception as e:  # noqa: BLE001 — surface a read failure as WARNING
+        except Exception as e:  # noqa: BLE001 - surface a read failure as WARNING
             read_errors.append((bot_id, f"{type(e).__name__}: {e}"))
             continue
         observed_commit = (data or {}).get("commitSha") or ""
