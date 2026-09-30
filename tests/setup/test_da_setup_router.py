@@ -139,6 +139,17 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "When both probes returned `found`" in reconciliation
     assert "When both probes returned `not-found`" in reconciliation
     assert "Preserve a backend-hint mismatch as internal evidence" in reconciliation
+    assert (
+        "whose direct agent metadata omits schema reads the exact agent's "
+        "component identity"
+        in normalized_reconciliation
+    )
+    assert (
+        "When the authoritative `found` observation has "
+        "`productIdentity.outcome` equal to `uncertain`"
+        in reconciliation
+    )
+    assert "Do not call the agent missing or unsupported" in reconciliation
     assert "For a native `found` DA-GA observation" in reconciliation
     assert "For a Dataverse-only `found` DA-GA observation" in reconciliation
     for mismatch_state in (
@@ -242,7 +253,8 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "selected-agent product-line reconciliation" in prod_to_dev
     assert "--known-native-schema" in prod_to_dev
     assert "`agentBackend` query value as an ordering hint" in foundation
-    assert "`almEnrollment` is `not-enrolled`" in foundation
+    assert "`routeStatus` is `not-found`" in foundation
+    assert "does not require readable `/configure` state" in existing_dev
 
 
 def test_foundation_defines_setup_state_sources() -> None:

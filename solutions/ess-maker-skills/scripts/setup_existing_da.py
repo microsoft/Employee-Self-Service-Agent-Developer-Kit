@@ -215,7 +215,7 @@ def inspect_agent_route(
         return {
             **result,
             "realm": None,
-            "almEnrollment": "not-enrolled",
+            "routeStatus": "not-found",
             "statusCode": exc.status_code,
             "errorCode": exc.error_code,
             "requestId": exc.request_id,
@@ -240,7 +240,7 @@ def inspect_agent_route(
     return {
         **result,
         "realm": realm_name,
-        "almEnrollment": "enrolled",
+        "routeStatus": "resolved",
     }
 
 

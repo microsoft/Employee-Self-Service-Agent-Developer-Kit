@@ -40,6 +40,72 @@ def test_orchestrator_resumes_from_controller_status() -> None:
     assert "controller status is `ready`" in text
 
 
+def test_role_availability_is_state_aware_at_phase_boundary() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+
+    briefing = skill.index("> Here's who may be needed")
+    status = skill.index("python scripts/workday_connect.py status")
+    attestation = skill.index('"header": "Required access"')
+    dispatch = skill.index("Dispatch from `nextPhaseId`")
+
+    assert briefing < status < attestation < dispatch
+    form_match = re.search(
+        r"use this exact\s+`vscode_askQuestions` form before dispatching "
+        r"that phase:\s+```json\s+(.*?)\s+```",
+        skill,
+        re.DOTALL,
+    )
+    assert form_match is not None
+    assert json.loads(form_match.group(1)) == [
+        {
+            "header": "Required access",
+            "question": (
+                "Are the people needed for the next phase available to help "
+                "when that phase begins?"
+            ),
+            "options": [
+                {"label": "Yes, required people are available"},
+                {"label": "No, someone is unavailable"},
+            ],
+            "allowFreeformInput": False,
+        }
+    ]
+    assert "If controller status is `ready`, skip the availability question" in skill
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        assert f"| `{phase_id}` |" in skill
+    assert "Leave the selection unset" in skill
+    assert "not proof that the signed-in account has a required role" in skill
+    assert "phase-specific permission checks and verified evidence remain" in skill
+    assert "Do not include people from completed phases" in skill
+    assert "remediation-only roles that are\nnot currently required" in skill
+    assert "only\nwhen `nextPhaseId` is `workday-admin`" in skill
+    assert "healthy reused tenant foundation\ncontinues at Connections" in skill
+    assert "When `nextPhaseId` is `entra`, dispatch" in skill
+    assert "tenant-foundation\nreconciliation first" in skill
+    assert "stop before dispatching\nthe next phase" in skill
+    assert "no phase progress or target configuration was\nchanged" in skill
+    assert "do not offer to bypass the role requirement" in " ".join(skill.split())
+    assert "do not repeat the question while\n`nextPhaseId` remains unchanged" in skill
+    assert (
+        "Before showing any administrator portal action that remains after discovery"
+        in entra
+    )
+    assert "tenant-foundation reconciliation" in entra
+    assert '"header": "Microsoft Entra administrator"' in entra
+    assert "availability answer is not authorization evidence" in entra
+    assert "Do not add another availability confirmation in\nthis phase" in tenant
+    assert "phase-boundary self-attestation already covers it" in tenant
+
+
 def test_every_controller_command_is_documented() -> None:
     import workday_connect as controller
 
@@ -93,6 +159,62 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
     assert "(Recommended)" not in form_text
     assert "Leave every field and option initially unset" in form_text
     assert "do not mark the passing outcome as recommended" in form_text
+
+
+def test_employee_validation_uses_stable_remediation_contract() -> None:
+    import workday_connect_contracts as contracts
+
+    text = (_WORKDAY_DA / "verify-connection.md").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(text.split())
+
+    documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
+    assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
+    documented_result_ids = dict(
+        re.findall(
+            r"\|\s*(Failed - [^|]+?)\s*\|\s*`(WD-E2E-\d{3})`\s*\|",
+            text,
+        )
+    )
+    assert documented_result_ids == contracts.EMPLOYEE_VALIDATION_RESULT_IDS
+    documented_surfaces = {
+        value
+        for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
+        if value in contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    }
+    assert documented_surfaces == set(
+        contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
+    )
+    surface_section = text.split(
+        '"header": "Failure surface"',
+        maxsplit=1,
+    )[1].split("Map those choices respectively to", maxsplit=1)[0]
+    surface_labels = re.findall(
+        r'\{ "label": "([^"]+)" \}',
+        surface_section,
+    )
+    documented_surface_choices = dict(
+        zip(
+            surface_labels,
+            re.findall(
+                r"`([a-z]+(?:-[a-z]+)*)`",
+                text.split("Map those choices respectively to", maxsplit=1)[1],
+            )[: len(surface_labels)],
+            strict=True,
+        )
+    )
+    assert (
+        documented_surface_choices
+        == contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES
+    )
+    assert "`failureCategory`" not in text
+    assert "Canonical `remediation`" not in text
+    assert "Do not invent a remediation ID" in normalized
+    assert "derives the safe category and canonical remediation" in normalized
+    assert "migrates existing three-field failure files" in normalized
+    assert "legacy free-form remediation text is discarded" in normalized
+    assert "cannot publish the agent, impersonate an employee" in normalized
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:

@@ -246,7 +246,7 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
-    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5])
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6])
     def test_connect_config_flattens_workday_state(
         self, tmp_path: Path, schema_version: int
     ) -> None:

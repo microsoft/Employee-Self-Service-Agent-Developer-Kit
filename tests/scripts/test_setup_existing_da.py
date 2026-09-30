@@ -494,12 +494,25 @@ def test_inspect_agent_route_returns_service_realm(
     )
 
     assert result["realm"] == expected
-    assert result["almEnrollment"] == "enrolled"
+    assert result["routeStatus"] == "resolved"
     assert result["agentId"] == AGENT_ID
     assert result["tenantId"] == TENANT_ID
 
 
-def test_inspect_agent_route_distinguishes_missing_alm_enrollment() -> None:
+def test_inspect_agent_route_does_not_require_dev_configuration() -> None:
+    client = FakeClient(published_config_available=False)
+    result = setup_existing_da.inspect_agent_route(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["realm"] == "dev"
+    assert result["routeStatus"] == "resolved"
+    assert client.configuration_calls == 0
+
+
+def test_inspect_agent_route_distinguishes_missing_route() -> None:
     client = FakeClient()
 
     def missing_realms(_agent_id: str) -> dict[str, Any]:
@@ -519,7 +532,7 @@ def test_inspect_agent_route_distinguishes_missing_alm_enrollment() -> None:
     )
 
     assert result["realm"] is None
-    assert result["almEnrollment"] == "not-enrolled"
+    assert result["routeStatus"] == "not-found"
     assert result["statusCode"] == 404
     assert result["errorCode"] == "ObjectNotFound"
     assert result["requestId"] == "request-123"
