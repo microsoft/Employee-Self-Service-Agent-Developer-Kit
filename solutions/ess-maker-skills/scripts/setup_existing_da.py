@@ -27,6 +27,7 @@ from agentbuilder import (
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
+    authenticate_agent_inventory,
     authenticate,
     authenticate_selected_tenant,
     cached_account_names,
@@ -1380,7 +1381,31 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
             continue
         realm = _realm_name(metadata.get("realm"))
         if realm == "dev":
+            listed_schema_name = str(
+                listed_agent.get("schemaName") or ""
+            ).strip()
+            direct_schema_name = str(
+                metadata.get("schemaName") or ""
+            ).strip()
             enriched_agent = {**listed_agent, **metadata}
+            if (
+                listed_schema_name
+                and direct_schema_name
+                and listed_schema_name.casefold()
+                != direct_schema_name.casefold()
+            ):
+                print(
+                    f"WARNING: Agent {normalized_agent_id} product identity: "
+                    "the collection and direct lookup returned different "
+                    "schemas.",
+                    file=sys.stderr,
+                )
+            if direct_schema_name or listed_schema_name:
+                enriched_agent["schemaName"] = (
+                    direct_schema_name or listed_schema_name
+                )
+                dev_agents.append(enriched_agent)
+                continue
             try:
                 configuration = client.get_dev_configuration(
                     normalized_agent_id
@@ -2894,7 +2919,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     list_agents = commands.add_parser(
         "list-agents",
-        help="List directly discoverable AgentBuilder agents.",
+        help="List current Copilot Studio agents visible to one maker.",
     )
     _add_agentbuilder_target_arguments(list_agents)
     inspect_agent = commands.add_parser(
@@ -2966,6 +2991,14 @@ def _authentication_from_args(
     account = getattr(args, "account", None)
     kit_root = args.kit_root.resolve()
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
+    if getattr(args, "command", None) == "list-agents":
+        return authenticate_agent_inventory(
+            ring,
+            tenant_id=args.tenant_id,
+            cache_path=cache_path,
+            force_account_selection=args.select_account,
+            account_hint=account,
+        )
     if args.tenant_id:
         token = authenticate(
             args.tenant_id,

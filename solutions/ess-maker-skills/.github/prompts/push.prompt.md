@@ -5,11 +5,44 @@ description: "Push local changes to Copilot Studio"
 
 # Push
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+If canonical state does not have `schema_version: 4` and an `agents` entry
+matching the active workspace slug with `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/push`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+## Explicit evaluation push
+
+If the request explicitly targets evaluation test sets, route before the
+general-component instructions below. Discover/select the exact workspace or
+current-agent set using `src/skills/evaluations/update/SKILL.md`, then follow
+`src/skills/evaluations/deployment-flow.md` with helper action `push`.
+Preserve existing review state; do not create a review request, mark review
+complete, or start a run.
+Use the existing backend APIs. Explain native `new_copy`/`reuse` behavior before
+consent; a new copy gets a new deployed ID and retains the old remote copy.
+Native review sidecars remain local, not shared review metadata. Follow the
+shared guide's `reviewMetadataPersisted`/`reviewWarning` outcome rules rather
+than adding an in-place-update or remote-review prerequisite.
+
+This branch supports standalone evaluation push even though the normal maker
+menu has no Push item. Method admission, target checks, selected-set scope,
+dry-run visibility, and required destructive approval remain mandatory.
+Use noninteractive execution only after the shared flow obtains chat approval;
+its authorized `--yes` does not bypass that consent. Never launch an
+interactive evaluation push waiting for unattended stdin.
+If evaluation scope is ambiguous, ask rather than pushing all components.
+Return after this branch; do not also execute the general push below.
+
+## General component push
+
+For a general component push, show:
+
+> General component push for a DA-GA agent is not yet available in this release. No local or remote files have been changed.
+
+and STOP. The explicit evaluation-push branch above remains available.
 
 Run a dry-run first so the user sees the exact diff before any mutation:
 
