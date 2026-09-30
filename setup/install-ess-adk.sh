@@ -502,11 +502,8 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     if [[ -n "$CODE_CMD" ]]; then
         # Required extensions — skip if already present or built-in.
         # Recent VS Code (>=1.99) ships Copilot as a built-in extension.
-        # `--install-extension` may exit non-zero if the marketplace version
-        # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
         INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
-        INSTALLED_EXTENSIONS_WITH_VERSIONS=$("$CODE_CMD" --list-extensions --show-versions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
             if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
                 ok "extension $ext (already present / built-in)"
