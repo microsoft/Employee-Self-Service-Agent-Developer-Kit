@@ -36,6 +36,22 @@ M365_INTEGRATED_APPS_URL = (
 )
 ALM_NOT_OPTED_IN_CODE = "4003"
 
+# PUB-001/PUB-002 exercise the AgentBuilder ALM export/import of the
+# declarative-agent (gptagent) package ONLY. In the Workday hybrid model the
+# Dataverse-side flow solution (WorkdayRESTExecution + connection reference
+# new_sharedworkdaysoap_ff0df) promotes via a separate Dataverse solution
+# import and is NOT carried by this package. Point the operator at the
+# Workday-category checks that verify the flow actually landed in the target
+# env, so a green PUB row is not mistaken for "the Workday flow promoted too".
+_DA_PACKAGE_SCOPE_NOTE = (
+    "Scope: this validates the declarative-agent (gptagent) ALM package only. "
+    "For Workday, the Dataverse flow solution (WorkdayRESTExecution flow + "
+    "connection reference new_sharedworkdaysoap_ff0df) promotes separately and "
+    "is not covered here; run the Workday-category checks (WD-CONN-012, "
+    "WD-FLOW, WD-WF) against the target environment to confirm the flow "
+    "promoted."
+)
+
 
 def _studio_agent_url(runner) -> str | None:
     """Build a deep link to the selected agent's Studio page."""
@@ -324,7 +340,7 @@ def _check_pub_001_export(runner, row: dict) -> CheckResult:
             status=Status.PASSED,
             result=(
                 f"AgentBuilder ALM export returned a valid zip package for {bot_id} "
-                f"({package_path.stat().st_size} bytes)."
+                f"({package_path.stat().st_size} bytes). {_DA_PACKAGE_SCOPE_NOTE}"
             ),
             remediation="",
         )
@@ -346,6 +362,22 @@ def _pub_002_requires_opt_in(row: dict) -> CheckResult:
             f"fallback: {row['remediation']}"
         ),
     )
+
+
+def _delete_imported_agent(target_client, imported_bot_id: str) -> str | None:
+    """Best-effort cleanup of the throwaway agent PUB-002 just imported.
+
+    Returns None when the agent was deleted (or was already gone), otherwise a
+    short error string. PUB-002 is the only mutating publishing check, so it
+    must leave no residue on success; when cleanup fails the caller keeps the
+    import verdict but downgrades to WARNING and surfaces this agent id so it
+    is removed by hand rather than silently orphaned.
+    """
+    try:
+        target_client.delete_agent(imported_bot_id)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller as WARNING
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _check_pub_002_import(runner, row: dict) -> CheckResult:
@@ -549,13 +581,33 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
                 ),
             )
 
+        cleanup_error = _delete_imported_agent(target_client, imported_bot_id)
+        if cleanup_error is not None:
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.WARNING,
+                result=(
+                    f"AgentBuilder ALM import created agent {imported_bot_id} "
+                    f"with schema {schema_name}, but cleanup of that throwaway "
+                    f"agent failed: {cleanup_error}."
+                ),
+                remediation=(
+                    f"Import/export works, so PUB-002 is functionally green. "
+                    f"Manually delete the throwaway agent {imported_bot_id} "
+                    f"(schema {schema_name}) from the target environment to "
+                    f"remove the residue this probe left behind."
+                ),
+            )
+
         return _api_result(
             checkpoint_id="PUB-002",
             row=row,
             status=Status.PASSED,
             result=(
                 f"AgentBuilder ALM import created agent {imported_bot_id} "
-                f"with schema {schema_name}."
+                f"with schema {schema_name}, then deleted it to leave no "
+                f"residue in the target environment. {_DA_PACKAGE_SCOPE_NOTE}"
             ),
             remediation="",
         )

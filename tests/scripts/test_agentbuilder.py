@@ -542,6 +542,54 @@ def test_import_package_classifies_invalid_success_shape(
     }
 
 
+def test_delete_agent_issues_native_minimalbots_delete() -> None:
+    session = FakeSession([FakeResponse({}, status_code=204)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    call = session.calls[0]
+    assert call["method"] == "DELETE"
+    assert call["url"] == f"{HOST}/copilotstudio/minimalBots/api/{AGENT_ID}"
+    assert call["params"] == {"api-version": agentbuilder.DEFAULT_API_VERSION}
+    assert call["allow_redirects"] is False
+
+
+def test_delete_agent_treats_missing_agent_as_idempotent_success() -> None:
+    session = FakeSession([FakeResponse({}, status_code=404)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    assert len(session.calls) == 1
+
+
+def test_delete_agent_raises_on_unexpected_status() -> None:
+    session = FakeSession([FakeResponse({}, status_code=403)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError, match="HTTP 403"):
+        client.delete_agent(AGENT_ID)
+
+
 def test_lists_ring_environments_with_agentbuilder_token() -> None:
     next_url = (
         "https://api.test.powerplatform.com/"

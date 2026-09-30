@@ -62,6 +62,7 @@ class _FakeAgentBuilder:
         export_error: Exception | None = None,
         import_result: dict | None = None,
         import_error: Exception | None = None,
+        delete_error: Exception | None = None,
     ) -> None:
         self.host = host
         self.export_bytes = (
@@ -70,8 +71,10 @@ class _FakeAgentBuilder:
         self.export_error = export_error
         self.import_result = import_result or ab.import_package_result()
         self.import_error = import_error
+        self.delete_error = delete_error
         self.export_calls: list[tuple[str, Path]] = []
         self.import_calls: list[Path] = []
+        self.delete_calls: list[str] = []
 
     def export_package(self, agent_id: str, destination: Path) -> None:
         self.export_calls.append((agent_id, destination))
@@ -84,6 +87,11 @@ class _FakeAgentBuilder:
         if self.import_error is not None:
             raise self.import_error
         return self.import_result
+
+    def delete_agent(self, agent_id: str) -> None:
+        self.delete_calls.append(agent_id)
+        if self.delete_error is not None:
+            raise self.delete_error
 
 
 def _agentbuilder_http_error(
@@ -310,6 +318,8 @@ def test_pub_001_passes_when_export_returns_valid_archive():
     assert row.status == Status.PASSED.value
     assert "valid zip package" in row.result
     assert "bot-xyz" in row.result
+    assert "declarative-agent (gptagent) ALM package only" in row.result
+    assert "WD-CONN-012" in row.result
     assert row.remediation == ""
     assert client.export_calls[0][0] == "bot-xyz"
 
@@ -514,11 +524,41 @@ def test_pub_002_passes_when_import_returns_valid_identity():
     assert row.status == Status.PASSED.value
     assert "ALM import created agent" in row.result
     assert "gptagent_mockemployeeselfservice_imported" in row.result
+    assert "then deleted it to leave no residue" in row.result
+    assert "declarative-agent (gptagent) ALM package only" in row.result
+    assert "WD-CONN-012" in row.result
     assert row.remediation == ""
     assert source.export_calls
     assert not source.import_calls
     assert target.import_calls
     assert not target.export_calls
+    assert len(target.delete_calls) == 1
+    assert target.delete_calls[0] in row.result
+
+
+def test_pub_002_warns_when_throwaway_agent_cleanup_fails():
+    from flightcheck.runner import Status
+
+    source = _FakeAgentBuilder()
+    target = _FakeAgentBuilder(
+        host="https://target.example.test",
+        delete_error=RuntimeError("delete route returned 405"),
+    )
+    by_id = _results_by_id(
+        _runner(
+            agentbuilder=source,
+            alm_import_target=target,
+            alm_import_probe=True,
+        )
+    )
+
+    row = by_id["PUB-002"]
+    assert row.status == Status.WARNING.value
+    assert "cleanup of that throwaway agent failed" in row.result
+    assert "delete route returned 405" in row.result
+    assert "Manually delete the throwaway agent" in row.remediation
+    assert len(target.delete_calls) == 1
+    assert target.delete_calls[0] in row.remediation
 
 
 def test_pub_002_exports_selected_active_agent_before_target_import():

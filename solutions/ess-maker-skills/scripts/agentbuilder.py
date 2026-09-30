@@ -825,6 +825,31 @@ class AgentBuilderClient:
             raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
         return body
 
+    def delete_agent(self, agent_id: str, *, timeout: int = 120) -> None:
+        """Delete one native agent by its MinimalBot (Dataverse bot) id.
+
+        Used only to clean up the throwaway agent that the PUB-002 import
+        probe creates, so the single mutating publishing check leaves no
+        residue in the target environment. Mirrors the live-proven
+        ``get_agent`` resource route (``/copilotstudio/minimalBots/api/{id}``)
+        with the DELETE verb. A 404 is treated as already-absent so a retried
+        cleanup is idempotent. Any other non-2xx raises, so the caller surfaces
+        the still-present agent id for manual removal instead of silently
+        orphaning it.
+        """
+        response = self.session.request(
+            "DELETE",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if response.status_code == 404:
+            return
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native agent delete")
+
     def publish_agent(
         self,
         agent_id: str,
