@@ -187,9 +187,26 @@ def connectivity_read_scopes(ring: str) -> tuple[str]:
     return (f"{audience}/Connectivity.Connections.Read",)
 
 
+def flightcheck_scopes(
+    ring: str,
+    *,
+    allow_write: bool = False,
+    include_connectivity: bool = True,
+) -> tuple[str, ...]:
+    """Return least-privilege scopes for a native-agent FlightCheck run."""
+    minimal_bot = (
+        minimal_bot_scope(ring)
+        if allow_write
+        else minimal_bot_read_scope(ring)
+    )
+    if not include_connectivity:
+        return (minimal_bot,)
+    return (minimal_bot, *connectivity_read_scopes(ring))
+
+
 def flightcheck_read_scopes(ring: str) -> tuple[str, ...]:
     """Return the read-only scopes used by native-agent FlightCheck."""
-    return (minimal_bot_read_scope(ring), *connectivity_read_scopes(ring))
+    return flightcheck_scopes(ring)
 
 
 def _ring_api_host(ring: str) -> str:
@@ -593,12 +610,13 @@ def authenticate_flightcheck(
     force_account_selection: bool = False,
     account_hint: str | None = None,
     include_connectivity: bool = True,
+    allow_write: bool = False,
 ) -> tuple[str, str]:
-    """Acquire one read-only token for native AgentBuilder FlightCheck reads."""
-    scopes = (
-        flightcheck_read_scopes(ring)
-        if include_connectivity
-        else (minimal_bot_read_scope(ring),)
+    """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
+    scopes = flightcheck_scopes(
+        ring,
+        allow_write=allow_write,
+        include_connectivity=include_connectivity,
     )
     token = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
@@ -897,6 +915,31 @@ class AgentBuilderClient:
         if not isinstance(body, dict):
             raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
         return body
+
+    def delete_agent(self, agent_id: str, *, timeout: int = 120) -> None:
+        """Delete one native agent by its MinimalBot (Dataverse bot) id.
+
+        Used only to clean up the throwaway agent that the PUB-002 import
+        probe creates, so the single mutating publishing check leaves no
+        residue in the target environment. Mirrors the live-proven
+        ``get_agent`` resource route (``/copilotstudio/minimalBots/api/{id}``)
+        with the DELETE verb. A 404 is treated as already-absent so a retried
+        cleanup is idempotent. Any other non-2xx raises, so the caller surfaces
+        the still-present agent id for manual removal instead of silently
+        orphaning it.
+        """
+        response = self.session.request(
+            "DELETE",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if response.status_code == 404:
+            return
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native agent delete")
 
     def publish_agent(
         self,

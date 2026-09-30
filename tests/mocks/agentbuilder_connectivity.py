@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from typing import Any, Iterable
 
 import responses
@@ -186,6 +188,47 @@ def components_with_references(
         [] if references is None else list(references)
     )
     return payload
+
+
+def export_package_bytes(
+    *,
+    filename: str = "agent/manifest.json",
+    content: bytes = b'{"schemaName":"gptagent_mockemployeeselfservice"}',
+) -> bytes:
+    """Real in-memory zip archive for AgentBuilder ALM export tests.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/publishing.py
+
+    Source (validated):
+      AgentBuilder ALM export is implemented by
+      AgentBuilderClient.export_package, which streams the response from
+      POST /copilotstudio/minimalBots/alm/{agent_id}/export into a caller-owned
+      .zip path. The route, method, and binary package contract are pinned by
+      tests/scripts/test_agentbuilder.py::test_realm_discovery_configuration_and_export_use_native_alm_requests.
+      The FlightCheck check validates the archive by reading the zip central
+      directory and running testzip() CRC validation, so this builder returns
+      an actual zipfile archive rather than a magic-byte stub.
+    """
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(filename, content)
+    return stream.getvalue()
+
+
+def import_package_result(
+    *,
+    agent_id: str = MOCK_AGENT_ID,
+    schema_name: str = "gptagent_mockemployeeselfservice_imported",
+) -> dict[str, Any]:
+    """Successful AgentBuilderClient.import_package result shape."""
+    return {
+        "responseStatus": "valid",
+        "result": {
+            "cdsBotId": agent_id,
+            "schemaName": schema_name,
+        },
+    }
 
 
 def connection(
