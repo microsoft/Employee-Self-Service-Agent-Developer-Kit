@@ -75,6 +75,23 @@ def _env004_config_value(config: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _env004_workday_configured(runner) -> bool:
+    """True when the local setup config indicates a Workday install.
+
+    Uses the same creds-free signal WD-REST-001 and the Workday network
+    allowlist gate on (a captured Workday REST or SOAP base URL). Workday's SOAP
+    connection reference is flow-scoped, so the Declarative Agent components API
+    cannot see it: without Dataverse there is no component-level way to know a
+    Workday install exists. This local-config signal lets ENV-004 warn (rather
+    than falsely PASS) only when Workday is plausibly present, keeping
+    ServiceNow-only runs quiet. A Workday install too early in setup to have
+    captured a URL is already flagged loudly by WD-REST-001, so ENV-004 need not
+    double-warn there.
+    """
+    config = getattr(runner, "config", None) or {}
+    return bool(_env004_config_value(config, ("restBaseUrl", "soapBaseUrl")))
+
+
 def _env004_grs_commit_pin_result(runner) -> CheckResult:
     """Validate the minimalBots ALM commit pin (ENV-004-GRS).
 
@@ -522,8 +539,12 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     To close that gap this check also reads the environment's Dataverse
     ``connectionreference`` table (documented tier, as WD-PKG-001 does) and
     unions in any Workday SOAP reference so it is classified as bound/unbound
-    like the rest. If that Dataverse read is unavailable it degrades to WARNING
-    (never a silent PASS) so Workday is never falsely reported clean.
+    like the rest. When Dataverse cannot be read - either because the read
+    errors, or because native Declarative Agent runs carry no Dataverse token at
+    all - a Workday install (detected from the local config's Workday REST/SOAP
+    base URL) degrades to WARNING rather than a silent PASS, so Workday is never
+    falsely reported clean. ServiceNow-only runs stay quiet because they have no
+    Workday base URL configured.
 
     A separate GRS commit-pin sub-check (``ENV-004-GRS``) verifies the deployed
     agent's ALM commit matches an expected SHA when one is configured; its
@@ -534,7 +555,8 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     Signal:
       SKIP  \u2014 no AgentBuilder client or no configured agent botId.
       PASS  \u2014 every reference is bound (and the GRS pin passed or was not judged).
-      WARN  \u2014 the components read or GRS configure read errored.
+      WARN  \u2014 the components read or GRS configure read errored, or a Workday
+              install's SOAP reference could not be verified (no Dataverse access).
       FAIL  \u2014 one or more unbound references (or the GRS pin failed).
     """
     results: list[CheckResult] = []
@@ -639,6 +661,31 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
                     "connectionid": row.get("connectionid"),
                     "sharedconnectionparameters": None,
                 })
+    elif _env004_workday_configured(runner):
+        # Dataverse was not available (native Declarative Agent runs do not
+        # authenticate a Dataverse token), so the flow-scoped Workday SOAP
+        # reference could not be read. The components API structurally cannot
+        # see it, so a components-only PASS would be a false clean on a Workday
+        # install. Warn instead of silently passing. ServiceNow-only runs stay
+        # quiet because they have no Workday REST/SOAP base URL configured.
+        workday_warning = CheckResult(roles=roles,
+            checkpoint_id="ENV-004-WD", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Workday connection reference coverage",
+            result=(
+                "This is a Workday install (a Workday REST/SOAP base URL is "
+                "configured), but Dataverse was not available to FlightCheck, so "
+                "the flow-scoped Workday SOAP connection reference could not be "
+                "read. The Declarative Agent components API cannot see that "
+                "reference, so Workday connection health was not judged and this "
+                "run cannot confirm the Workday connection is bound."
+            ),
+            remediation=(
+                "Re-run FlightCheck with Dataverse read access to the "
+                "connectionreferences table (supply the environment URL and a "
+                "Dataverse token) so the Workday SOAP binding can be verified."
+            ),
+        )
 
     unbound_refs = [r for r in refs if not (r.get("connectionid") or "")]
     bound_refs = [r for r in refs if (r.get("connectionid") or "")]

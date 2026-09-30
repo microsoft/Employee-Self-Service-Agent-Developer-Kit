@@ -77,10 +77,13 @@ def _servicenow_only():
 
 
 def _runner(*, components, dv_rows_or_error, env_url="https://x.crm.dynamics.com",
-            dv_token="t"):
+            dv_token="t", config_extra=None):
+    config = {"agent": {"botId": ab.MOCK_AGENT_ID}}
+    if config_extra:
+        config.update(config_extra)
     return SimpleNamespace(
         agentbuilder=_FakeAgentBuilder(components),
-        config={"agent": {"botId": ab.MOCK_AGENT_ID}},
+        config=config,
         env_id="env-wd",
         env_url=env_url,
         dv_token=dv_token,
@@ -229,11 +232,49 @@ def test_dataverse_unavailable_warns_without_false_clean(_patch_query_all):
     assert "Dataverse read access" in wd.remediation
 
 
-def test_no_dataverse_creds_skips_workday_union(_patch_query_all):
-    """Without env_url/dv_token the Workday union is skipped silently.
+def test_no_dataverse_creds_on_workday_install_warns_not_false_clean(
+    _patch_query_all,
+):
+    """Creds-absent on a Workday install degrades to WARNING, never PASS.
 
-    This mirrors the rest of the suite's convention (WD-PKG-001 SKIPs when
-    creds are absent) and avoids a false WARNING on pure non-Workday installs.
+    Native Declarative Agent runs authenticate no Dataverse token, so the
+    flow-scoped Workday SOAP reference cannot be read and the components API
+    cannot see it. A components-only PASS would be a false clean on a Workday
+    install. The local config's Workday REST base URL marks the install as
+    Workday, so ENV-004 must WARN rather than silently PASS.
+    """
+    runner = _runner(
+        components=_servicenow_only(),
+        dv_rows_or_error=[],
+        env_url=None,
+        dv_token=None,
+        config_extra={"restBaseUrl": "https://wd.example.com/ccx/api"},
+    )
+
+    by_id = _by_id(_check(runner, _patch_query_all))
+    summary = by_id["ENV-004"]
+
+    assert summary.status == "Warning"
+    # ServiceNow (component-sourced) is still judged.
+    assert "1 bound" in summary.result
+    assert "Workday connection coverage unverified" in summary.result
+    assert "Dataverse read access" in summary.remediation
+    # Dedicated detail row names the impact and the fix.
+    wd = by_id["ENV-004-WD"]
+    assert wd.status == "Warning"
+    assert "Workday connection health was not judged" in wd.result
+    assert "Dataverse was not available" in wd.result
+    assert "Dataverse read access" in wd.remediation
+
+
+def test_no_dataverse_creds_on_non_workday_install_passes_quietly(
+    _patch_query_all,
+):
+    """Creds-absent on a non-Workday install stays PASS with no Workday noise.
+
+    A ServiceNow-only install has no Workday REST/SOAP base URL configured, so
+    there is no Workday coverage to warn about and ENV-004 must not emit a
+    false WARNING.
     """
     runner = _runner(
         components=_servicenow_only(),
@@ -247,4 +288,5 @@ def test_no_dataverse_creds_skips_workday_union(_patch_query_all):
 
     assert summary.status == "Passed"
     assert "1 reference(s) declared by the agent(s)" in summary.result
+    assert "1 bound" in summary.result
     assert "ENV-004-WD" not in by_id
