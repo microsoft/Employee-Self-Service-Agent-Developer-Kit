@@ -183,13 +183,18 @@ result.
 
 One workspace targets one Power Platform environment, can contain multiple ESS Dev agents from that environment, and has one active agent at a time. `.local/config.json` owns the active agent through `activeAgent` and the matching `agent` entry. Canonical setup state records readiness independently for every configured agent.
 
-When an occupied workspace needs a new environment, offer **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
+When an occupied workspace needs a new environment, offer **Reset and use this workspace** alongside **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Ask exactly:
 
+> This workspace is already connected to a different Power Platform environment. How would you like to continue?
+
+Use the host's interactive single-selection control and offer exactly:
+
+- **Reset and use this workspace**
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
 - **Go back**
 
-For **Go back**, make no changes and return to the Setup choice surface that offered **Create and open a new workspace**. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
+For **Reset and use this workspace**, do not derive or create a fresh destination; continue through the existing reset confirmation below. For **Go back**, make no changes and return to the Setup choice surface that entered different-environment handling. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
 
 ```text
 python scripts/prepare_fresh_workspace.py \
@@ -325,12 +330,12 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
-- When `almEnrollment` is `not-enrolled`, the earlier native identity probe
-  still proves that the agent exists. Say that the agent is not enrolled in
-  the ALM family required for local authoring, then offer **Choose a different
-  agent**, **Choose a different environment**, and **Go back** using the exact
-  recovery routes in `product-line-reconciliation.md`. Do not call the agent
-  missing and do not continue to validation or attachment.
+- When `routeStatus` is `not-found`, the earlier native identity probe still
+  proves that the agent exists. Say that setup could not establish an authoring
+  route for that agent, then offer **Choose a different agent**, **Choose a
+  different environment**, and **Go back** using the exact recovery routes in
+  `product-line-reconciliation.md`. Do not call the agent missing and do not
+  continue to validation or attachment.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent

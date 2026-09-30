@@ -45,6 +45,8 @@ class FakeCheck:
     description: str = "desc"
     result: str = "SECRET finding text with /paths and agent names"
     remediation: str = "SECRET remediation text"
+    severity: str = "info"
+    automation_type: str = "automated"
     roles: list = field(default_factory=lambda: ["Entra Admin", "ESS Maker / Agent Developer"])
 
 
@@ -57,11 +59,14 @@ class FakeRun:
     total: int = 2
     passed: int = 1
     failed: int = 1
+    blocked: int = 0
     warnings: int = 0
     not_configured: int = 0
     manual: int = 0
     skipped: int = 0
     errors: int = 0
+    profile: str = ""
+    validation_context: dict = field(default_factory=dict)
 
 
 @pytest.fixture(autouse=True)
@@ -101,7 +106,9 @@ def test_time_format_is_iso_ms_z():
 
 
 # --- event construction ---------------------------------------------------
-def test_build_events_shape_and_required_fields():
+def test_build_events_shape_and_required_fields(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "main")
+    telemetry.get_toolkit_git_branch.cache_clear()
     events = telemetry.build_events(
         FakeRun(),
         env="dev",
@@ -127,6 +134,7 @@ def test_build_events_shape_and_required_fields():
         # Same run correlates all events.
         assert e["data"]["runId"] == "run-1"
         assert e["data"]["env"] == "dev"
+        assert e["data"]["agentType"] == telemetry.AGENT_TYPE_DECLARATIVE
 
     run_data = events[0]["data"]
     assert run_data["overall"] == "READY"
@@ -143,12 +151,18 @@ def test_build_events_shape_and_required_fields():
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"
+    assert run_data["blocked"] == 0
+    assert run_data["profile"] == ""
+    assert run_data["validationRealm"] == ""
     # Precise upgrade-posture + CA/DA-attribution dimensions ride on the
     # run event (ADO #7943642). Best-effort: they resolve to "unknown"
     # outside a git clone. The dedicated tests below cover the resolution
     # code paths.
     assert "toolkitGitSha" in run_data
     assert "toolkitGitBranch" in run_data
+    for event in events[1:]:
+        assert event["data"]["severity"] == "info"
+        assert event["data"]["automationType"] == "automated"
 
 
 def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
@@ -372,25 +386,88 @@ def test_classify_branch_privacy_bounded():
     assert telemetry._classify_branch("") == "unknown"
 
 
-def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
-    """Version-gate the new dimensions so dashboards can pin on schema 1.3."""
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"
+def test_telemetry_schema_version_bumped_for_check_dimensions():
+    """Version-gate the ADO 7955324 dimensions on schema 1.4."""
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"
+
+
+def test_classify_agent_type_maps_shipping_branches():
+    assert telemetry.classify_agent_type("main-ca") == telemetry.AGENT_TYPE_CUSTOM
+    assert telemetry.classify_agent_type("main") == telemetry.AGENT_TYPE_DECLARATIVE
+
+
+@pytest.mark.parametrize("branch", [
+    "other",
+    "detached",
+    "unknown",
+    "",
+    "release/1.0",
+])
+def test_classify_agent_type_unknown_branches_bucketed(branch):
+    assert telemetry.classify_agent_type(branch) == telemetry.AGENT_TYPE_UNKNOWN
+
+
+def test_build_events_derives_agent_type_once(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(telemetry, "get_toolkit_git_branch", lambda: "main")
+
+    def fake_classify(branch):
+        calls.append(branch)
+        return telemetry.AGENT_TYPE_DECLARATIVE
+
+    monkeypatch.setattr(telemetry, "classify_agent_type", fake_classify)
+    events = telemetry.build_events(
+        FakeRun(),
+        env="dev",
+        instance_id="i",
+        tenant_id="t",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+    )
+
+    assert calls == ["main"]
+    assert all(
+        event["data"]["agentType"] == telemetry.AGENT_TYPE_DECLARATIVE
+        for event in events
+    )
 
 
 def test_derive_run_outcome_precedence():
-    """errored > failed > warnings > ready (ADO 7590584)."""
-    # errored wins even when failures/warnings are also present.
+    """errored > failed > blocked > warnings > ready (ADO 7590584, 7943641)."""
+    # errored wins even when failures/blocked/warnings are also present.
     assert telemetry.derive_run_outcome(
-        FakeRun(errors=1, failed=3, warnings=2)) == "Blocked (check errored)"
-    # failed wins over warnings when nothing errored.
+        FakeRun(errors=1, failed=3, blocked=2, warnings=2)) == "Blocked (check errored)"
+    # failed wins over blocked/warnings when nothing errored.
     assert telemetry.derive_run_outcome(
-        FakeRun(errors=0, failed=1, warnings=5)) == "Failed"
+        FakeRun(errors=0, failed=1, blocked=2, warnings=5)) == "Failed"
+    # blocked wins over warnings when nothing errored/failed. A blocked
+    # essential capability is a release gate, not an advisory warning.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, blocked=1, warnings=5)) == "Blocked (gate)"
     # warnings-only run.
     assert telemetry.derive_run_outcome(
         FakeRun(errors=0, failed=0, warnings=1)) == "Ready with warnings"
     # clean run.
     assert telemetry.derive_run_outcome(
         FakeRun(errors=0, failed=0, warnings=0)) == "Ready"
+
+
+def test_derive_run_outcome_blocked_only_is_not_ready():
+    """Regression (ADO 7943641): a blocked-only run must NOT bucket as Ready.
+
+    Before the fix ``derive_run_outcome`` had no blocked branch, so a run
+    whose only non-passing rows were BLOCKED fell through to
+    RUN_OUTCOME_READY — the donut said "Ready" for a run the runner scores
+    NOT_READY with exit code 1.
+    """
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, blocked=1, warnings=0)
+    ) == telemetry.RUN_OUTCOME_BLOCKED
+    assert telemetry.RUN_OUTCOME_BLOCKED != telemetry.RUN_OUTCOME_READY
 
 
 def test_check_events_never_leak_free_text():
@@ -415,6 +492,8 @@ def test_check_events_never_leak_free_text():
         # enums/ids that ARE allowed:
         assert e["data"]["checkpointId"]
         assert e["data"]["status"] in ("Passed", "Failed")
+        assert e["data"]["severity"] == "info"
+        assert e["data"]["automationType"] == "automated"
         assert e["data"]["roles"] == "Entra Admin, ESS Maker / Agent Developer"
 
 
@@ -588,6 +667,18 @@ def test_emit_noop_when_disabled(monkeypatch, tmp_path):
     (" topics ", "workday"),        # whitespace-tolerant
     ("servicenow", "servicenow"),
     ("ServiceNow", "servicenow"),
+    # ADO 7943641 carry-over — profile and single-checkpoint runs pass a
+    # wrapped scope ("profile:<name>" / "checkpoint:<id>"). Before the fix
+    # these unwrapped to nothing and every DA profile run emitted "".
+    ("profile:workday-da:final", "workday"),
+    ("profile:workday-da:setup-readiness", "workday"),
+    ("profile:workday-legacy:diagnostic", "workday"),
+    ("PROFILE:Workday-DA:Final", "workday"),   # case-insensitive
+    ("checkpoint:WD-CONN-012", "workday"),
+    ("checkpoint:wd-wf-001", "workday"),
+    ("checkpoint:SN-CONN-001", "servicenow"),
+    ("profile:workday-da:post-connection", "workday"),
+    ("profile:servicenow-hrsd:preflight", "servicenow"),
 ])
 def test_derive_connector_from_scope_known(scope, expected):
     assert telemetry.derive_connector_from_scope(scope) == expected
@@ -601,6 +692,11 @@ def test_derive_connector_from_scope_known(scope, expected):
     "local",
     "publishing",
     "entraapp",
+    # Wrapped non-connector scopes must stay "" too: a Dataverse or
+    # environment checkpoint/profile is not connector-scoped.
+    "checkpoint:DV-CONN-001",
+    "checkpoint:ENV-001",
+    "profile:dataverse-ready",
     "",
     None,
 ])
@@ -693,5 +789,44 @@ def test_check_events_carry_connector_from_category():
     assert connectors == ["workday", "servicenow", ""]
 
 
-def test_schema_version_bump_records_connector_dim():
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"
+def test_profile_run_emits_profile_realm_and_check_contract_fields():
+    run = FakeRun(
+        results=[
+            FakeCheck(
+                severity="blocking",
+                automation_type="active_probe",
+            )
+        ],
+        total=1,
+        passed=0,
+        failed=0,
+        blocked=1,
+        profile="workday-da:post-connection",
+        validation_context={"realm": "prod"},
+    )
+    events = telemetry.build_events(
+        run,
+        env="prod",
+        instance_id="i",
+        tenant_id="00000000-0000-0000-0000-0000000000ab",
+        agent_id="a",
+        agent_count=1,
+        scope="profile:workday-da:post-connection",
+        invocation_source="connect",
+        ikey_envelope=f"o:{PROD_TOKEN}",
+        run_id="r",
+    )
+
+    run_data = events[0]["data"]
+    check_data = events[1]["data"]
+    assert run_data["profile"] == "workday-da:post-connection"
+    assert run_data["validationRealm"] == "prod"
+    assert run_data["blocked"] == 1
+    assert run_data["runOutcome"] == "Blocked (gate)"
+    assert run_data["connector"] == "workday"
+    assert check_data["severity"] == "blocking"
+    assert check_data["automationType"] == "active_probe"
+
+
+def test_schema_version_bump_records_ado_7955324_dimensions():
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"
