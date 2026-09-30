@@ -14,7 +14,7 @@ Coverage per emitter:
     Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
     echo via the ``validated`` pp_admin mock.
   * WD-REST-001 — selected-agent flow-bound physical Workday OAuth connection
-    check (restBaseUri must match /ccx/api/<tenantName>).
+    check (restBaseUri must be trimmed to /ccx/api, nothing appended).
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
   * WD-NET-001 — always-MANUAL InfoSec/IT attestation (never PASSED).
@@ -403,7 +403,7 @@ class TestDataverseConnection:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# WD-REST-001 — REST API root matches /ccx/api/<tenantName> (S5.5).
+# WD-REST-001 — REST API root is trimmed to /ccx/api (S5.5).
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -450,9 +450,9 @@ class TestRestBaseUrl:
     @pytest.mark.parametrize(
         "rest_base_uri",
         [
-            "https://wd.example.com/ccx/api/mocktenant",
-            "https://wd.example.com/ccx/api/mocktenant/",
-            "https://contoso.azure-api.net/ccx/api/mocktenant",
+            "https://wd.example.com/ccx/api",
+            "https://wd.example.com/ccx/api/",
+            "https://contoso.azure-api.net/api",
         ],
     )
     def test_exact_rest_root_passes(self, monkeypatch, rest_base_uri):
@@ -468,40 +468,36 @@ class TestRestBaseUrl:
         )
 
         assert result.status == Status.PASSED.value
-        assert "/ccx/api/<tenantName>" in result.result
+        assert "/ccx/api" in result.result
         assert "Workday OAuth" in result.result
         assert rest_base_uri not in result.result
 
     @pytest.mark.parametrize(
         ("rest_base_uri", "expected"),
         [
-            ("http://wd.example.com/ccx/api/mocktenant", "HTTPS"),
-            ("https:///ccx/api/mocktenant", "host"),
+            ("http://wd.example.com/ccx/api", "HTTPS"),
+            ("https:///ccx/api", "host"),
             (
-                "https://user@wd.example.com/ccx/api/mocktenant",
+                "https://user@wd.example.com/ccx/api",
                 "user information",
             ),
             (
-                "https://wd.example.com/ccx/api/mocktenant?x=1",
+                "https://wd.example.com/ccx/api?x=1",
                 "query string",
             ),
             (
-                "https://wd.example.com/ccx/api/mocktenant#x",
+                "https://wd.example.com/ccx/api#x",
                 "fragment",
             ),
-            ("https://wd.example.com/ccx/service", "exactly the path"),
-            ("https://wd.example.com/ccx/api", "exactly the path"),
-            (
-                "https://wd.example.com/ccx/api/other",
-                "does not match tenantName",
-            ),
+            ("https://wd.example.com/ccx/service", "nothing appended"),
+            ("https://wd.example.com/ccx/api/mocktenant", "nothing appended"),
             (
                 "https://wd.example.com/ccx/api/mocktenant/v1",
-                "exactly the path",
+                "nothing appended",
             ),
             (
-                "https://wd.example.com/ccx//api/mocktenant",
-                "exactly the path",
+                "https://wd.example.com/ccx//api",
+                "nothing appended",
             ),
         ],
     )
@@ -537,18 +533,18 @@ class TestRestBaseUrl:
         assert "restBaseUri is missing" in result.result
         assert "Do not substitute baseUri" in result.remediation
 
-    def test_tenant_name_is_required(self, monkeypatch):
+    def test_rest_root_passes_without_tenant_name(self, monkeypatch):
         result = self._check(
             monkeypatch,
             self._resolution(
                 values={
-                    "restBaseUri": "https://wd.example.com/ccx/api/mocktenant",
+                    "restBaseUri": "https://wd.example.com/ccx/api",
                 }
             ),
         )
 
-        assert result.status == Status.FAILED.value
-        assert "tenantName is missing" in result.result
+        assert result.status == Status.PASSED.value
+        assert "/ccx/api" in result.result
 
     def test_no_selected_agent_workday_binding_is_not_configured(
         self, monkeypatch
@@ -576,7 +572,7 @@ class TestRestBaseUrl:
                 values={
                     "tenantName": "mocktenant",
                     "restBaseUri": (
-                        "https://wd.example.com/ccx/api/mocktenant"
+                        "https://wd.example.com/ccx/api"
                     ),
                 },
                 unresolved=("missing-connection",),

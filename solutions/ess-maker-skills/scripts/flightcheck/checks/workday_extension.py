@@ -26,8 +26,9 @@ via ``--checkpoint``:
     can confirm it is their **own** account. Programmatic PASS/FAIL on a
     documented-tier Dataverse ``connectionreferences`` read.
   * ``WD-REST-001`` (S5.5) — every OAuth Workday connection used by the
-    selected agent has a ``restBaseUri`` whose path is exactly
-    ``/ccx/api/<tenantName>``. Evidence comes from enabled topics, per-flow
+    selected agent has a ``restBaseUri`` trimmed so it ends exactly at
+    ``/ccx/api`` (or ``/api`` for hosts that omit ``/ccx``), with nothing
+    appended. Evidence comes from enabled topics, per-flow
     detail, and the bound physical Power Platform connection.
   * ``WD-REST-002`` (S5.7) — the agent's ``user-context-setup.mcs.yml`` topic
     contains a ``BeginDialog`` redirect to the Workday user-context system topic
@@ -123,7 +124,7 @@ _CONN_AUTH_DESC = (
 _DV_CONN_DESC = (
     "Dataverse connection reference bound to an active connection you own"
 )
-_REST_URL_DESC = "Workday REST API root matches the configured tenant"
+_REST_URL_DESC = "Workday REST API root is trimmed to /ccx/api"
 _REDIRECT_DESC = (
     "User-context topic redirects to the Workday user-context system topic"
 )
@@ -622,8 +623,15 @@ def _check_dv_connection(runner) -> list[CheckResult]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _rest_base_uri_problem(rest_base_uri: str, tenant_name: str) -> str | None:
-    """Return why a Workday REST root is invalid, or ``None`` when valid."""
+def _rest_base_uri_problem(rest_base_uri: str) -> str | None:
+    """Return why a Workday REST root is invalid, or ``None`` when valid.
+
+    The Workday REST base must be trimmed so it ends exactly at ``/ccx/api``
+    (or ``/api`` for hosts that omit ``/ccx``). Anything appended after the
+    ``/api`` segment — a version segment, the tenant name, or a resource path —
+    silently breaks the managed connection, so a trailing segment is precisely
+    the misconfiguration this check exists to catch.
+    """
     try:
         parsed = urlsplit(rest_base_uri)
         hostname = parsed.hostname
@@ -642,16 +650,14 @@ def _rest_base_uri_problem(rest_base_uri: str, tenant_name: str) -> str | None:
 
     path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
     raw_segments = path.split("/")
-    if len(raw_segments) != 4 or raw_segments[0] != "":
-        return "must have exactly the path /ccx/api/<tenantName>"
-    segments = [unquote(segment) for segment in raw_segments[1:]]
-    if segments[:2] != ["ccx", "api"] or any("/" in part for part in segments):
-        return "must have exactly the path /ccx/api/<tenantName>"
-    if segments[2] != tenant_name:
-        return (
-            f"tenant path segment '{segments[2]}' does not match tenantName "
-            f"'{tenant_name}'"
-        )
+    if raw_segments and raw_segments[0] == "":
+        raw_segments = raw_segments[1:]
+    segments = [unquote(segment) for segment in raw_segments]
+    if any("/" in part for part in segments) or segments not in (
+        ["ccx", "api"],
+        ["api"],
+    ):
+        return "must be trimmed to end exactly at /ccx/api with nothing appended"
     return None
 
 
@@ -713,20 +719,11 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
     problems: list[tuple[str, str]] = []
     for connection in resolution.connections:
         rest = connection.values.get("restBaseUri", "")
-        tenant = connection.values.get("tenantName", "")
         if not rest:
             problems.append(
                 (connection.display_name, "restBaseUri is missing or empty")
             )
-        elif not tenant:
-            problems.append(
-                (
-                    connection.display_name,
-                    "tenantName is missing or empty, so the REST tenant "
-                    "segment cannot be validated",
-                )
-            )
-        elif problem := _rest_base_uri_problem(rest, tenant):
+        elif problem := _rest_base_uri_problem(rest):
             problems.append((connection.display_name, problem))
 
     if problems:
@@ -742,9 +739,10 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
                 f"invalid REST API root: {details}."
             ),
             remediation=(
-                "Set restBaseUri to https://<host>/ccx/api/<tenantName> with "
-                "no query, fragment, credentials, version, or resource path. "
-                "Do not substitute baseUri; it is the SOAP endpoint."
+                "Trim restBaseUri to https://<host>/ccx/api so nothing "
+                "follows /api — no tenant name, version, resource path, "
+                "query, fragment, or credentials. Do not substitute baseUri; "
+                "it is the SOAP endpoint."
             ),
             doc_link=_DOC_SIMPLIFIED,
         )]
@@ -795,8 +793,8 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.PASSED.value,
         description=_REST_URL_DESC,
         result=(
-            "The Workday REST API root matches "
-            "https://<host>/ccx/api/<tenantName> on "
+            "The Workday REST API root is trimmed to "
+            "https://<host>/ccx/api on "
             f"{len(resolution.connections)} selected-agent connection(s): {names}."
         ),
         doc_link=_DOC_SIMPLIFIED,
