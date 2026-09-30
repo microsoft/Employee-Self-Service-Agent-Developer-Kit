@@ -94,6 +94,7 @@ footprint, logical connector references, and environment connection health.
 
 | Scope | Used by | Type |
 |-------|---------|------|
+| `CopilotStudio.MakerOperations.Read` | Foundation setup agent inventory | Delegated |
 | `CopilotStudio.MinimalBot.Read` | DA-AGENT-001, DA-CONTENT-001, DA-CONN-* | Delegated |
 | `Connectivity.Connections.Read` | DA-CONN-* | Delegated |
 

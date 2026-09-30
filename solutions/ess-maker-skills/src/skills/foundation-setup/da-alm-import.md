@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Set Up Dev from a Supplied Agent Package
 
 This is an advanced handoff for a maker who has already supplied a native agent
@@ -42,7 +43,10 @@ python scripts/setup_alm_import.py \
   --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
-The first operation must omit both replacement arguments. Never infer
+The first operation must omit both replacement arguments and
+`--client-request-id`. The client request UUID is reserved for the separately
+approved create-only recovery after an ambiguous or invalid-success result.
+Never infer
 replacement permission from the package, collision, environment, schema, or a
 different setup context.
 
@@ -105,7 +109,7 @@ show:
 > An editable agent created from this package already exists in the target
 > environment. I did not replace it.
 
-Offer exactly:
+Present these standard choices:
 
 - **Choose an existing agent in this environment**
 - **Replace an existing agent with this package**
@@ -129,7 +133,7 @@ Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 > Replacing **{agent display name}** will overwrite its current editable
 > content with the supplied package. Continue?
 
-Offer exactly:
+Present these standard choices:
 
 - **Continue replacement**
 - **Go back**
@@ -173,10 +177,12 @@ checkpointing and refreshing them.
   actionable error and preserve its status, error code, and request ID when
   available. Do not retry automatically.
 - `invalid-success` or `ambiguous`: the mutation may have completed, but no
-  usable identity is available. Show: **The import outcome could not be proven.
-  I stopped to avoid creating or replacing the agent twice.** Do not retry.
-  Follow the manual reconciliation procedure in
-  `src/reference/native-alm-import.md`.
+  usable identity is available. Preserve the receipt and follow the read-only
+  reconciliation procedure in `src/reference/native-alm-import.md`. For a
+  create-only import, if no exact identity can be proven, offer an explicitly
+  approved new create request using `--client-request-id
+"{NEW_CLIENT_REQUEST_UUID}"` and let the
+  service return conflict if the earlier create succeeded.
 
 If an older command exits during direct verification after recording status
 `imported`, treat it as the same completed-import state. Rerun the identical
@@ -191,11 +197,22 @@ requires explicit maker approval. Ask:
 
 > The reported prerequisite has been resolved. Start a new import request?
 
-Offer exactly:
+Present these standard choices:
 
 - **Retry import**
 - **Stop without retrying**
 
-Use `--retry-safe-failure` only after the maker selects **Retry import**.
+Use `--retry-safe-failure` only after the maker selects **Retry import**. Rerun
+the original command and add only that flag:
+
+```text
+python scripts/setup_alm_import.py \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
+  --package "{NATIVE_AGENT_PACKAGE_PATH}" \
+  --retry-safe-failure
+```
+
+Do not generate or pass a client request UUID for this existing receipt.
 
 Never remove or edit import records merely to permit another mutation.
