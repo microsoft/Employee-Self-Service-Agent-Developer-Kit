@@ -46,6 +46,7 @@ pytest --cov --cov-report=term-missing --cov-report=html
 | `scripts/` | Tests for the FlightCheck-relevant slice of `solutions/ess-maker-skills/scripts/auth.py`. |
 | `conftest.py` | Shared fixtures (MSAL token stub, base URLs, sample config dict, tmp workspace). |
 | `mcp/agentconfig/` | Landing-page MCP contracts, structural instruction guards, and opt-in model-driven skill evaluations. |
+| `mcp/evaluations/` | Synthetic curator orchestration harness and its opt-in model-driven evaluation. |
 
 ## Landing-page skill evaluations
 
@@ -66,6 +67,26 @@ The `gh` account must have Copilot model access. These tests make billable model
 Each case writes `trace.json` into its pytest temporary directory, recording the model, skill hash, synthetic context, tool arguments/results, and final replies. Use pytest's `--basetemp` option to choose a retained artifact directory. Authentication tokens and model reasoning are not included in these traces.
 
 The scenarios cover matching widget drafts, stale snapshots, server-side changes between turns, failed or externalized reads, deleted-link preservation, current-value answers, wrong-entity context, instruction-like field text, visual accent lookups, default starter prompts, and the guided overview. They also cover proposed drafts, starter-prompt edits and destructive confirmation, partial insight toggles, and branding validation/contrast confirmation. The local validation command is simulated and recorded without executing model-supplied commands. These evaluations cover model-visible widget context and tool behavior; transport of `updateModelContext` events and widget rendering require separate host integration coverage.
+
+## Evaluation curator skill evaluation
+
+`mcp/evaluations/test_curator_skill_orchestration.py` runs one real Copilot model case against the shipped `/evaluate` routing, Maker Kit curator wrapper, and vendored curator skill. The case verifies orchestration by tool-call ordering: valid preflight, reading the returned curator skill before generation, topic confirmation before writes, writes restricted to `workspace/evaluations/`, structural and Maker Kit validation, and no push without a separate explicit approval turn.
+
+The curator case has a 40-tool-call safety cap. This is intentionally separate from the 24-tool-call limit used by the landing-page skill evaluations.
+
+Install and configure the same optional SDK runtime described in [Landing-page skill evaluations](#landing-page-skill-evaluations). The authenticated `gh` account must have Copilot model access. Run the deterministic offline harness and routing coverage first:
+
+```powershell
+python -m pytest tests\mcp\evaluations\test_curator_skill_orchestration.py tests\scripts\test_evaluation_curator_routing.py -m "not live" -v
+```
+
+Then explicitly opt in to the billable model case:
+
+```powershell
+python -m pytest tests\mcp\evaluations\test_curator_skill_orchestration.py --run-live -v
+```
+
+The live-marked case is skipped by default and makes a billable Copilot model call when explicitly enabled. It exposes only synthetic sample knowledge, synthetic agent instructions, contract and skill text, recording-only file writes, and simulated validator commands. It does not start a live agent, read user documents, contact a tenant, use production MCP connections, execute model-supplied commands, or push files.
 
 ## Two layers of mocks
 

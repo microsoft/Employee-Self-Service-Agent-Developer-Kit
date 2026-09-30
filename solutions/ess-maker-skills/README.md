@@ -99,10 +99,13 @@ Catch and fix compile errors before they reach production. The `/scan` command a
 
 ### 📊 Generate Evaluation Test Sets
 
-Create Copilot Studio-native evaluation sets from configured agent topics, or
-generate catalogue-grounded starter sets for named ESS scenarios before an
-agent is configured. Each set produces synchronized `.mcs.yml` and CSV
-artifacts from the same test cases.
+Create evaluation test sets from three sources:
+
+- **Configured agent topics** — validate behavior already present in the active agent.
+- **Local knowledge source or connected knowledge base + agent instructions** — curate grounded knowledge and instruction-adherence tests through the vendored curator. The knowledge source can be a local knowledge source (files or a folder) or a connected knowledge base (for example ServiceNow or SharePoint) reachable through a search/fetch tool already available in the session; the kit does not set up the connection itself.
+- **Bundled ESS catalogue** — seed tests for a named ESS scenario without configured topics or documents.
+
+All three sources produce native `.mcs.yml` plus CSV artifacts and use the existing review, push, run, and results lifecycle.
 
 - **Topic Triggering** — Verifies each topic fires on its trigger phrases plus paraphrased variants
 - **Responsible AI** — Standard guardrail tests for harmful, adversarial, and policy-bypass prompts
@@ -112,11 +115,7 @@ artifacts from the same test cases.
 - **Integration Data** — Validates external system data retrieval with placeholder-based expected responses
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
-Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
-agent sets live under the agent's `evaluations/` folder. The lifecycle supports
-quality validation, optional SME review, promotion into the configured agent,
-scoped push, execution, run history, and results analysis. Run `/evaluate` to
-create or manage sets, and `/run` to execute a pushed set or inspect results.
+Catalogue-grounded and knowledge-source-curated sets are staged under `workspace/evaluations/`; configured agent sets live under the agent's `evaluations/` folder. Run `/evaluate` to create or manage sets, and `/run` to execute a pushed set or inspect results.
 
 ### 🚀 Local-First Authoring
 
@@ -153,18 +152,19 @@ Re-run the same command to change your environment or agent. See [`setup/README.
 
 **What it checks (41+ automated checks across 8 categories):**
 
-| Category | What's validated |
-|----------|------------------|
-| Prerequisites | M365 Copilot, Copilot Studio, and Teams licenses; Global Admin and PP Admin roles |
-| Environment | Power Platform environment, Dataverse provisioning, DLP policies |
-| Authentication | Entra ID configuration, Conditional Access policies, user sync |
-| External Systems | Workday, ServiceNow, and SAP flow discovery and status |
-| Workday Deep | Environment variables, connection references, flow status, 17 SOAP workflow tests |
-| Agent Files | Agent instructions, starter prompts, required topics, variables, template configs |
-| Configuration | Per-agent validation across all extracted agents (HR and IT) |
-| Publishing | Golden prompts, UAT sign-off, managed solution export, admin approval |
+| Category         | What's validated                                                                  |
+| ---------------- | --------------------------------------------------------------------------------- |
+| Prerequisites    | M365 Copilot, Copilot Studio, and Teams licenses; Global Admin and PP Admin roles |
+| Environment      | Power Platform environment, Dataverse provisioning, DLP policies                  |
+| Authentication   | Entra ID configuration, Conditional Access policies, user sync                    |
+| External Systems | Workday, ServiceNow, and SAP flow discovery and status                            |
+| Workday Deep     | Environment variables, connection references, flow status, 17 SOAP workflow tests |
+| Agent Files      | Agent instructions, starter prompts, required topics, variables, template configs |
+| Configuration    | Per-agent validation across all extracted agents (HR and IT)                      |
+| Publishing       | Golden prompts, UAT sign-off, managed solution export, admin approval             |
 
 **Key capabilities:**
+
 - **Multi-agent** — automatically scans every agent under `workspace/agents/`, not just the active one
 - **HTML report** — opens in your browser with color-coded results, priority highlighting, and clickable remediation links
 - **Run history** — every run is archived in `workspace/flightcheck/history/` for trend tracking
@@ -174,12 +174,12 @@ Re-run the same command to change your environment or agent. See [`setup/README.
 
 **Scopes** for targeted re-runs:
 
-| Scope | What it checks |
-|-------|----------------|
-| `full` | Everything (default) |
-| `workday` | Workday connections, flows, env vars, and SOAP workflow tests |
-| `local` | Agent files only — no API calls |
-| `prerequisites` | Licenses and roles only |
+| Scope           | What it checks                                                |
+| --------------- | ------------------------------------------------------------- |
+| `full`          | Everything (default)                                          |
+| `workday`       | Workday connections, flows, env vars, and SOAP workflow tests |
+| `local`         | Agent files only — no API calls                               |
+| `prerequisites` | Licenses and roles only                                       |
 
 ---
 
@@ -223,6 +223,7 @@ current DA-GA release.
 Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog items. Run `/connect servicenow` to start.
 
 **What the kit sets up:**
+
 - **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
 - **OAuth or Certificate auth** for service-to-service flows — configurable per environment
 - **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
@@ -237,6 +238,7 @@ Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog i
 | Basic auth | Dev/test only |
 
 **What you can build after connecting:**
+
 - Look up or create ServiceNow incidents, HR cases, and catalog requests
 - Query CMDB items, knowledge articles, and user records
 - New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
@@ -254,10 +256,12 @@ integration with the ESS IT Agent is not supported in this release.
 - **Legacy** — the older setup with ISU accounts, security groups, domain permissions, and the `WD_User_Context` RaaS report. Still fully supported for existing installs.
 
 **What the kit sets up (simplified path):**
+
 - **SSO via Entra ID** — verifies or creates the Entra enterprise app, configures trust with Workday, and pre-authorizes the Power Platform connector
 - **Extension pack installation** — installs the Workday extension in Copilot Studio with the OAuthUser and Dataverse connection references configured (including the Workday REST base URL)
 
 **What the kit additionally sets up on the legacy path:**
+
 - **Integration System Users (ISUs)** — automatically creates `ISU_WQL_COPILOT` (for reports) and `ISU_GENERIC_COPILOT` (for API calls) via the Workday SOAP API
 - **Security groups and domain permissions** — guides you through creating `ISSG_WQL_COPILOT` and `ISSG_GENERIC_COPILOT` with the correct domain policies
 - **OAuth API client** — walks you through registering a SAML Bearer Grant client
@@ -293,6 +297,7 @@ is required. This lets the maker arrange the required participants before the
 setup reaches a permission-dependent step.
 
 **What you can build after connecting:**
+
 - Look up employee information, compensation, service anniversary, cost center
 - Check time off balances and request time off
 - Query emergency contacts, national IDs, passports, visas, certifications
@@ -336,18 +341,18 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 
 **Last tested:** 2026-05-04
 
-| Model | Status | Notes |
-|-------|--------|-------|
-| **Claude Sonnet 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Claude Opus 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Codex 5.4 Medium** | ✅ Recommended | Successfully handles MCP tool detection and setup flows |
-| **GPT-4o** | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows |
-| **GPT-4.1** | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
-| **GPT 5.4** | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following |
-| **Codex 5.3 High** | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows |
-| **Codex 5.3** | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity |
-| **Codex 5.3 Medium** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
-| **Claude Sonnet 4** | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows |
+| Model                 | Status             | Notes                                                                             |
+| --------------------- | ------------------ | --------------------------------------------------------------------------------- |
+| **Claude Sonnet 4.6** | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Claude Opus 4.6**   | ✅ Recommended     | Reliable tool use, follows multi-step instructions accurately                     |
+| **Codex 5.4 Medium**  | ✅ Recommended     | Successfully handles MCP tool detection and setup flows                           |
+| **GPT-4o**            | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows         |
+| **GPT-4.1**           | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |
+| **GPT 5.4**           | ⚠️ Not recommended | Unreliable MCP tool detection, inconsistent multi-step instruction following      |
+| **Codex 5.3 High**    | ⚠️ Not recommended | Inconsistent MCP tool detection, unreliable multi-step setup flows                |
+| **Codex 5.3**         | ⚠️ Not recommended | Inconsistent MCP tool detection, false negatives on server connectivity           |
+| **Codex 5.3 Medium**  | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
+| **Claude Sonnet 4**   | ⚠️ Not recommended | Fails MCP tool detection, insufficient reasoning for multi-step setup flows       |
 
 ### Quick Start
 
@@ -371,24 +376,24 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 
 ## Available Commands
 
-| Command | What it does |
-|---------|-------------|
-| `/setup` | Connect this workspace to an existing editable DA Dev agent |
-| `/landing-page` | Configure landing-page branding and content |
-| `/connect` | Explain the DA-GA product extension requirement |
-| `/create` | Create a topic, workflow, or evaluation test set locally |
-| `/update` | Update a topic, workflow, or evaluation test set locally |
-| `/delete` | Report that DA-GA deletion is not yet available |
-| `/scan` | Scan your agent for compile errors and fix them |
-| `/review` | Review local topics or evaluation test sets tagged for review |
-| `/evaluate` | Generate evaluation test sets for your agent |
-| `/run` | Run pushed evaluation test sets and inspect history or results |
-| `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
-| `/flightcheck` | Validate local agent files; standalone FlightCheck retains its full mode |
-| `/push` | Report that native DA-GA deployment is not yet available |
-| `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
-| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
-| `/menu` | See all available commands |
+| Command                     | What it does                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `/setup`                    | Connect this workspace to an existing editable DA Dev agent                                    |
+| `/landing-page`             | Configure landing-page branding and content                                                    |
+| `/connect`                  | Explain the DA-GA product extension requirement                                                |
+| `/create`                   | Create a topic, workflow, or evaluation test set locally                                       |
+| `/update`                   | Update a topic, workflow, or evaluation test set locally                                       |
+| `/delete`                   | Report that DA-GA deletion is not yet available                                                |
+| `/scan`                     | Scan your agent for compile errors and fix them                                                |
+| `/review`                   | Review local topics or evaluation test sets tagged for review                                  |
+| `/evaluate`                 | Generate evaluation test sets for your agent                                                   |
+| `/run`                      | Run pushed evaluation test sets and inspect history or results                                 |
+| `/test`                     | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
+| `/flightcheck`              | Validate local agent files; standalone FlightCheck retains its full mode                       |
+| `/push`                     | Report that native DA-GA deployment is not yet available                                       |
+| `/backup-template-configs`  | Capture hybrid Workday reference-data template configs before an extension update              |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update               |
+| `/menu`                     | See all available commands                                                                     |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
 

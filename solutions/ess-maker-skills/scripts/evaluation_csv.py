@@ -137,6 +137,54 @@ def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
     return "GeneralQuality", None
 
 
+def _single_turn_csv_table(
+    parent: dict[str, Any],
+    single_turn_docs: list[tuple[dict[str, Any], Path]],
+) -> tuple[list[str], list[dict[str, str]]]:
+    source_rows: list[dict[str, Any]] = []
+    for document, _ in single_turn_docs:
+        document_rows = document.get("rows")
+        if isinstance(document_rows, list):
+            source_rows.extend(
+                row for row in document_rows if isinstance(row, dict)
+            )
+
+    method, passing_score = _grader(parent, source_rows)
+    headers = ["Prompt", "Expected response", "Test Method Type"]
+    if passing_score is not None:
+        headers.append("Passing Score")
+
+    export_rows = []
+    for row in source_rows:
+        export_row = {
+            "Prompt": _formula_safe(row.get("input")),
+            "Expected response": _formula_safe(row.get("expectedOutput")),
+            "Test Method Type": method,
+        }
+        if passing_score is not None:
+            export_row["Passing Score"] = passing_score
+        export_rows.append(export_row)
+    return headers, export_rows
+
+
+def evaluation_csv_table(
+    set_folder: str | Path,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Return the exact table for an exclusively single-turn EvaluationSet."""
+    folder = Path(set_folder)
+    parent, case_documents = _set_documents(folder)
+    single_turn_docs = [
+        (document, path)
+        for document, path in case_documents
+        if document.get("kind") == "EvaluationData"
+    ]
+    if len(single_turn_docs) != len(case_documents):
+        raise EvaluationCSVError(
+            f"Evaluation set is not exclusively single-turn: {folder}"
+        )
+    return _single_turn_csv_table(parent, single_turn_docs)
+
+
 def _activity_role(activity: dict[str, Any]) -> str | None:
     outer = activity.get("activity")
     if not isinstance(outer, dict):
@@ -255,29 +303,13 @@ def generate_set_csv(
                     ])
         return output
 
-    rows: list[dict[str, Any]] = []
-    for document, _ in single_turn_docs:
-        document_rows = document.get("rows")
-        if isinstance(document_rows, list):
-            rows.extend(row for row in document_rows if isinstance(row, dict))
-
-    method, passing_score = _grader(parent, rows)
-    headers = ["Prompt", "Expected response", "Test Method Type"]
-    if passing_score is not None:
-        headers.append("Passing Score")
+    headers, rows = _single_turn_csv_table(parent, single_turn_docs)
 
     with output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)
         writer.writerow(headers)
         for row in rows:
-            values = [
-                _formula_safe(row.get("input")),
-                _formula_safe(row.get("expectedOutput")),
-                method,
-            ]
-            if passing_score is not None:
-                values.append(passing_score)
-            writer.writerow(values)
+            writer.writerow([row[header] for header in headers])
     return output
 
 

@@ -1,0 +1,576 @@
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SOLUTION_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills"
+
+
+def _read(relative_path: str) -> str:
+    return (SOLUTION_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _normalized(relative_path: str) -> str:
+    return " ".join(_read(relative_path).split())
+
+
+def _section(text: str, start: str, end: str) -> str:
+    return text[text.index(start) : text.index(end)]
+
+
+def test_dispatcher_routes_local_knowledge_before_topic_matching():
+    dispatcher = _read("src/skills/evaluations/dispatcher/SKILL.md")
+    normalized = " ".join(dispatcher.split()).lower()
+
+    assert "src/skills/evaluations/curate/SKILL.md" in dispatcher
+    assert '"curate from a knowledge source"' in normalized
+    assert "even when neither required path was supplied" in normalized
+    assert "route immediately" in normalized
+    assert "local knowledge source" in normalized
+    assert "connected knowledge base" in normalized
+    assert "agent-instructions file" in normalized
+    assert dispatcher.index("src/skills/evaluations/curate/SKILL.md") < (
+        dispatcher.index("### Matching topic found")
+    )
+    assert dispatcher.index("src/skills/evaluations/curate/SKILL.md") < (
+        dispatcher.index("Which scenario or goal should I create evaluation tests for?")
+    )
+
+
+def test_curator_wrapper_resolves_and_confirms_connected_kb_connection():
+    wrapper_text = _read("src/skills/evaluations/curate/SKILL.md")
+    wrapper = " ".join(wrapper_text.split())
+    normalized_lower = wrapper.lower()
+
+    # Resolver shim runs ahead of the vendored curator body's Step 3b.
+    assert "scripts/resolve_kb_connection.py" in wrapper
+    assert "before proceeding into the curator body's step 3b" in normalized_lower
+    assert wrapper.index("scripts/resolve_kb_connection.py") < wrapper.index(
+        "existing Step 3b/3c flow"
+    )
+
+    # Error and none_bound both stop the flow and report the specific reason,
+    # with no automatic fallback to local-file mode.
+    assert '`status == "error"`' in wrapper
+    assert '`status == "none_bound"`' in wrapper
+    assert "stop and report" in normalized_lower
+    assert "automatically switch to local" not in normalized_lower
+    assert "automatically fall back to local" not in normalized_lower
+    assert "must not silently fall back to local-file mode" in normalized_lower
+    assert "restart mode selection" in normalized_lower
+
+    # Single resolved connection requires explicit maker confirmation.
+    assert '`status == "ok"`' in wrapper
+    assert "exactly one connection" in normalized_lower
+    assert "require" in normalized_lower and "explicit confirmation" in normalized_lower
+
+    # Multiple resolved connections require the maker to pick one or more.
+    assert "more than one connection" in normalized_lower
+    assert "list all of them" in normalized_lower
+    assert "pick one or more" in normalized_lower
+
+
+def test_dispatcher_preserves_topic_and_catalogue_routes():
+    dispatcher = _read("src/skills/evaluations/dispatcher/SKILL.md")
+    normalized = " ".join(dispatcher.split()).lower()
+
+    assert "src/skills/evaluations/create/SKILL.md" in dispatcher
+    assert "src/skills/evaluations/generate/SKILL.md" in dispatcher
+    assert "plain named scenario" in normalized
+    assert "explicit document grounding" in normalized
+
+
+def test_evaluate_prompt_offers_curator_creation_through_dispatcher():
+    prompt = _read(".github/prompts/evaluate.prompt.md")
+    normalized = " ".join(prompt.split()).lower()
+
+    assert "curate from a knowledge source" in normalized
+    assert "configured or named scenario" in normalized
+    assert "src/skills/evaluations/dispatcher/SKILL.md" in prompt
+
+
+def test_curator_wrapper_reads_vendored_files_without_duplication():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split())
+    normalized_lower = normalized.lower()
+
+    # Vendored, in-repo curator content — no submodule handshake.
+    assert "curator/curate-evals.md" in wrapper
+    assert "curator/check_eval_artifacts.py" in wrapper
+    assert "read `curator/curate-evals.md` in full" in normalized_lower
+    assert (
+        "src/skills/evaluations/curate/curator/check_eval_artifacts.py" in wrapper
+    )
+    # Missing vendored files stop the flow with an actionable error.
+    assert "curator is not available in this workspace" in normalized_lower
+    # No submodule scaffolding leaks back in.
+    assert "git submodule update" not in normalized_lower
+    assert "submodule update --init" not in normalized_lower
+    assert "eval_curator_submodule" not in wrapper
+    assert "skillpath" not in normalized_lower
+    assert "host-contract" not in normalized_lower
+    assert "never duplicate the curator instructions" in normalized_lower
+    assert "active GitHub Copilot session" in wrapper
+
+
+def test_curator_wrapper_defines_host_parameters_and_mode_selection():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split())
+    normalized_lower = normalized.lower()
+
+    assert "hostOutputRoot" in wrapper
+    assert "workspace/evaluations" in wrapper
+    assert "hostLifecycleHandoff" in wrapper
+    assert (
+        "Maker Kit validation, maker review choice, promotion, scoped push, "
+        "and post-success run/results lifecycle"
+    ) in normalized
+    # Wrapper asks the maker to choose local vs connected knowledge base first.
+    assert "connected knowledge base" in normalized_lower
+    assert "local files" in normalized_lower or "local folder" in normalized_lower
+    assert "local-file mode only for v1" not in normalized_lower
+    assert "knowledge source" in wrapper.lower()
+    assert "agent instructions" in wrapper.lower()
+
+
+def test_curator_wrapper_hands_off_to_maker_kit_lifecycle():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split())
+    normalized_lower = normalized.lower()
+
+    assert "src/skills/evaluations/validate/SKILL.md" in wrapper
+    assert "src/skills/evaluations/quality-fix-flow.md" in wrapper
+    assert "src/skills/evaluations/update/SKILL.md" in wrapper
+    assert "for each generated set" in normalized_lower
+    assert "skip the curator local-only wrap-up" in normalized_lower
+    assert "step 7 onward" in normalized_lower
+    assert "explicitly preselected" in normalized_lower
+    assert "one authoritative flow" in normalized_lower
+    assert "do not duplicate" in normalized_lower
+
+
+def test_curator_wrapper_requires_maker_choice_before_step_7_handoff():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split())
+
+    gate = normalized.index("What would you like to do with these test sets?")
+    step_7_handoff = normalized.index("update **Step 7 onward**")
+
+    assert gate < step_7_handoff
+    assert "**Edit the test sets myself**" in wrapper
+    assert "**Send them to a judge or SME for feedback**" in wrapper
+    assert "**Keep them unchanged**" in wrapper
+    assert "Wait for the maker's response" in normalized
+    assert "Steps 2 through 6" in normalized
+    assert "return to this maker review gate" in normalized
+    assert "update **Flow R1**" in normalized
+    assert "without implementing any mutation" in normalized
+
+
+def test_update_authorizes_every_curator_preselected_set_entry():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    update = " ".join(update_text.split())
+    update_lower = update.lower()
+    rules = " ".join(
+        _section(update_text, "## Rules", "## Review-intent routing").split()
+    ).lower()
+
+    for choice in (
+        "Edit the test sets myself",
+        "Send them to a judge or SME for feedback",
+        "Keep them unchanged",
+    ):
+        assert choice in wrapper
+        assert f"**{choice}**" in update
+
+    assert "exact generated workspace set folders already preselected" in update
+    assert "enter the edit path at Step 2" in update
+    assert "enter Flow R1 with the exact preselected sets" in update
+    assert "enter Step 7 directly with the exact preselected sets" in update
+    assert "without rediscovering or reselecting those sets" in update_lower
+    assert "for normal update entries, always discover sets" in rules
+    assert "curator-originated preselected-set handoffs are exempt" in rules
+    assert "use only the exact folders supplied by the curator skill" in rules
+    assert "normalized folder and csv paths returned by" in update_lower
+    assert "must receive those paths unchanged" in update_lower
+
+
+def test_curator_edit_path_returns_to_mandatory_maker_gate():
+    wrapper_text = _read("src/skills/evaluations/curate/SKILL.md")
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    wrapper = " ".join(wrapper_text.split())
+    update = " ".join(update_text.split())
+    wrapper_gate = " ".join(
+        _section(
+            wrapper_text,
+            "## Step 4: Validate, then ask for maker review",
+            "Failed or partial validation",
+        ).split()
+    )
+    curator_handoffs = " ".join(
+        _section(
+            update_text,
+            "### Curator-originated preselected-set handoffs",
+            "### Review-state reconciliation",
+        ).split()
+    ).lower()
+    step_2 = " ".join(
+        _section(
+            update_text,
+            "## Step 2: Identify the requested changes",
+            "## Step 3:",
+        ).split()
+    )
+
+    assert "Steps 2 through 6" in wrapper
+    assert "return to this maker review gate" in wrapper
+    assert "This curator gate has already selected the edit path" in wrapper_gate
+    assert "skip its generic Edit/SME/Keep continuation question" in wrapper_gate
+    assert "enter the edit path at Step 2" in update
+    assert "the curator gate already selected the edit path" in curator_handoffs
+    assert "show the current csv preview and cases" in curator_handoffs
+    assert "skip step 2's generic continuation question" in curator_handoffs
+    assert "proceed directly to selecting and editing cases" in curator_handoffs
+    assert "curator edit handoff is the exception" in update.lower()
+    assert "already selected **Edit the test sets myself**" in update
+    assert (
+        step_2.index("regenerate its CSV")
+        < step_2.index("curator gate already selected")
+        < step_2.index("mandatory structured question")
+    )
+    assert "do not ask this question again" in step_2
+    assert "For every non-curator entry" in step_2
+    assert "How would you like to continue with **{set name}**?" in step_2
+    assert "**Edit the test set myself**" in step_2
+    assert "**Send it to a judge or SME for feedback**" in step_2
+    assert "**Keep it unchanged**" in step_2
+    assert (
+        "After Step 6 completes, return control to the curator skill's mandatory maker review gate"
+        in update
+    )
+    assert "Do not fall through to Step 6a or Step 7" in update
+
+
+def test_dispatcher_delegates_required_agent_instructions_collection():
+    dispatcher = _normalized("src/skills/evaluations/dispatcher/SKILL.md")
+
+    assert "agent-instructions file remains required" in dispatcher
+    assert "curator wrapper enforces that requirement" in dispatcher
+
+
+def test_flow_r1_accepts_curator_preselected_sets_without_reselection():
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    flow_r1 = " ".join(
+        _section(
+            update_text,
+            "### Flow R1 — Tag selected test sets for review",
+            "The pushed parent description contains:",
+        ).split()
+    )
+
+    assert "When Flow R1 is entered from the curator maker review gate" in flow_r1
+    assert "exact generated workspace set folders as already preselected" in flow_r1
+    assert "Do not run `evaluation_review.py --list-all`" in flow_r1
+    assert "ask the maker to select the sets again" in flow_r1
+    status_update = flow_r1.index("--status review_requested")
+    curator_handoff = flow_r1.index(
+        "For a curator-originated preselected-set handoff, enter Step 7 exactly once"
+    )
+    assert status_update < curator_handoff
+    assert (
+        "Do not run configuration, promotion, dry-run, or push actions before that "
+        "Step 7 handoff" in flow_r1
+    )
+    assert "For every other Flow R1 entry" in flow_r1
+    assert (
+        "enter Step 7 and follow its push-decision, configuration, promotion, "
+        "dry-run, push, cleanup, and post-push gates" in flow_r1
+    )
+
+
+def test_update_mixed_declines_do_not_stop_approved_pushes():
+    update = _normalized("src/skills/evaluations/update/SKILL.md").lower()
+
+    assert "for each set the user declines" in update
+    assert "do not finish the overall flow while `push-approved sets`" in update
+    assert "continues through steps 8 and 9" in update
+
+
+def test_run_skill_is_referenced_only_after_successful_push():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    update = _read("src/skills/evaluations/update/SKILL.md")
+    run = _read("src/skills/evaluations/run/SKILL.md")
+    normalized = " ".join(update.split())
+    run_handoff = " ".join(
+        _section(
+            run,
+            "### Eligible-set handoff from the update skill",
+            "## Flow A: Start an evaluation run",
+        ).split()
+    )
+
+    assert "src/skills/evaluations/run/SKILL.md" not in wrapper
+    success_gate = normalized.index(
+        "If one or more selected sets completed `push.py --yes` successfully"
+    )
+    run_reference = normalized.index("src/skills/evaluations/run/SKILL.md")
+
+    assert success_gate < run_reference
+    assert "**Run an evaluation**" in update
+    assert "**View results**" in update
+    assert "**Finish**" in update
+    assert "Wait for the user's response" in normalized
+    assert "exact successfully pushed set names and IDs" in normalized
+    assert "eligible-set scope" in normalized
+    assert "choosing a next action does not select a test set or run" in normalized
+    assert "discovery and selection must remain separate user turns" in normalized
+    assert "Do not offer **Run an evaluation** as immediately available" in update
+    assert "Whenever `src/skills/evaluations/update/SKILL.md` enters" in run_handoff
+    assert "from its post-push next actions" in run_handoff
+    assert "whether every selected set succeeded or only some did" in run_handoff
+    assert "only for returned sets whose name or ID is in that scope" in run_handoff
+    assert (
+        "only for runs whose test-set name or `testSetId` is in that scope"
+        in run_handoff
+    )
+    assert "Do not widen the scope to unrelated deployed sets or runs" in run_handoff
+
+
+def test_update_step_7_is_direct_curator_handoff_not_only_curator_entry():
+    update = _read("src/skills/evaluations/update/SKILL.md")
+    step_7 = _section(update, "## Step 7: Ask whether to push", "## Step 8:")
+    normalized = " ".join(step_7.split()).lower()
+
+    assert "authoritative post-validation lifecycle" in normalized
+    assert "src/skills/evaluations/curate/SKILL.md" in update
+    assert "one of several authorized curator entries" in normalized
+    assert "step 2 edit path or flow r1" in normalized
+    assert "exact generated workspace set folders" in normalized
+    assert (
+        "curator structural validation and maker kit quality validation both complete successfully"
+        in normalized
+    )
+    assert "a direct step 7 handoff is allowed only from" in normalized
+    assert "keep them unchanged" in normalized
+    assert "judge or sme path has completed flow r1 as applicable" in normalized
+    assert "normal update entry" in normalized
+    assert "curator direct-handoff entry" in normalized
+    assert (
+        normalized.index("normal update entry")
+        < normalized.index("curator direct-handoff entry")
+        < normalized.index("the generic normal-update prerequisite")
+    )
+    assert "exact generated workspace set folders are preselected" in normalized
+    assert "maker gate choice is **keep them unchanged**" in normalized
+    assert "flow r1 has completed" in normalized
+    assert "exempt from the generic normal-update prerequisite" in normalized
+    assert "ready locally" in normalized
+    assert "enter step 7 directly" in normalized
+    assert "do not repeat steps 1 through 6" in normalized
+    assert "another skill" not in normalized
+    assert "decline/keep-local" in normalized
+    assert "optional review tagging" in normalized
+    assert "setup check" in normalized
+    assert "promotion" in normalized
+    assert "scoped dry-run and push" in normalized
+    assert "cleanup" in normalized
+    assert "final status" in normalized
+
+
+def test_mixed_push_outcomes_limit_run_and_view_to_successful_sets():
+    update = _normalized("src/skills/evaluations/update/SKILL.md")
+
+    assert "For mixed multi-set outcomes" in update
+    assert "available only for the sets whose push succeeded" in update
+    assert (
+        "Identify those eligible sets before asking the next-action question" in update
+    )
+    assert "retain the mandatory local-only reminder and resume-push guidance" in update
+    assert "they are not eligible for Run or View actions in this interaction" in update
+    assert (
+        "If no set was successfully pushed, do not offer the next-action question"
+        in update
+    )
+
+
+def test_curator_wrapper_blocks_on_missing_input_or_failed_validation():
+    wrapper = _read("src/skills/evaluations/curate/SKILL.md")
+    normalized = " ".join(wrapper.split()).lower()
+
+    assert "ask exactly one question" in normalized
+    assert "wait" in normalized
+    assert "curator is not available in this workspace" in normalized
+    assert "missing vendored curator file" in normalized
+    assert "stop" in normalized
+    assert "failed or partial validation" in normalized
+    assert "stays local" in normalized
+    assert "blocks lifecycle handoff" in normalized
+
+
+def test_curator_wrapper_accepts_only_complete_successful_handoffs():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+
+    assert "`structuralValidation` is exactly `passed`" in wrapper
+    assert "`qualityValidation` is exactly `passed`" in wrapper
+    assert "one or more generated set entries" in wrapper
+    assert "every entry in `sets`" in wrapper
+    assert "successful Maker Kit quality validation" in wrapper
+    assert "even when the curator reports `qualityValidation: passed`" in wrapper
+    assert "malformed, failed, or partial handoff" in wrapper
+    assert "remain local" in wrapper
+    assert "must not enter the update skill" in wrapper
+    assert "promotion, push, cleanup, or run" in wrapper
+    assert "scripts/eval_curator_handoff.py validate" in wrapper
+    assert "Before invoking Maker Kit validation" in wrapper
+    assert "traversal" in wrapper
+    assert "symlink or junction escape" in wrapper
+    assert "`exports/` as a set folder" in wrapper
+
+
+def test_curator_wrapper_delegates_push_contract_without_commands():
+    wrapper = _normalized("src/skills/evaluations/curate/SKILL.md")
+
+    assert (
+        "Topic confirmation, generation preview, and the maker review choice "
+        "are not push approval"
+    ) in wrapper
+    assert "explicit push approval inside update Step 7" in wrapper
+    assert "sole source of truth" in wrapper
+    assert "evaluation_promotion.py" not in wrapper
+    assert "push.py" not in wrapper
+    assert "--dry-run" not in wrapper
+    assert "--yes" not in wrapper
+
+
+def test_update_owns_concrete_workspace_push_and_cleanup_gates():
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    update = " ".join(update_text.split())
+    step_8 = " ".join(
+        _section(
+            update_text,
+            "## Step 8: Prepare the selected set for push",
+            "## Step 9:",
+        ).split()
+    )
+    step_9_text = _section(
+        update_text, "## Step 9: Dry run and push", "## Step 10:"
+    )
+    step_9 = " ".join(step_9_text.split())
+    step_9_lines = [line.strip() for line in step_9_text.splitlines()]
+
+    promote = (
+        'python scripts/evaluation_promotion.py promote --set-name "{set}" '
+        '--agent-folder "{agent.folder}"'
+    )
+    dry_run = 'python scripts/push.py --only "evaluations/{set}/*" --dry-run'
+    confirmed_push = 'python scripts/push.py --only "evaluations/{set}/*" --yes'
+    confirmed_force_delete_push = (
+        'python scripts/push.py --only "evaluations/{set}/*" --yes --force-delete'
+    )
+    cleanup = (
+        'python scripts/evaluation_promotion.py cleanup --set-name "{set}" '
+        '--agent-folder "{agent.folder}"'
+    )
+
+    assert promote in step_8
+    assert "preserves the workspace source until the push succeeds" in step_8
+    assert "until cleanup completes successfully" in step_8
+    assert dry_run in step_9_lines
+    assert confirmed_push in step_9_lines
+    assert confirmed_force_delete_push in step_9_lines
+
+    dry_run_line = step_9_lines.index(dry_run)
+    confirmation_line = next(
+        index
+        for index, line in enumerate(step_9_lines)
+        if line.startswith("Show the output and get confirmation.")
+    )
+    confirmed_push_lines = (
+        step_9_lines.index(confirmed_push),
+        step_9_lines.index(confirmed_force_delete_push),
+    )
+
+    assert all(dry_run_line < line for line in confirmed_push_lines)
+    assert all(confirmation_line < line for line in confirmed_push_lines)
+    assert (
+        "Use `--yes` only after the user explicitly confirms the push in Step 7"
+        in step_9
+    )
+    assert step_9.index("Only when `push.py --yes` exits successfully") < step_9.index(
+        cleanup
+    )
+    assert "do not perform cleanup" in step_9
+    assert "workspace source remains available for retry" in step_9
+    assert "must not duplicate these questions, commands, or behaviors" in update
+
+
+def test_mixed_push_approval_scopes_every_mutation_to_approved_sets():
+    update_text = _read("src/skills/evaluations/update/SKILL.md")
+    step_7 = _section(update_text, "## Step 7:", "## Step 8:")
+    step_8 = _section(update_text, "## Step 8:", "## Step 9:")
+    step_9 = _section(update_text, "## Step 9:", "## Step 10:")
+    step_10 = update_text[update_text.index("## Step 10:") :]
+    normalized_step_7 = " ".join(step_7.split())
+    normalized_step_8 = " ".join(step_8.split())
+    normalized_step_9 = " ".join(step_9.split())
+    normalized_step_10 = " ".join(step_10.split())
+    assert "`push-approved sets`" in normalized_step_7
+    assert "add only that set" in normalized_step_7.lower()
+    assert "declined or kept local" in normalized_step_7.lower()
+    assert "never add" in normalized_step_7.lower()
+    assert "two selected sets" in normalized_step_7.lower()
+    assert "one is approved" in normalized_step_7.lower()
+    assert "one is declined" in normalized_step_7.lower()
+    assert "only the approved set" in normalized_step_7.lower()
+    assert (
+        "review tagging apply only to `push-approved sets`"
+        in normalized_step_7
+    )
+    assert "Operate only on `push-approved sets`" in normalized_step_8
+    assert "Promotion must never" in normalized_step_8
+    assert "every set in `push-approved sets`" in normalized_step_9
+    assert "never appear in the scoped dry-run" in normalized_step_9
+    assert "only for members of `push-approved sets`" in normalized_step_9
+    assert "never appear in a `--yes` push" in normalized_step_9
+    assert (
+        "successfully pushed members of `push-approved sets`"
+        in normalized_step_9
+    )
+    assert "must never appear in cleanup" in normalized_step_9
+    assert (
+        "successfully pushed members of `push-approved sets`"
+        in normalized_step_10
+    )
+    assert "must never appear in successful-push actions" in normalized_step_10
+
+
+def test_maker_readme_documents_all_evaluation_generation_sources():
+    readme = " ".join(_read("README.md").split()).lower()
+
+    assert "configured agent topics" in readme
+    assert "behavior already present in the active agent" in readme
+    assert "local knowledge source" in readme
+    assert "connected knowledge base" in readme
+    assert "agent instructions" in readme
+    assert "grounded knowledge" in readme
+    assert "instruction-adherence" in readme
+    assert "vendored curator" in readme
+    assert "bundled ess catalogue" in readme
+    assert "without configured topics or documents" in readme
+    assert "native `.mcs.yml`" in readme
+    assert "csv" in readme
+    assert "review, push, run, and results lifecycle" in readme
+
+
+def test_evaluation_docs_preserve_generation_skill_boundaries():
+    generate = " ".join(
+        _read("src/skills/evaluations/generate/SKILL.md").split()
+    ).lower()
+    create = " ".join(_read("src/skills/evaluations/create/SKILL.md").split()).lower()
+
+    assert "bundled-catalogue-only" in generate
+    assert "must not handle user-supplied document folders" in generate
+    assert "configured-topic-grounded" in create
+    assert "must not absorb" in create
+    assert "document-grounding" in create
+    assert "curator workflow" in create

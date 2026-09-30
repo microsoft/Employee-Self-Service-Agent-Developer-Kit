@@ -103,6 +103,82 @@ def test_regenerate_exports_creates_general_quality_csv(tmp_path):
     ]
 
 
+def test_regenerate_exports_keeps_mixed_set_single_turn_behavior(tmp_path):
+    evaluations = tmp_path / "evaluations"
+    mixed = evaluations / "mixed"
+    following = evaluations / "z-following"
+    exports = evaluations / "exports"
+    mixed.mkdir(parents=True)
+    following.mkdir()
+    exports.mkdir()
+    (mixed / "set.mcs.yml").write_text(
+        "kind: EvaluationSet\n"
+        "displayName: Mixed\n"
+        "graders:\n"
+        "  - kind: CompareMeaningGrader\n"
+        "    threshold: 0.8\n",
+        encoding="utf-8",
+    )
+    (mixed / "single.mcs.yml").write_text(
+        "kind: EvaluationData\n"
+        "rows:\n"
+        "  - input: Single-turn question\n"
+        "    expectedOutput: Single-turn answer\n",
+        encoding="utf-8",
+    )
+    (mixed / "conversation.mcs.yml").write_text(
+        "kind: MultiTurnEvaluationCase\n"
+        "activities:\n"
+        "  - activity:\n"
+        "      value:\n"
+        "        from:\n"
+        "          role: user\n"
+        "    text:\n"
+        "      - Multi-turn question\n",
+        encoding="utf-8",
+    )
+    (following / "set.mcs.yml").write_text(
+        "kind: EvaluationSet\n"
+        "displayName: Following\n",
+        encoding="utf-8",
+    )
+    (following / "case.mcs.yml").write_text(
+        "kind: EvaluationData\n"
+        "rows:\n"
+        "  - input: Following question\n",
+        encoding="utf-8",
+    )
+    existing = exports / "20260927_Mixed.csv"
+    existing.write_text("prior export\n", encoding="utf-8")
+
+    paths = evaluation_csv.regenerate_evaluation_exports(
+        tmp_path,
+        timestamp="20260927",
+    )
+
+    assert [path.name for path in paths] == [
+        "20260927_Mixed.csv",
+        "20260927_Following.csv",
+    ]
+    with existing.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert rows == [
+        [
+            "Prompt",
+            "Expected response",
+            "Test Method Type",
+            "Passing Score",
+        ],
+        [
+            "Single-turn question",
+            "Single-turn answer",
+            "CompareMeaning",
+            "80",
+        ],
+    ]
+    assert paths[1].is_file()
+
+
 def test_generate_set_csv_migrates_legacy_export_to_display_name_format(tmp_path):
     set_folder = tmp_path / "evaluations" / "compensation"
     exports = tmp_path / "evaluations" / "exports"

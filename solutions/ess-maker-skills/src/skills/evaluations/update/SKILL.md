@@ -20,7 +20,9 @@ available in this workspace.
 
 ## Rules
 
-- Always discover sets from both locations when they are available.
+- For normal update entries, always discover sets from both locations when they
+  are available. Curator-originated preselected-set handoffs are exempt from
+  rediscovery; use only the exact folders supplied by the curator skill.
 - Do not require setup to update a workspace-level set.
 - Require a complete `.local/config.json` only for discovering or pushing
   configured-agent sets.
@@ -35,8 +37,8 @@ available in this workspace.
 - Never push until the user explicitly chooses to push.
 - Promote a workspace-level set only after the user chooses to push it. Promotion
   stages a copy under the configured agent. Remove the workspace source and its
-  matching workspace CSV only after the push succeeds; preserve both if
-  promotion or push fails.
+  matching workspace CSV only through successful cleanup after the push
+  succeeds; preserve both if promotion, push, or cleanup fails.
 - Track progress with the todo list tool.
 - Never ask a user to type `review_requested` or `review_completed`; the skill
   owns review status values.
@@ -49,9 +51,11 @@ available in this workspace.
   the choices are already known.
 - Never finish immediately after displaying test cases. Makers must receive an
   explicit choice to edit the set themselves, send it to a judge or SME for
-  feedback, or keep it unchanged. Reviewers must receive an explicit choice to
-  provide feedback, suggestions, or recommendations, or complete review
-  without feedback.
+  feedback, or keep it unchanged. The curator edit handoff is the exception to
+  asking this choice inside the update skill because the maker already selected
+  **Edit the test sets myself** at the curator gate; follow the preselected-set
+  handoff below. Reviewers must receive an explicit choice to provide feedback,
+  suggestions, or recommendations, or complete review without feedback.
 
 ## Review-intent routing
 
@@ -73,6 +77,33 @@ Review state and review activity are separate:
 
 Never route a normal or resumed push into review completion merely because its
 local `review.json` contains `review_requested`.
+
+### Curator-originated preselected-set handoffs
+
+`src/skills/evaluations/curate/SKILL.md` may enter this skill with the exact
+generated workspace set folders already preselected after structural and
+Maker Kit quality validation. Accept each of its three named handoffs without
+rediscovering or reselecting those sets. The curator skill supplies the
+normalized folder and CSV paths returned by `eval_curator_handoff.py`; this
+skill must receive those paths unchanged and must not reconstruct them from set
+names or other handoff fields:
+
+- **Edit the test sets myself** — enter the edit path at Step 2, then complete
+  Steps 2 through 6, including YAML/CSV synchronization and quality validation.
+  The curator gate already selected the edit path: show the current CSV preview
+  and cases, skip Step 2's generic continuation question, and proceed directly
+  to selecting and editing cases. After Step 6 completes, return control to the
+  curator skill's mandatory maker review gate. Do not fall through to Step 6a
+  or Step 7.
+- **Send them to a judge or SME for feedback** — enter Flow R1 with the exact
+  preselected sets as described below. Do not list all sets or ask the maker to
+  select them again.
+- **Keep them unchanged** — enter Step 7 directly with the exact preselected
+  sets, subject to the Step 7 entry requirements.
+
+These curator handoffs waive only the discovery or reselection steps explicitly
+identified above. They do not weaken mutation, synchronization, validation,
+review-state, promotion, dry-run, push, cleanup, or post-push requirements.
 
 ### Review-state reconciliation
 
@@ -105,6 +136,13 @@ Before asking the user to tag a set, explain:
 > recommendations. The maker remains responsible for editing the test set. The
 > tag must be pushed to Copilot Studio before it is shared with other users.
 
+When Flow R1 is entered from the curator maker review gate, accept the exact
+generated workspace set folders as already preselected. Do not run
+`evaluation_review.py --list-all`, display unrelated sets, or ask the maker to
+select the sets again. Continue at the status update in step 5 for every
+preselected set, then follow the curator-specific branch in step 6 to enter
+Step 7 exactly once.
+
 1. For a generic request such as **"tag testsets for review"**, run:
 
    ```text
@@ -126,8 +164,13 @@ Before asking the user to tag a set, explain:
    python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_requested
    ```
 
-6. Explain that the tag is local until pushed. Continue through the normal
-   configuration check, promotion when needed, dry run, and push flow.
+6. Explain that the tag is local until pushed.
+   - For a curator-originated preselected-set handoff, enter Step 7 exactly
+     once after recording and explaining the local `review_requested` state.
+     Do not run configuration, promotion, dry-run, or push actions before that
+     Step 7 handoff.
+   - For every other Flow R1 entry, enter Step 7 and follow its push-decision,
+     configuration, promotion, dry-run, push, cleanup, and post-push gates.
 
 The pushed parent description contains:
 
@@ -275,8 +318,13 @@ Then continue with the existing detailed edit experience and show its cases:
 Read both `input` and `expectedOutput` from every EvaluationData file before
 presenting the cases. The expected response is required context, not optional.
 
-Unless the user already supplied a specific edit, follow the case display with
-this mandatory structured question:
+If this Step 2 entry came from the curator gate's **Edit the test sets myself**
+handoff, the curator gate already selected edit. After showing the preview and
+cases, do not ask this question again; proceed directly to selecting and
+editing cases.
+
+For every non-curator entry, unless the user already supplied a specific edit,
+follow the case display with this mandatory structured question:
 
 > How would you like to continue with **{set name}**?
 
@@ -477,26 +525,69 @@ validation; completion requires the user's explicit choice in an active review.
 
 ## Step 7: Ask whether to push
 
-Only after the update, CSV synchronization, validation, file review, and any
-required Step 6a review-completion gate are complete, ask for every selected
+This section is the authoritative post-validation lifecycle for generated
+workspace sets. It is also one of several authorized curator entries into this
+skill; the curator may instead enter the Step 2 edit path or Flow R1 as defined
+above.
+
+Step 7 has two prerequisite alternatives:
+
+- **Normal update entry** — the update, CSV synchronization, validation, file
+  review, and any required Step 6a review-completion gate are complete.
+- **Curator direct-handoff entry** — the exact generated workspace set folders
+  are preselected, curator structural validation and Maker Kit quality
+  validation both complete successfully, and either the maker gate choice is
+  **Keep them unchanged** or Flow R1 has completed for the judge or SME path.
+  This authorized curator entry is exempt from the generic normal-update
+  prerequisite because unchanged sets have no edit or file-review steps to
+  complete and Flow R1 owns its required review-state work. Enter Step 7
+  directly. Do not repeat Steps 1 through 6 or rediscover or reselect those
+  sets.
+
+A direct Step 7 handoff is allowed only from
+`src/skills/evaluations/curate/SKILL.md` under the curator alternative above:
+the maker chose **Keep them unchanged**, or the curator's judge or SME path has
+completed Flow R1 as applicable.
+
+From this point onward, this skill owns decline/keep-local, optional review
+tagging, setup check, promotion, scoped dry-run and push, cleanup, and final
+status. The curator skill must not duplicate these questions, commands, or
+behaviors.
+
+After either prerequisite alternative is satisfied, ask for every selected
 set:
 
-> The **{set name}** evaluation set is updated locally. Would you like to
+> The **{set name}** evaluation set is ready locally. Would you like to
 > **push it to Copilot Studio now**?
 
 Ask this even for workspace-level sets and even when no agent is currently
 configured. Do not inspect or report agent configuration until the user answers.
 
-### If the user declines
+Record each answer independently. After all Step 7 answers, create a distinct
+`push-approved sets` collection. Add only that set when the user explicitly
+chooses push for it. Never add a set that was declined or kept local. If there
+are two selected sets with mixed answers — one is approved and one is declined
+— only the approved set enters `push-approved sets`; the declined set finishes
+locally and must not appear in any later command or mutation lifecycle.
 
-Confirm the local locations and finish without checking setup:
+### For each set the user declines
+
+Confirm the local locations and finish that set locally without checking setup:
 
 - `.mcs.yml`: the selected set folder.
 - CSV: that source's `evaluations/exports/` folder.
 
+Declined or keep-local sets must never appear in promotion, review tagging,
+dry-run, `--yes` push, cleanup, or successful-push actions. If
+`push-approved sets` is empty after all answers, skip Steps 8 and 9 and proceed
+to the local-only final summary. Do not finish the overall flow while
+`push-approved sets` contains another set; that approved subset continues
+through Steps 8 and 9.
+
 ### If the user chooses push
 
-Only now read `.local/config.json` and check that:
+Only when `push-approved sets` is non-empty, read `.local/config.json` and
+check that:
 
 1. `setup` is `"complete"`;
 2. `agent.folder` exists;
@@ -515,12 +606,16 @@ Before preparing the push, ask:
 
 > Would you like to tag any selected test sets for review?
 
-If yes, run the Flow R1 metadata command for each selected set before the dry
-run. If the current request already followed Flow R1 or the selected set is
-already `review_requested`, do not ask again. Preserve its existing status and
-continue the push.
+This question and all review tagging apply only to `push-approved sets`. If
+yes, run the Flow R1 metadata command for each set in `push-approved sets`
+before the dry run. If the current request already followed Flow R1 or an
+approved set is already `review_requested`, do not ask again. Preserve its
+existing status and continue the push.
 
 ## Step 8: Prepare the selected set for push
+
+Operate only on `push-approved sets`. Promotion must never read, copy,
+overwrite, or otherwise mutate a declined or keep-local set.
 
 ### Set already owned by the configured agent
 
@@ -559,11 +654,11 @@ review complete and do not describe the staging copy as proof that review
 occurred.
 
 The agent-folder copy becomes the source for `push.py`. Keep the workspace set
-unchanged until the push reports full success.
+unchanged until cleanup completes successfully after a full push success.
 
 ## Step 9: Dry run and push
 
-Build one scope argument for every selected set:
+Build one scope argument for every set in `push-approved sets`:
 
 ```text
 --only "evaluations/{set}/*"
@@ -575,9 +670,11 @@ Run the scoped preview:
 python scripts/push.py --only "evaluations/{set}/*" --dry-run
 ```
 
-For multiple selected sets, repeat `--only` once per set. Never use an unscoped
-`push.py` command from the evaluation update, tagging, review, or promotion
-flow. Unscoped push can include unrelated pending topic or workflow changes.
+For multiple `push-approved sets`, repeat `--only` once per approved set.
+Declined or keep-local sets must never appear in the scoped dry-run.
+Never use an unscoped `push.py` command from the evaluation update, tagging,
+review, or promotion flow. Unscoped push can include unrelated pending topic
+or workflow changes.
 
 Show the output and get confirmation. Clearly identify any deletions within
 the selected evaluation set as replacement of deployed cases.
@@ -602,16 +699,18 @@ If the scoped preview has no deletions, omit `--force-delete`:
 python scripts/push.py --only "evaluations/{set}/*" --yes
 ```
 
-Use `--yes` only after the user explicitly confirms the push in Step 7. Use
-`--force-delete` only after the exact selected-set deletions have been shown
-and approved. The scope ensures unrelated local topic or workflow deletions
-remain untouched for a later push.
+Use `--yes` only after the user explicitly confirms the push in Step 7, and
+only for members of `push-approved sets`. Declined or keep-local sets must
+never appear in a `--yes` push. Use `--force-delete` only after the exact
+approved-set deletions have been shown and approved. The scope ensures
+unrelated local topic or workflow deletions remain untouched for a later push.
 
 If the push fails, show the error and offer retry or checkpoint revert.
 
 ### Successful workspace promotion cleanup
 
-   Only when `push.py --yes` exits successfully:
+   Only when `push.py --yes` exits successfully for a member of
+   `push-approved sets`:
 
    Run:
 
@@ -627,6 +726,9 @@ If the push fails, show the error and offer retry or checkpoint revert.
 If the push fails, is cancelled, or only the dry run completes, do not perform
 cleanup. The workspace source remains available for retry.
 
+Cleanup is scoped only to successfully pushed members of `push-approved sets`.
+Declined or keep-local sets must never appear in cleanup.
+
 ## Step 10: Final summary
 
 Report each updated set, its source, changed-case count, CSV location, and
@@ -636,6 +738,10 @@ whether it was:
 - Waiting for `/setup`.
 - Promoted from the workspace, pushed, and removed from workspace staging.
 - Updated and pushed from the configured agent folder.
+
+Successful-push status and next actions are derived only from successfully
+pushed members of `push-approved sets`. Declined or keep-local sets must never
+appear in successful-push actions.
 
 For every set that was kept local, is waiting for `/setup`, had only a dry run,
 or whose push failed/cancelled, end with this mandatory reminder:
@@ -657,3 +763,36 @@ SMEs. Instead state:
 
 > ✅ Review completed and pushed successfully. You can now run this test set or
 > view its evaluation run history.
+
+If one or more selected sets completed `push.py --yes` successfully, use the
+structured choice control after the per-set summary to ask:
+
+> What would you like to do next?
+
+Offer:
+
+1. **Run an evaluation**
+2. **View results**
+3. **Finish**
+
+Wait for the user's response.
+
+For mixed multi-set outcomes, make **Run an evaluation** and **View results**
+available only for the sets whose push succeeded. Identify those eligible sets
+before asking the next-action question. Sets that were kept local, are waiting
+for setup, completed only a dry run, or had a failed or cancelled push retain
+the mandatory local-only reminder and resume-push guidance; they are not
+eligible for Run or View actions in this interaction. If no set was
+successfully pushed, do not offer the next-action question.
+
+For **Run an evaluation**, read `src/skills/evaluations/run/SKILL.md` and enter
+Flow A with the exact successfully pushed set names and IDs as the eligible-set
+scope. For **View results**, read the same skill and enter Flow B with that same
+eligible-set scope. Preserve all mandatory selection gates in that skill:
+choosing a next action does not select a test set or run, and discovery and
+selection must remain separate user turns.
+
+Do not offer **Run an evaluation** as immediately available when the set was
+kept local, setup is incomplete, only a dry run completed, or the push failed
+or was cancelled. Preserve the local-only reminder and resume-push guidance
+above instead.
