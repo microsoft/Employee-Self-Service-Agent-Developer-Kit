@@ -102,7 +102,9 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 #      upgrade-posture and CA-vs-DA attribution — ADO 7943642.
 # 1.3: added derived ``connector`` (workday|servicenow|"") on run + check —
 #      ADO 7943641.
-TELEMETRY_SCHEMA_VERSION = "1.3"
+# 1.4: added ``agentType`` to check events plus profile/realm/blocking,
+#      severity, and automation dimensions — ADO 7955324.
+TELEMETRY_SCHEMA_VERSION = "1.4"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -742,6 +744,29 @@ def get_toolkit_git_branch() -> str:
         return "unknown"
 
 
+# --- Agent-type classification (ADO 7830949 / 7955324) --------------------
+AGENT_TYPE_CUSTOM = "custom_agent"
+AGENT_TYPE_DECLARATIVE = "declarative_agent"
+AGENT_TYPE_UNKNOWN = "unknown"
+AGENT_TYPES = frozenset({
+    AGENT_TYPE_CUSTOM,
+    AGENT_TYPE_DECLARATIVE,
+    AGENT_TYPE_UNKNOWN,
+})
+
+
+def classify_agent_type(git_branch: str) -> str:
+    """Map a bounded toolkit branch to the CA/DA telemetry taxonomy."""
+    if not git_branch:
+        return AGENT_TYPE_UNKNOWN
+    normalized = git_branch.strip().lower()
+    if normalized == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if normalized == "main":
+        return AGENT_TYPE_DECLARATIVE
+    return AGENT_TYPE_UNKNOWN
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -802,6 +827,7 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 RUN_OUTCOME_READY = "Ready"
 RUN_OUTCOME_WARNINGS = "Ready with warnings"
 RUN_OUTCOME_FAILED = "Failed"
+RUN_OUTCOME_BLOCKED = "Blocked"
 RUN_OUTCOME_ERRORED = "Blocked (check errored)"
 # BLOCKED is a distinct hard gate: an essential platform capability was
 # unavailable (release-blocking), not a check that failed its assertion or
@@ -939,7 +965,9 @@ def _run_data(
     agent_count: int,
     scope: str,
     invocation_source: str,
+    agent_type: str,
 ) -> dict[str, Any]:
+    validation_context = getattr(run_result, "validation_context", {}) or {}
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -953,7 +981,10 @@ def _run_data(
         "adkVersion": get_adk_version(),
         "toolkitGitSha": get_toolkit_git_sha(),
         "toolkitGitBranch": get_toolkit_git_branch(),
+        "agentType": agent_type,
         "scope": scope,
+        "profile": getattr(run_result, "profile", ""),
+        "validationRealm": validation_context.get("realm", ""),
         "invocationSource": invocation_source,
         "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
@@ -962,6 +993,7 @@ def _run_data(
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),
         "failed": getattr(run_result, "failed", 0),
+        "blocked": getattr(run_result, "blocked", 0),
         "warnings": getattr(run_result, "warnings", 0),
         "notConfigured": getattr(run_result, "not_configured", 0),
         "manual": getattr(run_result, "manual", 0),
@@ -979,6 +1011,7 @@ def _check_data(
     run_id: str,
     instance_id: str,
     tenant_id: str,
+    agent_type: str,
     tenant_name: str = "",
 ) -> dict[str, Any]:
     # Identifiers + enums ONLY. Never `result` / `remediation` (EUII risk).
@@ -991,11 +1024,14 @@ def _check_data(
         "tenantId": tenant_id,
         "tenantClass": classify_tenant(tenant_id),
         "tenantName": tenant_name,
+        "agentType": agent_type,
         "checkpointId": getattr(check, "checkpoint_id", ""),
         "category": _category,
         "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
+        "severity": getattr(check, "severity", ""),
+        "automationType": getattr(check, "automation_type", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),
     }
 
@@ -1016,6 +1052,7 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
+    agent_type = classify_agent_type(get_toolkit_git_branch())
     events = [
         _build_event(
             EVENT_RUN,
@@ -1031,6 +1068,7 @@ def build_events(
                 agent_count=agent_count,
                 scope=scope,
                 invocation_source=invocation_source,
+                agent_type=agent_type,
             ),
         )
     ]
@@ -1046,6 +1084,7 @@ def build_events(
                     instance_id=instance_id,
                     tenant_id=tenant_id,
                     tenant_name=tenant_name,
+                    agent_type=agent_type,
                 ),
             )
         )
@@ -1119,6 +1158,7 @@ def selftest() -> int:
             "adkVersion": get_adk_version(),
             "toolkitGitSha": get_toolkit_git_sha(),
             "toolkitGitBranch": get_toolkit_git_branch(),
+            "agentType": classify_agent_type(get_toolkit_git_branch()),
         },
     )
     print(f"Posting selftest event to env='{env}' "
