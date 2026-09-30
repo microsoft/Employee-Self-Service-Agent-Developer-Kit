@@ -59,6 +59,7 @@ from agentbuilder import (
     AgentBuilderClient,
     ConnectivityClient,
     authenticate_flightcheck,
+    derive_environment_host,
     ring_from_environment_host,
     validate_environment_host,
 )
@@ -148,10 +149,12 @@ NATIVE_NO_DATAVERSE_SCOPE_MAP = {
         ("Native Agent", run_native_agent_checks),
         ("Environment", run_capacity_check),
         ("Local Files", run_local_file_checks),
+        ("Publishing", run_publishing_checks),
     ],
     "environment": [("Environment", run_capacity_check)],
     "servicenow": [("Native Agent", run_native_agent_checks)],
     "workday": [("Native Agent", run_native_agent_checks)],
+    "publishing": [("Publishing", run_publishing_checks)],
 }
 NATIVE_CONNECTOR_FILTERS = {
     "servicenow": ("shared_service-now",),
@@ -711,6 +714,44 @@ def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
     return str(active.get("releaseLine") or "").casefold() == "da"
 
 
+def _create_alm_import_target(
+    args,
+    *,
+    source_host: str,
+    token: str,
+    tenant_id: str,
+    ring: str,
+    api_version: str,
+):
+    """Create the explicit cross-environment client for the mutating probe."""
+    if not bool(getattr(args, "alm_import_probe", False)):
+        return None
+
+    target_environment_id = str(
+        getattr(args, "alm_import_target_environment_id", "") or ""
+    ).strip()
+    if not target_environment_id:
+        raise ValueError(
+            "--alm-import-target-environment-id is required with "
+            "--alm-import-probe"
+        )
+
+    target_host = derive_environment_host(target_environment_id, ring)
+    target_host = validate_environment_host(target_host, ring)
+    if target_host.rstrip("/").lower() == source_host.rstrip("/").lower():
+        raise ValueError(
+            "ALM import target must be a different environment from the source"
+        )
+
+    return AgentBuilderClient(
+        target_host,
+        token,
+        ring=ring,
+        tenant_id=tenant_id,
+        api_version=api_version,
+    )
+
+
 def _validation_context_from_args(
     args,
     config: dict,
@@ -1045,6 +1086,7 @@ def _run_single_checkpoint(args):
     pva = None
     powerplatform = None
     agentbuilder = None
+    alm_import_target = None
     connectivity = None
 
     # Tenant discovery feeds Graph / Power Platform / PVA auth. Normally read
@@ -1136,30 +1178,40 @@ def _run_single_checkpoint(args):
             native_token, native_tenant_id = authenticate_flightcheck(
                 native_ring,
                 include_connectivity=registry.CONNECTIVITY in needed,
+                allow_write=bool(getattr(args, "alm_import_probe", False)),
             )
             tenant_id = native_tenant_id
+            api_version = config.get("agentBuilderApiVersion", "2024-10-01")
             agentbuilder = AgentBuilderClient(
                 native_host,
                 native_token,
                 ring=native_ring,
                 tenant_id=native_tenant_id,
-                api_version=config.get(
-                    "agentBuilderApiVersion", "2024-10-01"
-                ),
+                api_version=api_version,
+            )
+            alm_import_target = _create_alm_import_target(
+                args,
+                source_host=native_host,
+                token=native_token,
+                tenant_id=native_tenant_id,
+                ring=native_ring,
+                api_version=api_version,
             )
             if registry.CONNECTIVITY in needed:
                 connectivity = ConnectivityClient(
                     native_token,
                     ring=native_ring,
-                    api_version=config.get(
-                        "agentBuilderApiVersion", "2024-10-01"
-                    ),
+                    api_version=api_version,
                 )
             if not quiet_auth:
                 print("  Native AgentBuilder APIs: OK")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
         except Exception as e:
             print(f"  Native AgentBuilder APIs: WARNING — {e}")
             agentbuilder = None
+            alm_import_target = None
             connectivity = None
 
     if registry.PVA in needed:
@@ -1209,7 +1261,9 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
     runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -1306,6 +1360,7 @@ def _run_profile(args):
     pva = None
     powerplatform = None
     agentbuilder = None
+    alm_import_target = None
     connectivity = None
 
     if needed & {
@@ -1385,30 +1440,40 @@ def _run_profile(args):
             native_token, native_tenant_id = authenticate_flightcheck(
                 native_ring,
                 include_connectivity=registry.CONNECTIVITY in needed,
+                allow_write=bool(getattr(args, "alm_import_probe", False)),
             )
             tenant_id = native_tenant_id
+            api_version = config.get("agentBuilderApiVersion", "2024-10-01")
             agentbuilder = AgentBuilderClient(
                 native_host,
                 native_token,
                 ring=native_ring,
                 tenant_id=native_tenant_id,
-                api_version=config.get(
-                    "agentBuilderApiVersion", "2024-10-01"
-                ),
+                api_version=api_version,
+            )
+            alm_import_target = _create_alm_import_target(
+                args,
+                source_host=native_host,
+                token=native_token,
+                tenant_id=native_tenant_id,
+                ring=native_ring,
+                api_version=api_version,
             )
             if registry.CONNECTIVITY in needed:
                 connectivity = ConnectivityClient(
                     native_token,
                     ring=native_ring,
-                    api_version=config.get(
-                        "agentBuilderApiVersion", "2024-10-01"
-                    ),
+                    api_version=api_version,
                 )
             if not quiet_auth:
                 print("  Native AgentBuilder APIs: OK")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
         except Exception as e:
             print(f"  Native AgentBuilder APIs: WARNING — {e}")
             agentbuilder = None
+            alm_import_target = None
             connectivity = None
 
     if registry.PVA in needed:
@@ -1459,6 +1524,8 @@ def _run_profile(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
     runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.connectivity = connectivity
 
     for label, fn in plan.ordered_fns:
@@ -1608,6 +1675,26 @@ def main():
         ),
     )
     parser.add_argument(
+        "--alm-import-probe",
+        action="store_true",
+        help=(
+            "Enable the PUB-002 AgentBuilder ALM import write-probe. This is a "
+            "MUTATING action: it exports the configured agent's ALM package and "
+            "imports it, creating a throwaway agent in the target environment. "
+            "Omitted by default, so PUB-002 stays read-only and reports SKIPPED. "
+            "Requires --alm-import-target-environment-id for a separate "
+            "disposable environment where creating an agent is safe."
+        ),
+    )
+    parser.add_argument(
+        "--alm-import-target-environment-id",
+        help=(
+            "Power Platform environment ID that receives PUB-002's imported "
+            "package. Required with --alm-import-probe and must differ from "
+            "the configured source environment."
+        ),
+    )
+    parser.add_argument(
         "--invocation-source", default=None,
         choices=["adk", "installer", "cli", "connect"],
         help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
@@ -1642,6 +1729,11 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.alm_import_probe and not args.alm_import_target_environment_id:
+        parser.error(
+            "--alm-import-target-environment-id is required with "
+            "--alm-import-probe"
+        )
     if args.agent_slug is not None:
         try:
             validate_agent_slug(args.agent_slug)
@@ -1768,6 +1860,7 @@ def main():
     print()
 
     agentbuilder = None
+    alm_import_target = None
     connectivity = None
     powerplatform = None
     azure_arm = None
@@ -1835,7 +1928,12 @@ def main():
             )
             sys.exit(1)
 
-        needs_agent_readiness = args.scope in {"full", "servicenow", "workday"}
+        needs_agent_readiness = args.scope in {
+            "full",
+            "servicenow",
+            "workday",
+            "publishing",
+        }
         if needs_agent_readiness:
             environment_host = str(
                 config.get("powerPlatformApiEndpoint") or ""
@@ -1859,14 +1957,33 @@ def main():
             token, tenant_id = authenticate_flightcheck(
                 ring,
                 include_connectivity=True,
+                allow_write=bool(args.alm_import_probe),
             )
+            api_version = config.get("agentBuilderApiVersion", "2024-10-01")
             agentbuilder = AgentBuilderClient(
                 environment_host,
                 token,
                 ring=ring,
                 tenant_id=tenant_id,
+                api_version=api_version,
             )
-            connectivity = ConnectivityClient(token, ring=ring)
+            try:
+                alm_import_target = _create_alm_import_target(
+                    args,
+                    source_host=environment_host,
+                    token=token,
+                    tenant_id=tenant_id,
+                    ring=ring,
+                    api_version=api_version,
+                )
+            except ValueError as exc:
+                print(f"ERROR: {exc}")
+                sys.exit(1)
+            connectivity = ConnectivityClient(
+                token,
+                ring=ring,
+                api_version=api_version,
+            )
             print("  AgentBuilder and connection inventory: OK")
         else:
             tenant_id = "organizations"
@@ -2052,7 +2169,9 @@ def main():
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
     runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
         args.scope
     )
