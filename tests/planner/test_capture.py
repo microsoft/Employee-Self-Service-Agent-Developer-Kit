@@ -15,6 +15,7 @@ from planner.capture import (
     detect_environment,
     read_config,
     snapshot_config,
+    summarize_discovery,
 )
 
 ENV_ID = "d3f10000-0000-1111-2222-333344445555"
@@ -197,3 +198,63 @@ def test_ask_artifact_marks_user_provenance():
     assert art["attributes"] == {"appId": "abc"}
     assert art["producedByTaskId"] == "T2"
     assert art["provenance"]["source"] == "User"  # assignee supplied it
+
+
+# --- /discover summary capture (tenantInventory) -------------------------------------
+
+DISCOVER_RESULTS = {
+    "correlationId": "run-abc",
+    "aborted": False,
+    "writePath": "mcp:substrate.office.com",
+    "writeDegraded": False,
+    "totals": {"kindsCrawled": 3, "mapped": 16},
+    "discovered": {
+        "Environment": [{"naturalKey": "e1"}],
+        "Connection": [{"naturalKey": "c1"}, {"naturalKey": "c2"}],
+        "EntraApp": [{"naturalKey": "a1"}],
+    },
+}
+
+
+def test_summarize_discovery_shapes_tenant_inventory():
+    art = summarize_discovery(DISCOVER_RESULTS, task_id="T2")
+    assert art is not None
+    assert art["kind"] == "Custom"          # single summary artifact, not per-resource
+    assert art["key"] == "tenantInventory"
+    assert art["producedByTaskId"] == "T2"
+    assert art["provenance"]["source"] == "Discovered"
+    attrs = art["attributes"]
+    assert attrs["resourceCount"] == 16     # from totals.mapped
+    assert attrs["kindsCrawled"] == 3
+    assert attrs["writePath"] == "mcp:substrate.office.com"
+    assert attrs["writeDegraded"] == "false"          # bool -> scalar string
+    assert attrs["inventoryPath"].endswith("inventory.json")
+    # per-kind counts, sorted, space-joined (no commas -> renders cleanly in the table)
+    assert attrs["resources"] == "Connection:2 EntraApp:1 Environment:1"
+    assert art["inventoryRef"] == "Inventory:run-abc"
+
+
+def test_summarize_discovery_none_on_aborted():
+    # An aborted run wrote nothing and left the mirror untouched -> nothing to pin.
+    assert summarize_discovery({"aborted": True}, task_id="T2") is None
+    assert summarize_discovery({"status": "aborted"}, task_id="T2") is None
+    assert summarize_discovery("not a dict", task_id="T2") is None  # defensive guard
+
+
+def test_summarize_discovery_degraded_still_pins():
+    # exit 2: crawl OK, server write failed, but the durable local mirror WAS
+    # refreshed -> the task output exists, so it is captured and flagged degraded.
+    degraded = dict(DISCOVER_RESULTS, writeDegraded=True, writePath="")
+    art = summarize_discovery(degraded, task_id="T2")
+    assert art is not None
+    assert art["attributes"]["writeDegraded"] == "true"
+    assert art["attributes"]["writePath"] == ""
+
+
+def test_summarize_discovery_empty_run_and_updated_at():
+    minimal = {"totals": {"mapped": 0, "kindsCrawled": 0}, "discovered": {}}
+    art = summarize_discovery(minimal, task_id="T2", updated_at="2026-01-02T03:04:05Z")
+    assert art["attributes"]["updatedAt"] == "2026-01-02T03:04:05Z"
+    assert art["attributes"]["resourceCount"] == 0
+    assert "resources" not in art["attributes"]   # nothing discovered -> key omitted
+    assert art["inventoryRef"] == ""              # no correlationId -> empty ref

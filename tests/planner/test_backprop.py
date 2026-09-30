@@ -100,6 +100,22 @@ def test_setup_task_id_is_the_env_producer():
     assert Plan.new().setup_task_id() is None  # no task produces the env -> None
 
 
+def test_discover_task_id_is_the_inventory_producer():
+    p = Plan.new()
+    p.add_task(new_task("T1", "Run setup",
+                        description="Run /setup to onboard the ADK",
+                        assigned_to=principal_pool("power-platform-admin"),
+                        produces=["primaryEnvironment"]))
+    # The discover task is the one that PRODUCES the tenant inventory, keyed on the
+    # grounded `produces` signal (never on the title/description).
+    p.add_task(new_task("T2", "Discover the tenant inventory",
+                        description="Run /discover to crawl the environment",
+                        assigned_to=principal_pool("power-platform-admin"),
+                        produces=["tenantInventory"], consumes=["primaryEnvironment"]))
+    assert p.discover_task_id() == "T2"
+    assert Plan.new().discover_task_id() is None  # no task produces the inventory -> None
+
+
 def test_capture_setup_autodetects_setup_task(tmp_path):
     plan_path = str(tmp_path / "plan.json")
     cfg = tmp_path / "config.json"
@@ -118,6 +134,105 @@ def test_capture_setup_autodetects_setup_task(tmp_path):
     assert p.output("primaryEnvironment")["attributes"]["environmentId"] == "env-7"
     assert p.task("T2")["state"] == "Completed"
     assert p.task("T1")["state"] == "NotStarted"  # portal task untouched
+
+
+def _write_results(path, **overrides):
+    results = {
+        "correlationId": "run-9",
+        "aborted": False,
+        "writePath": "mcp:substrate",
+        "writeDegraded": False,
+        "totals": {"kindsCrawled": 2, "mapped": 3},
+        "discovered": {
+            "Connection": [{"naturalKey": "c1"}, {"naturalKey": "c2"}],
+            "Environment": [{"naturalKey": "e1"}],
+        },
+    }
+    results.update(overrides)
+    path.write_text(json.dumps(results), encoding="utf-8")
+
+
+def test_capture_discover_autodetects_and_pins(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Run setup",
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover to crawl the environment", "--role", "power-platform-admin",
+         "--produces", "tenantInventory")
+    capsys.readouterr()
+    # No --task: capture-discover finds T2 (produces tenantInventory), pins the summary, completes it.
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results), "--complete")
+    assert rc == 0
+    assert "tenantInventory" in capsys.readouterr().out
+    p = Plan.load(plan_path)
+    art = p.output("tenantInventory")
+    assert art is not None
+    assert art["kind"] == "Custom"
+    assert art["producedByTaskId"] == "T2"
+    assert art["attributes"]["resourceCount"] == 3
+    assert p.task("T2")["state"] == "Completed"
+    assert p.task("T1")["state"] == "NotStarted"  # setup task untouched
+
+
+def test_capture_discover_no_discover_task_is_noop(tmp_path, capsys):
+    # A plan with no tenant-inventory task means this was a standalone /discover run,
+    # not part of a tracked rollout -> the skill skips silently on this nonzero rc.
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Run setup",
+         "--description", "Run /setup", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results))
+    assert rc == 1
+    assert "No discover task" in capsys.readouterr().err
+    assert Plan.load(plan_path).output("tenantInventory") is None  # nothing pinned
+
+
+def test_capture_discover_missing_results_file(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(tmp_path / "nope.json"))
+    assert rc == 1
+    assert "Could not read discovery results" in capsys.readouterr().err
+
+
+def test_capture_discover_aborted_pins_nothing(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    results.write_text(json.dumps({"aborted": True, "correlationId": "run-x"}), encoding="utf-8")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results), "--complete")
+    assert rc == 1
+    assert "aborted" in capsys.readouterr().err.lower()
+    p = Plan.load(plan_path)
+    assert p.output("tenantInventory") is None
+    assert p.task("T2")["state"] != "Completed"  # stays open
+
+
+def test_capture_discover_dry_run_saves_nothing(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results), "--dry-run")
+    assert rc == 0
+    assert "[dry-run]" in capsys.readouterr().err
+    assert Plan.load(plan_path).output("tenantInventory") is None  # nothing pinned
 
 
 def test_cli_pin_output_commits_artifact(tmp_path, capsys):

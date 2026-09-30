@@ -156,15 +156,19 @@ recorded) — the environment, the cloned agent, and anything else the run wrote
 **`tenantInventory` is the one backbone output `capture-setup` cannot see.**
 `/discover` writes its findings to `.local/inventory.json` and leaves only two
 top-level *strings* in `.local/config.json` (`inventoryPath`, `inventoryUpdatedAt`).
-The generic sweep pins **id-bearing objects**, so it skips both. Close that task
-with `pin-output` instead — a task with unresolved `produces` is refused
-`Completed`, so a discover task that declares `tenantInventory` and is never
-pinned stays open forever:
+The generic sweep pins **id-bearing objects**, so it skips both. So the `/discover`
+skill **closes its own task**: when a run finishes it calls `capture-discover`, which
+reads `workspace/discover/results.json`, pins a single `Custom` `tenantInventory`
+artifact (per-kind resource counts + the write path + a pointer to the mirror), and —
+because a task with unresolved `produces` is refused `Completed` — marks the discover
+task done so it never stays open forever. You don't pin it by hand; the same command
+run from the planner is the fallback if you ever need it:
 
 ```
-python scripts/planner/cli.py pin-output --task <T#> --key tenantInventory \
-  --kind Custom --attr inventoryPath=.local/inventory.json --complete
+python scripts/planner/cli.py capture-discover --complete
 ```
+
+(auto-detects the plan's discover task; `--dry-run` previews without saving.)
 
 When the tasks are in, show the summary and go to Phase 4.
 

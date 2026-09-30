@@ -97,6 +97,12 @@ CONFIGURING_AGENT_CHOICES = (
 # is described only by its title + description (matching the WeveNova Task
 # entity); there is no execution-hint/action field.
 PRIMARY_ENVIRONMENT_KEY = "primaryEnvironment"
+# The ledger key the /discover task produces — the tenant inventory summary the
+# discover skill pins back onto the plan after a crawl (see
+# capture.py::summarize_discovery and src/skills/discover/SKILL.md). Keyed like
+# PRIMARY_ENVIRONMENT_KEY so the discover task is identified by what it produces,
+# not by any execution-hint field.
+TENANT_INVENTORY_KEY = "tenantInventory"
 DEPENDENCY_KINDS = ("requires", "recommends")
 # Scenario dependency lives in the open Context bag (no new typed collection),
 # consistent with the "one Context bag" model. A scenario in scope is a Context
@@ -890,6 +896,23 @@ class Plan:
         candidates = [
             t for t in self.tasks
             if PRIMARY_ENVIRONMENT_KEY in (t.get("produces") or [])
+        ]
+        if not candidates:
+            return None
+        for t in candidates:
+            if t.get("state") != "Completed":
+                return t["id"]
+        return candidates[0]["id"]
+
+    def discover_task_id(self) -> str | None:
+        """The plan's discover task id — the task that **produces** the tenant
+        inventory (`tenantInventory`), i.e. the ``/discover`` task. Prefers the
+        first not-yet-Completed such task, else the first one; ``None`` if no task
+        produces it. Keyed on the grounded ``produces`` signal, mirroring
+        :meth:`setup_task_id` — never on any execution-hint field."""
+        candidates = [
+            t for t in self.tasks
+            if TENANT_INVENTORY_KEY in (t.get("produces") or [])
         ]
         if not candidates:
             return None

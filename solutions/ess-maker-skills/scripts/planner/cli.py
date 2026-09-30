@@ -35,7 +35,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from planner import research, setup_tasks
-from planner.capture import detect_config_artifacts, snapshot_config
+from planner.capture import (
+    detect_config_artifacts,
+    read_config,
+    snapshot_config,
+    summarize_discovery,
+)
 from planner.plan_model import (
     ARTIFACT_KINDS,
     CONFIGURING_AGENT_CHOICES,
@@ -371,6 +376,80 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
             plan.set_task_state(task_id, "Completed")
     _save(plan, args)
     print(json.dumps(pinned, indent=2))
+    return 0 if complete_ok else 1
+
+
+def cmd_capture_discover(args: argparse.Namespace) -> int:
+    """Observe-mode capture for the ``/discover`` hand-off — pin the tenant
+    inventory summary a crawl produced onto the plan so the discover task can close
+    and downstream tasks read it off the plan.
+
+    The tenant inventory is the one backbone output ``capture-setup`` cannot see:
+    ``/discover`` writes the full picture to the durable mirror
+    (``.local/inventory.json``) and only leaves two string pointers in
+    ``config.json``, which the generic id+name sweep skips. This reads the run's
+    ``results.json`` instead and shapes one ``Custom`` ``tenantInventory`` artifact.
+    ``--task`` is optional — omitted, it auto-detects the plan's discover task (the
+    task that produces ``tenantInventory``).
+    """
+    plan = _load(args)
+    task_id = args.task or plan.discover_task_id()
+    if not task_id:
+        print(
+            "No discover task found on the plan (no task produces 'tenantInventory'); "
+            "pass --task <T#>, or skip if this plan isn't tracking discovery.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        with open(args.results, "r", encoding="utf-8") as fh:
+            results = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Could not read discovery results at {args.results!r}: {exc}. "
+            "Run /discover first — it writes workspace/discover/results.json.",
+            file=sys.stderr,
+        )
+        return 1
+    updated_at = read_config(args.config).get("inventoryUpdatedAt")
+    artifact = summarize_discovery(
+        results,
+        task_id=task_id,
+        key=args.key,
+        inventory_path=args.inventory_path,
+        results_path=args.results,
+        updated_at=updated_at,
+    )
+    if artifact is None:
+        print(
+            "Discovery run aborted — nothing was recorded, so there is nothing to "
+            "pin. Re-run /discover, then capture again.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.dry_run:
+        print(json.dumps(artifact, indent=2))
+        print(
+            f"[dry-run] detected the {artifact['key']} artifact; nothing saved. "
+            "Confirm with the assignee, then re-run without --dry-run to pin.",
+            file=sys.stderr,
+        )
+        return 0
+    plan.add_output(artifact)
+    complete_ok = True
+    if args.complete:
+        missing = plan.unresolved_produces(task_id)
+        if missing:
+            complete_ok = False
+            print(
+                f"Pinned; NOT completing {task_id} — unresolved produces {missing}. "
+                "Pin the rest, then complete.",
+                file=sys.stderr,
+            )
+        else:
+            plan.set_task_state(task_id, "Completed")
+    _save(plan, args)
+    print(json.dumps(artifact, indent=2))
     return 0 if complete_ok else 1
 
 
@@ -801,6 +880,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print artifacts without saving (preview for confirm-before-pin)")
     p.add_argument("--complete", action="store_true", help="mark the task Completed")
     p.set_defaults(func=cmd_capture_setup)
+
+    p = sub.add_parser("capture-discover", help="observe /discover output and pin the tenant inventory summary onto the plan")
+    p.add_argument("--task", help="discover task id (default: auto-detect the plan's /discover task)")
+    p.add_argument("--key", default="tenantInventory")
+    p.add_argument("--results", default=os.path.join("workspace", "discover", "results.json"),
+                   help="the /discover results JSON to summarize")
+    p.add_argument("--inventory-path", dest="inventory_path", default=os.path.join(".local", "inventory.json"),
+                   help="pointer to the durable local inventory mirror recorded on the artifact")
+    p.add_argument("--config", default=os.path.join(".local", "config.json"),
+                   help="config.json to read inventoryUpdatedAt from")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print the artifact without saving (preview for confirm-before-pin)")
+    p.add_argument("--complete", action="store_true", help="mark the discover task Completed")
+    p.set_defaults(func=cmd_capture_discover)
 
     p = sub.add_parser("snapshot-config", help="print the config.json snapshot (capture before an action for capture-setup --before-file)")
     p.add_argument("--config", default=os.path.join(".local", "config.json"))

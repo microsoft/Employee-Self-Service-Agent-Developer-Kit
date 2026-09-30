@@ -398,6 +398,41 @@ This tenant has more **{kind}** than the inventory records per resource type
 
 ---
 
+## Step 4: Record the inventory on the rollout plan (only when one is tracking it)
+
+A rollout plan authored by `/planner` includes a **task to discover the tenant
+inventory** — a Power Platform admin task that runs right after setup and produces
+`tenantInventory`. When such a plan is in play, close the loop: record this run's
+summary onto the plan so that task can complete and every later task reads the
+tenant picture off the plan instead of re-discovering it.
+
+Only do this on a run that finished — Step 1 already stopped on an aborted run.
+After presenting the results above, run from `solutions/ess-maker-skills`:
+
+```
+python scripts/planner/cli.py capture-discover --complete
+```
+
+It auto-detects the plan's discover task (the one that produces `tenantInventory`),
+reads `workspace/discover/results.json`, pins one summary artifact — the per-kind
+counts, the write path, and a pointer to the durable mirror
+(`.local/inventory.json`) — and marks that task complete.
+
+- If it reports that **no discover task** was found (or there is no plan yet), this
+  run is a standalone `/discover`, not part of a tracked rollout. Skip this step
+  **silently** — do not run anything else and do not mention it to the user.
+- Do not narrate the command. Surface the Message below **only** when the capture
+  succeeded (it printed the pinned `tenantInventory` artifact).
+
+**Message:**
+
+I've recorded this inventory against your rollout plan, so the discovery task is now
+complete and the rest of your plan can build on what already exists in your tenant.
+
+**End message.**
+
+---
+
 ## Notes for the assistant (do not show the user)
 
 - The crawler is idempotent by `(kind, naturalKey)`: re-running over an unchanged
@@ -452,6 +487,13 @@ This tenant has more **{kind}** than the inventory records per resource type
   server-faithful whole-inventory semantics, with `firstSeenAt`/`lastSeenAt` and one-run
   `Retired` tombstones. The server (WeveNova) stays authoritative; the mirror is a
   local cache and is only updated on a run that actually synced.
+- **Plan capture (Step 4) is the one plan touchpoint.** `capture-discover` reads
+  `workspace/discover/results.json` and pins a single `Custom` `tenantInventory`
+  artifact (per-kind counts + `writePath`/`writeDegraded` + a pointer to the mirror)
+  onto the plan, attributed to the plan's discover task. It never copies the full
+  per-resource picture onto the plan — that stays in `.local/inventory.json`. It is a
+  safe no-op (exit 1, nothing written) when the workspace has no plan or no task
+  produces `tenantInventory`, so it is always safe to attempt after a finished run.
 - The default crawl reads all eight kinds live for the configured environment —
   Dataverse (Connection, ExtensionPack, ScenarioTemplate), Microsoft Graph (EntraApp,
   SharePointSite), the BAP admin API (Connector), and Copilot Studio (KnowledgeSource) —

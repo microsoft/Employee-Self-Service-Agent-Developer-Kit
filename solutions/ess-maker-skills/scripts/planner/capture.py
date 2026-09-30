@@ -32,7 +32,7 @@ import json
 import os
 from typing import Any
 
-from .plan_model import plan_artifact
+from .plan_model import TENANT_INVENTORY_KEY, plan_artifact
 
 CONFIG_PATH = os.path.join(".local", "config.json")
 
@@ -43,6 +43,7 @@ _CONFIG_NOISE_KEYS = {"setup"}
 # falls back to ask-mode (b). This is metadata the CLI/skill can surface.
 OBSERVE_DETECTORS: dict[str, str] = {
     "onboarding": "config-artifacts",  # /setup -> every id+name in config.json
+    "discover": "inventory-results",   # /discover -> tenantInventory summary from results.json
 }
 
 
@@ -326,4 +327,81 @@ def ask_artifact(
         produced_by_task_id=task_id,
         inventory_ref=inventory_ref,
         source="User",
+    )
+
+
+# --- Discovery capture (observe mode for /discover) --------------------------------
+# The tenant inventory is the one backbone output the config sweep can't see:
+# ``/discover`` writes the full picture to the durable local mirror
+# (``.local/inventory.json``) and only leaves two string pointers in ``config.json``
+# (``inventoryPath``/``inventoryUpdatedAt``), so :func:`detect_config_artifacts` — which
+# pins id-bearing *objects* — skips it. This detector reads the run's ``results.json``
+# instead and shapes a single ``Custom`` ``tenantInventory`` artifact so the discover
+# task can close and downstream tasks read the summary off the plan. The full
+# per-resource picture stays in the mirror, referenced by ``inventoryPath``.
+
+DISCOVER_RESULTS_PATH = os.path.join("workspace", "discover", "results.json")
+INVENTORY_MIRROR_PATH = os.path.join(".local", "inventory.json")
+
+
+def summarize_discovery(
+    results: dict[str, Any],
+    *,
+    task_id: str,
+    key: str = TENANT_INVENTORY_KEY,
+    inventory_path: str = INVENTORY_MIRROR_PATH,
+    results_path: str = DISCOVER_RESULTS_PATH,
+    updated_at: str | None = None,
+) -> dict[str, Any] | None:
+    """Shape a ``/discover`` run's ``results.json`` into a pinnable ``tenantInventory``
+    artifact (kind ``Custom``), or ``None`` when the run **aborted**.
+
+    An aborted run wrote nothing and left the mirror untouched, so there is nothing
+    to pin — the discover task legitimately stays open. A **degraded** run (the crawl
+    succeeded but the server write failed, exit ``2``) still refreshed the durable
+    local mirror, so it IS captured; the artifact records ``writeDegraded="true"`` so
+    the plan stays honest about it. The full per-resource picture is not copied onto
+    the plan — the artifact carries per-kind counts plus a pointer to the mirror
+    (``inventoryPath``) that holds the detail.
+    """
+    if not isinstance(results, dict):
+        return None
+    if results.get("aborted") or results.get("status") == "aborted":
+        return None
+
+    totals = results.get("totals") or {}
+    discovered = results.get("discovered") or {}
+    # Per-kind counts, sorted, as a compact human-readable summary. The detail
+    # (natural keys + attributes) stays in the durable mirror at ``inventory_path``.
+    counts = {
+        kind: len(rows)
+        for kind, rows in discovered.items()
+        if isinstance(rows, list) and rows
+    }
+    resources = " ".join(f"{kind}:{counts[kind]}" for kind in sorted(counts))
+
+    attributes: dict[str, Any] = {
+        "inventoryPath": inventory_path,
+        "resultsPath": results_path,
+        "resourceCount": int(totals.get("mapped", 0) or 0),
+        "kindsCrawled": int(totals.get("kindsCrawled", len(counts)) or 0),
+        "writePath": str(results.get("writePath", "") or ""),
+        "writeDegraded": "true" if results.get("writeDegraded") else "false",
+    }
+    if resources:
+        attributes["resources"] = resources
+    correlation_id = results.get("correlationId")
+    if correlation_id:
+        attributes["correlationId"] = str(correlation_id)
+    if updated_at:
+        attributes["updatedAt"] = str(updated_at)
+
+    inventory_ref = f"Inventory:{correlation_id}" if correlation_id else ""
+    return plan_artifact(
+        key,
+        "Custom",
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="Discovered",
     )
