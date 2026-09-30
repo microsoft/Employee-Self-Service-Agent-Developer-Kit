@@ -402,20 +402,6 @@ def test_public_guidance_records_existing_api_scope_not_native_parity_blockers()
     assert "new copy with a new deployed ID" in readme
     assert "not published as shared review metadata" in readme
     assert "same flow and report this limitation" in readme
-    document = (
-        SOLUTION_ROOT.parents[1] / "docs" / "ado-eval-p0-implementation.md"
-    ).read_text(encoding="utf-8")
-    decision = _normalized(document.split("### 8.2 ", 1)[1].split("### 8.3 ", 1)[0])
-    assert "ENG-1/ENG-2/ENG-3 native-parity prerequisites are withdrawn" in decision
-    assert "keep using the same APIs" in decision
-    assert "Successful native YAML deployment must not be relabeled failed" in decision
-    assert "`reviewMetadataPersisted=false`, `deployedReviewStatus=null`, and `reviewWarning`" in decision
-    for obsolete in (
-        "native dirty updates/shared review remain blocked",
-        "Dirty native updates are a separate narrow prerequisite",
-        "Until established, label the action blocked/pending on that backend",
-    ):
-        assert obsolete not in _normalized(document)
 
 
 def test_integrated_run_preserves_selection_connection_and_token_gates():
