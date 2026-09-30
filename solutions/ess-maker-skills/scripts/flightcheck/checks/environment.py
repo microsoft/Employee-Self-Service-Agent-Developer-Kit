@@ -13,6 +13,7 @@ from ..runner import CheckResult, Priority, Role, Status
 from ._da_connection_refs import (
     agent_bot_ids,
     read_all_agents_connection_references,
+    WORKDAY_SOAP_CONNECTOR_SUFFIX,
 )
 from ._dlp_utils import iter_effective_policies
 from ._maker_urls import maker_solutions_url
@@ -514,6 +515,16 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     missing-reference, and unbound-connection branches are not applicable and
     are not emitted.
 
+    Workday hybrid caveat: the components changeset never carries Workday's SOAP
+    connection reference, which is flow-scoped (bound on the WorkdayRESTExecution
+    Power Automate flow inside the Dataverse solution, not on any bot topic). A
+    components-only read therefore reports a false clean on a Workday install.
+    To close that gap this check also reads the environment's Dataverse
+    ``connectionreference`` table (documented tier, as WD-PKG-001 does) and
+    unions in any Workday SOAP reference so it is classified as bound/unbound
+    like the rest. If that Dataverse read is unavailable it degrades to WARNING
+    (never a silent PASS) so Workday is never falsely reported clean.
+
     A separate GRS commit-pin sub-check (``ENV-004-GRS``) verifies the deployed
     agent's ALM commit matches an expected SHA when one is configured; its
     verdict folds into the ENV-004 summary status and it is also emitted as a
@@ -568,6 +579,67 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         ))
         return results
 
+    # Workday hybrid coverage. The minimalBots components API never surfaces the
+    # Workday SOAP connection reference: it is flow-scoped (it lives on the
+    # WorkdayRESTExecution Power Automate flow inside the Dataverse solution, not
+    # on any bot topic), so a components-only read reports a false clean on a
+    # Workday install. Union an environment-wide Dataverse connectionreferences
+    # read, filtered to the Workday SOAP connector, so ENV-004 regains Workday
+    # coverage. ServiceNow and other topic-scoped connectors are already covered
+    # by the components read above. This is the same documented-tier
+    # connectionreferences read WD-PKG-001 uses.
+    workday_warning: CheckResult | None = None
+    if getattr(runner, "env_url", None) and getattr(runner, "dv_token", None):
+        try:
+            dv_rows = query_all(
+                runner.env_url, runner.dv_token, "connectionreferences",
+                "connectionreferenceid,connectionreferencelogicalname,"
+                "connectionreferencedisplayname,connectorid,connectionid,"
+                "statuscode",
+            )
+        except Exception as e:  # noqa: BLE001 - fail loudly as a WARNING
+            # Never silently pass Workday when we could not read Dataverse.
+            workday_warning = CheckResult(roles=roles,
+                checkpoint_id="ENV-004-WD", category="Environment",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description="Workday connection reference coverage",
+                result=(
+                    "Unable to read Dataverse connection references to verify the "
+                    f"Workday SOAP binding: {type(e).__name__}: {e}. The "
+                    "Declarative Agent components API cannot see the flow-scoped "
+                    "Workday reference, so Workday connection health was not judged."
+                ),
+                remediation=(
+                    "Confirm the FlightCheck identity has Dataverse read access to "
+                    "the connectionreferences table, then re-run FlightCheck."
+                ),
+            )
+        else:
+            seen = {
+                (r.get("connectionreferencelogicalname") or "").casefold()
+                for r in refs
+            }
+            for row in dv_rows:
+                connector_id = (
+                    str(row.get("connectorid") or "").casefold().rstrip("/")
+                )
+                if not connector_id.endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX):
+                    continue
+                key = (row.get("connectionreferencelogicalname") or "").casefold()
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                refs.append({
+                    "botid": None,
+                    "connectionreferencelogicalname": row.get(
+                        "connectionreferencelogicalname"
+                    ),
+                    "connectorid": row.get("connectorid"),
+                    "connectionid": row.get("connectionid"),
+                    "sharedconnectionparameters": None,
+                })
+
     unbound_refs = [r for r in refs if not (r.get("connectionid") or "")]
     bound_refs = [r for r in refs if (r.get("connectionid") or "")]
 
@@ -578,7 +650,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
 
     if unbound_refs or grs_result.status == Status.FAILED.value:
         overall_status = Status.FAILED.value
-    elif grs_result.status == Status.WARNING.value:
+    elif grs_result.status == Status.WARNING.value or workday_warning is not None:
         overall_status = Status.WARNING.value
     else:
         overall_status = Status.PASSED.value
@@ -600,6 +672,13 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     # without this the summary would report FAILED/WARNING with no reason.
     if grs_nonpass and grs_result.result:
         summary_parts.append(grs_result.result)
+
+    # Fold the Workday coverage warning into the summary result for the same
+    # reason as GRS: a targeted `--checkpoint ENV-004` run filters out the
+    # ENV-004-WD detail row, so without this the summary would report WARNING
+    # with no reason.
+    if workday_warning is not None:
+        summary_parts.append("Workday connection coverage unverified")
 
     env_id = getattr(runner, "env_id", None)
     solutions_url = maker_solutions_url(env_id) if env_id else None
@@ -634,6 +713,15 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             else grs_result.remediation
         )
 
+    # Carry the Workday coverage remediation onto the summary for the same
+    # reason: the ENV-004-WD detail row is filtered on a targeted run.
+    if workday_warning is not None and workday_warning.remediation:
+        remediation = (
+            f"{remediation} {workday_warning.remediation}".strip()
+            if remediation
+            else workday_warning.remediation
+        )
+
     summary_doc_link = (
         conn_ref_doc
         if unbound_refs
@@ -664,6 +752,10 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             ),
             doc_link=conn_ref_doc,
         ))
+
+    # --- Detail: Workday coverage warning (folded into summary status above) ---
+    if workday_warning is not None:
+        results.append(workday_warning)
 
     # --- Detail: GRS commit pin (also folded into the summary status above) ---
     results.append(grs_result)
