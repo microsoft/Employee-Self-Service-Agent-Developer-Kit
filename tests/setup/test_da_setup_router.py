@@ -985,10 +985,28 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type a product name" in normalized
     assert (
-        "leave the selection initially unset, and disable custom entry inside "
+        "Leave the selection initially unset, and disable custom entry inside "
         "the control"
     ) in normalized
-    assert "Use **Choose an ESS product.** as the exact interactive-control question." in normalized
+    assert "{PRODUCT_ROWS}" in text
+    assert "never assume a fixed product count" in normalized
+    assert "Do not ask the maker to type a product name or number any choice" in normalized
+    assert (
+        "present those product choices followed by **Refresh list** and "
+        "**Choose a different environment**, in that order"
+    ) in normalized
+    assert (
+        "Use **Choose an ESS product or setup action.** as the exact question."
+    ) in normalized
+    assert (
+        "For **Refresh list**, rerun the catalog list and agent list in their "
+        "existing order"
+    ) in normalized
+    assert "This is a new maker-requested read, not an automatic retry" in normalized
+    assert (
+        "For **Choose a different environment**, retain the selected account and ring"
+    ) in normalized
+    assert "rerun `list-environments`" in text
     assert "selecting a product to create" in normalized
     assert "**Use {friendly product name} — Already installed**" in text
     assert "**Create {friendly product name} {version}**" in text

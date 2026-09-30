@@ -75,7 +75,7 @@ If agent listing fails, preserve its failure evidence and continue with the cata
 
 For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. Render `Employee Self-Service` as `Employee Self-Service (Hub)`, render `Employee Self-Service IT` or `Employee Self-Service (IT)` as `Employee Self-Service (IT)`, and render `Employee Self-Service HR` or `Employee Self-Service (HR)` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
 
-For the three recognized ESS products, render the following friendly product name and default supporting description exactly as written. Do not paraphrase, shorten, or combine this copy with the service-provided description. The installed-without-matching-Dev case below replaces the default supporting description for that row.
+For the recognized ESS products listed below, render the following friendly product name and default supporting description exactly as written. Do not paraphrase, shorten, or combine this copy with the service-provided description. The installed-without-matching-Dev case below replaces the default supporting description for that row.
 
 | Friendly product name         | Supporting description                                                                                                       |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -85,13 +85,19 @@ For the three recognized ESS products, render the following friendly product nam
 
 For every other product, use its exact service-provided name unchanged and use `shortDescription`, then `description`, as the supporting text.
 
-When listing succeeds, continue the catalog surface with:
+When listing succeeds, render this mostly fixed catalog surface:
 
-> {PRODUCT_COUNT} entitled products are available for **{environment name}**. What would you like to do?
+**Message:**
 
-Use the host's interactive single-selection control, leave the selection initially unset, and disable custom entry inside the control. Present one standard choice for each exact `packageId`. Do not ask the maker to type a product name.
+{PRODUCT_COUNT} entitled products are available for **{environment name}**. What would you like to do?
 
-Use **Choose an ESS product.** as the exact interactive-control question. Do not describe the whole surface as selecting a fresh product or selecting a product to create, because some options continue with an existing agent.
+{PRODUCT_ROWS}
+
+**End message.**
+
+Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}` to the unnumbered product rows defined below; never assume a fixed product count. In the host's interactive single-selection control, present those product choices followed by **Refresh list** and **Choose a different environment**, in that order. Leave the selection initially unset, and disable custom entry inside the control. Use **Choose an ESS product or setup action.** as the exact question. Do not describe the surface as selecting a product to create.
+
+For **Refresh list**, rerun the catalog list and agent list in their existing order, then rebuild the complete surface from the fresh results. This is a new maker-requested read, not an automatic retry. For **Choose a different environment**, retain the selected account and ring, read `da-environment-target.md`, rerun `list-environments`, and continue from its environment picker. Do not ask the maker to type a product name or number any choice.
 
 Build the product picker as a projection of the latest successful catalog result and the latest agent-list attempt. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Enrich each projected row with workspace observations and the latest `devAgents` evidence. A successful complete agent list is authoritative for the current picker, but only an exact identity in that result renders **Use — Already installed**. An older workspace observation without a current exact identity is historical evidence, not a sticky installed label. When agent listing fails or reports unresolved identities, retain the observation only as historical evidence and state that current installation could not be established; do not convert that uncertainty into either installed or uninstalled. Rebuild this projection whenever a fresh catalog or agent-list result arrives.
 
