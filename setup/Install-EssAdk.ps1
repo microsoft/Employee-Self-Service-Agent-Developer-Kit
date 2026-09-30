@@ -16,8 +16,9 @@
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
          location (default: $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit).
-      6. Opens the ess-maker-skills workspace in VS Code and automatically
-         requests `/setup` in Copilot Chat (requires VS Code 1.102+).
+      6. Opens the ess-maker-skills workspace in VS Code. `/setup` is
+         user-driven - run it yourself in Copilot Chat when ready
+         (requires VS Code 1.102+).
 
     The script is idempotent: re-run to repair a partial install.
 
@@ -54,9 +55,9 @@
     .local/config.json so FlightCheck can authenticate without running /setup.
 
 .PARAMETER InstallMode
-    Selects the VS Code experience: 'maker' (chat-first, hidden developer
-    chrome - was 'lite'), 'developer' (default VS Code layout with /setup
-    injection - was 'standard'), or 'prompt' (default: this installer
+    Selects the VS Code experience: 'maker' (guided rail layout - was
+    'lite'), 'developer' (default VS Code layout with the rendered README
+    - was 'standard'), or 'prompt' (default: this installer
     asks the maker in the terminal, defaulting to 'maker' under a
     non-interactive shell). The ESS Maker Profile extension is installed
     in every mode; only the layout and /setup delivery differ. Explicit
@@ -102,7 +103,7 @@ param(
 
 # Back-compat: -SkipMakerProfile forces developer mode even when
 # -InstallMode is passed. This preserves the old behaviour where the
-# switch was the only way to say "no chat-first layout".
+# switch was the only way to say "no guided rail layout".
 if ($SkipMakerProfile) { $InstallMode = 'developer' }
 
 # Normalize -Ring casing before forwarding: [ValidateSet] on the param
@@ -143,9 +144,9 @@ if ($InstallMode -eq 'prompt') {
         Write-Host ""
         Write-Host "==> Choose your ESS Maker experience" -ForegroundColor Cyan
         Write-Host "  [1] Maker (recommended)"
-        Write-Host "      Chat-first layout; hides file tree, tabs, and status bar;"
-        Write-Host "      big-button Quick Actions rail. Best if you mostly work in"
-        Write-Host "      chat and want a focused HR/IT admin surface."
+        Write-Host "      Guided rail layout: a focused activity-bar rail with a"
+        Write-Host "      Getting started walkthrough and a Customization task list."
+        Write-Host "      Best if you want a focused HR/IT admin surface."
         Write-Host ""
         Write-Host "  [2] Developer"
         Write-Host "      Default VS Code layout with GitHub Copilot Chat in the"
@@ -216,6 +217,51 @@ function Invoke-Native {
         return $output
     } finally {
         $ErrorActionPreference = $prevEAP
+    }
+}
+
+# Close VS Code before installing the bundled profile and launching the
+# workspace. VS Code can keep the previous extension instance alive while the
+# installer updates the VSIX/settings, so the new guided layout may not appear
+# until the old processes exit. Never close it silently: unsaved editor state
+# may be lost when the operator confirms.
+function Confirm-StopRunningCode {
+    $running = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+    if (-not $running) { return }
+
+    Write-Host ''
+    Write-Warn2 "VS Code is running (PIDs: $($running.Id -join ', '))."
+    Write-Warn2 'Close/save any unsaved files before continuing.'
+    $answer = Read-Host 'VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N]'
+    if ($answer -notmatch '^(?i:y|yes)$') {
+        Write-Warn2 'Leaving existing VS Code instances open. Launching the Maker workspace may require a manual VS Code restart.'
+        return
+    }
+
+    foreach ($process in $running) {
+        # Re-query immediately before stopping: VS Code often exits its renderer
+        # and helper processes while the parent process list is being enumerated.
+        $current = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $current -or $current.ProcessName -notin @('Code', 'Code-insiders')) {
+            continue
+        }
+        try {
+            Stop-Process -Id $current.Id -Force -ErrorAction Stop
+        } catch {
+            # A normal shutdown can win this race between the re-query and
+            # Stop-Process. Only report a failure if the PID is still alive.
+            if (Get-Process -Id $current.Id -ErrorAction SilentlyContinue) {
+                Write-Warn2 "Could not close VS Code PID $($current.Id): $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # Wait briefly for child processes to exit before launching the new window.
+    # Do not print stale-PID warnings for processes that disappear naturally.
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $remaining = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+        if (-not $remaining) { break }
+        Start-Sleep -Milliseconds 250
     }
 }
 
@@ -1043,24 +1089,25 @@ if (-not $FlightCheckOnly) {
 }
 
 # ---------------------------------------------------------------------------
-# 5c. ESS Maker Profile (chat-first VS Code layout)
+# 5c. ESS Maker Profile (guided rail VS Code layout)
 # ---------------------------------------------------------------------------
-# The bundled extension at tools/ess-maker-profile/extension/ hides developer
-# chrome and surfaces a big-button "Quick actions" rail tied to the kit's
+# The bundled extension at tools/ess-maker-profile/extension/ applies a guided
+# rail layout and surfaces a "Customization" task list tied to the kit's
 # slash commands. We install it from the cloned repo (not the marketplace -
 # this is a POC build that isn't published) so it auto-activates the next
-# time `code` launches. When the maker profile is installed, the extension
-# itself opens chat and injects /setup (section 7 just opens the workspace).
+# time `code` launches. When the profile is installed, the extension reads
+# essMaker.mode and applies the mode-specific layout (Maker: guided rail;
+# Developer: README preview). /setup is user-driven (section 7 just opens
+# the workspace).
 #
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     # Install the ESS Maker Profile extension in every mode. In maker mode
-    # it applies the chat-first layout; in developer mode it only handles
-    # /setup injection after the welcome wizard closes (no visual
-    # changes). $modeLabel is always 'maker' or 'developer' by this
-    # point - the CLI prompt above resolves 'prompt' before we reach any
-    # of the install steps.
+    # it applies the guided layout; in developer mode it shows the rendered
+    # README preview (/setup is user-driven in both). $modeLabel is always
+    # 'maker' or 'developer' by this point - the CLI prompt above resolves
+    # 'prompt' before we reach any of the install steps.
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
     $code = Resolve-CodeCommand
@@ -1083,39 +1130,33 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
             $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
-            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
-            $makerProfileCurrent = $makerVersion -and
-                $LASTEXITCODE -eq 0 -and
-                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
+            # Reinstall even when the version is unchanged: branch builds can
+            # update the VSIX contents without bumping the version, and VS Code
+            # otherwise retains the old extension payload.
+            $out = $null
+            $vsix_exit = 0
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                $vsix_exit = $LASTEXITCODE
+            } catch {
+                $out = $_.Exception.Message
+                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+            } finally {
+                $ErrorActionPreference = $prevEAP
+            }
 
-            if ($makerProfileCurrent) {
-                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
+            if ($vsix_exit -eq 0) {
+                Write-Ok "ESS Maker Profile installed/refreshed ($($vsix.Name)) - $modeLabel mode"
             } else {
-                $out = $null
-                $vsix_exit = 0
-                try {
-                    $prevEAP = $ErrorActionPreference
-                    $ErrorActionPreference = 'Continue'
-                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                    $vsix_exit = $LASTEXITCODE
-                } catch {
-                    $out = $_.Exception.Message
-                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-                } finally {
-                    $ErrorActionPreference = $prevEAP
-                }
-
-                if ($vsix_exit -eq 0) {
-                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
-                } else {
-                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
-                }
+                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
             }
         }
 
         # Write the mode setting so the extension knows whether to apply
-        # the maker (chat-first) layout or inject /setup (developer mode).
+        # the guided maker layout or show the README preview (developer mode).
         # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
@@ -1507,6 +1548,12 @@ if ($FlightCheckOnly) {
     return
 }
 
+# VS Code can retain the previous extension host while the installer updates
+# the bundled profile. Close it before relaunching the Maker workspace.
+if (-not $FlightCheckOnly -and -not $SkipLaunch) {
+    Confirm-StopRunningCode
+}
+
 # ---------------------------------------------------------------------------
 # 7. Launch
 # ---------------------------------------------------------------------------
@@ -1514,39 +1561,30 @@ if (-not $SkipLaunch) {
     $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
-        # Launch strategy depends on mode:
-        # - Maker mode: just open the workspace. The ESS Maker Profile extension
-        #   handles layout + /setup injection after the welcome wizard closes.
-        # - Developer mode: use `code chat '/setup'` which opens Copilot Chat in
-        #   the sidebar panel on the right (the standard chat experience).
+        # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
+        # extension reads essMaker.mode and applies the mode-specific layout
+        # (Maker: guided rail + walkthrough; Developer: rendered README preview).
+        # /setup is user-driven in both modes - neither the installer nor the
+        # extension runs it automatically.
         # By the time we get here $modeLabel is always 'maker' or 'developer'
         # (the CLI prompt above resolves 'prompt' before we reach any launch
         # code), so there is no third fall-through branch to handle.
         Push-Location $workspace
         try {
             if ($modeLabel -eq 'developer') {
-                # Developer mode - use code chat to open /setup in sidebar panel
-                Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
-                $chatOutput = Invoke-Native { & $codePath chat '/setup' }
-                $chatExit = $LASTEXITCODE
-                foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
-                if ($chatExit -ne 0) {
-                    Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
-                    Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                    Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
-                    Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
-                } else {
-                    Write-Ok "Requested /setup in Copilot Chat at $workspace"
-                    Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
-                    Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
-                }
-            } else {
-                # Maker mode - extension handles /setup after welcome wizard
+                # Developer mode - open the workspace; the extension shows the
+                # rendered README preview. /setup is user-driven.
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
-                Write-Host "The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes." -ForegroundColor Yellow
+                Write-Host "Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Yellow
+                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
+            } else {
+                # Maker mode - extension opens the guided view; /setup is user-driven
+                Write-Step 'Opening workspace in VS Code'
+                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
+                Write-Ok "Launched VS Code at $workspace"
+                Write-Host "The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat." -ForegroundColor Yellow
                 Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
             }
         } finally { Pop-Location }
