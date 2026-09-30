@@ -246,6 +246,58 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6])
+    def test_connect_config_flattens_workday_state(
+        self, tmp_path: Path, schema_version: int
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": schema_version,
+                    "scope": {
+                        "workdayTenant": "acme_impl",
+                        "entraTenantId": "tenant-id",
+                        "dataverseUrl": "https://acme.crm.dynamics.com",
+                    },
+                    "identifiers": {
+                        "entraAppId": "app-id",
+                        "entraAppIdUri": "api://app-id",
+                        "workdaySamlEntityId": (
+                            "http://www.workday.com/acme_impl"
+                        ),
+                    },
+                    "endpoints": {
+                        "restBaseUrl": (
+                            "https://wd2-impl-services1.workday.com/ccx/api"
+                        ),
+                        "oauthTokenUrl": (
+                            "https://wd2-impl-services1.workday.com/"
+                            "ccx/oauth2/acme_impl/token"
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["tenantId"] == "tenant-id"
+        assert merged["dataverseEndpoint"] == (
+            "https://acme.crm.dynamics.com"
+        )
+        assert merged["entraAppId"] == "app-id"
+        assert merged["appIdUri"] == "api://app-id"
+        assert merged["workdaySamlEntityId"] == (
+            "http://www.workday.com/acme_impl"
+        )
+        assert merged["tokenEndpoint"] == (
+            "https://wd2-impl-services1.workday.com/"
+            "ccx/oauth2/acme_impl/token"
+        )
+
     @pytest.mark.parametrize(
         "agent_slug",
             (

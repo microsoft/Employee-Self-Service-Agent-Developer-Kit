@@ -380,9 +380,9 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says... | Pattern | What to create |
 |-----------------|---------|---------------|
-| "I need to look up X from ServiceNow/Workday" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to create a ticket/case/request" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to show the user their X data" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
+| "I need to look up X from ServiceNow/Workday" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to create a ticket/case/request" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to show the user their X data" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
 | "I need to call a non-ESS system (Jira, custom API)" | Standalone Topic + Workflow | Topic + new cloud flow (only for connectors without a shared orchestrator) |
 | "I need to add a step to an existing flow" | Modify topic | Edit the existing topic YAML |
 | "I need to change how the agent responds to X" | Modify topic | Update trigger phrases, messages, or conditions |
@@ -430,7 +430,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
-| Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
+| Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`) | `src/skills/connect/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
@@ -566,6 +566,32 @@ doc_link=f"{DOC_BASE}/manage-knowledge-sources",  # this page doesn't exist!
 
 This rule exists because fabricated links erode customer trust and create
 support burden when they 404. A missing link is always better than a broken one.
+
+### Telemetry impact review
+
+Before opening a PR, ask:
+
+1. Does this change add a CLI entry point (`--profile`, `--scope`, or a
+   subcommand)? Wire `emit_flightcheck_telemetry(...)` and the `adk.*` emitters
+   into the new path. An entry point that does not emit is invisible to Aria.
+2. Does this change add a status, verdict, or outcome bucket such as
+   `Status.BLOCKED`? Add the counter to `_run_data`, update
+   `derive_run_outcome`, and pass the enum value through check-level emission.
+3. Does this change add a stable per-item field such as severity, remediation
+   ID, automation type, connector, or profile? Thread it through `_run_data` or
+   `_check_data` in
+   `scripts/flightcheck/telemetry.py` and add the corresponding Aria cube
+   dimension. Fields that exist only in `results.json` do not reach dashboards.
+4. Does this change alter a scope, category, or dimension whose Aria projection
+   depends on string shape, such as
+   `scope="profile:workday-da:post-connection"`? Update the derivation in
+   `scripts/flightcheck/telemetry.py` and check the additive emitters in
+   `scripts/adk_telemetry.py`.
+
+If none applies, note "no telemetry impact" in the PR description. If telemetry
+work is deliberately deferred, link the follow-up work item. Never add a
+capability without either wiring telemetry or explicitly documenting the
+deferral.
 
 ## User Config
 

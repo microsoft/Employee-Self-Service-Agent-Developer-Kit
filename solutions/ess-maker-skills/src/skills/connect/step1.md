@@ -11,11 +11,15 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected only if
-  `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
-  its `agentSlug` exactly matches the active agent, and every phase is `done`.
-  Shared provider setup state is not agent connection state and must not make
-  a sibling or newly selected agent appear connected.
+- **Workday** — connected if either:
+  - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
+    its `agentSlug` exactly matches the active agent, and every phase is
+    `done`; or
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 6`,
+    `status: "ready"`, and `scope.agent.slug` and `scope.agent.botId` exactly
+    match the active native agent.
+  Shared provider state without an exact active-agent match must not make a
+  sibling or newly selected agent appear connected.
 
 ---
 
@@ -269,12 +273,15 @@ Please select the ESS HR Agent or contact your administrator.
 
 Stop immediately without creating Workday state or entering a lifecycle.
 
-For `gptagent_copilotforemployeeselfservicehr` or the legacy
-`msdyn_copilotforemployeeselfservicedahr` alias, read
+For `gptagent_copilotforemployeeselfservicehr`, read
 `src/skills/setup/workday-da/SKILL.md` and follow it. That setup uses
 `WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
 `WD-PKG-001`: DA packages share some Workday connection-reference names with
 CEA, so the CEA package fingerprint is not an architecture discriminator.
+
+For the classic DA HR schema `msdyn_copilotforemployeeselfservicedahr`, explain
+that the simplified Workday lifecycle currently supports only the native ESS
+HR agent. Stop without creating or changing Workday state.
 
 For a CEA agent, check the currently installed Workday extension before
 honoring lifecycle state:
