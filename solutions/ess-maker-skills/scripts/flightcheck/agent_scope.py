@@ -49,20 +49,14 @@ def active_agent(config: dict[str, Any] | None) -> dict[str, Any]:
 def active_agent_bot_id(config: dict[str, Any] | None) -> str | None:
     """Return the active agent's ``botId``, or ``None`` when none is recorded.
 
-    Resolves the active agent via :func:`active_agent`, then falls back to the
-    first other agent that carries a ``botId`` so a runner whose active record
-    lacks one still finds a usable agent identity.
+    Resolves the active agent via :func:`active_agent` and returns only that
+    agent's ``botId``. Never substitutes a sibling agent's id: a per-agent
+    check must report on the selected agent or refuse, otherwise it would
+    silently verify the wrong agent. Callers treat ``None`` as "no usable agent
+    identity" and skip or degrade explicitly.
     """
     config = config or {}
-    bot_id = _clean_bot_id(active_agent(config).get("botId"))
-    if bot_id:
-        return bot_id
-    for agent in config.get("agents") or []:
-        if isinstance(agent, dict):
-            bot_id = _clean_bot_id(agent.get("botId"))
-            if bot_id:
-                return bot_id
-    return None
+    return _clean_bot_id(active_agent(config).get("botId")) or None
 
 
 def _clean_bot_id(value: Any) -> str:

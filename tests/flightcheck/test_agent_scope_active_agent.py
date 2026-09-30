@@ -50,7 +50,11 @@ def test_bot_id_uses_slug_from_agent_copy_against_agents_list():
     assert active_agent_bot_id(config) == "id-beta"
 
 
-def test_bot_id_falls_back_when_active_agent_lacks_bot_id():
+def test_bot_id_never_substitutes_a_sibling_when_active_agent_lacks_bot_id():
+    """Subject-identity invariant: a per-agent check must read the selected
+    agent or refuse. When the active agent (beta) has no botId, the resolver
+    must return None, NOT a healthy sibling's (alpha) botId, so ESS-SOLN-001 /
+    DV-CONN-001 never silently verify the wrong agent."""
     config = {
         "activeAgent": "beta",
         "agents": [
@@ -59,7 +63,7 @@ def test_bot_id_falls_back_when_active_agent_lacks_bot_id():
         ],
     }
 
-    assert active_agent_bot_id(config) == "id-alpha"
+    assert active_agent_bot_id(config) is None
 
 
 def test_bot_id_strips_whitespace_and_ignores_blank():

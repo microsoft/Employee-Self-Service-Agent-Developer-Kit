@@ -226,19 +226,37 @@ def _active_agent_bot_id(runner) -> str | None:
     return agent_scope.active_agent_bot_id(getattr(runner, "config", None))
 
 
+def _first_present(*values: Any) -> Any:
+    """Return the first value that is actually set.
+
+    Presence, not truthiness: an explicit Dev realm ``0`` must win over later
+    candidates, which ``a or b`` would drop because ``0`` is falsy. Blank or
+    whitespace-only strings are treated as unset so a later candidate supplies
+    the realm.
+    """
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
 def _alm_realm(runner) -> int | None:
     config = getattr(runner, "config", None) or {}
     single = config.get("agent") or {}
-    raw = (
-        config.get("minimalBotsAlmRealm")
-        or config.get("grsRealm")
-        or config.get("almRealm")
-        or single.get("minimalBotsAlmRealm")
-        or single.get("grsRealm")
-        or single.get("almRealm")
-        or single.get("realm")
-        or _DEFAULT_ALM_REALM
+    raw = _first_present(
+        config.get("minimalBotsAlmRealm"),
+        config.get("grsRealm"),
+        config.get("almRealm"),
+        single.get("minimalBotsAlmRealm"),
+        single.get("grsRealm"),
+        single.get("almRealm"),
+        single.get("realm"),
     )
+    if raw is None:
+        raw = _DEFAULT_ALM_REALM
     if type(raw) is int and raw in REALM_NAMES:
         return raw
     if isinstance(raw, str):

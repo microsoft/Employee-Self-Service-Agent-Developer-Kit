@@ -227,6 +227,34 @@ def test_alm_realm_maps_supported_config_values(
     assert _alm_realm(runner) == expected
 
 
+def test_alm_realm_honors_explicit_dev_zero_over_later_fields() -> None:
+    """Presence-based resolution: an explicit Dev realm 0 in an earlier field
+    must win over a later field. The old `a or b` chain dropped 0 as falsy and
+    resolved the wrong realm."""
+    runner = _Runner(
+        config={
+            "minimalBotsAlmRealm": DEV_REALM,
+            "grsRealm": TEST_REALM,
+            "agent": {"realm": PROD_REALM},
+        }
+    )
+
+    assert _alm_realm(runner) == DEV_REALM
+
+
+def test_alm_realm_skips_blank_string_and_uses_next_present_field() -> None:
+    """A blank/whitespace field is treated as unset so a later present
+    candidate supplies the realm."""
+    runner = _Runner(
+        config={
+            "minimalBotsAlmRealm": "   ",
+            "grsRealm": TEST_REALM,
+        }
+    )
+
+    assert _alm_realm(runner) == TEST_REALM
+
+
 def test_warning_when_configure_read_errors() -> None:
     error = AgentBuilderHTTPError("Dev realm configuration", 500)
     runner = _Runner(
