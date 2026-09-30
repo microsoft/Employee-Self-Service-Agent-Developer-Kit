@@ -48,12 +48,12 @@ close_running_vscode() {
     warn "Visual Studio Code is running (PIDs: $(echo "$running_pids" | tr '\n' ' '))."
     warn "Close/save any unsaved files before continuing."
     if [[ -r /dev/tty ]]; then
-        read -r -p "Close all running VS Code instances and relaunch the new UX? [Y/N] " answer </dev/tty
+        read -r -p "VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N] " answer </dev/tty
     else
-        read -r -p "Close all running VS Code instances and relaunch the new UX? [Y/N] " answer
+        read -r -p "VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N] " answer
     fi
     if [[ ! "$answer" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
-        warn "Leaving existing VS Code instances open. The new extension/layout may require a manual VS Code reload."
+        warn "Leaving existing VS Code instances open. Launching the Maker workspace may require a manual VS Code restart."
         return 0
     fi
 

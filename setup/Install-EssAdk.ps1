@@ -215,20 +215,37 @@ function Confirm-StopRunningCode {
     Write-Host ''
     Write-Warn2 "VS Code is running (PIDs: $($running.Id -join ', '))."
     Write-Warn2 'Close/save any unsaved files before continuing.'
-    $answer = Read-Host 'Close all running VS Code instances and relaunch the new UX? [Y/N]'
+    $answer = Read-Host 'VS Code needs to restart to launch the Maker workspace. Close all running VS Code instances now? [Y/N]'
     if ($answer -notmatch '^(?i:y|yes)$') {
-        Write-Warn2 'Leaving existing VS Code instances open. The new extension/layout may require a manual VS Code reload.'
+        Write-Warn2 'Leaving existing VS Code instances open. Launching the Maker workspace may require a manual VS Code restart.'
         return
     }
 
     foreach ($process in $running) {
+        # Re-query immediately before stopping: VS Code often exits its renderer
+        # and helper processes while the parent process list is being enumerated.
+        $current = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+        if (-not $current -or $current.ProcessName -notin @('Code', 'Code-insiders')) {
+            continue
+        }
         try {
-            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            Stop-Process -Id $current.Id -Force -ErrorAction Stop
         } catch {
-            Write-Warn2 "Could not close VS Code PID $($process.Id): $($_.Exception.Message)"
+            # A normal shutdown can win this race between the re-query and
+            # Stop-Process. Only report a failure if the PID is still alive.
+            if (Get-Process -Id $current.Id -ErrorAction SilentlyContinue) {
+                Write-Warn2 "Could not close VS Code PID $($current.Id): $($_.Exception.Message)"
+            }
         }
     }
-    Start-Sleep -Milliseconds 500
+
+    # Wait briefly for child processes to exit before launching the new window.
+    # Do not print stale-PID warnings for processes that disappear naturally.
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        $remaining = @(Get-Process -Name 'Code', 'Code-insiders' -ErrorAction SilentlyContinue)
+        if (-not $remaining) { break }
+        Start-Sleep -Milliseconds 250
+    }
 }
 
 # Helper: resolve Python executable robustly.
@@ -1498,7 +1515,7 @@ if ($FlightCheckOnly) {
 }
 
 # VS Code can retain the previous extension host while the installer updates
-# the bundled profile. Close it before relaunching so the new UX is loaded.
+# the bundled profile. Close it before relaunching the Maker workspace.
 if (-not $FlightCheckOnly -and -not $SkipLaunch) {
     Confirm-StopRunningCode
 }

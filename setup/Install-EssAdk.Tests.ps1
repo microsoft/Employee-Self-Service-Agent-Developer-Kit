@@ -482,14 +482,20 @@ Test 'Install-EssAdk.ps1 confirmation-gates closing running VS Code by PID' {
     if ($src -notmatch 'Get-Process\s+-Name\s+''Code'',\s*''Code-insiders''') {
         throw 'Windows installer must enumerate running VS Code processes'
     }
-    if ($src -notmatch 'Read-Host\s+''Close all running VS Code instances') {
+    if ($src -notmatch 'Read-Host\s+''(?:Close all running VS Code instances|VS Code needs to restart)') {
         throw 'Windows installer must ask before closing VS Code'
     }
-    if ($src -notmatch 'Stop-Process\s+-Id\s+\$process\.Id') {
+    if ($src -notmatch 'Stop-Process\s+-Id\s+\$current\.Id') {
         throw 'Windows installer must stop specific VS Code PIDs, not use name-based termination'
     }
     if ($src -notmatch 'Confirm-StopRunningCode') {
         throw 'Windows installer must invoke the VS Code shutdown helper'
+    }
+    if ($src -notmatch 'Get-Process\s+-Id\s+\$process\.Id\s+-ErrorAction\s+SilentlyContinue') {
+        throw 'Windows installer must re-query each VS Code PID before stopping it'
+    }
+    if ($src -notmatch 'Only report a failure if the PID is still alive') {
+        throw 'Windows installer must suppress expected stale-PID shutdown races'
     }
 }
 
