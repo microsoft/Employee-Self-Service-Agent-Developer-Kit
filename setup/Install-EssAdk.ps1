@@ -17,7 +17,7 @@
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
          location (default: $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit).
       6. Opens the ess-maker-skills workspace in VS Code. `/setup` is
-         user-driven — run it yourself in Copilot Chat when ready
+         user-driven - run it yourself in Copilot Chat when ready
          (requires VS Code 1.102+).
 
     The script is idempotent: re-run to repair a partial install.

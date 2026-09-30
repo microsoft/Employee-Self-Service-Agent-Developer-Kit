@@ -6,7 +6,7 @@
     Downloads the installer and runs it with -InstallMode developer, giving
     the maker the default VS Code layout (activity bar, file explorer,
     status bar visible) plus the rendered README preview. `/setup` is
-    user-driven — run it yourself in Copilot Chat when ready. This is the
+    user-driven - run it yourself in Copilot Chat when ready. This is the
     shortcut for makers who already know they want the developer experience
     and want to skip the Maker/Developer terminal prompt.
 
