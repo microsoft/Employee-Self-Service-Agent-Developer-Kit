@@ -1187,6 +1187,15 @@ class MinimalBotEvaluationClient:
                 f"Unable to persist native tracking {path}: {exc}"
             ) from exc
 
+    def verify_deployed_components(
+        self, plan: dict[str, Any], response: dict[str, Any],
+    ) -> None:
+        """Verify every component tracked by a deployment plan."""
+        expected = self._expected_components(plan)
+        self._verify_components(
+            expected, self._remote_components(response), set(expected),
+        )
+
     @staticmethod
     def _expected_components(plan: dict[str, Any]) -> dict[str, Any]:
         entries = plan.get("entries")

@@ -46,7 +46,7 @@ def test_append_keeps_old_files_and_uses_unique_filename_and_order(tmp_path):
     assert rows[2][0:2] == ["New | prompt", "First\nanswer"]
     assert rows[3][0:2] == ["New | prompt", "Other answer"]
     assert all(row[-2:] == ["CompareMeaning", "50"] for row in rows[1:])
-    assert second["caseCount"] == 3
+    assert second["rowCount"] == 3
 
 
 @pytest.mark.parametrize("count,prompt,expected", [

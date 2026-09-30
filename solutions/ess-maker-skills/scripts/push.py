@@ -20,6 +20,7 @@ Usage:
 import fnmatch
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -1532,7 +1533,6 @@ def _is_evaluation_parent(content):
 
 
 def _validate_selected_evaluations(agent_dir, working_files, only_globs, affected):
-    from pathlib import Path
     candidates = working_files if only_globs else affected
     folders = {
         path.replace("\\", "/").split("/")[1]
@@ -2840,7 +2840,6 @@ def main(argv=None, *, config=None, verify=None):
     if _reg["exit_code"]:
         sys.exit(_reg["exit_code"])
     return {"status": "pushed", "backend": "dataverse"}
-    print("")
 
 
 if __name__ == "__main__":

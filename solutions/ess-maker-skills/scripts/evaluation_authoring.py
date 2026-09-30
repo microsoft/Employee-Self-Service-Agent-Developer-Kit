@@ -77,7 +77,7 @@ def add_evaluation_case(
         "setFolder": str(folder),
         "caseFile": str(case_path),
         "csv": str(csv_path),
-        "caseCount": sum(len(case["rows"]) for case in cases) + 1,
+        "rowCount": sum(len(case["rows"]) for case in cases) + 1,
     }
 
 

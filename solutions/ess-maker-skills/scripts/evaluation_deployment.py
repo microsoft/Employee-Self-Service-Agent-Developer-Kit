@@ -324,16 +324,10 @@ def _prepare(
         context["nativeRemote"] = remote
         remote_snapshot = remote
         if selected_map and not native_pending and not plan["changes"]:
-            expected = client._expected_components({"entries": selected_map})
-            client._verify_components(
-                expected, client._remote_components(remote), set(expected)
-            )
+            client.verify_deployed_components({"entries": selected_map}, remote)
         if native_pending:
             context["nativePending"] = native_pending
-            expected = client._expected_components(plan)
-            client._verify_components(
-                expected, client._remote_components(remote), set(expected),
-            )
+            client.verify_deployed_components(plan, remote)
             recovery = True
     else:
         auth = push._AuthHolder(config["dataverseEndpoint"])
