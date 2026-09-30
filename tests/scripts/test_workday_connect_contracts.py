@@ -408,29 +408,11 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert "both dates match exactly" in (
         packet["certificateValidityQuestion"]["options"][0]
     )
-    customer_tasks = packet["customerTaskList"]
-    assert len(customer_tasks) == 23
-    assert customer_tasks[0] == "In Workday, run Edit Tenant Setup - Security."
-    assert "https://sts.windows.net/00000000-0000-0000-0000-000000000000/" in (
-        customer_tasks[2]
+    assert "customerTaskList" not in packet
+    assert packet["actions"][0].startswith(
+        "Identify which sign-in provider the enabled Workday SAML row"
     )
-    assert "Certificate (Base64)" in customer_tasks[4]
-    assert "2026-01-01 through 2027-01-01" in customer_tasks[8]
-    assert customer_tasks[9] == (
-        "Set Service Provider ID exactly to "
-        "http://www.workday.com/contoso_impl."
-    )
-    assert customer_tasks.index("In Workday, run Register API Client.") < (
-        customer_tasks.index("Set Client Grant Type to SAML Bearer.")
-    )
-    assert customer_tasks.index(
-        "Record the Workday REST base URL ending exactly at /ccx/api."
-    ) < customer_tasks.index(
-        "Record the Workday SOAP service base URL including the tenant path "
-        "ending at /ccx/service/contoso_impl."
-    )
-    assert "Integration System User policy" in customer_tasks[21]
-    assert "firewall change" in customer_tasks[22]
+    assert any("REST and SOAP hosts" in action for action in packet["actions"])
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
 
@@ -490,7 +472,7 @@ def test_workday_admin_response_validates_exact_endpoints():
                 "https://example.workday.com/ccx/oauth2/contoso_impl/token"
             ),
             "restBaseUrl": "https://example.workday.com/ccx/api",
-            "soapBaseUrl": ("https://example.workday.com/ccx/service/contoso_impl"),
+            "soapBaseUrl": "https://example.workday.com/ccx/service",
             "authenticationPolicyOutcome": "existing-active-policy",
             "networkReadinessOutcome": "confirmed-hosts-allowed",
         },
@@ -534,7 +516,7 @@ def test_workday_admin_response_rejects_certificate_date_drift():
                     "https://example.workday.com/ccx/oauth2/contoso_impl/token"
                 ),
                 "restBaseUrl": "https://example.workday.com/ccx/api",
-                "soapBaseUrl": ("https://example.workday.com/ccx/service/contoso_impl"),
+                "soapBaseUrl": "https://example.workday.com/ccx/service",
                 "authenticationPolicyOutcome": "existing-active-policy",
                 "networkReadinessOutcome": "confirmed-hosts-allowed",
             },
@@ -558,7 +540,7 @@ def test_workday_admin_response_rejects_conflicting_confirmed_defaults():
             "https://example.workday.com/ccx/oauth2/contoso_impl/token"
         ),
         "restBaseUrl": "https://example.workday.com/ccx/api",
-        "soapBaseUrl": "https://example.workday.com/ccx/service/contoso_impl",
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
         "authenticationPolicyOutcome": "existing-active-policy",
         "networkReadinessOutcome": "confirmed-hosts-allowed",
     }
@@ -607,7 +589,7 @@ def test_workday_admin_rejects_unused_response_fields():
                     "https://example.workday.com/ccx/oauth2/contoso_impl/token"
                 ),
                 "restBaseUrl": "https://example.workday.com/ccx/api",
-                "soapBaseUrl": ("https://example.workday.com/ccx/service/contoso_impl"),
+                "soapBaseUrl": "https://example.workday.com/ccx/service",
                 "authenticationPolicyOutcome": "existing-active-policy",
                 "networkReadinessOutcome": "confirmed-hosts-allowed",
                 "notes": "not part of the evidence contract",
@@ -644,7 +626,10 @@ def test_agent_binding_and_employee_evidence_are_strict():
                 "flowAttachment": {
                     "outcome": "maker-confirmed",
                     "botId": "bot-id",
-                    "flowNames": ["ESS Workday Runtime REST Execution"],
+                    "flowNames": [
+                        "ESS Workday Runtime",
+                        "ESS Workday Runtime REST Execution",
+                    ],
                     "parameterSharingOutcome": (
                         "enabled-for-exposed-connections"
                     ),
@@ -673,7 +658,10 @@ def test_agent_binding_and_employee_evidence_are_strict():
             "flowAttachment": {
                 "outcome": "maker-confirmed",
                 "botId": "bot-id",
-                "flowNames": ["ESS Workday Runtime REST Execution"],
+                "flowNames": [
+                    "ESS Workday Runtime",
+                    "ESS Workday Runtime REST Execution",
+                ],
                 "parameterSharingOutcome": (
                     "enabled-for-exposed-connections"
                 ),
@@ -748,7 +736,7 @@ def test_entra_check_outcome_must_match_provenance():
         ),
         (
             "soapBaseUrl",
-            "https://example.workday.com/ccx/service/other",
+            "https://example.workday.com/ccx/service/contoso_impl",
             "SOAP base URL must end exactly",
         ),
     ],
@@ -776,7 +764,7 @@ def test_workday_admin_rejects_endpoint_path_drift(
         "oauthClientId": "safe-client-id",
         "oauthTokenUrl": ("https://example.workday.com/ccx/oauth2/contoso_impl/token"),
         "restBaseUrl": "https://example.workday.com/ccx/api",
-        "soapBaseUrl": ("https://example.workday.com/ccx/service/contoso_impl"),
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
         "authenticationPolicyOutcome": "existing-active-policy",
         "networkReadinessOutcome": "confirmed-hosts-allowed",
     }
@@ -815,7 +803,7 @@ def test_workday_admin_rejects_legacy_identity_provider_evidence():
                 ),
                 "restBaseUrl": "https://example.workday.com/ccx/api",
                 "soapBaseUrl": (
-                    "https://example.workday.com/ccx/service/contoso_impl"
+                    "https://example.workday.com/ccx/service"
                 ),
                 "authenticationPolicyOutcome": "existing-active-policy",
                 "networkReadinessOutcome": "confirmed-hosts-allowed",
@@ -840,7 +828,7 @@ def test_workday_admin_rejects_non_workday_or_mixed_endpoint_hosts():
             "https://attacker.example/ccx/oauth2/contoso_impl/token"
         ),
         "restBaseUrl": "https://example.workday.com/ccx/api",
-        "soapBaseUrl": "https://example.workday.com/ccx/service/contoso_impl",
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
         "authenticationPolicyOutcome": "existing-active-policy",
         "networkReadinessOutcome": "confirmed-hosts-allowed",
     }

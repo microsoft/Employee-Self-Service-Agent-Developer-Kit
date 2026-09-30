@@ -102,8 +102,14 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     assert "tenant-foundation reconciliation" in entra
     assert '"header": "Microsoft Entra administrator"' in entra
     assert "availability answer is not authorization evidence" in entra
-    assert "Do not add another availability confirmation in\nthis phase" in tenant
-    assert "phase-boundary self-attestation already covers it" in tenant
+    assert (
+        "Do not add another availability confirmation in this phase"
+        in " ".join(tenant.split())
+    )
+    assert (
+        "phase-boundary self-attestation already covers it"
+        in " ".join(tenant.split())
+    )
 
 
 def test_every_controller_command_is_documented() -> None:
@@ -363,11 +369,18 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Connections list fallback" in text
     assert "Power Apps maker portal" in text
     assert "Microsoft Entra ID Integrated" in text
-    assert "**Microsoft Entra resource URL:**" in text
-    assert "Do not use the Entra application\n  ID URI beginning with `api://`" in text
-    assert "**Workday OAuth token URL:**" in text
-    assert "**Client ID:**" in text
+    assert "**Display name (optional)**" in text
+    assert "**Authentication type**" in text
+    assert "**Microsoft Entra resource URL \\***" in text
+    assert "Do not use the Entra application ID URI beginning with `api://`" in text
+    assert "**Workday OAuth token URL \\***" in text
+    assert "**Workday OAuth client ID \\***" in text
+    assert "**SOAP base URL \\***" in text
+    assert "**REST base URL**" in text
+    assert "**Tenant name \\***" in text
     assert "not the Microsoft Entra application ID" in text
+    assert "ESS Workday Runtime**" in text
+    assert "ESS Workday Runtime REST Execution**" in text
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
     assert "Reuse a healthy existing connection" in text
@@ -400,22 +413,30 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert text.index("Allow permission") < text.index("activate-workday-topics.md")
 
 
-def test_workday_admin_handoff_renders_full_task_list_before_form() -> None:
+def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
 
     packet = text.index("workday_connect.py workday-admin-packet")
-    task_list = text.index("Read `customerTaskList` directly")
-    detailed_steps = text.index("1. **Protect the existing federation.**")
-    form_gate = text.index(
-        "Do not show this response form until the complete numbered"
+    provider_question = text.index("`identityProviderQuestion` from the packet")
+    unsupported_stop = text.index(
+        "For **Okta**, **Ping Identity**, or **Another sign-in provider**"
     )
-    form = text.index('"header": "Identity provider"')
+    existing_handoff = text.index("### Existing Microsoft Entra federation handoff")
+    greenfield_handoff = text.index("### New Microsoft Entra federation handoff")
+    completion = text.index(
+        "Has the Workday administrator completed every applicable task"
+    )
+    form = text.index('"header": "Issuer"')
 
-    assert packet < task_list < detailed_steps < form_gate < form
-    assert "render **Workday Administrator Steps**" in text
-    assert "every\n`customerTaskList` item verbatim" in text
-    assert "Do not\nsummarize, combine, omit, or paraphrase" in text
-    assert "Do not replace the list with\na one-sentence overview" in text
+    assert packet < provider_question < unsupported_stop
+    assert unsupported_stop < existing_handoff < greenfield_handoff
+    assert greenfield_handoff < completion < form
+    assert "This question selects a safe handoff branch" in text
+    assert "Do not show the completion question\n  or response form" in text
+    assert "Only after **Yes**\nmay the skill collect evidence" in text
+    assert "ending at /ccx/service, without the tenant name" in text
+    assert "using steps 2 through 7" not in text
+    assert '"header": "Identity provider"' not in text
 
 
 def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
