@@ -1,19 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Canonical reader for Declarative Agent connection references (minimalBots
-components API), shared so the DA connection checks cannot drift apart.
+"""Canonical reader for Declarative Agent connection references.
 
-Intended consumers (this reader ships ahead of them; the wiring lands in the
-stacked DA re-point PRs, so nothing in this branch imports it yet):
+Intended consumers:
   * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
     Workday SOAP reference, via ``read_active_agent_connection_references``.
   * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
     environment-wide and de-duped by logical name, via
     ``read_all_agents_connection_references``.
-  * The Workday shared-parameter checks (checks/workday.py) -> the active
-    agent's Workday ``sharedConnectionParameters`` via
-    ``workday_shared_connection_parameters``.
 
 Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
 ``agentbuilder_readiness.yaml``, the same endpoint + shape the shipped native
@@ -27,28 +22,13 @@ Fail-loudly contract:
     "do not swallow it." No consumer imports this reader on this branch yet, so
     the runner's uncaught-raise -> ERROR mapping is documented runner behavior,
     not exercised here;
-  * a read that cannot be attempted at all (no AgentBuilder client, or no
+  * a read that cannot be attempted at all (no AgentBuilder client or no
     configured agent botId) returns ``None`` so the caller SKIPs.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
-
-
-WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
-
-# Distinguishable ``unavailable_reason`` values returned by
-# ``workday_shared_connection_parameters`` when ``values == {}``. Consumers
-# compare against these constants (never the prose) to tell "Workday was never
-# set up" (NOT_CONFIGURED) apart from "the Workday reference exists but is
-# broken" (FAILED). See WD-ENV-001 / WD-REST-001.
-WORKDAY_REF_NOT_FOUND = "Workday connection reference was not found"
-WORKDAY_REF_MISSING_VALUES = (
-    "Workday connection reference is missing "
-    "sharedConnectionParameters.values"
-)
 
 
 def agent_bot_ids(config: dict[str, Any]) -> list[str]:
@@ -132,9 +112,6 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
                 "connectionreferencelogicalname": logical_name,
                 "connectorid": connector_id,
                 "connectionid": item.get("connectionId"),
-                "sharedconnectionparameters": item.get(
-                    "sharedConnectionParameters"
-                ),
             }
         )
     return refs
@@ -218,83 +195,3 @@ def read_all_agents_connection_references(
             seen.add(key)
         deduped.append(ref)
     return deduped
-
-
-def _shared_parameter_value(raw_value: Any) -> str:
-    if isinstance(raw_value, dict):
-        raw_value = raw_value.get("value")
-    if raw_value is None:
-        return ""
-    return str(raw_value).strip()
-
-
-def shared_connection_parameter_values(ref: dict[str, Any]) -> dict[str, str]:
-    """Return ``sharedConnectionParameters.values`` as a string map.
-
-    A present-but-malformed shape raises ``ValueError`` because the components
-    payload no longer matches the validated contract.
-    """
-    params = ref.get("sharedconnectionparameters")
-    if params is None:
-        return {}
-    # Live AgentBuilder returns sharedConnectionParameters as a JSON string,
-    # not a nested object (observed on a live connection reference), so parse
-    # the string before validating the shape.
-    if isinstance(params, str):
-        text = params.strip()
-        if not text:
-            return {}
-        try:
-            params = json.loads(text)
-        except ValueError as exc:
-            raise ValueError(
-                "Component fetch returned invalid sharedConnectionParameters."
-            ) from exc
-    if not isinstance(params, dict):
-        raise ValueError(
-            "Component fetch returned invalid sharedConnectionParameters."
-        )
-    raw_values = params.get("values")
-    if raw_values is None:
-        return {}
-    if not isinstance(raw_values, dict):
-        raise ValueError(
-            "Component fetch returned invalid sharedConnectionParameters.values."
-        )
-    return {
-        str(key): value
-        for key, raw_value in raw_values.items()
-        if isinstance(key, str)
-        if (value := _shared_parameter_value(raw_value))
-    }
-
-
-def workday_shared_connection_parameters(
-    runner,
-) -> tuple[dict[str, str] | None, str]:
-    """Return the active agent's Workday parameters from components.
-
-    ``values is None`` means the check could not run because AgentBuilder or a
-    configured active-agent botId is unavailable. ``values == {}`` means the
-    check ran and observed a missing Workday reference or missing shared
-    parameters on the active agent.
-    """
-    refs = read_active_agent_connection_references(runner)
-    if refs is None:
-        return None, (
-            "AgentBuilder client or active-agent botId not available"
-        )
-
-    found_workday_ref = False
-    for ref in refs:
-        connector_id = str(ref.get("connectorid") or "").casefold().rstrip("/")
-        if connector_id.endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX):
-            found_workday_ref = True
-            values = shared_connection_parameter_values(ref)
-            if values:
-                return values, ""
-
-    if found_workday_ref:
-        return {}, WORKDAY_REF_MISSING_VALUES
-
-    return {}, WORKDAY_REF_NOT_FOUND

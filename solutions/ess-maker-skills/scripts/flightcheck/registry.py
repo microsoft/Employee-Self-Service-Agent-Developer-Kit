@@ -434,15 +434,15 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.WORKDAY_ADMIN.value,),
         is_family=True,
     ),
-    # WD-ENV-001 — Workday tenant/OAuth configuration read from the
-    # Declarative Agent components payload (AGENTBUILDER), no Dataverse.
+    # WD-ENV-001 — selected-agent topics -> flow detail -> physical Workday
+    # connection parameters.
     CheckpointSpec(
         key="WD-ENV-001",
         category_fn=run_workday_checks,
         category_label="Workday",
-        clients=frozenset({AGENTBUILDER}),
+        clients=frozenset({DATAVERSE, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=False,
+        requires_dataverse_endpoint=True,
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
@@ -586,15 +586,15 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # WD-REST-001 — Workday REST base URI read from DA components
-    # sharedConnectionParameters (AGENTBUILDER), no Dataverse.
+    # WD-REST-001 — REST root read from the selected agent's flow-bound
+    # physical Workday OAuth connection.
     CheckpointSpec(
         key="WD-REST-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({AGENTBUILDER}),
+        clients=frozenset({DATAVERSE, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=False,
+        requires_dataverse_endpoint=True,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),

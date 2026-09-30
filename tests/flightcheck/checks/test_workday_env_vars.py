@@ -37,10 +37,8 @@ import pytest
 import responses
 
 from tests.conftest import require_validated_mock
-from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 
-require_validated_mock(ab)
 require_validated_mock(dv)
 
 
@@ -57,14 +55,6 @@ require_validated_mock(dv)
 class _MinimalRunner:
     env_url: str
     dv_token: str
-
-
-class _FakeAgentBuilder:
-    def __init__(self, components: dict[str, Any]):
-        self._components = components
-
-    def fetch_components(self, _agent_id: str):
-        return self._components
 
 
 @pytest.fixture
@@ -145,199 +135,179 @@ def _result_by_id(results: list, checkpoint_id: str):
     return matches[0]
 
 
-def _runner_with_da_components(
-    payload: dict[str, Any],
-    *,
-    include_bot_id: bool = True,
-) -> _MinimalRunner:
-    runner = _MinimalRunner(env_url="", dv_token="")
-    runner.agentbuilder = _FakeAgentBuilder(payload)
-    runner.config = (
-        {"agent": {"botId": ab.MOCK_AGENT_ID}}
-        if include_bot_id
-        else {}
-    )
-    return runner
-
-
 # ───────────────────────────────────────────────────────────────────────
 # Tests
 # ───────────────────────────────────────────────────────────────────────
 
 
 class TestDeclarativeAgentWorkdayEnvConfig:
-    """WD-ENV-001 now reads Workday sharedConnectionParameters from DA
-    components instead of Dataverse environment variables."""
+    """WD-ENV-001 validates physical OAuth connection parameters."""
 
-    def test_required_shared_parameters_present_passes(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
-
-        runner = _runner_with_da_components(
-            ab.components_with_references(
-                references=[
-                    ab.workday_connection_reference(
-                        shared_connection_parameters=(
-                            ab.shared_connection_parameters()
-                        )
-                    )
-                ]
-            )
+    @staticmethod
+    def _resolution(
+        *,
+        has_binding: bool = True,
+        values: dict[str, str] | None = None,
+        unresolved: tuple[str, ...] = (),
+        ignored: tuple[str, ...] = (),
+    ):
+        from flightcheck.checks._workday_connection_params import (
+            WorkdayOAuthConnection,
+            WorkdayOAuthResolution,
         )
 
-        result = _check_da_env_config(runner)[0]
-
-        assert result.checkpoint_id == "WD-ENV-001"
-        assert result.status == "Passed"
-        assert "sharedConnectionParameters.values" in result.result
-        assert "tenantName=mocktenant" in result.result
-        assert "token:ResourceUri" in result.result
-
-    def test_shared_parameters_json_string_shape_passes(self) -> None:
-        # Live AgentBuilder returns sharedConnectionParameters as a JSON
-        # string; WD-ENV-001 must parse it, not just accept a nested object.
-        from flightcheck.checks.workday import _check_da_env_config
-
-        runner = _runner_with_da_components(
-            ab.components_with_references(
-                references=[
-                    ab.workday_connection_reference(
-                        shared_connection_parameters=(
-                            ab.shared_connection_parameters_json_string()
-                        )
-                    )
-                ]
+        connections = (
+            (
+                WorkdayOAuthConnection(
+                    name="workday-oauth-1",
+                    display_name="Workday OAuth",
+                    values=values,
+                ),
             )
+            if values is not None
+            else ()
+        )
+        return WorkdayOAuthResolution(
+            has_workday_binding=has_binding,
+            connections=connections,
+            unresolved_bindings=unresolved,
+            ignored_non_oauth_bindings=ignored,
         )
 
-        result = _check_da_env_config(runner)[0]
+    def test_required_oauth_parameters_present_passes(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
 
-        assert result.checkpoint_id == "WD-ENV-001"
-        assert result.status == "Passed"
-        assert "tenantName=mocktenant" in result.result
-        assert "token:ResourceUri" in result.result
-
-    def test_required_shared_parameters_can_be_on_later_workday_ref(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
-
-        runner = _runner_with_da_components(
-            ab.components_with_references(
-                references=[
-                    ab.workday_connection_reference(
-                        connection_id="mock-obo-connection",
-                        logical_name=(
-                            "gptagent_mockemployeeselfservice."
-                            "msdyn_sharedworkdaysoap_ff0df"
-                        ),
-                    ),
-                    ab.workday_connection_reference(
-                        connection_id="mock-isu-connection",
-                        logical_name=(
-                            "gptagent_mockemployeeselfservice."
-                            "msdyn_sharedworkdaysoap_0786a"
-                        ),
-                        shared_connection_parameters=(
-                            ab.shared_connection_parameters()
-                        ),
-                    ),
-                    ab.workday_connection_reference(
-                        connection_id="mock-context-isu-connection",
-                        logical_name=(
-                            "gptagent_mockemployeeselfservice."
-                            "msdyn_sharedworkdaysoap_d6081"
-                        ),
-                    ),
-                ]
-            )
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "token:ResourceUri": "https://wd.example.com",
+                    "token:WorkdayTokenUri": "https://wd.example.com/token",
+                    "token:WorkdayClientId": "mock-client-id",
+                }
+            ),
         )
 
-        result = _check_da_env_config(runner)[0]
+        result = workday._check_da_env_config(object())[0]
 
         assert result.status == "Passed"
-        assert "tenantName=mocktenant" in result.result
-        assert "token:ResourceUri" in result.result
+        assert "1 selected-agent Workday connection" in result.result
+        assert "Workday OAuth" in result.result
+        assert "mock-client-id" not in result.result
 
-    def test_missing_required_token_key_fails(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
+    def test_missing_required_token_key_fails(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
 
-        runner = _runner_with_da_components(
-            ab.components_with_references(
-                references=[
-                    ab.workday_connection_reference(
-                        shared_connection_parameters=(
-                            ab.shared_connection_parameters(token_uri=None)
-                        )
-                    )
-                ]
-            )
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "token:ResourceUri": "https://wd.example.com",
+                    "token:WorkdayClientId": "mock-client-id",
+                }
+            ),
         )
 
-        result = _check_da_env_config(runner)[0]
+        result = workday._check_da_env_config(object())[0]
 
         assert result.status == "Failed"
         assert "token:WorkdayTokenUri" in result.result
-        assert "missing required entries" in result.result
-        assert "Reconnect the Workday connection" in result.remediation
-        assert "token:WorkdayClientId" in result.remediation
+        assert "missing required parameters" in result.result
+        assert "Edit or recreate" in result.remediation
 
-    def test_no_workday_ref_is_not_configured(self) -> None:
-        """No Workday connection reference at all means Workday was never set
-        up in this environment. WD-ENV-001 must report NOT_CONFIGURED (which
-        does not fail readiness), mirroring the DV-CONN-001 "no ref" contract,
-        not FAILED — a targeted or non-Workday tenant run otherwise misfires a
-        hard CRITICAL failure."""
-        from flightcheck.checks.workday import _check_da_env_config
+    def test_no_selected_agent_workday_binding_is_not_configured(
+        self, monkeypatch
+    ) -> None:
+        from flightcheck.checks import workday
 
-        # components() carries only the ServiceNow reference, no Workday one.
-        runner = _runner_with_da_components(ab.components())
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: self._resolution(has_binding=False),
+        )
 
-        result = _check_da_env_config(runner)[0]
+        result = workday._check_da_env_config(object())[0]
 
-        assert result.checkpoint_id == "WD-ENV-001"
         assert result.status == "NotConfigured"
-        assert "No Workday connection reference" in result.result
-        assert "shared_workdaysoap" in result.result
+        assert "selected agent's enabled topics" in result.result
         assert "install/repair the Workday extension pack" in result.remediation
-        assert "If Workday is not used here" in result.remediation
 
-    def test_no_agentbuilder_client_skips(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
+    def test_unavailable_clients_skip(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
 
-        runner = _MinimalRunner(env_url="", dv_token="")
-        runner.config = {"agent": {"botId": ab.MOCK_AGENT_ID}}
-
-        result = _check_da_env_config(runner)[0]
-
-        assert result.status == "Skipped"
-        assert "not available" in result.result
-        assert "native AgentBuilder access" in result.remediation
-
-    def test_no_active_agent_botid_skips(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
-
-        runner = _runner_with_da_components(
-            ab.components_with_references(),
-            include_bot_id=False,
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: None,
         )
 
-        result = _check_da_env_config(runner)[0]
+        result = workday._check_da_env_config(object())[0]
 
         assert result.status == "Skipped"
-        assert "active-agent botId" in result.result
-        assert "configured active-agent botId" in result.remediation
+        assert "evidence is not available" in result.result
+        assert "Dataverse access" in result.remediation
 
-    def test_malformed_components_shape_returns_warning(self) -> None:
-        from flightcheck.checks.workday import _check_da_env_config
+    def test_unresolved_binding_warns(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
 
-        runner = _runner_with_da_components(
-            {"connectionReferenceChanges": {"unexpected": "dict"}}
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "token:ResourceUri": "https://wd.example.com",
+                    "token:WorkdayTokenUri": "https://wd.example.com/token",
+                    "token:WorkdayClientId": "mock-client-id",
+                },
+                unresolved=("missing-connection",),
+            ),
         )
 
-        result = _check_da_env_config(runner)[0]
+        result = workday._check_da_env_config(object())[0]
 
         assert result.status == "Warning"
-        assert "Unable to run WD-ENV-001" in result.result
-        assert "invalid connectionReferenceChanges" in result.result
-        assert "report the checkpoint ID" in result.remediation
+        assert "missing-connection" in result.result
+        assert "resolves to a visible" in result.remediation
+
+    def test_basic_only_binding_is_not_configured(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
+
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: self._resolution(
+                ignored=("workday-basic (basic)",),
+            ),
+        )
+
+        result = workday._check_da_env_config(object())[0]
+
+        assert result.status == "NotConfigured"
+        assert "workday-basic (basic)" in result.result
+        assert "Microsoft Entra ID Integrated" in result.remediation
+
+    def test_resolution_error_warns(self, monkeypatch) -> None:
+        from flightcheck.checks import workday
+
+        def _raise(_runner):
+            raise RuntimeError("403 Forbidden")
+
+        monkeypatch.setattr(
+            workday,
+            "resolve_active_workday_oauth_connections",
+            _raise,
+        )
+
+        result = workday._check_da_env_config(object())[0]
+
+        assert result.status == "Warning"
+        assert "403 Forbidden" in result.result
+        assert "Power Platform Administrator access" in result.remediation
 
 
 class TestGoodConfig:

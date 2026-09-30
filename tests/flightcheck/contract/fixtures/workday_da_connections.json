@@ -49,8 +49,7 @@
         "connectionReference": {
           "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
           "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
-          "connectionId": "mock-healthy-workday",
-          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"},\"token:ResourceUri\":{\"value\":\"https://wd.example.com\"},\"token:WorkdayTokenUri\":{\"value\":\"https://wd.example.com/ccx/oauth2/mocktenant/token\"},\"token:WorkdayClientId\":{\"value\":\"mock-client-id\"}}}"
+          "connectionId": "mock-healthy-workday"
         }
       }
     ]
@@ -62,8 +61,7 @@
         "connectionReference": {
           "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
           "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
-          "connectionId": "mock-degraded-workday",
-          "sharedConnectionParameters": "{\"values\":{}}"
+          "connectionId": "mock-degraded-workday"
         }
       }
     ]
@@ -76,8 +74,7 @@
           "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
           "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
           "connectionId": "mock-invoker-workday",
-          "authenticationType": "OAuthUser",
-          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"}}}"
+          "authenticationType": "OAuthUser"
         }
       }
     ]
@@ -90,8 +87,7 @@
           "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df",
           "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
           "connectionId": "mock-embedded-workday",
-          "authenticationType": "Raw",
-          "sharedConnectionParameters": "{\"values\":{\"restBaseUri\":{\"value\":\"https://wd.example.com/ccx/api\"},\"tenantName\":{\"value\":\"mocktenant\"}}}"
+          "authenticationType": "Raw"
         }
       }
     ]

@@ -105,6 +105,23 @@ class AgentRefScope:
     connectors: frozenset[str]
 
 
+@dataclass(frozen=True, order=True)
+class ActiveConnectionBinding:
+    """One physical connection binding used by the selected agent."""
+
+    logical_name: str
+    connector: str
+    connection_name: str
+
+
+def _active_agent_bot_id(config: dict) -> str | None:
+    """Return the selected agent's bot ID, never a sibling agent's ID."""
+    bot_id = (config.get("agent") or {}).get("botId")
+    if not isinstance(bot_id, str) or not bot_id.strip():
+        return None
+    return bot_id.strip()
+
+
 def _agent_bot_ids(config: dict) -> list[str]:
     """Every configured agent botId (multi-agent + single-agent shapes)."""
     bot_ids: list[str] = []
@@ -131,6 +148,118 @@ def _extract_flow_ids(topic_data: str) -> set[str]:
     if not topic_data:
         return set()
     return {m.group(1).lower() for m in _FLOW_ID_RE.finditer(topic_data)}
+
+
+def build_active_agent_connection_bindings(
+    runner,
+) -> tuple[ActiveConnectionBinding, ...] | None:
+    """Resolve physical connection bindings used by the selected agent.
+
+    ``None`` means the read cannot be attempted because a required client,
+    environment identifier, or selected-agent bot ID is unavailable. An empty
+    tuple means the selected agent was readable but its enabled topics invoke
+    no flows, or its readable flows carry no connection references.
+
+    Per-flow detail is mandatory because the flow listing omits
+    ``properties.connectionReferences``. Permission failures raise so callers
+    can surface a WARNING instead of treating missing visibility as absence.
+    """
+    config = getattr(runner, "config", None) or {}
+    bot_id = _active_agent_bot_id(config)
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    if not bot_id or not env_url or not dv_token or not pp or not env_id:
+        return None
+
+    try:
+        topics = query_all(
+            env_url,
+            dv_token,
+            "botcomponents",
+            "name,schemaname,data",
+            filter_expr=(
+                f"_parentbotid_value eq '{bot_id}' "
+                "and componenttype eq 9 and statecode eq 0"
+            ),
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Dataverse enabled-topic query failed for the selected agent: "
+            f"{exc}"
+        ) from exc
+    flow_ids: set[str] = set()
+    for topic in topics or []:
+        flow_ids |= _extract_flow_ids(topic.get("data") or "")
+    if not flow_ids:
+        return ()
+
+    bindings: set[ActiveConnectionBinding] = set()
+    readable = 0
+    for flow_id in sorted(flow_ids):
+        try:
+            detail = pp.get_flow(env_id, flow_id)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Power Platform Admin flow detail fetch failed for {flow_id}: {exc}"
+            ) from exc
+        if isinstance(detail, dict) and detail.get("_status") in (401, 403):
+            raise RuntimeError(
+                f"Power Platform Admin flow detail unauthorized for {flow_id}: "
+                f"{detail.get('_error')}"
+            )
+        if not detail or (isinstance(detail, dict) and detail.get("_error")):
+            error = detail.get("_error") if isinstance(detail, dict) else "not found"
+            raise RuntimeError(
+                f"Power Platform Admin flow detail was unavailable for "
+                f"{flow_id}: {error}"
+            )
+
+        readable += 1
+        conn_refs = (detail.get("properties") or {}).get("connectionReferences") or {}
+        if not isinstance(conn_refs, dict):
+            raise RuntimeError(
+                f"Power Platform Admin flow detail returned malformed "
+                f"connectionReferences for {flow_id}"
+            )
+        for meta in conn_refs.values():
+            if not isinstance(meta, dict):
+                raise RuntimeError(
+                    f"Power Platform Admin flow detail returned a malformed "
+                    f"connection reference for {flow_id}"
+                )
+            api_def = meta.get("apiDefinition") or {}
+            connector = normalize_connector_id(
+                api_def.get("name")
+                or api_def.get("id")
+                or meta.get("apiName")
+                or meta.get("apiId")
+            )
+            if not connector:
+                continue
+            logical_name = str(
+                meta.get("connectionReferenceLogicalName") or ""
+            ).strip()
+            connection_name = str(
+                meta.get("connectionName")
+                or (meta.get("connection") or {}).get("name")
+                or ""
+            ).strip()
+            bindings.add(
+                ActiveConnectionBinding(
+                    logical_name=logical_name,
+                    connector=connector,
+                    connection_name=connection_name,
+                )
+            )
+
+    if readable == 0:
+        raise RuntimeError(
+            "The selected agent invokes flows, but none of their Power Platform "
+            "Admin flow details could be read."
+        )
+    return tuple(sorted(bindings))
 
 
 def build_agent_ref_scope(runner) -> AgentRefScope | None:

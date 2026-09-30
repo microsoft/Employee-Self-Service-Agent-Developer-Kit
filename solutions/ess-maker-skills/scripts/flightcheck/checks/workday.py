@@ -40,9 +40,8 @@ from defusedxml.common import DefusedXmlException
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
 from ..agent_scope import resolve_agent_directory
-from ._da_connection_refs import (
-    WORKDAY_REF_NOT_FOUND,
-    workday_shared_connection_parameters,
+from ._workday_connection_params import (
+    resolve_active_workday_oauth_connections,
 )
 from .infrastructure import (
     _infra_003_directive,
@@ -81,7 +80,7 @@ ENV_VARS = {
     },
 }
 
-_WORKDAY_SHARED_ENV_KEYS = (
+_WORKDAY_OAUTH_REQUIRED_KEYS = (
     "tenantName",
     "token:ResourceUri",
     "token:WorkdayTokenUri",
@@ -662,12 +661,16 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # when the kit-side Workday install isn't deployed yet.
     results.extend(_check_entra_workday_federation_alignment(runner))
 
-    # WD-ENV-001 — DA Workday tenant/OAuth configuration from the native
-    # AgentBuilder components payload. Run it before the legacy no-Workday
-    # early-return only when the native client exists or this exact checkpoint
-    # was requested; Graph-only no-Dataverse probes must stay non-interactive.
+    # WD-ENV-001 — selected-agent Workday tenant/OAuth configuration from
+    # enabled topic -> flow detail -> physical connection evidence. Run it
+    # before the legacy no-Workday early-return when its Dataverse/admin inputs
+    # exist or this exact checkpoint was requested.
     should_run_da_env = (
-        getattr(runner, "agentbuilder", None) is not None
+        (
+            getattr(runner, "pp_admin", None) is not None
+            and bool(getattr(runner, "env_url", None))
+            and bool(getattr(runner, "dv_token", None))
+        )
         or str(getattr(runner, "scope", "")) == "checkpoint:WD-ENV-001"
     )
     if should_run_da_env:
@@ -1751,88 +1754,150 @@ def _simplified_install_skip(
 
 
 def _check_da_env_config(runner) -> list[CheckResult]:
-    """WD-ENV-001 — validate Workday tenant/OAuth config from DA components."""
+    """WD-ENV-001 — validate selected-agent Workday OAuth parameters."""
     try:
-        values, unavailable_reason = workday_shared_connection_parameters(runner)
-    except ValueError as exc:
+        resolution = resolve_active_workday_oauth_connections(runner)
+    except RuntimeError as exc:
         return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Workday tenant and OAuth connection configuration",
-            result=f"Unable to run WD-ENV-001: ValueError: {exc}",
+            result=(
+                "Unable to run WD-ENV-001 while inspecting the selected "
+                f"agent's Workday connection: {exc}"
+            ),
             remediation=(
-                "Re-run FlightCheck; if this persists, report the checkpoint "
-                "ID (WD-ENV-001) and the error above."
+                "Confirm the account has Dataverse read access and Power "
+                "Platform Administrator access to read the selected agent's "
+                "enabled topics, flow details, and connections, then re-run "
+                "FlightCheck."
             ),
             doc_link=f"{DOC_BASE}/workday-simplified-setup",
         )]
 
-    if values is None:
+    if resolution is None:
         return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
             description="Workday tenant and OAuth connection configuration",
             result=(
-                "AgentBuilder client or active-agent botId not available — "
-                "skipping the Workday tenant configuration check."
+                "Selected-agent Dataverse or Power Platform Admin evidence is "
+                "not available, so Workday OAuth parameters cannot be checked."
             ),
             remediation=(
-                "Run FlightCheck with native AgentBuilder access and a "
-                "configured active-agent botId."
+                "Run FlightCheck with a configured active-agent botId, "
+                "Dataverse access, and Power Platform Administrator access."
             ),
             doc_link=f"{DOC_BASE}/workday-simplified-setup",
         )]
 
-    missing = [key for key in _WORKDAY_SHARED_ENV_KEYS if not values.get(key)]
-    if unavailable_reason == WORKDAY_REF_NOT_FOUND:
+    if not resolution.has_workday_binding:
         return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value,
             status=Status.NOT_CONFIGURED.value,
             description="Workday tenant and OAuth connection configuration",
             result=(
-                "No Workday connection reference (connector "
-                "shared_workdaysoap) was found in this environment, so "
-                "Workday tenant and OAuth configuration is not set up."
+                "The selected agent's enabled topics do not invoke a flow "
+                "bound to the Workday connector."
             ),
             remediation=(
                 "If this environment is meant to use Workday, install/repair "
-                "the Workday extension pack and connect the Workday "
-                "connection from Copilot Studio so tenantName, "
-                "token:ResourceUri, token:WorkdayTokenUri, and "
-                "token:WorkdayClientId are captured. If Workday is not used "
-                "here, no action is needed."
+                "the Workday extension pack and confirm the selected agent's "
+                "enabled topics invoke its Workday flows. If Workday is not "
+                "used here, no action is needed."
             ),
             doc_link=f"{DOC_BASE}/workday-simplified-setup",
         )]
-    if missing:
-        reason = f" {unavailable_reason}." if unavailable_reason else ""
+
+    missing_by_connection = [
+        (
+            connection.display_name,
+            [
+            key
+            for key in _WORKDAY_OAUTH_REQUIRED_KEYS
+            if not connection.values.get(key)
+            ],
+        )
+        for connection in resolution.connections
+    ]
+    missing_by_connection = [
+        (name, missing)
+        for name, missing in missing_by_connection
+        if missing
+    ]
+    if missing_by_connection:
+        details = "; ".join(
+            f"{name}: {', '.join(missing)}"
+            for name, missing in sorted(missing_by_connection)
+        )
         return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description="Workday tenant and OAuth connection configuration",
             result=(
-                "Workday sharedConnectionParameters.values is missing "
-                f"required entries: {', '.join(missing)}.{reason}"
+                "One or more selected-agent Workday OAuth connections are "
+                f"missing required parameters: {details}."
             ),
             remediation=(
-                "Reconnect the Workday connection from Copilot Studio so "
+                "Edit or recreate each affected Workday connection so "
                 "tenantName, token:ResourceUri, token:WorkdayTokenUri, and "
-                "token:WorkdayClientId are captured on the Workday connection "
-                "reference."
+                "token:WorkdayClientId are configured, then re-bind the "
+                "selected agent's Workday flow if the connection changed."
             ),
             doc_link=f"{DOC_BASE}/workday-simplified-setup",
         )]
 
+    if resolution.unresolved_bindings:
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=(
+                "Workday OAuth parameters could not be inspected for these "
+                "selected-agent flow bindings: "
+                + ", ".join(resolution.unresolved_bindings)
+                + "."
+            ),
+            remediation=(
+                "Confirm each named Workday flow binding resolves to a visible "
+                "Power Platform connection, then re-run FlightCheck."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
+
+    if not resolution.connections:
+        observed = (
+            ": " + ", ".join(resolution.ignored_non_oauth_bindings)
+            if resolution.ignored_non_oauth_bindings
+            else ""
+        )
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value,
+            status=Status.NOT_CONFIGURED.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=(
+                "The selected agent's Workday flow bindings do not resolve to "
+                f"an OAuth Workday connection{observed}."
+            ),
+            remediation=(
+                "Bind the Workday runtime flow to the Microsoft Entra ID "
+                "Integrated Workday connection. Basic/ISU connections are "
+                "validated by the legacy Workday checks."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
+
+    names = ", ".join(connection.display_name for connection in resolution.connections)
     return [CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id="WD-ENV-001", category="Workday",
         priority=Priority.CRITICAL.value, status=Status.PASSED.value,
         description="Workday tenant and OAuth connection configuration",
         result=(
-            "Workday tenant and OAuth configuration is present in "
-            "sharedConnectionParameters.values: tenantName="
-            f"{values['tenantName']}, token:ResourceUri="
-            f"{values['token:ResourceUri']}."
+            "All required tenant and OAuth parameters are present on "
+            f"{len(resolution.connections)} selected-agent Workday connection(s): "
+            f"{names}."
         ),
         doc_link=f"{DOC_BASE}/workday-simplified-setup",
     )]

@@ -350,10 +350,12 @@ class TestWorkdayExtensionCheckpoints:
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 
-    def test_rest_and_local_checks_are_clientless(self):
+    def test_rest_and_local_check_client_requirements(self):
         spec = registry.resolve("WD-REST-001")
-        assert spec.clients == frozenset({registry.AGENTBUILDER})
-        assert spec.requires_dataverse_endpoint is False
+        assert spec.clients == frozenset(
+            {registry.DATAVERSE, registry.PP_ADMIN}
+        )
+        assert spec.requires_dataverse_endpoint is True
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 
@@ -364,11 +366,13 @@ class TestWorkdayExtensionCheckpoints:
             assert spec.prereqs == ()
             assert Role.ESS_MAKER.value in spec.roles
 
-    def test_wd_env_001_declares_agentbuilder_without_dataverse(self):
+    def test_wd_env_001_declares_dataverse_and_pp_admin(self):
         spec = registry.resolve("WD-ENV-001")
         assert spec.key == "WD-ENV-001"
-        assert spec.clients == frozenset({registry.AGENTBUILDER})
-        assert spec.requires_dataverse_endpoint is False
+        assert spec.clients == frozenset(
+            {registry.DATAVERSE, registry.PP_ADMIN}
+        )
+        assert spec.requires_dataverse_endpoint is True
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 

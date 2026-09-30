@@ -13,8 +13,8 @@ Coverage per emitter:
   * DV-CONN-001 — PASS/FAIL/NOT_CONFIGURED/SKIPPED over a documented-tier
     Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
     echo via the ``validated`` pp_admin mock.
-  * WD-REST-001 — AgentBuilder components check
-    (sharedConnectionParameters.values.restBaseUri / baseUri trimmed to '/api').
+  * WD-REST-001 — selected-agent flow-bound physical Workday OAuth connection
+    check (restBaseUri must match /ccx/api/<tenantName>).
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
   * WD-NET-001 — always-MANUAL InfoSec/IT attestation (never PASSED).
@@ -34,11 +34,9 @@ import pytest
 import responses
 
 from tests.conftest import require_validated_mock
-from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 from tests.mocks import pp_admin as pp
 
-require_validated_mock(ab)
 require_validated_mock(dv)
 require_validated_mock(pp)
 
@@ -65,30 +63,6 @@ class _FakePPAdmin:
 
     def get_connections(self, _env_id: str):
         return self._connections
-
-
-class _FakeAgentBuilder:
-    """Stand-in for FlightCheckRunner.agentbuilder. Only ``fetch_components``
-    is consumed (WD-REST-001's connection-reference read)."""
-
-    def __init__(self, components: dict[str, Any]):
-        self._components = components
-
-    def fetch_components(self, _agent_id: str):
-        return self._components
-
-
-class _PerBotAgentBuilder:
-    """Stand-in for FlightCheckRunner.agentbuilder that routes
-    ``fetch_components`` by agent id, so multi-agent selection can be
-    exercised. Component shapes come from the validated
-    ``agentbuilder_connectivity`` builders."""
-
-    def __init__(self, components_by_bot: dict[str, Any]):
-        self._components_by_bot = components_by_bot
-
-    def fetch_components(self, agent_id: str):
-        return self._components_by_bot[agent_id]
 
 
 @dataclass
@@ -429,213 +403,215 @@ class TestDataverseConnection:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# WD-REST-001 — REST base URL trimmed to /api (S5.5).
+# WD-REST-001 — REST API root matches /ccx/api/<tenantName> (S5.5).
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _runner_with_refs(references, *, pp_admin=None, env_id=None):
-    """A runner whose faked ``agentbuilder.fetch_components`` returns the given
-    connection references and whose config names an active agent (botId)."""
-    components = ab.components_with_references(references=references)
-    return _Runner(
-        config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-        agentbuilder=_FakeAgentBuilder(components),
-        pp_admin=pp_admin,
-        env_id=env_id,
-    )
-
-
 class TestRestBaseUrl:
-    def _runner(self, *, rest_base_uri: str | None):
-        return _runner_with_refs(
-            [
-                ab.workday_connection_reference(
-                    shared_connection_parameters=(
-                        ab.shared_connection_parameters(
-                            rest_base_uri=rest_base_uri
-                        )
-                    )
-                )
-            ]
+    @staticmethod
+    def _resolution(
+        *,
+        has_binding: bool = True,
+        values: dict[str, str] | None = None,
+        unresolved: tuple[str, ...] = (),
+        ignored: tuple[str, ...] = (),
+    ):
+        from flightcheck.checks._workday_connection_params import (
+            WorkdayOAuthConnection,
+            WorkdayOAuthResolution,
         )
 
-    def test_trimmed_url_passes(self):
-        runner = self._runner(rest_base_uri="https://wd.example.com/ccx/api")
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-        assert "trimmed to '/api'" in r.result
-        assert "https://wd.example.com/ccx/api" in r.result
-
-    def test_base_uri_only_passes(self):
-        params = ab.shared_connection_parameters(rest_base_uri=None)
-        params["values"]["baseUri"] = {
-            "value": "https://wd.example.com/ccx/api"
-        }
-        runner = _runner_with_refs(
-            [
-                ab.workday_connection_reference(
-                    shared_connection_parameters=params
-                )
-            ]
-        )
-
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-        assert "https://wd.example.com/ccx/api" in r.result
-
-    def test_rest_base_uri_wins_when_both_keys_are_present(self):
-        params = ab.shared_connection_parameters(
-            rest_base_uri="https://primary.example.com/ccx/api"
-        )
-        params["values"]["baseUri"] = {
-            "value": "https://fallback.example.com/ccx/api/invalid"
-        }
-        runner = _runner_with_refs(
-            [
-                ab.workday_connection_reference(
-                    shared_connection_parameters=params
-                )
-            ]
-        )
-
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-        assert "https://primary.example.com/ccx/api" in r.result
-        assert "fallback.example.com" not in r.result
-
-    def test_empty_rest_base_uri_falls_back_to_base_uri(self):
-        params = ab.shared_connection_parameters(rest_base_uri="")
-        params["values"]["baseUri"] = {
-            "value": "https://wd.example.com/ccx/api"
-        }
-        runner = _runner_with_refs(
-            [
-                ab.workday_connection_reference(
-                    shared_connection_parameters=params
-                )
-            ]
-        )
-
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-        assert "https://wd.example.com/ccx/api" in r.result
-
-    def test_trimmed_url_can_be_on_later_workday_ref(self):
-        runner = _runner_with_refs(
-            [
-                ab.workday_connection_reference(
-                    connection_id="mock-obo-connection",
-                    logical_name=(
-                        "gptagent_mockemployeeselfservice."
-                        "msdyn_sharedworkdaysoap_ff0df"
-                    ),
+        connections = (
+            (
+                WorkdayOAuthConnection(
+                    name="workday-oauth-1",
+                    display_name="Workday OAuth",
+                    values=values,
                 ),
-                ab.workday_connection_reference(
-                    connection_id="mock-isu-connection",
-                    logical_name=(
-                        "gptagent_mockemployeeselfservice."
-                        "msdyn_sharedworkdaysoap_0786a"
-                    ),
-                    shared_connection_parameters=(
-                        ab.shared_connection_parameters(
-                            rest_base_uri="https://wd.example.com/ccx/api"
-                        )
-                    ),
-                ),
-                ab.workday_connection_reference(
-                    connection_id="mock-context-isu-connection",
-                    logical_name=(
-                        "gptagent_mockemployeeselfservice."
-                        "msdyn_sharedworkdaysoap_d6081"
-                    ),
-                ),
-            ]
+            )
+            if values is not None
+            else ()
+        )
+        return WorkdayOAuthResolution(
+            has_workday_binding=has_binding,
+            connections=connections,
+            unresolved_bindings=unresolved,
+            ignored_non_oauth_bindings=ignored,
         )
 
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-        assert "https://wd.example.com/ccx/api" in r.result
-
-    def test_trailing_slash_still_passes(self):
-        runner = self._runner(rest_base_uri="https://wd.example.com/ccx/api/")
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.PASSED.value
-
-    def test_untrimmed_url_fails(self):
-        runner = self._runner(
-            rest_base_uri="https://wd.example.com/ccx/api/staffing/v1"
+    def _check(self, monkeypatch, resolution):
+        monkeypatch.setattr(
+            wx,
+            "resolve_active_workday_oauth_connections",
+            lambda runner: resolution,
         )
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+        return wx._check_rest_base_url(object())[0]
 
-        assert r.status == Status.FAILED.value
-        assert "not trimmed to '/api'" in r.result
-        assert "https://wd.example.com/ccx/api/staffing/v1" in r.result
-        assert "restBaseUri" in r.remediation
-        assert "remove any trailing path" in r.remediation
-
-    def test_absent_url_fails(self):
-        runner = self._runner(rest_base_uri=None)
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.FAILED.value
-        assert "restBaseUri and baseUri are missing or empty" in r.result
-        assert "restBaseUri or baseUri is captured" in r.remediation
-
-    def test_no_workday_ref_is_not_configured(self):
-        """No Workday connection reference at all means Workday was never set
-        up. WD-REST-001 must report NOT_CONFIGURED (which does not fail
-        readiness), mirroring DV-CONN-001's "no ref" contract, rather than a
-        hard FAILED that misfires on non-Workday tenants."""
-        # components() carries only the ServiceNow reference, no Workday one.
-        runner = _Runner(
-            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-            agentbuilder=_FakeAgentBuilder(ab.components()),
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.NOT_CONFIGURED.value
-        assert "No Workday connection reference" in r.result
-        assert "shared_workdaysoap" in r.result
-        assert "install/repair the Workday extension pack" in r.remediation
-        assert "If Workday is not used here" in r.remediation
-
-    def test_no_agentbuilder_client_skips(self):
-        runner = _Runner(config={"agent": {"botId": ab.MOCK_AGENT_ID}})
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.SKIPPED.value
-        assert "not available" in r.result
-        assert "native AgentBuilder access" in r.remediation
-
-    def test_no_active_agent_botid_skips(self):
-        runner = _Runner(
-            config={},
-            agentbuilder=_FakeAgentBuilder(ab.components_with_references()),
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
-
-        assert r.status == Status.SKIPPED.value
-        assert "active-agent botId" in r.result
-        assert "configured active-agent botId" in r.remediation
-
-    def test_malformed_components_shape_degrades_to_warning(self):
-        runner = _Runner(
-            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
-            agentbuilder=_FakeAgentBuilder(
-                {"connectionReferenceChanges": {"unexpected": "dict"}}
+    @pytest.mark.parametrize(
+        "rest_base_uri",
+        [
+            "https://wd.example.com/ccx/api/mocktenant",
+            "https://wd.example.com/ccx/api/mocktenant/",
+            "https://contoso.azure-api.net/ccx/api/mocktenant",
+        ],
+    )
+    def test_exact_rest_root_passes(self, monkeypatch, rest_base_uri):
+        result = self._check(
+            monkeypatch,
+            self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "restBaseUri": rest_base_uri,
+                    "baseUri": "https://wd.example.com/ccx/service",
+                }
             ),
         )
-        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
-        assert r.status == Status.WARNING.value
-        assert "Unable to run WD-REST-001" in r.result
-        assert "WD-REST-001" in r.remediation
+        assert result.status == Status.PASSED.value
+        assert "/ccx/api/<tenantName>" in result.result
+        assert "Workday OAuth" in result.result
+        assert rest_base_uri not in result.result
+
+    @pytest.mark.parametrize(
+        ("rest_base_uri", "expected"),
+        [
+            ("http://wd.example.com/ccx/api/mocktenant", "HTTPS"),
+            ("https:///ccx/api/mocktenant", "host"),
+            (
+                "https://user@wd.example.com/ccx/api/mocktenant",
+                "user information",
+            ),
+            (
+                "https://wd.example.com/ccx/api/mocktenant?x=1",
+                "query string",
+            ),
+            (
+                "https://wd.example.com/ccx/api/mocktenant#x",
+                "fragment",
+            ),
+            ("https://wd.example.com/ccx/service", "exactly the path"),
+            ("https://wd.example.com/ccx/api", "exactly the path"),
+            (
+                "https://wd.example.com/ccx/api/other",
+                "does not match tenantName",
+            ),
+            (
+                "https://wd.example.com/ccx/api/mocktenant/v1",
+                "exactly the path",
+            ),
+            (
+                "https://wd.example.com/ccx//api/mocktenant",
+                "exactly the path",
+            ),
+        ],
+    )
+    def test_invalid_rest_root_fails(
+        self, monkeypatch, rest_base_uri, expected
+    ):
+        result = self._check(
+            monkeypatch,
+            self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "restBaseUri": rest_base_uri,
+                }
+            ),
+        )
+
+        assert result.status == Status.FAILED.value
+        assert expected in result.result
+        assert "Do not substitute baseUri" in result.remediation
+
+    def test_base_uri_is_not_a_rest_fallback(self, monkeypatch):
+        result = self._check(
+            monkeypatch,
+            self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "baseUri": "https://wd.example.com/ccx/service",
+                }
+            ),
+        )
+
+        assert result.status == Status.FAILED.value
+        assert "restBaseUri is missing" in result.result
+        assert "Do not substitute baseUri" in result.remediation
+
+    def test_tenant_name_is_required(self, monkeypatch):
+        result = self._check(
+            monkeypatch,
+            self._resolution(
+                values={
+                    "restBaseUri": "https://wd.example.com/ccx/api/mocktenant",
+                }
+            ),
+        )
+
+        assert result.status == Status.FAILED.value
+        assert "tenantName is missing" in result.result
+
+    def test_no_selected_agent_workday_binding_is_not_configured(
+        self, monkeypatch
+    ):
+        result = self._check(
+            monkeypatch,
+            self._resolution(has_binding=False),
+        )
+
+        assert result.status == Status.NOT_CONFIGURED.value
+        assert "selected agent's enabled topics" in result.result
+        assert "install/repair the Workday extension pack" in result.remediation
+
+    def test_unavailable_clients_skip(self, monkeypatch):
+        result = self._check(monkeypatch, None)
+
+        assert result.status == Status.SKIPPED.value
+        assert "evidence is not available" in result.result
+        assert "Dataverse access" in result.remediation
+
+    def test_unresolved_binding_warns(self, monkeypatch):
+        result = self._check(
+            monkeypatch,
+            self._resolution(
+                values={
+                    "tenantName": "mocktenant",
+                    "restBaseUri": (
+                        "https://wd.example.com/ccx/api/mocktenant"
+                    ),
+                },
+                unresolved=("missing-connection",),
+            ),
+        )
+
+        assert result.status == Status.WARNING.value
+        assert "missing-connection" in result.result
+        assert "resolves to a visible" in result.remediation
+
+    def test_basic_only_binding_is_not_configured(self, monkeypatch):
+        result = self._check(
+            monkeypatch,
+            self._resolution(ignored=("workday-basic (basic)",)),
+        )
+
+        assert result.status == Status.NOT_CONFIGURED.value
+        assert "workday-basic (basic)" in result.result
+        assert "Microsoft Entra ID Integrated" in result.remediation
+
+    def test_resolution_error_warns(self, monkeypatch):
+        def _raise(_runner):
+            raise RuntimeError("403 Forbidden")
+
+        monkeypatch.setattr(
+            wx,
+            "resolve_active_workday_oauth_connections",
+            _raise,
+        )
+
+        result = wx._check_rest_base_url(object())[0]
+
+        assert result.status == Status.WARNING.value
+        assert "403 Forbidden" in result.result
+        assert "Power Platform Administrator access" in result.remediation
 
 
 # ─────────────────────────────────────────────────────────────────────

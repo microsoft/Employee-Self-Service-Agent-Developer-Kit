@@ -382,6 +382,8 @@ def workday_connection(
     created_by_upn: str | None = None,
     created_by_display_name: str | None = None,
     created_time: str | None = None,
+    parameter_set_name: str | None = None,
+    parameter_values: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convenience: a Workday SOAP connection. The check filters by
     'workday' substring in apiId+displayName, so both the api_id and
@@ -414,6 +416,11 @@ def workday_connection(
 
     `created_time` overrides the ``properties.createdTime`` field used
     by WD-CONN-101 to surface a creation date in the operator's view.
+
+    `parameter_set_name` / `parameter_values` populate the captured
+    ``properties.connectionParametersSet`` shape used by WD-ENV-001 and
+    WD-REST-001. The PowerApps admin cassette proves that non-secret
+    connection parameter values are returned in this block.
     """
     extra: dict[str, Any] = {}
     if account_name is not None:
@@ -432,6 +439,14 @@ def workday_connection(
         if created_by_display_name is not None:
             created_by["displayName"] = created_by_display_name
         extra["createdBy"] = created_by
+    if parameter_set_name is not None or parameter_values is not None:
+        extra["connectionParametersSet"] = {
+            "name": parameter_set_name,
+            "values": {
+                key: {"value": value}
+                for key, value in (parameter_values or {}).items()
+            },
+        }
     return connection(
         name=connection_name or f"workday-{status.lower()}-{display_name[:8].lower().replace(' ', '-')}",
         display_name=display_name,
@@ -643,6 +658,8 @@ def flow_connector_ref(
     tier: str = "Premium",
     is_custom_api: bool = False,
     display_name: str | None = None,
+    connection_name: str | None = None,
+    logical_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a single ``connectionReferences`` entry as it appears in the
     flow DETAIL response (``get_flow``), carrying the connector-tier signal
@@ -657,8 +674,8 @@ def flow_connector_ref(
     disp = display_name or api_name
     return {
         "apiName": api_name,
-        "connectionName": f"conn-{api_name}",
-        "connectionReferenceLogicalName": f"ref_{api_name}",
+        "connectionName": connection_name or f"conn-{api_name}",
+        "connectionReferenceLogicalName": logical_name or f"ref_{api_name}",
         "tier": tier,
         "apiDefinition": {
             "name": api_name,
@@ -858,6 +875,5 @@ def insufficient_permissions(
         },
         "status": 403,
     }
-
 
 

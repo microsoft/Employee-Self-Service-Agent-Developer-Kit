@@ -2,17 +2,15 @@
 # Licensed under the MIT License.
 
 """Contract tests for the canonical Declarative Agent connection-reference
-reader (``checks/_da_connection_refs.py``), the single shared module that
-``DV-CONN-001`` (active agent), ``ENV-004`` (environment-wide, de-duped) and the
-Workday shared-parameter checks all read through.
+reader (``checks/_da_connection_refs.py``), shared by ``DV-CONN-001`` (active
+agent) and ``ENV-004`` (environment-wide, de-duped).
 
 These are pure-logic tests: a duck-typed fake AgentBuilder client returns
 minimalBots components payloads built from
 ``tests.mocks.agentbuilder_connectivity`` (``MOCK_STATUS == "validated"``), so
 no network replay or cassette is needed (same inline-fake approach as
 ``test_agent_handoff.py``). Every component shape traces to the validated
-``components()`` builder or its documented ``sharedConnectionParameters``
-variant; none is invented here.
+``components()`` builder.
 """
 
 from __future__ import annotations
@@ -254,117 +252,3 @@ def test_read_all_dedups_by_logical_name_first_wins():
     rows = reader.read_all_agents_connection_references(runner)
     assert len(rows) == 1
     assert rows[0]["connectionid"] == "c1"
-
-
-# --------------------------------------------------------------------------
-# shared_connection_parameter_values
-# --------------------------------------------------------------------------
-
-def test_scp_values_parsed_from_json_string():
-    ref = {
-        "sharedconnectionparameters": ab.shared_connection_parameters_json_string(
-            rest_base_uri="https://wd.example.com/ccx/api"
-        )
-    }
-    values = reader.shared_connection_parameter_values(ref)
-    assert values["restBaseUri"] == "https://wd.example.com/ccx/api"
-
-
-def test_scp_values_parsed_from_nested_object():
-    ref = {"sharedconnectionparameters": ab.shared_connection_parameters(tenant_name="mocktenant")}
-    values = reader.shared_connection_parameter_values(ref)
-    assert values["tenantName"] == "mocktenant"
-
-
-def test_scp_values_missing_is_empty_map():
-    assert reader.shared_connection_parameter_values({}) == {}
-
-
-def test_scp_values_malformed_json_string_raises():
-    ref = {"sharedconnectionparameters": "{not valid json"}
-    with pytest.raises(ValueError):
-        reader.shared_connection_parameter_values(ref)
-
-
-# --------------------------------------------------------------------------
-# workday_shared_connection_parameters (WD-ENV-001 / WD-REST-001 surface)
-# --------------------------------------------------------------------------
-
-def test_wscp_found_with_values():
-    ref = ab.workday_connection_reference(
-        shared_connection_parameters=ab.shared_connection_parameters_json_string()
-    )
-    payload = ab.components_with_references(references=[ref])
-    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
-    values, message = reader.workday_shared_connection_parameters(runner)
-    assert message == ""
-    assert values["tenantName"] == "mocktenant"
-
-
-def test_wscp_found_but_missing_values():
-    ref = ab.workday_connection_reference(shared_connection_parameters=None)
-    payload = ab.components_with_references(references=[ref])
-    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
-    values, message = reader.workday_shared_connection_parameters(runner)
-    assert values == {}
-    assert "missing" in message.lower()
-
-
-def test_wscp_workday_reference_not_found():
-    # components() carries only the ServiceNow reference, no Workday one.
-    runner = _FakeRunner(
-        _FakeClient({"BOT": ab.components()}), {"agent": {"botId": "BOT"}}
-    )
-    values, message = reader.workday_shared_connection_parameters(runner)
-    assert values == {}
-    assert "not found" in message.lower()
-
-
-def test_wscp_does_not_use_sibling_agent_values():
-    sibling_ref = ab.workday_connection_reference(
-        shared_connection_parameters=ab.shared_connection_parameters_json_string()
-    )
-    client = _FakeClient(
-        {
-            "ACTIVE": ab.components(),
-            "SIBLING": ab.components_with_references(references=[sibling_ref]),
-        }
-    )
-    runner = _FakeRunner(
-        client,
-        {
-            "agent": {"botId": "ACTIVE"},
-            "agents": [{"botId": "ACTIVE"}, {"botId": "SIBLING"}],
-        },
-    )
-
-    values, message = reader.workday_shared_connection_parameters(runner)
-
-    assert values == {}
-    assert message == reader.WORKDAY_REF_NOT_FOUND
-    assert client.calls == ["ACTIVE"]
-
-
-def test_wscp_requires_active_agent_bot_id():
-    sibling_ref = ab.workday_connection_reference(
-        shared_connection_parameters=ab.shared_connection_parameters_json_string()
-    )
-    client = _FakeClient(
-        {
-            "SIBLING": ab.components_with_references(references=[sibling_ref]),
-        }
-    )
-    runner = _FakeRunner(client, {"agents": [{"botId": "SIBLING"}]})
-
-    values, message = reader.workday_shared_connection_parameters(runner)
-
-    assert values is None
-    assert "active-agent botId" in message
-    assert client.calls == []
-
-
-def test_wscp_none_when_client_unavailable():
-    runner = _FakeRunner(None, {"agent": {"botId": "BOT"}})
-    values, message = reader.workday_shared_connection_parameters(runner)
-    assert values is None
-    assert message

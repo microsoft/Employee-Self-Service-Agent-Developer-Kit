@@ -328,3 +328,149 @@ def test_scope_matched_flow_without_refs_is_empty_not_none(monkeypatch):
     assert scope is not None
     assert scope.logical_names == frozenset()
     assert scope.connectors == frozenset()
+
+
+def test_active_bindings_use_selected_agent_only(monkeypatch):
+    """A healthy sibling agent cannot supply evidence for the selected agent."""
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    queried_filters: list[str] = []
+
+    def _fake(env_url, token, entity_set, select, filter_expr=None):
+        queried_filters.append(filter_expr or "")
+        if "selected-bot" in (filter_expr or ""):
+            return [_topic(_invoke(FLOW_A))]
+        return [_topic(_invoke(FLOW_B))]
+
+    monkeypatch.setattr(mod, "query_all", _fake)
+    runner = _runner(
+        config={
+            "agent": {"botId": "selected-bot"},
+            "agents": [
+                {"botId": "selected-bot"},
+                {"botId": "healthy-sibling"},
+            ],
+        },
+        details={
+            FLOW_A: _detail_with_ref(FLOW_A, "shared_office365"),
+            FLOW_B: _detail_with_ref(FLOW_B, "shared_workdaysoap"),
+        },
+    )
+
+    bindings = mod.build_active_agent_connection_bindings(runner)
+
+    assert bindings is not None
+    assert {binding.connector for binding in bindings} == {"shared_office365"}
+    assert len(queried_filters) == 1
+    assert "selected-bot" in queried_filters[0]
+    assert "healthy-sibling" not in queried_filters[0]
+
+
+def test_active_bindings_include_physical_connection_name(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    detail = pp.flow_detail(
+        flow_id=FLOW_A,
+        connection_refs={
+            "workday": pp.flow_connector_ref(
+                api_name="shared_workdaysoap",
+                connection_name="workday-oauth-1",
+                logical_name="new_sharedworkdaysoap_ff0df",
+            )
+        },
+    )
+    monkeypatch.setattr(mod, "query_all", lambda *a, **k: [_topic(_invoke(FLOW_A))])
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={FLOW_A: detail},
+    )
+
+    bindings = mod.build_active_agent_connection_bindings(runner)
+
+    assert bindings is not None
+    assert len(bindings) == 1
+    assert bindings[0].connector == "shared_workdaysoap"
+    assert bindings[0].logical_name == "new_sharedworkdaysoap_ff0df"
+    assert bindings[0].connection_name == "workday-oauth-1"
+
+
+def test_active_bindings_deduplicate_repeated_flow_refs(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    monkeypatch.setattr(
+        mod,
+        "query_all",
+        lambda *a, **k: [_topic(_invoke(FLOW_A)), _topic(_invoke(FLOW_A))],
+    )
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={FLOW_A: _detail_with_ref(FLOW_A, "shared_workdaysoap")},
+    )
+
+    bindings = mod.build_active_agent_connection_bindings(runner)
+
+    assert bindings is not None
+    assert len(bindings) == 1
+    assert runner.pp_admin.calls == [("env-1", FLOW_A)]
+
+
+def test_active_bindings_empty_when_selected_agent_invokes_no_flows(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    monkeypatch.setattr(mod, "query_all", lambda *a, **k: [_topic("kind: SendActivity")])
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={FLOW_A: _detail_with_ref(FLOW_A, "shared_workdaysoap")},
+    )
+
+    assert mod.build_active_agent_connection_bindings(runner) == ()
+    assert runner.pp_admin.calls == []
+
+
+def test_active_bindings_raise_when_no_flow_detail_is_readable(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    monkeypatch.setattr(mod, "query_all", lambda *a, **k: [_topic(_invoke(FLOW_A))])
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={FLOW_A: {"_error": "not found", "_status": 404}},
+    )
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        mod.build_active_agent_connection_bindings(runner)
+
+
+def test_active_bindings_raise_when_any_flow_detail_is_unavailable(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    monkeypatch.setattr(
+        mod,
+        "query_all",
+        lambda *a, **k: [_topic(_invoke(FLOW_A) + _invoke(FLOW_B))],
+    )
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={
+            FLOW_A: _detail_with_ref(FLOW_A, "shared_workdaysoap"),
+            FLOW_B: {"_error": "not found", "_status": 404},
+        },
+    )
+
+    with pytest.raises(RuntimeError, match=FLOW_B):
+        mod.build_active_agent_connection_bindings(runner)
+
+
+def test_active_bindings_wrap_dataverse_query_error(monkeypatch):
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    def _raise(*args, **kwargs):
+        raise ConnectionError("socket reset")
+
+    monkeypatch.setattr(mod, "query_all", _raise)
+    runner = _runner(
+        config={"agent": {"botId": "selected-bot"}},
+        details={},
+    )
+
+    with pytest.raises(RuntimeError, match="Dataverse.*socket reset"):
+        mod.build_active_agent_connection_bindings(runner)
