@@ -38,26 +38,11 @@ ALM_NOT_OPTED_IN_CODE = "4003"
 
 
 def _studio_agent_url(runner) -> str | None:
-    """Build a deep link to the first configured agent's Studio page.
-
-    The publishing/QA checks are agent-scoped in spirit (the maker
-    runs evaluations against a specific agent), but the result rows
-    themselves are emitted once per checklist item — not per agent.
-    We pick the first configured agent so the deep link lands on a
-    real Studio surface rather than the generic homepage; if a tenant
-    runs multi-agent the operator can switch from the agent picker.
-    """
+    """Build a deep link to the selected agent's Studio page."""
     env_id = getattr(runner, "env_id", None)
     if not env_id:
         return None
-    config = getattr(runner, "config", None) or {}
-    bot_id = None
-    for agent in config.get("agents", []) or []:
-        bot_id = agent.get("botId")
-        if bot_id:
-            break
-    if not bot_id:
-        bot_id = (config.get("agent") or {}).get("botId")
+    bot_id, _ = _configured_bot_id(runner)
     if not bot_id:
         return None
     return f"{STUDIO_BASE}/environments/{env_id}/bots/{bot_id}/overview"
@@ -70,14 +55,63 @@ def _maker_solutions_url(runner) -> str | None:
     return f"https://make.powerapps.com/environments/{env_id}/solutions"
 
 
-def _configured_bot_id(runner) -> str | None:
+def _configured_bot_id(runner) -> tuple[str | None, str | None]:
+    """Resolve the selected agent bot ID without silently choosing a sibling."""
     config = getattr(runner, "config", None) or {}
-    for agent in config.get("agents", []) or []:
-        bot_id = agent.get("botId")
-        if bot_id:
-            return str(bot_id)
-    bot_id = (config.get("agent") or {}).get("botId")
-    return str(bot_id) if bot_id else None
+    agents = [
+        agent
+        for agent in (config.get("agents") or [])
+        if isinstance(agent, dict)
+    ]
+    legacy_agent = config.get("agent")
+    legacy_agent = legacy_agent if isinstance(legacy_agent, dict) else {}
+
+    selected_slug = (
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or legacy_agent.get("slug")
+    )
+    if selected_slug:
+        if not isinstance(selected_slug, str):
+            return None, "The selected agent slug must be a string."
+        selected = next(
+            (
+                agent
+                for agent in agents
+                if str(agent.get("slug") or "") == selected_slug
+            ),
+            None,
+        )
+        if selected is None and str(legacy_agent.get("slug") or "") == selected_slug:
+            selected = legacy_agent
+        if selected is None:
+            return None, (
+                f"The selected agent '{selected_slug}' is not present in "
+                ".local/config.json."
+            )
+        bot_id = selected.get("botId")
+        if not isinstance(bot_id, str) or not bot_id.strip():
+            return None, (
+                f"The selected agent '{selected_slug}' has no configured botId."
+            )
+        return bot_id.strip(), None
+
+    if legacy_agent:
+        bot_id = legacy_agent.get("botId")
+        if isinstance(bot_id, str) and bot_id.strip():
+            return bot_id.strip(), None
+        return None, "The configured single agent has no botId."
+
+    if len(agents) == 1:
+        bot_id = agents[0].get("botId")
+        if isinstance(bot_id, str) and bot_id.strip():
+            return bot_id.strip(), None
+        return None, "The configured agent has no botId."
+    if len(agents) > 1:
+        return None, (
+            "Multiple agents are configured but activeAgent is not set."
+        )
+    return None, None
 
 
 def _api_result(
@@ -189,12 +223,32 @@ def _invalid_archive_reason(path: Path) -> str | None:
     return None
 
 
+def _agent_selection_failed(
+    checkpoint_id: str,
+    row: dict,
+    reason: str,
+) -> CheckResult:
+    return _api_result(
+        checkpoint_id=checkpoint_id,
+        row=row,
+        status=Status.FAILED,
+        result=f"Unable to resolve the selected agent for ALM validation. {reason}",
+        remediation=(
+            "Set activeAgent to a valid agents[].slug and ensure that selected "
+            "agent has a non-empty botId in .local/config.json, then re-run "
+            f"{checkpoint_id}."
+        ),
+    )
+
+
 def _check_pub_001_export(runner, row: dict) -> CheckResult:
     client = getattr(runner, "agentbuilder", None)
     if client is None:
         return _agentbuilder_unavailable("PUB-001", row)
 
-    bot_id = _configured_bot_id(runner)
+    bot_id, selection_error = _configured_bot_id(runner)
+    if selection_error:
+        return _agent_selection_failed("PUB-001", row, selection_error)
     if not bot_id:
         return _bot_id_missing("PUB-001", row)
 
@@ -301,7 +355,9 @@ def _check_pub_002_import(runner, row: dict) -> CheckResult:
     client = getattr(runner, "agentbuilder", None)
     if client is None:
         return _agentbuilder_unavailable("PUB-002", row)
-    bot_id = _configured_bot_id(runner)
+    bot_id, selection_error = _configured_bot_id(runner)
+    if selection_error:
+        return _agent_selection_failed("PUB-002", row, selection_error)
     if not bot_id:
         return _bot_id_missing("PUB-002", row)
 

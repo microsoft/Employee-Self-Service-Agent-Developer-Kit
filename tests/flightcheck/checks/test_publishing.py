@@ -113,14 +113,17 @@ def _runner(
     agentbuilder=None,
     alm_import_target=None,
     alm_import_probe: bool = False,
+    config: dict | None = None,
+    agent_slug: str | None = None,
 ):
     """Minimal runner stub exposing the two attributes publishing.py reads."""
-    config: dict = {}
-    if bot_id:
-        config["agents"] = [{"slug": "esshr", "botId": bot_id}]
+    runner_config: dict = {} if config is None else config
+    if config is None and bot_id:
+        runner_config["agents"] = [{"slug": "esshr", "botId": bot_id}]
     return SimpleNamespace(
         env_id=env_id,
-        config=config,
+        config=runner_config,
+        agent_slug=agent_slug,
         agentbuilder=agentbuilder,
         alm_import_target=alm_import_target,
         alm_import_probe=alm_import_probe,
@@ -311,6 +314,83 @@ def test_pub_001_passes_when_export_returns_valid_archive():
     assert client.export_calls[0][0] == "bot-xyz"
 
 
+def test_pub_001_exports_selected_active_agent_in_multi_agent_config():
+    from flightcheck.runner import Status
+
+    client = _FakeAgentBuilder()
+    config = {
+        "activeAgent": "selected",
+        "agents": [
+            {"slug": "sibling", "botId": "bot-sibling"},
+            {"slug": "selected", "botId": "bot-selected"},
+        ],
+    }
+
+    row = _results_by_id(
+        _runner(agentbuilder=client, config=config)
+    )["PUB-001"]
+
+    assert row.status == Status.PASSED.value
+    assert client.export_calls[0][0] == "bot-selected"
+    assert "bot-selected" in row.result
+
+
+def test_pub_001_explicit_agent_slug_overrides_active_agent():
+    client = _FakeAgentBuilder()
+    config = {
+        "activeAgent": "default",
+        "agents": [
+            {"slug": "default", "botId": "bot-default"},
+            {"slug": "requested", "botId": "bot-requested"},
+        ],
+    }
+
+    _results_by_id(
+        _runner(
+            agentbuilder=client,
+            config=config,
+            agent_slug="requested",
+        )
+    )
+
+    assert client.export_calls[0][0] == "bot-requested"
+
+
+def test_pub_001_fails_when_active_agent_is_not_configured():
+    from flightcheck.runner import Status
+
+    config = {
+        "activeAgent": "missing",
+        "agents": [{"slug": "sibling", "botId": "bot-sibling"}],
+    }
+
+    row = _results_by_id(
+        _runner(agentbuilder=_FakeAgentBuilder(), config=config)
+    )["PUB-001"]
+
+    assert row.status == Status.FAILED.value
+    assert "selected agent 'missing' is not present" in row.result
+    assert "activeAgent" in row.remediation
+
+
+def test_pub_001_fails_when_multiple_agents_have_no_active_selection():
+    from flightcheck.runner import Status
+
+    config = {
+        "agents": [
+            {"slug": "first", "botId": "bot-first"},
+            {"slug": "second", "botId": "bot-second"},
+        ],
+    }
+
+    row = _results_by_id(
+        _runner(agentbuilder=_FakeAgentBuilder(), config=config)
+    )["PUB-001"]
+
+    assert row.status == Status.FAILED.value
+    assert "activeAgent is not set" in row.result
+
+
 def test_pub_001_fails_when_export_archive_is_corrupt():
     from flightcheck.runner import Status
 
@@ -439,6 +519,33 @@ def test_pub_002_passes_when_import_returns_valid_identity():
     assert not source.import_calls
     assert target.import_calls
     assert not target.export_calls
+
+
+def test_pub_002_exports_selected_active_agent_before_target_import():
+    from flightcheck.runner import Status
+
+    source = _FakeAgentBuilder()
+    target = _FakeAgentBuilder(host="https://target.example.test")
+    config = {
+        "activeAgent": "selected",
+        "agents": [
+            {"slug": "sibling", "botId": "bot-sibling"},
+            {"slug": "selected", "botId": "bot-selected"},
+        ],
+    }
+
+    row = _results_by_id(
+        _runner(
+            agentbuilder=source,
+            alm_import_target=target,
+            alm_import_probe=True,
+            config=config,
+        )
+    )["PUB-002"]
+
+    assert row.status == Status.PASSED.value
+    assert source.export_calls[0][0] == "bot-selected"
+    assert target.import_calls
 
 
 def test_pub_002_skips_import_probe_when_not_opted_in_with_client_present():
