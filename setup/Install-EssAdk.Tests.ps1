@@ -473,7 +473,60 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
     # Maker is now the fall-through `else` branch of the launch block (prompt
     # is resolved to maker|developer before any launch code runs), so we
     # assert the maker log copy is present instead of the explicit == check.
-    if ($macInstaller -notmatch 'ESS Maker Profile will run /setup') { throw 'maker launch branch (fall-through else) missing' }
+    # In the guided-rail UX maker mode does not auto-run /setup; it opens the
+    # guided view and the user clicks "Start set up", so we assert that copy.
+    if ($macInstaller -notmatch 'guided Agent Developer Kit view') { throw 'maker launch branch (fall-through else) missing' }
+}
+
+Test 'Install-EssAdk.ps1 confirmation-gates closing running VS Code by PID' {
+    if ($src -notmatch 'Get-Process\s+-Name\s+''Code'',\s*''Code-insiders''') {
+        throw 'Windows installer must enumerate running VS Code processes'
+    }
+    if ($src -notmatch 'Read-Host\s+''(?:Close all running VS Code instances|VS Code needs to restart)') {
+        throw 'Windows installer must ask before closing VS Code'
+    }
+    if ($src -notmatch 'Stop-Process\s+-Id\s+\$current\.Id') {
+        throw 'Windows installer must stop specific VS Code PIDs, not use name-based termination'
+    }
+    if ($src -notmatch 'Confirm-StopRunningCode') {
+        throw 'Windows installer must invoke the VS Code shutdown helper'
+    }
+    if ($src -notmatch 'Get-Process\s+-Id\s+\$process\.Id\s+-ErrorAction\s+SilentlyContinue') {
+        throw 'Windows installer must re-query each VS Code PID before stopping it'
+    }
+    if ($src -notmatch 'Only report a failure if the PID is still alive') {
+        throw 'Windows installer must suppress expected stale-PID shutdown races'
+    }
+}
+
+Test 'bundled ESS Maker Profile is force-reinstalled even when its version is unchanged' {
+    if ($src -notmatch '--install-extension\s+\$vsix\.FullName\s+--force') {
+        throw 'Windows installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($macInstaller -notmatch '--install-extension\s+"\$MAKER_VSIX"\s+--force') {
+        throw 'macOS installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($src -match 'makerProfileCurrent|already installed\) - \$modeLabel') {
+        throw 'Windows installer must not skip the bundled VSIX solely because its version matches'
+    }
+    if ($macInstaller -match 'MAKER_VERSION.*already installed') {
+        throw 'macOS installer must not skip the bundled VSIX solely because its version matches'
+    }
+}
+
+Test 'install-ess-adk.sh confirmation-gates graceful VS Code quit before launch' {
+    if ($macInstaller -notmatch 'pgrep\s+-f\s+''/Visual Studio Code\.app/''') {
+        throw 'macOS installer must detect running VS Code'
+    }
+    if ($macInstaller -notmatch 'read\s+-r\s+-p\s+.*Close all running VS Code instances') {
+        throw 'macOS installer must ask before closing VS Code'
+    }
+    if ($macInstaller -notmatch 'osascript\s+-e\s+''tell application "Visual Studio Code" to quit''') {
+        throw 'macOS installer must request a graceful VS Code quit'
+    }
+    if ($macInstaller -notmatch 'close_running_vscode') {
+        throw 'macOS installer must invoke the VS Code shutdown helper'
+    }
 }
 
 Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {
@@ -503,7 +556,7 @@ Test 'bootstrap-dev-mac.sh exists and pins INSTALL_MODE=developer' {
 
 Test 'bootstrap-lite-mac.sh pins INSTALL_MODE=maker (back-compat shim)' {
     $liteMacSrc = Get-Content (Join-Path $PSScriptRoot 'bootstrap-lite-mac.sh') -Raw
-    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the chat-first experience' }
+    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the guided rail experience' }
 }
 
 foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1', 'bootstrap-dev.ps1')) {
