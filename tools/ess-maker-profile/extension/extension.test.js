@@ -183,13 +183,23 @@ test('view container is in activitybar (primary sidebar)', () => {
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
 });
 
-test('view is webview type', () => {
+test('quick start view is a tree (no webview type)', () => {
     const view = pkg.contributes.views.essMakerActions[0];
-    assert.strictEqual(view.type, 'webview');
+    assert.strictEqual(view.type, undefined);
     assert.strictEqual(view.id, 'essMaker.actionsView');
 });
 
-test('activates on startup finished', () => {
+test('customization view is a tree named Customization (no guidance webview)', () => {
+    const views = pkg.contributes.views.essMakerActions;
+    const opts = views.find((v) => v.id === 'essMaker.customizationView');
+    assert.ok(opts, 'customizationView missing');
+    assert.strictEqual(opts.type, undefined);
+    assert.strictEqual(opts.name, 'Customization');
+    assert.ok(!views.some((v) => v.id === 'essMaker.customizationInfoView'),
+        'customizationInfoView should be removed');
+});
+
+test('activates on startup so the guided layout can restore hidden VS Code chrome', () => {
     assert.ok(pkg.activationEvents.includes('onStartupFinished'));
 });
 
