@@ -245,7 +245,7 @@ The final handoff is the detailed completion report and the standard completion 
 - **Reset and use this workspace**
 - **Create and open a new workspace**
 
-Do not preselect a choice. **Finish setup** closes the setup flow and renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, and Overall verdict from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
+Do not preselect a choice. **Finish setup** closes the setup flow and renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
 
 **Message:**
 
@@ -271,17 +271,29 @@ Here's your ESS agent setup:
 | Agent content        | {agent content status}         | {agent content evidence summary}        |
 | **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |
 
+{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}
+
 Next steps:
 
 - Run `/landing-page` to configure branding and the content employees see.
 - Run `/connect` to add or change an integration.
-  - Run `/connect workday` to go straight to the Workday flow.
-  - Run `/connect servicenow` to go straight to the ServiceNow flow.
+{SUPPORTED_INTEGRATION_SHORTCUTS}
 - Type `/menu` to see all available capabilities.
 
 **End message.**
 
 Then end the request.
+
+Replace `{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}` with every
+applicable complete block from the detailed handoff, in the same order. Omit
+the placeholder when no block applies.
+
+Build `{SUPPORTED_INTEGRATION_SHORTCUTS}` only from authoritative product
+identity and the active agent's supported connection routes. Include the
+`/connect workday` shortcut only for a supported HR architecture. Include
+another shortcut only when its route explicitly supports the resolved product.
+Render no shortcut lines when product identity is unresolved or the active
+agent does not support them.
 
 **Install another product in this environment** begins `da-mos-starter.md` at
 its first product-installation decision surface with the recorded environment
@@ -360,12 +372,12 @@ python scripts/setup_existing_da.py inspect-agent \
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
-- When `almEnrollment` is `not-enrolled`, the earlier native identity probe
-  still proves that the agent exists. Say that the agent is not enrolled in
-  the ALM family required for local authoring, then offer **Choose a different
-  agent**, **Choose a different environment**, and **Go back** using the exact
-  recovery routes in `product-line-reconciliation.md`. Do not call the agent
-  missing and do not continue to validation or attachment.
+- When `routeStatus` is `not-found`, the earlier native identity probe still
+  proves that the agent exists. Say that no ALM route is established for local
+  authoring, then offer **Choose a different agent**, **Choose a different
+  environment**, and **Go back** using the exact recovery routes in
+  `product-line-reconciliation.md`. Do not call the agent missing and do not
+  continue to validation or attachment.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent

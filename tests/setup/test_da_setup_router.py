@@ -242,7 +242,8 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "selected-agent product-line reconciliation" in prod_to_dev
     assert "--known-native-schema" in prod_to_dev
     assert "`agentBackend` query value as an ordering hint" in foundation
-    assert "`almEnrollment` is `not-enrolled`" in foundation
+    assert "`routeStatus` is `not-found`" in foundation
+    assert "`almEnrollment`" not in foundation
 
 
 def test_foundation_defines_setup_state_sources() -> None:
@@ -723,7 +724,11 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "matching import receipt" in normalized
     assert "--resume-create-after-cleanup" in text
     assert "--expected-alm-family-id" in text
-    assert '--client-request-id "{NEW_CLIENT_REQUEST_UUID}"' in text
+    initial_import = text.split(
+        "Run no other operation between the maker's confirmation and the create-only import:",
+        1,
+    )[1].split("Do not pass replacement or retry arguments.", 1)[0]
+    assert "--client-request-id" not in initial_import
     assert "exact target and family" in normalized
     assert "importStatus: resumed" in normalized
     assert "without another export or import request" in normalized
@@ -738,11 +743,18 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert create_flow.index("python scripts/setup_alm_import.py") < create_flow.index(
         "python scripts/setup_alm_export.py cleanup"
     )
-    assert "continue to attachment and carry the unresolved cleanup as a warning" in normalized
-    assert "separately retryable cleanup action" in normalized
+    assert "carry the unresolved cleanup warning into the detailed and durable handoffs" in normalized
+    assert "**Retry local package cleanup**" in text
+    assert "Parse `DA_ALM_EXPORT_CLEANUP_JSON:`" in text
+    assert "status: removed" in text
+    assert "status: not-found" in text
+    assert "Do not repeat export, import, attachment, or FlightCheck" in normalized
+    assert ".local/setup/alm-export/active.json" in text
     assert "ask whether to start a new export and create-only import" in normalized
     assert "Continue only after explicit maker approval" in normalized
+    assert "ordinary create-only command without a client request UUID" in normalized
     assert "new client request UUID" in normalized
+    assert len(text.splitlines()) < 180
     conflict_flow = create_flow.split("When import returns `kind: conflict`", 1)[1]
     normalized_conflict = " ".join(conflict_flow.split())
     assert "source inspection command above" in conflict_flow
@@ -984,13 +996,25 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "render exactly one choice for every resulting catalog product" in normalized
     assert "Enrich each projected row with workspace observations" in normalized
     assert "A successful complete agent list is authoritative for the current picker" in normalized
-    assert "render **Create** when no exact identity matches even if an older workspace observation recorded installation" in normalized
+    assert (
+        "An older workspace observation without a current exact identity is "
+        "historical evidence, not a sticky installed label"
+    ) in normalized
     assert "When agent listing fails or reports unresolved identities" in normalized
     assert "do not convert that uncertainty into either installed or uninstalled" in normalized
     assert "Rebuild this projection whenever a fresh catalog or agent-list result arrives" in normalized
+    assert "Installation status unconfirmed" in text
     assert "Installation status unavailable" in text
-    assert "Submit create request" in text
+    assert "Create anyway" in text
+    assert "An existing agent may still be hidden from this account" in normalized
     assert "let Copilot Studio validate the current state" in normalized
+    assert "does not claim that the product is absent" in normalized
+    assert "show a nonterminal progress message" in normalized
+    assert (
+        "I cannot confirm whether the agent was created because communication "
+        "ended before a definitive result was received. Setup has stopped."
+    ) not in normalized
+    assert "Say setup stopped only after reconciliation cannot prove an identity" in normalized
     assert "Do not add another prohibition based on the earlier observation" in normalized
     assert "it is not starter-package provenance" in normalized
     assert "does not prove the installed agent's template version" in normalized
@@ -1176,14 +1200,15 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "`devAgents`, `testAgents`, `prodAgents`, or `realmNotEstablishedAgents`" in text
     assert "**Use {friendly product name} — Already installed**" in text
     assert "successful complete agent list is authoritative" in normalized
-    assert "older workspace observation recorded installation" in normalized
+    assert "historical evidence, not a sticky installed label" in normalized
     assert "current installation could not be established" in normalized
+    assert "Installation status unconfirmed" in text
     assert "Installation status unavailable" in text
     assert (
-        "**Submit create request**, **Use an agent URL**, "
+        "**Create anyway**, **Use an agent URL**, "
         "**Try with a different user**, and **Go back**"
     ) in text
-    assert "proceeds through **Create** with a new client request UUID" in text
+    assert "retains the selected package facts and proceeds through **Create**" in normalized
     assert "A selected Prod identity can still follow" in normalized
     assert "Prod-to-Dev route" in text
     assert "setup_mos_starter.py create collision" in text
@@ -1303,8 +1328,13 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
         in completion_choices
     )
     assert "- Run `/connect` to add or change an integration." in completion_choices
-    assert "  - Run `/connect workday` to go straight to the Workday flow." in completion_choices
-    assert "  - Run `/connect servicenow` to go straight to the ServiceNow flow." in completion_choices
+    assert "{SUPPORTED_INTEGRATION_SHORTCUTS}" in completion_choices
+    assert "{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}" in completion_choices
+    assert "every applicable complete block from the detailed handoff" in normalized
+    assert "Omit the placeholder when no block applies" in normalized
+    assert "Build `{SUPPORTED_INTEGRATION_SHORTCUTS}` only from authoritative product identity" in normalized
+    assert "only for a supported HR architecture" in normalized
+    assert "Render no shortcut lines when product identity is unresolved" in normalized
     assert "- Type `/menu` to see all available capabilities." in completion_choices
     assert "What would you like to customize?" not in completion_choices
     assert "**Create a topic**" not in completion_choices
@@ -1498,6 +1528,19 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     assert "--client-request-id" in text
     assert "let the service return conflict if the earlier create succeeded" in normalized
     assert "only after the maker selects **Retry import**" in normalized
+    initial_import = text.split("## Preflight and create", 1)[1].split(
+        "## Complete workspace setup",
+        1,
+    )[0]
+    initial_command = initial_import.split("```text", 1)[1].split("```", 1)[0]
+    assert "--client-request-id" not in initial_command
+    retry_section = text.split(
+        "Use `--retry-safe-failure` only after the maker selects **Retry import**.",
+        1,
+    )[1].split("Never remove or edit import records", 1)[0]
+    assert "--retry-safe-failure" in retry_section
+    assert "--client-request-id" not in retry_section
+    assert "reserved for the separately approved create-only recovery" in normalized
 
 
 def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
@@ -1667,7 +1710,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert (
         "If the environment has fewer than 500 allocated Copilot Credits, "
         "increase the allocation to 500 or more and save the change."
-    ) in normalized
+    ) not in normalized
     assert (
         "After checking Power Platform Admin Center, is Copilot Studio "
         "message capacity allocated to this environment?"

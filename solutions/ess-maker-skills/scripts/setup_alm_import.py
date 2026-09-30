@@ -661,6 +661,12 @@ def import_package_once(
         if client_request_id
         else None
     )
+    if normalized_request_id is not None and (
+        replacement_agent_id or confirmed_replacement_agent_id
+    ):
+        raise AlmImportSetupError(
+            "Client request IDs apply only to create imports."
+        )
     if resume_create_after_cleanup:
         if normalized_request_id is not None:
             raise AlmImportSetupError(

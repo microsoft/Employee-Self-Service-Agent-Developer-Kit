@@ -129,11 +129,16 @@ Each operation has a deterministic record derived from its safe input identity:
 - environment, tenant, host, ring, and API version;
 - package SHA-256, declared type, and schema;
 - create or replacement mode;
-- client request UUID when the maker approves a distinct attempt;
+- client request UUID only for a separately approved create-only operation
+  after ambiguous or invalid-success reconciliation;
 - replacement agent ID and schema when applicable.
 
 Records never contain tokens, package paths, package content, or raw response
 bodies.
+
+`--client-request-id` is a local receipt discriminator, not a value sent to the
+service. Do not use it for the initial create, a safe-failure retry, or any
+replacement operation.
 
 An `imported` record means the service returned a usable identity but direct
 verification did not finish. Rerunning resumes verification without replaying
@@ -183,10 +188,11 @@ Recovery is an operator procedure:
 6. If the outcome cannot be proven, stop and escalate with the receipt. Absence
    from an eventually consistent listing is not proof that the mutation failed.
 
-Never edit or remove a receipt to enable another POST. Recovery may use an
-explicitly supplied new client request UUID, which creates a distinct operation
-record while preserving the earlier receipt. The caller must obtain maker
-approval and perform read-only reconciliation first.
+Never edit or remove a receipt to enable another POST. Create-only recovery may
+use an explicitly supplied new client request UUID, which creates a distinct
+operation record while preserving the earlier receipt. The caller must obtain
+maker approval and perform read-only reconciliation first. Replacement never
+accepts a client request UUID.
 
 ## Workspace handoff
 

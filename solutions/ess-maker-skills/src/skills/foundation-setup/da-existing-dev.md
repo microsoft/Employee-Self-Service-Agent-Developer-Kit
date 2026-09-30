@@ -142,7 +142,6 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 4. Select **Manage Copilot Credits**.
 5. Find **{friendly environment name or selected Power Platform environment}**.
 6. Confirm that the environment has allocated Copilot Credits. Setup requires a nonzero allocation; for initial use, we recommend allocating **500 or more Copilot Credits**.
-7. If the environment has fewer than 500 allocated Copilot Credits, increase the allocation to 500 or more and save the change.
 
 **End message.**
 

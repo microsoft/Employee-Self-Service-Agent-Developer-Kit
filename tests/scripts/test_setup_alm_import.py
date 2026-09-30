@@ -612,7 +612,6 @@ def test_conflict_is_cached_and_replacement_is_a_distinct_operation(
         kit_root=tmp_path,
         replacement_agent_id=AGENT_ID,
         confirmed_replacement_agent_id=AGENT_ID,
-        client_request_id="00000000-0000-4000-8000-000000000001",
     )
 
     assert replaced["kind"] == "success"
@@ -620,18 +619,44 @@ def test_conflict_is_cached_and_replacement_is_a_distinct_operation(
     assert len(client.import_calls) == 2
     assert client.import_calls[1]["replacementSchemaName"] == SCHEMA
     assert len(_records(tmp_path)) == 2
-    records = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in _records(tmp_path)
-    ]
-    replacement_record = next(
-        record
-        for record in records
-        if record["input"]["mode"] == "replace"
+
+
+def test_replacement_rejects_client_request_id_before_remote_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    validation_calls = 0
+
+    def validate(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal validation_calls
+        validation_calls += 1
+        return _connection()
+
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        validate,
     )
-    assert replacement_record["input"]["clientRequestId"] == (
-        "00000000-0000-4000-8000-000000000001"
-    )
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="apply only to create imports",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            replacement_agent_id=AGENT_ID,
+            confirmed_replacement_agent_id=AGENT_ID,
+            client_request_id="00000000-0000-4000-8000-000000000001",
+        )
+
+    assert validation_calls == 0
+    assert client.import_calls == []
+    assert _records(tmp_path) == []
 
 
 def test_replacement_requires_matching_explicit_confirmation(

@@ -40,12 +40,13 @@ message from the parent skill. Run:
 python scripts/setup_alm_import.py \
   --environment-id "{ENVIRONMENT_ID}" \
   --ring "{RING}" \
-  --package "{NATIVE_AGENT_PACKAGE_PATH}" \
-  --client-request-id "{NEW_CLIENT_REQUEST_UUID}"
+  --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
-Generate a new client request UUID for each maker-approved import.
-The first operation must omit both replacement arguments. Never infer
+The first operation must omit both replacement arguments and
+`--client-request-id`. The client request UUID is reserved for the separately
+approved create-only recovery after an ambiguous or invalid-success result.
+Never infer
 replacement permission from the package, collision, environment, schema, or a
 different setup context.
 
@@ -201,6 +202,17 @@ Present these standard choices:
 - **Retry import**
 - **Stop without retrying**
 
-Use `--retry-safe-failure` only after the maker selects **Retry import**.
+Use `--retry-safe-failure` only after the maker selects **Retry import**. Rerun
+the original command and add only that flag:
+
+```text
+python scripts/setup_alm_import.py \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
+  --package "{NATIVE_AGENT_PACKAGE_PATH}" \
+  --retry-safe-failure
+```
+
+Do not generate or pass a client request UUID for this existing receipt.
 
 Never remove or edit import records merely to permit another mutation.
