@@ -20,6 +20,7 @@ Usage:
 import fnmatch
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -60,6 +61,11 @@ from minimalbot_evaluation import (
     MinimalBotEvaluationError,
     is_minimalbot,
     resolve_workday_dialogs,
+)
+from evaluation_method_policy import (
+    EvaluationMethodError,
+    document_kind,
+    validate_evaluation_folder,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
@@ -635,7 +641,7 @@ def _evaluation_parent_path(review_path, component_map, working_files):
         path for path, content in working_files.items()
         if path.startswith(prefix)
         and path.endswith(".mcs.yml")
-        and "kind: EvaluationSet" in content
+        and _is_evaluation_parent(content)
     ]
     return local[0] if len(local) == 1 else None
 
@@ -1219,6 +1225,8 @@ def _minimalbot_topic_update_plan(
             "only; create/delete is not allowed: "
             + ", ".join(selected_new_or_deleted)
         )
+    if not selected_changed and not activate_topics:
+        return []
     raw_component_map = load_component_map(agent_dir)
     component_map = {}
     for raw_path, entry in raw_component_map.items():
@@ -1465,8 +1473,7 @@ def _minimalbot_push(
 
     # Build the plan offline first (no auth, no mutation) so the change set can
     # be shown and confirmed BEFORE any component insert. Honouring only_globs
-    # here is a correctness requirement: each push mints fresh component IDs, so
-    # a scoped update that silently pushed every set would duplicate all of them.
+    # prevents a selected action from deploying unrelated new evaluation sets.
     try:
         plan = client.push_agent_evaluations(
             agent_dir, dry_run=True, only_globs=only_globs)
@@ -1478,10 +1485,14 @@ def _minimalbot_push(
           f"{plan['componentCount']} component(s):")
     for entry in plan["sets"]:
         print(f"  • {entry['displayName']}  (cases: {entry['cases']})")
+    if plan["componentCount"]:
+        print("Native Push creates a new deployed copy; existing remote copies are retained.")
+    if plan.get("reviewWarning"):
+        print(plan["reviewWarning"])
 
     if dry_run:
         print("\n(Dry run — no changes pushed)")
-        return
+        return {"status": "ready", "backend": "minimalbot", "plan": plan}
 
     # Confirmation gate — the second safety layer preserved by /push. --yes
     # covers it (matching the classic path); dry runs return above, never here.
@@ -1491,13 +1502,13 @@ def _minimalbot_push(
         ).strip().lower()
         if response not in ("yes", "y"):
             print("Push cancelled.")
-            return
+            return {"status": "cancelled", "backend": "minimalbot"}
 
     print("Pushing evaluations via the Power Platform MinimalBot API...")
     try:
         client.authenticate()
         result = client.push_agent_evaluations(
-            agent_dir, dry_run=False, only_globs=only_globs)
+            agent_dir, dry_run=False, only_globs=only_globs, plan=plan)
     except MinimalBotEvaluationError as exc:
         print(f"ERROR: {exc}")
         sys.exit(1)
@@ -1511,29 +1522,53 @@ def _minimalbot_push(
         print(f"      testSetId: {entry['testSetId']}  (cases: {entry['cases']})")
     print("\nRun a set with:")
     print("  python scripts/evaluation_runs.py run --test-set-id <testSetId>")
+    return {**result, "backend": "minimalbot"}
 
 
-def main():
-    dry_run = "--dry-run" in sys.argv
-    auto_yes = "--yes" in sys.argv
-    force_delete = "--force-delete" in sys.argv
-    repair_mode = "--repair" in sys.argv
+def _is_evaluation_parent(content):
+    document = yaml.safe_load(content)
+    return isinstance(document, dict) and document_kind(
+        document, context="Evaluation parent",
+    ) == "EvaluationSet"
+
+
+def _validate_selected_evaluations(agent_dir, working_files, only_globs, affected):
+    candidates = working_files if only_globs else affected
+    folders = {
+        path.replace("\\", "/").split("/")[1]
+        for path in candidates
+        if path.replace("\\", "/").startswith("evaluations/")
+        and len(path.replace("\\", "/").split("/")) == 3
+        and (not only_globs or matches_only(path, only_globs))
+    }
+    for name in sorted(folders):
+        folder = Path(agent_dir) / "evaluations" / name
+        if folder.is_dir() and any(folder.glob("*.mcs.yml")):
+            validate_evaluation_folder(folder)
+
+
+def main(argv=None, *, config=None, verify=None):
+    argv = sys.argv[1:] if argv is None else argv
+    dry_run = "--dry-run" in argv
+    auto_yes = "--yes" in argv
+    force_delete = "--force-delete" in argv
+    repair_mode = "--repair" in argv
     repair_name = None
     if repair_mode:
-        _idx = sys.argv.index("--repair")
-        if _idx + 1 < len(sys.argv) and not sys.argv[_idx + 1].startswith("-"):
-            repair_name = sys.argv[_idx + 1]
-    only_globs = parse_only_globs(sys.argv[1:])
+        _idx = argv.index("--repair")
+        if _idx + 1 < len(argv) and not argv[_idx + 1].startswith("-"):
+            repair_name = argv[_idx + 1]
+    only_globs = parse_only_globs(argv)
     preferred_username = None
-    if "--preferred-username" in sys.argv:
-        index = sys.argv.index("--preferred-username")
-        if index + 1 >= len(sys.argv) or sys.argv[index + 1].startswith("-"):
+    if "--preferred-username" in argv:
+        index = argv.index("--preferred-username")
+        if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
             print("ERROR: --preferred-username requires a value.")
             sys.exit(1)
-        preferred_username = sys.argv[index + 1]
-    activate_topics = "--activate" in sys.argv
+        preferred_username = argv[index + 1]
+    activate_topics = "--activate" in argv
 
-    config = load_config()
+    config = load_config() if config is None else config
 
     # Dataverse-free MinimalBot agents cannot use the Dataverse Web API below.
     # Route evaluation pushes through the Power Platform MinimalBot components
@@ -1605,13 +1640,21 @@ def main():
         path for path in deleted
         if classify_path(path) != "evaluation-review"
     ]
+    try:
+        _validate_selected_evaluations(
+            agent_dir, working_files, only_globs, changed + new + deleted)
+    except EvaluationMethodError as exc:
+        print(f"ERROR: {exc}")
+        return {"status": "blocked", "backend": "dataverse", "error": str(exc)}
 
     if not changed and not new and not deleted:
         if only_globs:
             print("Nothing to push in the selected scope.")
         else:
             print("Nothing to push. Working files match the baseline.")
-        return
+        if verify is not None:
+            verify(component_map)
+        return {"status": "up_to_date", "backend": "dataverse"}
 
     # Show summary
     print("\n" + "=" * 50)
@@ -1647,7 +1690,8 @@ def main():
 
     if dry_run:
         print("\n(Dry run — no changes pushed)")
-        return
+        return {"status": "ready", "backend": "dataverse",
+                "changes": {"modified": changed, "new": new, "deleted": deleted}}
 
     # Pre-push schema validation: parse-check each file we're about to send
     # so a malformed YAML/JSON surfaces a clear local error rather than a
@@ -1693,7 +1737,7 @@ def main():
         response = input("\nPush these changes to Copilot Studio? (yes/no): ").strip().lower()
         if response not in ("yes", "y"):
             print("Push cancelled.")
-            return
+            return {"status": "cancelled", "backend": "dataverse"}
 
     # Separate confirmation for destructive operations. --yes covers
     # creates and updates; deletes additionally require --force-delete
@@ -1717,7 +1761,7 @@ def main():
         confirm = input("\nType 'delete' to confirm deletion, or anything else to abort: ").strip().lower()
         if confirm != "delete":
             print("Push cancelled (deletes not confirmed).")
-            return
+            return {"status": "cancelled", "backend": "dataverse"}
 
     # Checkpoint before pushing
     run_checkpoint("auto-save before push")
@@ -2175,7 +2219,7 @@ def main():
         eval_children = []
         for filepath in eval_new:
             content = working_files[filepath]
-            if "kind: EvaluationSet" in content:
+            if _is_evaluation_parent(content):
                 eval_parents.append(filepath)
             else:
                 eval_children.append(filepath)
@@ -2582,6 +2626,18 @@ def main():
     # against records that no longer existed (delete) or duplicated them
     # (create). The atomic gate preserves the contract.
     if errors == 0 and success > 0:
+        if verify is not None:
+            candidate_map = {
+                **component_map, **pending_creates,
+            }
+            for path in pending_deletes:
+                candidate_map.pop(path, None)
+            for path, description in pending_descriptions.items():
+                if path in candidate_map:
+                    candidate_map[path] = {
+                        **candidate_map[path], "description": description,
+                    }
+            verify(candidate_map)
         # Atomic two-phase persist:
         #   Phase 1: mutate the in-memory component_map.
         #   Phase 2: write every disk artifact to a *.tmp sibling first.
@@ -2700,6 +2756,12 @@ def main():
                 "The next /push may report stale changes; run"
                 " /setup --refresh to resync."
             )
+            if verify is not None:
+                return {
+                    "status": "failed", "backend": "dataverse",
+                    "remoteCommitted": True,
+                    "error": f"Baseline synchronization failed: {exc}",
+                }
     elif errors > 0:
         print(
             f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
@@ -2768,11 +2830,19 @@ def main():
 
     if errors:
         print(f"Errors:  {errors}")
+        if verify is not None:
+            return {
+                "status": "failed", "backend": "dataverse",
+                "error": f"{errors} component(s) failed.",
+                "pendingCreates": pending_creates,
+            }
         sys.exit(1)
     if _reg["exit_code"]:
         sys.exit(_reg["exit_code"])
-    print("")
+    return {"status": "pushed", "backend": "dataverse"}
 
 
 if __name__ == "__main__":
-    main()
+    outcome = main()
+    if isinstance(outcome, dict) and outcome.get("status") in {"blocked", "failed"}:
+        raise SystemExit(1)

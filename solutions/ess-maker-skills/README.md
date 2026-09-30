@@ -113,10 +113,39 @@ artifacts from the same test cases.
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
 Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
-agent sets live under the agent's `evaluations/` folder. The lifecycle supports
-quality validation, optional SME review, promotion into the configured agent,
-scoped push, execution, run history, and results analysis. Run `/evaluate` to
-create or manage sets, and `/run` to execute a pushed set or inspect results.
+agent sets live under the agent's `evaluations/` folder. New evaluation sets
+use **Compare Meaning** only and require an expected response for every prompt.
+Multi-turn generation is not supported by this single-response feature.
+
+Generated previews show full prompts and expected responses, with separate
+in-scope and out-of-scope sections and a downloadable CSV. Returning to an
+existing set offers editing or adding cases without replacing the original.
+Quality review assesses the authored test set; it does not prove that the
+deployed agent passes the tests in your tenant.
+
+After quality review, choose to request human review, run in Copilot Studio,
+edit the set, or run another quality review. **Run** and **Request Review**
+include their required scoped deployment, with confirmation and the existing
+review/connection prerequisites. A separate push command is not required;
+explicit evaluation push remains available outside this menu. Successful run
+initiation includes the current run's Copilot Studio link.
+
+These flows use the existing push APIs. Dataverse push stores `review.json`
+metadata in the evaluation-parent description. New or changed native MinimalBot
+YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
+unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
+this before consent. Removing cases from a new native copy does not delete
+them from the old remote set.
+
+Native push uploads YAML only: review status is retained locally but is **not
+published as shared review metadata** or copied into the deployed baseline.
+Request Review and reviewer completion
+still perform the existing push in the same flow and report this limitation;
+they do not claim another user can discover the local review marker. New native
+in-place-update APIs and cross-user-review parity are not part of this change.
+Files are retained when preparation or deployment cannot complete. Run
+`/evaluate` to create or manage sets and `/run` to prepare a selected set for
+execution or inspect its history/results.
 
 ### 🚀 Local-First Authoring
 
@@ -126,9 +155,11 @@ Every supported change follows the same safe local pipeline:
 Checkpoint (backup) → Local edit → Error scan
 ```
 
-The `/push` command remains discoverable but reports that native DA-GA
-deployment is not yet available. It does not fall back to the retired
-Dataverse mutation path.
+For topics and workflows, `/push` reports that native DA-GA deployment is not
+yet available; it does not fall back to the retired Dataverse mutation path.
+Explicit evaluation push uses its separate selected-set deployment flow and
+the existing evaluation APIs, including the native new-copy behavior described
+above. It does not add new native update/delete or review-metadata endpoints.
 
 ### ✈️ FlightCheck — Pre-Deployment Readiness Validation
 
@@ -382,10 +413,10 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/review` | Review local topics or evaluation test sets tagged for review |
 | `/evaluate` | Generate evaluation test sets for your agent |
-| `/run` | Run pushed evaluation test sets and inspect history or results |
+| `/run` | Prepare and run selected evaluation sets, or inspect history and results |
 | `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
 | `/flightcheck` | Validate local agent files; standalone FlightCheck retains its full mode |
-| `/push` | Report that native DA-GA deployment is not yet available |
+| `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
 | `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
 | `/menu` | See all available commands |

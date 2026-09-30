@@ -339,10 +339,11 @@ def _write_eval_set(root, name, *, kind="EvaluationData", cases=("case1",)):
     folder = root / "evaluations" / name
     folder.mkdir(parents=True)
     (folder / f"{name}.mcs.yml").write_text(
-        f"kind: EvaluationSet\ndisplayName: {name}\n", encoding="utf-8")
+        f"kind: EvaluationSet\ndisplayName: {name}\n"
+        "graders:\n  - kind: CompareMeaningGrader\n", encoding="utf-8")
     for case in cases:
         (folder / f"{case}.mcs.yml").write_text(
-            f"kind: {kind}\nrows:\n  - question: q\n    expectedResponse: a\n",
+            f"kind: {kind}\nrows:\n  - input: q\n    expectedOutput: a\n",
             encoding="utf-8",
         )
     return folder
@@ -387,8 +388,8 @@ def test_minimalbot_push_rejects_multiturn_case(tmp_path):
     with pytest.raises(mbe.MinimalBotEvaluationError) as exc:
         _mb_client().push_agent_evaluations(str(tmp_path), dry_run=True)
     msg = str(exc.value)
-    assert "MultiTurnEvaluationCase" in msg
-    assert "does not support" in msg
+    assert "multi-turn" in msg
+    assert "only single-response EvaluationData" in msg
 
 
 class _RecordingClient:
@@ -404,15 +405,18 @@ class _RecordingClient:
         self.authenticated = True
         self.preferred_username = preferred_username
 
-    def push_agent_evaluations(self, agent_dir, *, dry_run=False, only_globs=None):
+    def push_agent_evaluations(
+        self, agent_dir, *, dry_run=False, only_globs=None, plan=None,
+    ):
         if dry_run:
             return {"dryRun": True, "sets": [
                 {"folder": "compensation", "displayName": "compensation",
                  "testSetId": "plan-id", "cases": "1"}], "componentCount": 2}
         self.real_push = True
-        return {"dryRun": False, "sets": [
+        assert plan["sets"][0]["testSetId"] == "plan-id"
+        return {"dryRun": False, "status": "pushed", "sets": [
             {"folder": "compensation", "displayName": "compensation",
-             "testSetId": "real-id", "cases": "1"}],
+             "testSetId": "plan-id", "cases": "1"}],
             "componentCount": 2, "verifiedComponents": 2}
 
     def update_dialog_components(self, updates):

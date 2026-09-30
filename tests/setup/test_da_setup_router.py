@@ -152,6 +152,17 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "Do not call the agent missing or unsupported" in reconciliation
     assert "For a native `found` DA-GA observation" in reconciliation
     assert "For a Dataverse-only `found` DA-GA observation" in reconciliation
+    assert "As a temporary compatibility exception" in reconciliation
+    assert (
+        "its backend is `native`, and `identity.schemaName` is empty or missing"
+        in normalized_reconciliation
+    )
+    assert "Preserve `productFamily: unknown` as evidence." in normalized_reconciliation
+    assert (
+        "Do not apply this exception to a non-empty unknown schema, a Dataverse "
+        "observation, two `found` observations, or any outcome other than `found`."
+        in normalized_reconciliation
+    )
     for mismatch_state in (
         "**Choose the starting point and target environment** as complete",
         "**Verify access and agent identity** as blocked",
