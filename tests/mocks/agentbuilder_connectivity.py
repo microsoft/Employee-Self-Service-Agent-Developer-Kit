@@ -23,6 +23,7 @@ MOCK_FAMILY_ID = "00000000-0000-0000-0000-000000003333"
 MOCK_CONNECTION_ID = "mock-servicenow-connection"
 MOCK_WORKDAY_CONNECTION_ID = "mock-workday-connection"
 MOCK_COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
+MOCK_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 MOCK_AGENTBUILDER_BASE = (
     "https://00000000000000000000000000000000."
     "0.environment.api.test.powerplatform.com"
@@ -39,10 +40,21 @@ def agent() -> dict[str, Any]:
 
 
 def configuration() -> dict[str, Any]:
+    """AgentBuilder minimalBots ALM configure response.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/solution.py
+        (ESS-SOLN-001)
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml — the
+      ``minimalBots/alm/{agent_id}/configure`` response, whose ``schemaName``
+      is ``gptagent_copilotforemployeeselfservicehr``.
+    """
     return {
         "realm": "Dev",
         "cdsBotId": MOCK_AGENT_ID,
-        "schemaName": "gptagent_mockemployeeselfservice",
+        "schemaName": MOCK_SCHEMA_NAME,
         "grsRepositoryId": MOCK_ENV_ID,
         "commitSha": MOCK_COMMIT_SHA,
     }

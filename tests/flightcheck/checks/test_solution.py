@@ -68,19 +68,52 @@ def _config(*, bot_id: str | None = ab.MOCK_AGENT_ID) -> dict[str, Any]:
     }
 
 
-def test_passes_when_configure_returns_grs_repository_and_commit() -> None:
+def test_passes_when_configure_returns_ess_schema_grs_and_commit() -> None:
     agentbuilder = _FakeAgentBuilder()
     runner = _Runner(agentbuilder=agentbuilder, config=_config())
 
     result = _check_ess_solution_installed(runner)[0]
 
     assert result.status == Status.PASSED.value
-    assert "Agent has a committed GRS package" in result.result
-    assert "ESS base-package identity match pending US 7792604" in result.result
+    assert "Agent runs the ESS base package" in result.result
+    assert ab.MOCK_SCHEMA_NAME in result.result
+    assert "exact package revision match pending US 7792604" in result.result
     assert ab.MOCK_ENV_ID in result.result
     assert ab.MOCK_COMMIT_SHA in result.result
     assert result.remediation == ""
     assert agentbuilder.calls == [(ab.MOCK_AGENT_ID, DEV_REALM)]
+
+
+def test_fails_when_configure_schema_is_not_ess() -> None:
+    payload = ab.configuration()
+    payload["schemaName"] = "gptagent_contosowidgets"
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(payload), config=_config())
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.FAILED.value
+    assert "gptagent_contosowidgets" in result.result
+    assert "not the Employee Self Service base package" in result.result
+    assert "committed GRS package is a different product" in result.result
+    assert "Point this check's botId at the Employee Self Service agent" in (
+        result.remediation
+    )
+
+
+def test_warns_when_schema_name_missing() -> None:
+    payload = ab.configuration()
+    payload["schemaName"] = ""
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(payload), config=_config())
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.WARNING.value
+    assert "returned no schemaName" in result.result
+    assert "identity could not be confirmed" in result.result
+    assert "not provably ESS" in result.result
+    assert ab.MOCK_ENV_ID in result.result
+    assert ab.MOCK_COMMIT_SHA in result.result
+    assert "returns a schemaName" in result.remediation
 
 
 @pytest.mark.parametrize(

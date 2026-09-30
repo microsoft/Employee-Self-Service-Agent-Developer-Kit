@@ -7,7 +7,12 @@ ESS FlightCheck — ESS Solution Installation Validation (ESS-SOLN-xxx)
 Verifies that the base ESS declarative agent package is present in the target
 Power Platform environment (skill-2 ``install-ess``). The check reads the
 Copilot Studio minimalBots ALM configure surface so it works after the
-Declarative Agent re-point away from Dataverse solution-table state.
+Declarative Agent re-point away from Dataverse solution-table state. Package
+presence is proven by ``grsRepositoryId`` + ``commitSha``; package *identity*
+(that the committed package is ESS, not some other product) is proven by the
+configure ``schemaName`` carrying the ESS token ``copilotforemployeeselfservice``
+-- the DA analogue of the CA solution-uniquename prefix
+``msdyn_copilotforemployeeselfservice``.
 """
 
 from __future__ import annotations
@@ -30,6 +35,13 @@ _ESS_SOLN_DOC_LINK = (
     "employee-self-service/install"
 )
 _ESS_SOLN_DESCRIPTION = "ESS base agent package present in the environment"
+# The CA check proved ESS identity by the Dataverse solution uniquename prefix
+# ``msdyn_copilotforemployeeselfservice``. The DA ALM configure surface exposes
+# the committed package's ``schemaName`` (e.g. ``gptagent_copilotforemployee
+# selfservicehr`` / ``...it``). The stable identity token shared by both the CA
+# and DA schema conventions is ``copilotforemployeeselfservice``; match on it so
+# the DA check confirms *which* package is installed, not merely that one exists.
+_ESS_SCHEMA_IDENTITY_TOKEN = "copilotforemployeeselfservice"
 _DEFAULT_ALM_REALM = DEV_REALM
 _ALM_NOT_OPTED_IN_ERROR_CODE = "4003"
 _ALM_REALMS = {
@@ -140,13 +152,53 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
             )
         ]
 
+    schema_name = str(config.get("schemaName") or "").strip()
+    if schema_name:
+        if _ESS_SCHEMA_IDENTITY_TOKEN not in schema_name.casefold():
+            return [
+                _result(
+                    Status.FAILED.value,
+                    (
+                        "AgentBuilder ALM configure returned package schema "
+                        f"'{schema_name}', which is not the Employee Self "
+                        "Service base package (an ESS agent schema contains "
+                        f"'{_ESS_SCHEMA_IDENTITY_TOKEN}'). The agent's "
+                        "committed GRS package is a different product."
+                    ),
+                    (
+                        "Point this check's botId at the Employee Self Service "
+                        "agent, or install/import the ESS base package for this "
+                        "agent, then retry this check."
+                    ),
+                )
+            ]
+        return [
+            _result(
+                Status.PASSED.value,
+                (
+                    "Agent runs the ESS base package "
+                    f"(schema {schema_name}, GRS repository "
+                    f"{grs_repository_id}, commit {commit_sha}); exact "
+                    "package revision match pending US 7792604."
+                ),
+            )
+        ]
+
     return [
         _result(
-            Status.PASSED.value,
+            Status.WARNING.value,
             (
                 "Agent has a committed GRS package "
-                f"(repository {grs_repository_id}, commit {commit_sha}); "
-                "ESS base-package identity match pending US 7792604."
+                f"(repository {grs_repository_id}, commit {commit_sha}), but "
+                "AgentBuilder ALM configure returned no schemaName, so ESS "
+                "base-package identity could not be confirmed (a committed "
+                "package of some product exists, but not provably ESS)."
+            ),
+            (
+                "Re-run this read-only check once AgentBuilder ALM configure "
+                "returns a schemaName for the agent; if it keeps returning "
+                "none, confirm the agent's installed package via Copilot "
+                "Studio before relying on ESS base-package presence."
             ),
         )
     ]
