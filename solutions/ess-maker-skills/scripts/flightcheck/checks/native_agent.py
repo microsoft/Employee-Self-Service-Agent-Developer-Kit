@@ -12,6 +12,7 @@ from agentbuilder import AgentBuilderHTTPError
 from setup_existing_da import validate_existing_dev_connection
 
 from ..runner import CheckResult, Priority, Role, Status
+from ..agent_scope import active_agent
 from .connections import get_connection_status
 
 
@@ -38,28 +39,7 @@ def _result(
 
 
 def _active_agent(config: dict[str, Any]) -> dict[str, Any]:
-    agents = config.get("agents") or []
-    active_slug = config.get("activeAgent") or (config.get("agent") or {}).get(
-        "slug"
-    )
-    if active_slug:
-        active = next(
-            (
-                agent
-                for agent in agents
-                if isinstance(agent, dict) and agent.get("slug") == active_slug
-            ),
-            None,
-        )
-        if active is not None:
-            return active
-    single = config.get("agent")
-    if isinstance(single, dict) and single:
-        return single
-    return next(
-        (agent for agent in agents if isinstance(agent, dict)),
-        {},
-    )
+    return active_agent(config)
 
 
 def _normalize_connector_id(value: Any) -> str:
