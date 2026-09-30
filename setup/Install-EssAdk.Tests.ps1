@@ -493,6 +493,21 @@ Test 'Install-EssAdk.ps1 confirmation-gates closing running VS Code by PID' {
     }
 }
 
+Test 'bundled ESS Maker Profile is force-reinstalled even when its version is unchanged' {
+    if ($src -notmatch '--install-extension\s+\$vsix\.FullName\s+--force') {
+        throw 'Windows installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($macInstaller -notmatch '--install-extension\s+"\$MAKER_VSIX"\s+--force') {
+        throw 'macOS installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($src -match 'makerProfileCurrent|already installed\) - \$modeLabel') {
+        throw 'Windows installer must not skip the bundled VSIX solely because its version matches'
+    }
+    if ($macInstaller -match 'MAKER_VERSION.*already installed') {
+        throw 'macOS installer must not skip the bundled VSIX solely because its version matches'
+    }
+}
+
 Test 'install-ess-adk.sh confirmation-gates graceful VS Code quit before launch' {
     if ($macInstaller -notmatch 'pgrep\s+-f\s+''/Visual Studio Code\.app/''') {
         throw 'macOS installer must detect running VS Code'

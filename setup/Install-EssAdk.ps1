@@ -1096,34 +1096,28 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
             $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
-            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
-            $makerProfileCurrent = $makerVersion -and
-                $LASTEXITCODE -eq 0 -and
-                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
+            # Reinstall even when the version is unchanged: branch builds can
+            # update the VSIX contents without bumping the version, and VS Code
+            # otherwise retains the old extension payload.
+            $out = $null
+            $vsix_exit = 0
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                $vsix_exit = $LASTEXITCODE
+            } catch {
+                $out = $_.Exception.Message
+                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+            } finally {
+                $ErrorActionPreference = $prevEAP
+            }
 
-            if ($makerProfileCurrent) {
-                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
+            if ($vsix_exit -eq 0) {
+                Write-Ok "ESS Maker Profile installed/refreshed ($($vsix.Name)) - $modeLabel mode"
             } else {
-                $out = $null
-                $vsix_exit = 0
-                try {
-                    $prevEAP = $ErrorActionPreference
-                    $ErrorActionPreference = 'Continue'
-                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                    $vsix_exit = $LASTEXITCODE
-                } catch {
-                    $out = $_.Exception.Message
-                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-                } finally {
-                    $ErrorActionPreference = $prevEAP
-                }
-
-                if ($vsix_exit -eq 0) {
-                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
-                } else {
-                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
-                }
+                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
             }
         }
 

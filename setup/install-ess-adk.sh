@@ -525,12 +525,8 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
 
         if [[ -z "$MAKER_VSIX" ]]; then
             warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
-        elif MAKER_VERSION="$(basename "$MAKER_VSIX" .vsix)" &&
-             MAKER_VERSION="${MAKER_VERSION#ess-maker-profile-}" &&
-             echo "$INSTALLED_EXTENSIONS_WITH_VERSIONS" | grep -Fqix "microsoft-ess.ess-maker-profile@$MAKER_VERSION"; then
-            ok "ESS Maker Profile $MAKER_VERSION (already installed) — $MODE_LABEL mode"
         elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
-            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
+            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) installed/refreshed — $MODE_LABEL mode"
         else
             warn "ESS Maker Profile install failed (non-fatal)"
         fi
