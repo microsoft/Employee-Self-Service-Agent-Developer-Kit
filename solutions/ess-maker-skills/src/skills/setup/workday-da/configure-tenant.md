@@ -29,6 +29,9 @@ administrator finished configuration.
 
 - For **Microsoft Entra ID**, render **Workday Administrator Steps - Existing
   Microsoft Entra federation** and the applicable numbered handoff below.
+  Do not infer a match from the
+     provider choice alone; the administrator must confirm the displayed
+  Issuer exactly matches the verified Entra issuer.
 - For **No enabled SAML row**, render **Workday Administrator Steps - New
   Microsoft Entra federation** and the greenfield handoff below.
 - For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
@@ -175,7 +178,8 @@ form.
 Collect exactly one response form using one structured
 `vscode_askQuestions` call. Do not collapse these fields into a multiline text
 box, ask the administrator to edit a prose template, or ask for these values
-as a sequence of separate chat questions:
+as a sequence of separate chat questions. This avoids repeated confirmations
+while retaining all required evidence:
 
 - confirmation that the enabled issuer exactly matches the displayed verified
   Entra issuer, or the exact different Issuer value;
