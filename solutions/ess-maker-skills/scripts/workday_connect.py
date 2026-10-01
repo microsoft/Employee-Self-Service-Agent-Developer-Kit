@@ -380,13 +380,19 @@ def _record_connections(
     if not getattr(args, "confirm_workday_target", False):
         identifiers = state.get("identifiers") or {}
         endpoints = state.get("endpoints") or {}
+        scope = state.get("scope") or {}
         return {
             "requiresConfirmation": True,
             "connections": evidence["connections"],
             "workdayTarget": {
+                "displayName": "",
+                "authenticationType": "Microsoft Entra ID Integrated",
                 "resourceUrl": identifiers.get("workdaySamlEntityId"),
                 "oauthTokenUrl": endpoints.get("oauthTokenUrl"),
                 "oauthClientId": identifiers.get("oauthClientId"),
+                "soapBaseUrl": endpoints.get("soapBaseUrl"),
+                "restBaseUrl": endpoints.get("restBaseUrl"),
+                "tenantName": scope.get("workdayTenant"),
             },
             "status": store.status(),
         }

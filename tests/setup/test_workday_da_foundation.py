@@ -109,7 +109,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
         "exactly one response form using one structured\n"
         "`vscode_askQuestions` call"
     ) in tenant
-    assert '"header": "Identity provider"' in tenant
+    assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
     assert "multiline text\nbox" in tenant

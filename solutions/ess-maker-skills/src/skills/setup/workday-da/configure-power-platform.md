@@ -50,17 +50,44 @@ When both required connections resolve exactly, this read-only pass returns
 `requiresConfirmation: true` with safe connection display names and the saved
 non-secret Workday target values. It does not mark the phase complete.
 
-If the Workday connection is missing or disconnected, read the already
-validated values from the Workday state and show them with these
-customer-facing labels:
+Treat the two physical connections as sequential gates:
 
-- **Microsoft Entra resource URL:** the Workday SAML Service Provider ID,
-  `http://www.workday.com/{workdayTenant}`. Do not use the Entra application
-  ID URI beginning with `api://`.
-- **Workday OAuth token URL:** the exact Token Endpoint copied from
-  **View API Client** in Workday.
-- **Client ID:** the Workday OAuth client ID copied from **View API Client**,
-  not the Microsoft Entra application ID.
+1. Create or verify Microsoft Dataverse.
+2. Only after Microsoft Dataverse is connected, create or verify Workday.
+
+The controller checks Microsoft Dataverse first. If it is missing,
+disconnected, or ambiguous, show only the Microsoft Dataverse guidance below.
+Do not show the Workday connection values, link, or confirmation form in the
+same response. After the maker returns, rerun `record-connections`; continue
+to Workday only when Microsoft Dataverse resolves exactly.
+
+If the Microsoft Dataverse connection is missing or disconnected:
+
+1. Show a **Create Microsoft Dataverse connection** link using the
+   environment-scoped Microsoft Dataverse URL above.
+2. If the direct link does not open, use the Connections list fallback or open
+   the Power Apps maker portal, select the exact environment, open
+   **Connections**, select **New connection**, and choose **Microsoft
+   Dataverse**.
+3. Create or repair the connection using the selected maker account.
+4. Confirm that it shows **Connected**.
+
+After Microsoft Dataverse is connected, rerun `record-connections`.
+
+If the Workday connection is then missing or disconnected, read the already
+validated values from `workdayTarget` and show this complete value card in the
+same order as the Workday connection form:
+
+| Workday connection field | Value |
+| --- | --- |
+| **Display name (optional)** | Leave blank, or enter a maker-chosen recognizable connection name. |
+| **Authentication type** | `Microsoft Entra ID Integrated` |
+| **Microsoft Entra resource URL \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
+| **Workday OAuth token URL \*** | The exact saved Token Endpoint copied from **View API Client** in Workday. |
+| **Workday OAuth client ID \*** | The saved Workday OAuth client ID copied from **View API Client**, not the Microsoft Entra application ID. |
+| **SOAP base URL \*** | The saved SOAP service base ending at `/ccx/service`, without the tenant name. |
+| **REST base URL** | The saved REST base ending at `/ccx/api`. |
+| **Tenant name \*** | The saved Workday tenant name. |
 
 These values were collected during the Workday administrator phase. Do not ask
 the maker or administrator to provide them again. If any value is missing,
@@ -75,7 +102,8 @@ Then give the maker this creation process:
    the Power Apps maker portal, select the exact environment, open
    **Connections**, select **New connection**, and choose **Workday**.
 3. Select **Microsoft Entra ID Integrated** authentication.
-4. Enter the three displayed values in the matching connection fields.
+4. Enter the displayed values in the matching connection fields, preserving
+   their order and keeping the tenant separate from the SOAP base URL.
 5. Select **Create** and complete the Workday sign-in window. This connector
    uses a separate credential store, so an additional sign-in prompt is
    expected even when Microsoft or PAC authentication already succeeded.
@@ -86,15 +114,6 @@ Do not request or collect a Workday password, client secret, access token,
 refresh token, or cookie. The maker completes authentication in the connector
 sign-in window.
 
-If the Microsoft Dataverse connection is missing or disconnected:
-
-1. Show a **Create Microsoft Dataverse connection** link using the
-   environment-scoped Microsoft Dataverse URL above.
-2. If the direct link does not open, use the Connections list fallback, select
-   **New connection**, and choose **Microsoft Dataverse**.
-3. Create or repair the connection using the selected maker account.
-4. Confirm that it shows **Connected**.
-
 Reuse a healthy existing connection when one already exists. Do not create
 duplicates merely to satisfy the phase, and do not ask the maker to paste
 connection IDs.
@@ -104,14 +123,14 @@ keep the customer in the Power Apps **Connections** page. Ask them to return to
 the skill for another check; do not redirect them to the agent's Connection
 Settings page.
 
-Show the safe display name of the selected Workday connection and the three
-saved non-secret Workday values. Use `vscode_askQuestions`:
+Show the safe display name of the selected Workday connection and the complete
+saved non-secret Workday value card. Use `vscode_askQuestions`:
 
 ```json
 [
   {
     "header": "Confirm Workday connection",
-    "question": "Was this exact Workday connection created with the displayed Microsoft Entra resource URL, Workday OAuth token URL, and Workday OAuth client ID?",
+    "question": "Was this exact Workday connection created with all of the displayed Workday target values?",
     "options": [
       { "label": "Yes, confirm this connection" },
       { "label": "No, review or repair it" }
@@ -260,13 +279,17 @@ Copilot Studio browser session are separate. If the browser shows another
 account, the maker must switch accounts or use a separate browser profile
 before selecting a connection.
 
-Connect **ESS Workday Runtime REST Execution** and any other Workday flow shown
-there. The reviewed native agent contract marks **ESS Workday Runtime** and
-**ESS Workday Runtime References** as `EmbeddedOnly`; embedded flows are not
-expected to require a maker-selected user connection. For every Workday
-connection the page does expose, enable **Allow permission to share
-parameters**. This prevents each employee from receiving an unexpected
-first-use connection prompt.
+Connect both reviewed maker-visible Workday entries:
+
+1. **ESS Workday Runtime**
+2. **ESS Workday Runtime REST Execution**
+
+For each entry, select **Manage**, choose the already-created Workday
+connection, and save or confirm the selection. The reviewed native agent
+contract marks **ESS Workday Runtime References** as `EmbeddedOnly`; it is not
+expected to require a separate maker-selected connection. For both exposed
+entries, enable **Allow permission to share parameters**. This prevents each
+employee from receiving an unexpected first-use connection prompt.
 
 Internal execution note—never show this implementation detail to the customer:
 `connectionType: EmbeddedOnly` is separate from the Dataverse
@@ -275,14 +298,14 @@ agent-facing connection contract; the latter grants the Cosmos-backed agent
 principal access to the reviewed Dataverse workflows. Do not skip or scope the
 authorization stage solely from `connectionType`.
 
-Show the exact agent name and the reviewed agent-facing flow
-**ESS Workday Runtime REST Execution**. Use `vscode_askQuestions`:
+Show the exact agent name and both reviewed agent-facing flows. Use
+`vscode_askQuestions`:
 
 ```json
 [
   {
     "header": "Confirm Workday flow connection",
-    "question": "In this exact agent, is ESS Workday Runtime REST Execution connected and is parameter sharing enabled for every Workday connection shown by Copilot Studio?",
+    "question": "In this exact agent, are ESS Workday Runtime and ESS Workday Runtime REST Execution both connected to the reviewed Workday connection, with parameter sharing enabled for both entries?",
     "options": [
       { "label": "Yes, confirmed" },
       { "label": "No, review the agent connections" }
@@ -304,7 +327,10 @@ file-write tool:
 {
   "outcome": "maker-confirmed",
   "botId": "{SELECTED_AGENT_BOT_ID}",
-  "flowNames": ["ESS Workday Runtime REST Execution"],
+  "flowNames": [
+    "ESS Workday Runtime",
+    "ESS Workday Runtime REST Execution"
+  ],
   "parameterSharingOutcome": "enabled-for-exposed-connections"
 }
 ```

@@ -434,6 +434,10 @@ def test_record_connections_previews_before_target_confirmation(
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
     store.merge_section(
+        "scope",
+        {"workdayTenant": "contoso"},
+    )
+    store.merge_section(
         "identifiers",
         {
             "workdaySamlEntityId": "http://www.workday.com/contoso",
@@ -442,7 +446,11 @@ def test_record_connections_previews_before_target_confirmation(
     )
     store.merge_section(
         "endpoints",
-        {"oauthTokenUrl": "https://example.workday.com/oauth/token"},
+        {
+            "oauthTokenUrl": "https://example.workday.com/oauth/token",
+            "soapBaseUrl": "https://example.workday.com/ccx/service",
+            "restBaseUrl": "https://example.workday.com/ccx/api",
+        },
     )
     monkeypatch.setattr(
         workday_connect,
@@ -478,9 +486,14 @@ def test_record_connections_previews_before_target_confirmation(
 
     assert result["requiresConfirmation"] is True
     assert result["workdayTarget"] == {
+        "displayName": "",
+        "authenticationType": "Microsoft Entra ID Integrated",
         "resourceUrl": "http://www.workday.com/contoso",
         "oauthTokenUrl": "https://example.workday.com/oauth/token",
         "oauthClientId": "client-id",
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "tenantName": "contoso",
     }
     assert store.load()["phases"]["connections"]["status"] == "pending"
 
@@ -560,7 +573,10 @@ def test_record_agent_binding_completes_only_from_verifier_output(
             {
                 "outcome": "maker-confirmed",
                 "botId": "bot-id",
-                "flowNames": ["ESS Workday Runtime REST Execution"],
+                "flowNames": [
+                    "ESS Workday Runtime",
+                    "ESS Workday Runtime REST Execution",
+                ],
                 "parameterSharingOutcome": (
                     "enabled-for-exposed-connections"
                 ),
