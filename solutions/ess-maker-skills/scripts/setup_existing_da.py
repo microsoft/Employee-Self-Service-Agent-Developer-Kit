@@ -530,6 +530,7 @@ def _validate_canonical_agent_state(
             None,
             "automated",
             "manual-attested",
+            "manual-overridden",
             "skipped",
         }:
             raise ExistingDASetupError(
@@ -925,6 +926,7 @@ def maintain_setup_flightcheck(
     checkpoint: str,
     results_path: Path,
     manual_attested: bool = False,
+    manual_overridden: bool = False,
 ) -> dict[str, Any]:
     """Persist one supported FlightCheck result into canonical setup state."""
     state = _load_canonical_setup_state(kit_root)
@@ -1013,6 +1015,11 @@ def maintain_setup_flightcheck(
         str(row.get("status") or "")
         for row in matching
     }
+    if manual_attested and manual_overridden:
+        raise ExistingDASetupError(
+            "Capacity evidence cannot be both manually attested and "
+            "manually overridden."
+        )
     if manual_attested:
         if checkpoint != "ENV-CAPACITY-001":
             raise ExistingDASetupError(
@@ -1030,6 +1037,33 @@ def maintain_setup_flightcheck(
                 "ENV-CAPACITY-001 result."
             )
         complete = True
+    elif manual_overridden:
+        if checkpoint != "ENV-CAPACITY-001":
+            raise ExistingDASetupError(
+                "Manual override is supported only for "
+                "ENV-CAPACITY-001."
+            )
+        current_step = agent_state["steps"][step_id]
+        if (
+            current_step.get("state") != "blocked"
+            or current_step.get("checkpoint") != "ENV-CAPACITY-001"
+            or not current_step.get("failure_causes")
+        ):
+            raise ExistingDASetupError(
+                "Manual override requires a previously recorded zero "
+                "allocation and a fresh Warning recheck."
+            )
+        if (
+            len(matching) != 1
+            or statuses != {"Warning"}
+            or payload.get("failed") != 0
+            or payload.get("errors") != 0
+        ):
+            raise ExistingDASetupError(
+                "Manual override requires a fresh Warning "
+                "ENV-CAPACITY-001 recheck."
+            )
+        complete = True
     elif requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}
     elif checkpoint == "ENV-CAPACITY-001":
@@ -1040,7 +1074,7 @@ def maintain_setup_flightcheck(
         complete = (
             not run_blocked
             and bool(statuses)
-            and statuses <= {"Passed", "Warning"}
+            and statuses == {"Passed"}
         )
     else:
         run_blocked = (
@@ -1053,11 +1087,12 @@ def maintain_setup_flightcheck(
     if complete:
         note = SETUP_STEP_NOTES[step_id]
         mode = "automated"
-        if checkpoint == "ENV-CAPACITY-001" and "Warning" in statuses:
+        if manual_overridden:
+            mode = "manual-overridden"
             note = (
-                "ENV-CAPACITY-001 recorded a Copilot Studio message capacity "
-                "risk. Setup continued because capacity allocation is not a "
-                "foundation setup blocker."
+                "A maker explicitly continued with a manual override after "
+                "ENV-CAPACITY-001 automatically rechecked this environment "
+                "and still found no allocated Copilot Studio message capacity."
             )
         elif manual_attested:
             mode = "manual-attested"
@@ -1080,6 +1115,11 @@ def maintain_setup_flightcheck(
             requirement=requirement,
         )
     else:
+        non_blocking_statuses = (
+            {"Passed"}
+            if checkpoint == "ENV-CAPACITY-001"
+            else {"Passed", "Warning"}
+        )
         causes = (
             [
                 str(
@@ -1088,7 +1128,8 @@ def maintain_setup_flightcheck(
                     or "FlightCheck failed"
                 )
                 for row in matching
-                if str(row.get("status") or "") not in {"Passed", "Warning"}
+                if str(row.get("status") or "")
+                not in non_blocking_statuses
             ]
             if matching
             else [
@@ -2883,6 +2924,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     maintain_flightcheck.add_argument(
+        "--manual-overridden",
+        action="store_true",
+        help=(
+            "Record an explicit maker override for a current Warning "
+            "ENV-CAPACITY-001 result."
+        ),
+    )
+    maintain_flightcheck.add_argument(
         "--kit-root",
         type=Path,
         default=Path.cwd(),
@@ -3068,6 +3117,7 @@ def main(argv: list[str] | None = None) -> int:
                 checkpoint=args.checkpoint,
                 results_path=results_path,
                 manual_attested=args.manual_attested,
+                manual_overridden=args.manual_overridden,
             )
             print(
                 "DA_SETUP_FLIGHTCHECK_JSON:"

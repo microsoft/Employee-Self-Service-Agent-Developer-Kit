@@ -247,7 +247,7 @@ The final handoff is the detailed completion report and the standard completion 
 - **Reset and use this workspace**
 - **Create and open a new workspace**
 
-Do not preselect a choice. **Finish setup** closes the setup flow and renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
+Do not preselect a choice. The final handoff must explain that **Finish setup** acknowledges the displayed results and closes setup without running the checks again. **Finish setup** then renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
 
 **Message:**
 
@@ -275,11 +275,13 @@ Here's your ESS agent setup:
 
 {APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}
 
+These are the readiness results you acknowledged when you finished setup. No checks were rerun.
+
 Next steps:
 
 - Run `/landing-page` to configure branding and the content employees see.
 - Run `/connect` to add or change an integration.
-{SUPPORTED_INTEGRATION_SHORTCUTS}
+  {SUPPORTED_INTEGRATION_SHORTCUTS}
 - Type `/menu` to see all available capabilities.
 
 **End message.**

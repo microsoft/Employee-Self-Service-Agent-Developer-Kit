@@ -83,14 +83,17 @@ def test_passed_when_capacity_allocated():
     r = _run(_runner(powerplatform=_FakePP(_mcs(25000))))
     assert r.status == "Passed"
     assert "25000" in r.result
+    assert r.evidence["outcome"] == "verified"
+    assert r.evidence["allocatedCredits"] == 25000
 
 
 def test_warns_when_zero_capacity_no_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=False))
     assert r.status == "Warning"
+    assert r.evidence["outcome"] == "empty-results"
+    assert r.evidence["allocatedCredits"] == 0
     assert "not configured" in r.result
-    assert "no message capacity" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "manual override" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
@@ -98,8 +101,7 @@ def test_warns_when_zero_capacity_with_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=True))
     assert r.status == "Warning"
     assert "Pay-as-you-go billing is configured" in r.result
-    assert "will be billed through Azure Pay-as-you-go" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "manual override" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
@@ -108,23 +110,54 @@ def test_warns_when_zero_capacity_unknown_payg():
     r = _run(_runner(powerplatform=_FakePP([])))
     assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "message capacity is not confirmed" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "manual override" in r.remediation
 
 
 def test_requires_manual_confirmation_when_no_powerplatform_client():
     r = _run(_runner(powerplatform=None, payg=False))
     assert r.status == "Manual"
-    assert "could not verify" in r.result
+    assert "API capability was unavailable" in r.result
+    assert r.evidence["outcome"] == "unsupported-capability"
     assert "Manage capacity" in r.remediation
     assert "explicitly attest" in r.remediation
 
 
 def test_requires_manual_confirmation_when_allocation_read_denied():
-    pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
+    pp_denied = _FakePP(
+        {
+            "_error": "insufficient_permissions",
+            "_status": 403,
+            "_request_id": "request-123",
+        }
+    )
     r = _run(_runner(powerplatform=pp_denied, payg=False))
     assert r.status == "Manual"
-    assert "could not verify" in r.result
+    assert "access was denied" in r.result
+    assert r.evidence["outcome"] == "denied-access"
+    assert r.evidence["serviceStatus"] == 403
+    assert r.evidence["requestId"] == "request-123"
+
+
+def test_requires_manual_confirmation_when_allocation_service_fails():
+    class _Response:
+        status_code = 503
+        headers = {"x-ms-request-id": "request-503"}
+
+    error = RuntimeError("service payload must not be exposed")
+    error.response = _Response()
+
+    r = _run(_runner(powerplatform=_FakePP(error), payg=False))
+
+    assert r.status == "Manual"
+    assert "service returned an error" in r.result
+    assert "service payload" not in r.result
+    assert r.evidence == {
+        "environmentId": "env-guid",
+        "outcome": "service-error",
+        "errorType": "RuntimeError",
+        "serviceStatus": 503,
+        "requestId": "request-503",
+    }
 
 
 @pytest.mark.parametrize(

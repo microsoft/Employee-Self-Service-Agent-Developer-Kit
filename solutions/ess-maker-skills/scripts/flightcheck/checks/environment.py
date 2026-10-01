@@ -19,7 +19,7 @@ from ._dlp_utils import iter_effective_policies
 from ._maker_urls import maker_solutions_url
 from .licensing import (
     _CAPACITY_DOC,
-    _env_mcs_allocation,
+    _env_mcs_allocation_observation,
     classify_copilot_studio_capacity,
 )
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
@@ -449,7 +449,13 @@ def run_capacity_check(runner) -> list[CheckResult]:
     return _check_copilot_studio_capacity_provisioned(runner)
 
 
-def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResult:
+def _env_capacity(
+    status: str,
+    result: str,
+    remediation: str = "",
+    *,
+    evidence: dict | None = None,
+) -> CheckResult:
     """Build an ENV-CAPACITY-001 row (every branch shares id/category/role)."""
     return CheckResult(
         roles=[Role.POWER_PLATFORM_ADMIN.value],
@@ -457,6 +463,7 @@ def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResul
         priority=Priority.CRITICAL.value, status=status,
         description="Copilot Studio capacity provisioned",
         result=result, remediation=remediation, doc_link=_CAPACITY_DOC,
+        evidence=evidence or {},
     )
 
 
@@ -471,10 +478,10 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    A known zero allocation is a visible runtime or billing risk, but it does
-    not block the remaining foundation setup. When the allocation cannot be
-    read, the row requires explicit manual confirmation rather than presenting
-    the unknown result as a known failure.
+    A known zero allocation requires an explicit maker override before
+    foundation readiness can complete. When the allocation cannot be read, the
+    row requires explicit manual confirmation rather than presenting the
+    unknown result as a known failure.
     """
     env_id = getattr(runner, "env_id", None)
     if not env_id:
@@ -482,31 +489,46 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
             "Environment ID is unavailable, so Copilot Studio capacity could not be verified.",
             "Verify the environment identity, then rerun this checkpoint.")]
 
-    allocated = _env_mcs_allocation(getattr(runner, "powerplatform", None), env_id)
+    allocated, evidence = _env_mcs_allocation_observation(
+        getattr(runner, "powerplatform", None),
+        env_id,
+    )
     payg_flag = getattr(runner, "_payg_configured", None)
     _, reason = classify_copilot_studio_capacity(
         allocated, population=None, payg_flag=payg_flag)
     capacity_portal = _capacity_portal(runner)
 
     if reason == "unreadable":
+        outcome = evidence.get("outcome")
+        if outcome == "denied-access":
+            detail = "access was denied"
+        elif outcome == "service-error":
+            detail = "the service returned an error"
+        else:
+            detail = "the required API capability was unavailable"
         return [_env_capacity(Status.MANUAL.value,
-            "The Power Platform Licensing API was unavailable or permission was denied, so FlightCheck could not verify this environment's Copilot Studio message capacity allocation programmatically.",
-            f"Verify in {capacity_portal} whether Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup. If it is not allocated, rerun this checkpoint so setup can record the risk.")]
+            f"FlightCheck could not verify this environment's Copilot Studio message capacity because {detail}.",
+            f"Verify in {capacity_portal} whether Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup. If it is not allocated, rerun this checkpoint after capacity is allocated.",
+            evidence=evidence)]
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
-            f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]
+            f"{allocated} Copilot Studio message credit(s) are allocated to this environment.",
+            evidence=evidence)]
     if reason == "zero_with_payg":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is configured.",
-            f"Billing risk: agent messages will be billed through Azure Pay-as-you-go. Setup can continue with this risk recorded. Allocate prepaid capacity in {capacity_portal} if that billing path is not intended.")]
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+            evidence=evidence)]
     if reason == "zero_payg_unknown":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
-            f"Runtime and billing risk: message capacity is not confirmed. Setup can continue with this risk recorded. Verify Pay-as-you-go billing or allocate Copilot Studio capacity in {capacity_portal} before agent use.")]
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+            evidence=evidence)]
     # reason == "zero_no_payg"
     return [_env_capacity(Status.WARNING.value,
         "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is not configured.",
-        f"Runtime risk: the ESS agent has no message capacity. Setup can continue with this risk recorded, but capacity must be allocated in {capacity_portal} before the agent is used.")]
+        f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+        evidence=evidence)]
 
 
 # ---------------------------------------------------------------------------

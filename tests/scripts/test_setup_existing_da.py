@@ -2343,7 +2343,7 @@ def test_capacity_manual_result_requires_explicit_attestation(
     assert blocked["mode"] is None
 
 
-def test_capacity_warning_records_risk_without_blocking_setup(
+def test_capacity_warning_requires_explicit_override(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
@@ -2361,13 +2361,83 @@ def test_capacity_warning_records_risk_without_blocking_setup(
     )
 
     step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert result["state"] == "done"
-    assert result["mode"] == "automated"
+    assert result["state"] == "blocked"
+    assert result["mode"] is None
     assert result["evidenceStatuses"] == ["Warning"]
-    assert result["failureCauses"] == []
+    assert result["failureCauses"] == [
+        "ENV-CAPACITY-001 returned Warning"
+    ]
+    assert step["state"] == "blocked"
+
+
+def test_capacity_warning_accepts_explicit_override(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Warning",
+    )
+    blocked = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+    assert blocked["state"] == "blocked"
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Warning",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "ENV-CAPACITY-001",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--manual-overridden",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"state": "done"' in output
+    assert '"mode": "manual-overridden"' in output
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
     assert step["state"] == "done"
-    assert "capacity risk" in step["note"].lower()
-    assert "not a foundation setup blocker" in step["note"].lower()
+    assert step["mode"] == "manual-overridden"
+
+
+def test_capacity_warning_rejects_override_without_recorded_zero(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Warning",
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="previously recorded zero allocation",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="ENV-CAPACITY-001",
+            results_path=results_path,
+            manual_overridden=True,
+        )
 
 
 def test_capacity_manual_result_accepts_explicit_attestation(
@@ -2432,6 +2502,28 @@ def test_manual_attestation_rejects_unsupported_evidence(
             checkpoint=checkpoint,
             results_path=results_path,
             manual_attested=True,
+        )
+
+
+@pytest.mark.parametrize("status", ["Manual", "Failed", "Passed"])
+def test_manual_override_rejects_unsupported_evidence(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        status,
+    )
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="ENV-CAPACITY-001",
+            results_path=results_path,
+            manual_overridden=True,
         )
 
 

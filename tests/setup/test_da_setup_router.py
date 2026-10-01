@@ -1417,8 +1417,15 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "a blocked state that requires maker action" in normalized
     assert "A sequence of setup operations that retains the same markers" in normalized
     assert "The final handoff is the detailed completion report" in normalized
-    assert "**Finish setup** closes the setup flow" in normalized
+    assert (
+        "**Finish setup** acknowledges the displayed results and closes setup "
+        "without running the checks again"
+    ) in normalized
     assert "renders a durable completion snapshot as the final chat message" in normalized
+    assert (
+        "These are the readiness results you acknowledged when you finished "
+        "setup. No checks were rerun."
+    ) in normalized
     assert "first decision surface rather than rendering the durable completion snapshot" in (
         normalized
     )
@@ -1744,6 +1751,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⛔ Action required**",
         "**⛔ Manual confirmation required**",
         "**✅ Ready — manually confirmed**",
+        "**✅ Ready — manually overridden**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
@@ -1787,7 +1795,16 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "do not assume production" in normalized
     assert '--ring "{CONFIRMED_RING}"' in text
     assert "--manual-attested" in text
-    assert "never overrides a known zero allocation" in normalized
+    assert "--manual-overridden" in text
+    assert "requires an observed allocation greater than zero" in normalized
+    assert "the recheck still found 0 allocated credits" in normalized
+    assert "Never treat the maker's statement that capacity was allocated as verification" in normalized
+    assert "Continue with manual override" in text
+    assert "The final readiness table remains available" in normalized
+    assert "manual override is allowed only for a successful check that found zero" in normalized
+    assert "Agent content is present in your local workspace." in text
+    assert "Finish setup** acknowledges these results and closes setup" in normalized
+    assert "It does not run the checks again." in text
     assert "When it is false after materialization" in normalized
     assert (
         "local authoring is ready while the setup-owned prerequisites remain"

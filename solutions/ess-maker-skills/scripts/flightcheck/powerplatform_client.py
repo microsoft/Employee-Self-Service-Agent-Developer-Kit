@@ -267,7 +267,18 @@ class PowerPlatformClient:
             params={"api-version": API_VERSION}, timeout=60,
         )
         if resp.status_code in (401, 403):
-            return {"_error": "insufficient_permissions", "_status": resp.status_code}
+            request_id = (
+                resp.headers.get("x-ms-request-id")
+                or resp.headers.get("request-id")
+                or resp.headers.get("x-ms-correlation-request-id")
+            )
+            result = {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+            if request_id:
+                result["_request_id"] = request_id
+            return result
         if resp.status_code == 404:
             return []
         resp.raise_for_status()
