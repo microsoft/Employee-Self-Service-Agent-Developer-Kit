@@ -14,11 +14,23 @@ Workspace-level evaluation updates and review-tag workflows do not. Apply the
 setup gate only after the user chooses a topic or workflow, or when an
 evaluation operation needs a configured agent for push.
 
-Continue with local authoring but skip every instruction to push, publish, or
+For **topic and workflow updates only**, continue with local authoring but skip
+every instruction to push, publish, or
 run server-backed validation. Finish by stating that the local files were
 saved and DA-GA deployment is not yet available in this release. Do not offer
 `/test` as validation of the local change because `/test` can exercise only
 the unchanged deployed version.
+
+This restriction does not apply to evaluation operations. Evaluation edit/add,
+Request Review, Run, reviewer completion, and explicit evaluation push follow
+`src/skills/evaluations/experience-contract.md` and
+`src/skills/evaluations/deployment-flow.md`. Run and Request Review include their
+required scoped deployment without a separate push command. Keep the existing
+APIs: Dataverse push persists review metadata; new/changed native YAML creates a
+new copy while retaining the old remote copy and local review sidecar.
+Unchanged YAML, including review-only changes, uses verified reuse. Show
+that behavior before consent and report the native shared-review limitation,
+not a new API-parity blocker or a false reviewer-availability claim.
 
 **IMPORTANT: When the user just types `/update` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to update first.**
@@ -27,7 +39,8 @@ NOT silently route anywhere. Ask the user what they want to update first.**
 
 When `/update` includes additional text, explicit component intent always wins:
 
-1. If the user explicitly asks to update an **evaluation** or **test set**,
+1. If the user explicitly asks to update an **evaluation**, **test set**, or
+   **add test cases**,
    route to `src/skills/evaluations/update/SKILL.md`.
 2. If the user explicitly asks to update a **workflow**, route to
    `src/skills/workflows/update/SKILL.md`.
@@ -60,7 +73,10 @@ When `/update` includes additional text, explicit component intent always wins:
      `src/skills/workflows/update/SKILL.md` and follow its instructions.
    - **evaluation**
      -> Read `src/skills/evaluations/update/SKILL.md` and follow its
-     instructions.
+     instructions. Preserve exact selected context and visibly offer edit/add.
+   - **mark/send evaluation sets for review**
+     -> Read `src/skills/evaluations/update/SKILL.md` Flow R1. Do not stop at
+     a local tag or ask for a separate push command.
    - **review evaluation test sets** / **review testsets**
      -> Read `src/skills/evaluations/review/SKILL.md` and follow it. Do not
      invoke quality validation before listing `review_requested` sets and

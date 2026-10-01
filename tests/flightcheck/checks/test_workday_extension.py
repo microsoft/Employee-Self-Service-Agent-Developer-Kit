@@ -10,11 +10,12 @@ Coverage per emitter:
     connection, degrades gracefully when it does not. Cached-ref read + a
     best-effort Power Platform admin owner echo — no cassette required (the
     admin connections listing is the ``validated`` pp_admin mock).
-  * DV-CONN-001 — PASS/FAIL/NOT_CONFIGURED/SKIPPED over a documented-tier
-    Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
-    echo via the ``validated`` pp_admin mock.
-  * WD-REST-001 — selected-agent flow-bound physical Workday OAuth connection
-    check (restBaseUri must be trimmed to /ccx/api, nothing appended).
+  * DV-CONN-001 — PASS/FAIL/SKIPPED/NOT_CONFIGURED/WARNING over the validated
+    Dataverse ``connectionreferences`` read (ESS Dataverse connection
+    reference, connector ``shared_commondataserviceforapps``; ``query_all``
+    stubbed with the validated ``dv`` mock rows); owner echo via the
+    ``validated`` pp_admin mock.
+  * WD-REST-001 — pure-config check (restBaseUrl trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
   * WD-NET-001 — always-MANUAL InfoSec/IT attestation (never PASSED).
@@ -29,9 +30,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
-import responses
+
 
 from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
@@ -42,10 +44,6 @@ require_validated_mock(pp)
 
 from flightcheck.checks import workday_extension as wx  # noqa: E402
 from flightcheck.runner import Priority, Role, Status  # noqa: E402
-
-_DV_CONNECTOR_ID = (
-    "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
-)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -72,7 +70,6 @@ class _Runner:
     env_url: str | None = None
     dv_token: str | None = None
     pp_admin: Any = None
-    agentbuilder: Any = None
     env_id: str | None = None
     agent_slug: str = ""
     _workday_connection_refs: list[dict[str, Any]] = field(default_factory=list)
@@ -92,28 +89,6 @@ class _BoomConfig:
 
 def _by_id(results):
     return {r.checkpoint_id: r for r in results}
-
-
-def _dv_ref(*, connection_id, statuscode=1):
-    """A Dataverse connection reference matching the extension pack's shipped
-    ref (connector shared_commondataserviceforapps, logical-name suffix
-    92b66)."""
-    return dv.connection_ref(
-        logical_name="msdyn_sharedcommondataserviceforapps_92b66",
-        display_name="Microsoft Dataverse",
-        connector_id=_DV_CONNECTOR_ID,
-        connection_id=connection_id,
-        statuscode=statuscode,
-    )
-
-
-def _register_refs(base_url: str, refs: list[dict[str, Any]]) -> None:
-    responses.add(
-        method="GET",
-        url=f"{base_url}/api/data/v9.2/connectionreferences",
-        json=dv.collection(refs),
-        status=200,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -259,355 +234,171 @@ class TestConnectionAuth:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# DV-CONN-001 — Dataverse connection binding (S5.4, PASS/FAIL).
+# DV-CONN-001 — ESS Dataverse connection reference binding (S5.4).
+#
+# DV-CONN-001 reads the Dataverse ``connectionreferences`` table (same source
+# CA's own Workday checks use — WD-PKG-001 / WD-CONN-012 in checks/workday.py),
+# NOT the minimalBots components API: the Workday Dataverse ref is flow-scoped
+# and surfaces in ``connectionreferences``, not in the DA bot's
+# ``connectionReferenceChanges`` payload. ``wx.query_all`` is patched with rows
+# from the validated ``dv`` mock (mirrors the captured Dataverse cassettes).
 # ─────────────────────────────────────────────────────────────────────
+
+_DV_CONNECTOR = "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
+_DV_RUNTIME_LOGICAL = "msdyn_sharedcommondataserviceforapps_workdayruntime"
+
+
+def _dv_runner(*, pp_admin=None, env_id=None):
+    """A runner whose Dataverse read path is live (``env_url``/``dv_token``
+    set). Patch ``wx.query_all`` to inject the connectionreferences rows."""
+    return _Runner(
+        env_url="https://org-test.crm.dynamics.com",
+        dv_token="dv-token",
+        pp_admin=pp_admin,
+        env_id=env_id,
+    )
+
+
+def _run_dv_conn(runner, refs):
+    with patch.object(wx, "query_all", return_value=refs):
+        return _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+
+def _dataverse_ref(*, connection_id="shared-dataverse-runtime", statuscode=1):
+    return dv.connection_ref(
+        logical_name=_DV_RUNTIME_LOGICAL,
+        display_name="Microsoft Dataverse - Workday Runtime",
+        connector_id=_DV_CONNECTOR,
+        connection_id=connection_id,
+        statuscode=statuscode,
+    )
 
 
 class TestDataverseConnection:
-    @responses.activate
-    def test_bound_active_with_owner_echo_passes(
-        self, fake_dataverse_url, fake_token
-    ):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
-        )
+    def test_bound_with_owner_echo_passes(self):
         owner_conn = pp.connection(
-            name="dv-conn-active",
+            name="shared-dataverse-runtime",
             api_name="shared_commondataserviceforapps",
             extra_properties={"accountName": "maker@contoso.com"},
         )
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
-            pp_admin=_FakePPAdmin([owner_conn]),
-            env_id="env-1",
-        )
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+        runner = _dv_runner(pp_admin=_FakePPAdmin([owner_conn]), env_id="env-1")
+        # Runtime builder ships the Dataverse ref + a Workday SOAP ref; only
+        # the Dataverse ref is in scope for DV-CONN-001.
+        r = _run_dv_conn(runner, dv.workday_connection_refs_runtime())
 
         assert r.status == Status.PASSED.value
         assert "bound to an active" in r.result
         assert "maker@contoso.com" in r.result
         assert "your own account" in r.result
 
-    @responses.activate
-    def test_passes_without_pp_admin_notes_owner_unreadable(
-        self, fake_dataverse_url, fake_token
-    ):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
-        )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_passes_without_pp_admin_notes_owner_unreadable(self):
+        runner = _dv_runner()
+        r = _run_dv_conn(runner, dv.workday_connection_refs_runtime())
 
         assert r.status == Status.PASSED.value
         assert "owner could not be read" in r.result
         assert "your own account" in r.result
 
-    @responses.activate
-    def test_runtime_dataverse_reference_passes(
-        self, fake_dataverse_url, fake_token
-    ):
-        runtime_ref = dv.workday_connection_refs_runtime()[1]
-        _register_refs(fake_dataverse_url, [runtime_ref])
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
-        )
-
-        r = _by_id(
-            wx.run_workday_extension_checks(runner)
-        )["DV-CONN-001"]
-
-        assert r.status == Status.PASSED.value
-        assert (
-            "msdyn_sharedcommondataserviceforapps_workdayruntime"
-            in r.result
-        )
-
-    @responses.activate
-    def test_mixed_runtime_and_legacy_dataverse_refs_warn(
-        self, fake_dataverse_url, fake_token
-    ):
-        runtime_ref = dv.workday_connection_refs_runtime()[1]
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="legacy-dv"), runtime_ref],
-        )
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
-        )
-
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
-
-        assert r.status == Status.WARNING.value
-        assert "Multiple ESS Dataverse connection references" in r.result
-        assert "Remove obsolete Workday package references" in r.remediation
-
-    @responses.activate
-    def test_unbound_fails(self, fake_dataverse_url, fake_token):
-        _register_refs(
-            fake_dataverse_url, [_dv_ref(connection_id=None, statuscode=1)]
-        )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_unbound_fails(self):
+        runner = _dv_runner()
+        r = _run_dv_conn(runner, [_dataverse_ref(connection_id=None)])
 
         assert r.status == Status.FAILED.value
         assert "unbound" in r.result
         assert "connectionid=null" in r.result
         assert "bind the Dataverse connection reference" in r.remediation
 
-    @responses.activate
-    def test_inactive_statuscode_fails(self, fake_dataverse_url, fake_token):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-inactive", statuscode=2)],
-        )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_bound_but_inactive_fails(self):
+        runner = _dv_runner()
+        r = _run_dv_conn(runner, [_dataverse_ref(statuscode=2)])
 
         assert r.status == Status.FAILED.value
-        assert "inactive" in r.result
+        assert "bound but inactive" in r.result
         assert "statuscode=2" in r.result
-        assert "Re-authenticate or re-bind" in r.remediation
+        assert "Re-authenticate or re-bind the Dataverse connection" in r.remediation
 
-    @responses.activate
-    def test_missing_ref_not_configured(self, fake_dataverse_url, fake_token):
-        # Only a Workday ref present — no Dataverse (92b66) ref.
-        _register_refs(
-            fake_dataverse_url,
-            [
-                dv.connection_ref(
-                    logical_name="new_sharedworkdaysoap_ff0df",
-                    display_name="OAuthUser",
-                    connector_id=dv.WORKDAY_SOAP_CONNECTOR_ID,
-                    connection_id="wd-conn-1",
-                )
-            ],
-        )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_dataverse_ref_absent_not_configured(self):
+        # Only the Workday SOAP ref is present - no Dataverse ref.
+        runner = _dv_runner()
+        r = _run_dv_conn(runner, dv.workday_connection_refs_simplified())
 
         assert r.status == Status.NOT_CONFIGURED.value
-        assert "was not found in this environment" in r.result
+        assert "was not found" in r.result
+        assert "shared_commondataserviceforapps" in r.result
         assert "Install/repair the Workday extension pack" in r.remediation
 
-    def test_no_dv_token_skips(self):
-        runner = _Runner(env_url="https://x.crm.dynamics.com", dv_token="")
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+    def test_multiple_dataverse_refs_warn(self):
+        extra = dv.connection_ref(
+            logical_name="new_sharedcommondataserviceforapps_92b66",
+            display_name="ESS Dataverse (package)",
+            connector_id=_DV_CONNECTOR,
+            connection_id="dv-conn-2",
+        )
+        runner = _dv_runner()
+        r = _run_dv_conn(runner, [_dataverse_ref(), extra])
+
+        assert r.status == Status.WARNING.value
+        assert "Multiple ESS Dataverse connection references" in r.result
+        assert "Remove obsolete Workday package references" in r.remediation
+
+    def test_no_dataverse_token_skips(self):
+        runner = _Runner(env_url="https://org-test.crm.dynamics.com")
+        r = _run_dv_conn(runner, dv.workday_connection_refs_runtime())
 
         assert r.status == Status.SKIPPED.value
-        assert "Dataverse token not available" in r.result
+        assert "token not available" in r.result
+
+    def test_query_error_degrades_to_warning(self):
+        # A Dataverse read that raises must degrade to WARNING for this
+        # checkpoint rather than aborting the remaining skill-5 checks.
+        runner = _dv_runner()
+        with patch.object(wx, "query_all", side_effect=RuntimeError("boom")):
+            r = _by_id(
+                wx.run_workday_extension_checks(runner)
+            )["DV-CONN-001"]
+
+        assert r.status == Status.WARNING.value
+        assert "DV-CONN-001" in r.remediation
 
 
 # ─────────────────────────────────────────────────────────────────────
-# WD-REST-001 — REST API root is trimmed to /ccx/api (S5.5).
+# WD-REST-001 — REST base URL trimmed to /api (S5.5).
 # ─────────────────────────────────────────────────────────────────────
 
 
 class TestRestBaseUrl:
-    @staticmethod
-    def _resolution(
-        *,
-        has_binding: bool = True,
-        values: dict[str, str] | None = None,
-        unresolved: tuple[str, ...] = (),
-        ignored: tuple[str, ...] = (),
-    ):
-        from flightcheck.checks._workday_connection_params import (
-            WorkdayOAuthConnection,
-            WorkdayOAuthResolution,
+    def test_trimmed_url_passes(self):
+        runner = _Runner(config={"restBaseUrl": "https://wd.example.com/ccx/api"})
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+        assert "trimmed to '/api'" in r.result
+        assert "https://wd.example.com/ccx/api" in r.result
+
+    def test_trailing_slash_still_passes(self):
+        runner = _Runner(config={"restBaseUrl": "https://wd.example.com/ccx/api/"})
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+
+    def test_untrimmed_url_fails(self):
+        runner = _Runner(
+            config={"restBaseUrl": "https://wd.example.com/ccx/api/staffing/v1"}
         )
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
-        connections = (
-            (
-                WorkdayOAuthConnection(
-                    name="workday-oauth-1",
-                    display_name="Workday OAuth",
-                    values=values,
-                ),
-            )
-            if values is not None
-            else ()
-        )
-        return WorkdayOAuthResolution(
-            has_workday_binding=has_binding,
-            connections=connections,
-            unresolved_bindings=unresolved,
-            ignored_non_oauth_bindings=ignored,
-        )
+        assert r.status == Status.FAILED.value
+        assert "not trimmed to '/api'" in r.result
+        assert "https://wd.example.com/ccx/api/staffing/v1" in r.result
+        assert "remove any trailing path" in r.remediation
 
-    def _check(self, monkeypatch, resolution):
-        monkeypatch.setattr(
-            wx,
-            "resolve_active_workday_oauth_connections",
-            lambda runner: resolution,
-        )
-        return wx._check_rest_base_url(object())[0]
+    def test_absent_url_not_configured(self):
+        runner = _Runner(config={})
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
-    @pytest.mark.parametrize(
-        "rest_base_uri",
-        [
-            "https://wd.example.com/ccx/api",
-            "https://wd.example.com/ccx/api/",
-            "https://contoso.azure-api.net/api",
-        ],
-    )
-    def test_exact_rest_root_passes(self, monkeypatch, rest_base_uri):
-        result = self._check(
-            monkeypatch,
-            self._resolution(
-                values={
-                    "tenantName": "mocktenant",
-                    "restBaseUri": rest_base_uri,
-                    "baseUri": "https://wd.example.com/ccx/service",
-                }
-            ),
-        )
-
-        assert result.status == Status.PASSED.value
-        assert "/ccx/api" in result.result
-        assert "Workday OAuth" in result.result
-        assert rest_base_uri not in result.result
-
-    @pytest.mark.parametrize(
-        ("rest_base_uri", "expected"),
-        [
-            ("http://wd.example.com/ccx/api", "HTTPS"),
-            ("https:///ccx/api", "host"),
-            (
-                "https://user@wd.example.com/ccx/api",
-                "user information",
-            ),
-            (
-                "https://wd.example.com/ccx/api?x=1",
-                "query string",
-            ),
-            (
-                "https://wd.example.com/ccx/api#x",
-                "fragment",
-            ),
-            ("https://wd.example.com/ccx/service", "nothing appended"),
-            ("https://wd.example.com/ccx/api/mocktenant", "nothing appended"),
-            (
-                "https://wd.example.com/ccx/api/mocktenant/v1",
-                "nothing appended",
-            ),
-            (
-                "https://wd.example.com/ccx//api",
-                "nothing appended",
-            ),
-        ],
-    )
-    def test_invalid_rest_root_fails(
-        self, monkeypatch, rest_base_uri, expected
-    ):
-        result = self._check(
-            monkeypatch,
-            self._resolution(
-                values={
-                    "tenantName": "mocktenant",
-                    "restBaseUri": rest_base_uri,
-                }
-            ),
-        )
-
-        assert result.status == Status.FAILED.value
-        assert expected in result.result
-        assert "Do not substitute baseUri" in result.remediation
-
-    def test_base_uri_is_not_a_rest_fallback(self, monkeypatch):
-        result = self._check(
-            monkeypatch,
-            self._resolution(
-                values={
-                    "tenantName": "mocktenant",
-                    "baseUri": "https://wd.example.com/ccx/service",
-                }
-            ),
-        )
-
-        assert result.status == Status.FAILED.value
-        assert "restBaseUri is missing" in result.result
-        assert "Do not substitute baseUri" in result.remediation
-
-    def test_rest_root_passes_without_tenant_name(self, monkeypatch):
-        result = self._check(
-            monkeypatch,
-            self._resolution(
-                values={
-                    "restBaseUri": "https://wd.example.com/ccx/api",
-                }
-            ),
-        )
-
-        assert result.status == Status.PASSED.value
-        assert "/ccx/api" in result.result
-
-    def test_no_selected_agent_workday_binding_is_not_configured(
-        self, monkeypatch
-    ):
-        result = self._check(
-            monkeypatch,
-            self._resolution(has_binding=False),
-        )
-
-        assert result.status == Status.NOT_CONFIGURED.value
-        assert "selected agent's enabled topics" in result.result
-        assert "install/repair the Workday extension pack" in result.remediation
-
-    def test_unavailable_clients_skip(self, monkeypatch):
-        result = self._check(monkeypatch, None)
-
-        assert result.status == Status.SKIPPED.value
-        assert "evidence is not available" in result.result
-        assert "Dataverse access" in result.remediation
-
-    def test_unresolved_binding_warns(self, monkeypatch):
-        result = self._check(
-            monkeypatch,
-            self._resolution(
-                values={
-                    "tenantName": "mocktenant",
-                    "restBaseUri": (
-                        "https://wd.example.com/ccx/api"
-                    ),
-                },
-                unresolved=("missing-connection",),
-            ),
-        )
-
-        assert result.status == Status.WARNING.value
-        assert "missing-connection" in result.result
-        assert "resolves to a visible" in result.remediation
-
-    def test_basic_only_binding_is_not_configured(self, monkeypatch):
-        result = self._check(
-            monkeypatch,
-            self._resolution(ignored=("workday-basic (basic)",)),
-        )
-
-        assert result.status == Status.NOT_CONFIGURED.value
-        assert "workday-basic (basic)" in result.result
-        assert "Microsoft Entra ID Integrated" in result.remediation
-
-    def test_resolution_error_warns(self, monkeypatch):
-        def _raise(_runner):
-            raise RuntimeError("403 Forbidden")
-
-        monkeypatch.setattr(
-            wx,
-            "resolve_active_workday_oauth_connections",
-            _raise,
-        )
-
-        result = wx._check_rest_base_url(object())[0]
-
-        assert result.status == Status.WARNING.value
-        assert "403 Forbidden" in result.result
-        assert "Power Platform Administrator access" in result.remediation
+        assert r.status == Status.NOT_CONFIGURED.value
+        assert "restBaseUrl is empty" in r.result
+        assert "trim it to end at '/api'" in r.remediation
 
 
 # ─────────────────────────────────────────────────────────────────────

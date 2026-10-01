@@ -88,8 +88,7 @@ class TestResolve:
         assert registry.resolve("WD-CONN-003").key == "WD-CONN"
         assert registry.resolve("WD-FLOW-002").key == "WD-FLOW"
         assert registry.resolve("WD-WF-007").key == "WD-WF"
-        assert registry.resolve("WD-ENV-001").key == "WD-ENV-001"
-        assert registry.resolve("WD-ENV-002").key == "WD-ENV"
+        assert registry.resolve("WD-ENV-001").key == "WD-ENV"
 
     def test_wildcard_family_request_resolves(self):
         assert registry.resolve("WD-FLOW-*").key == "WD-FLOW"
@@ -201,6 +200,21 @@ class TestTransitiveRequirements:
         assert plan.requires_config is False
         assert len(plan.ordered_fns) == 1
 
+    def test_env_004_resolves_to_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ENV-004")
+        assert spec is not None and spec.key == "ENV-004"
+        assert spec.category_label == "Environment"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        # ENV-004 was re-pointed off the Dataverse connectionreference table to
+        # the Declarative Agent minimalBots components API, so it must not
+        # require a Dataverse endpoint, and its detail rows must not resolve.
+        plan = registry.transitive_requirements("ENV-004")
+        assert registry.AGENTBUILDER in plan.clients
+        assert plan.requires_dataverse_endpoint is False
+        assert plan.requires_config is True
+        assert registry.resolve("ENV-004-GRS") is None
+        assert registry.resolve("ENV-004-UR-001") is None
+
     def test_native_agent_checkpoints_use_only_native_read_clients(self):
         access = registry.transitive_requirements("DA-AGENT-001")
         assert access.clients == frozenset({registry.AGENTBUILDER})
@@ -220,6 +234,17 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_ess_soln_uses_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ESS-SOLN-001")
+        assert spec is not None and spec.key == "ESS-SOLN-001"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.requires_dataverse_endpoint is False
+
+        plan = registry.transitive_requirements("ESS-SOLN-001")
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
+        assert plan.requires_config is True
+        assert plan.requires_dataverse_endpoint is False
+
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
         assert spec is not None and spec.key == "ENV-009"
@@ -229,24 +254,19 @@ class TestTransitiveRequirements:
         assert plan.requires_dataverse_endpoint is True
         assert len(plan.ordered_fns) == 1
 
-    def test_ess_soln_001_resolves_and_pulls_env_prereqs(self):
+    def test_ess_soln_001_resolves_to_agentbuilder_configure_read(self):
         spec = registry.resolve("ESS-SOLN-001")
         assert spec is not None and spec.key == "ESS-SOLN-001"
         assert spec.category_label == "Solution"
         assert spec.category_fn is run_solution_checks
-        # Solution presence is a pure Dataverse read.
-        assert spec.clients == frozenset({registry.DATAVERSE})
-        assert spec.prereqs == ("ENV-002",)
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.prereqs == ()
         plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert registry.DATAVERSE in plan.clients
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.requires_config is True
-        assert plan.requires_dataverse_endpoint is True
-        # Own fn (run_solution_checks) plus the shared run_environment_checks
-        # that ENV-001+ENV-002 pull in -> exactly two, environment first.
+        assert plan.requires_dataverse_endpoint is False
         fns = [fn for _label, fn in plan.ordered_fns]
-        assert run_solution_checks in fns
-        assert len(fns) == 2
-        assert fns.index(run_solution_checks) == len(fns) - 1
+        assert fns == [run_solution_checks]
 
 
 class TestListCheckpoints:
@@ -307,8 +327,7 @@ class TestWorkdayExtensionCheckpoints:
     """skill-5 mints five checkpoints, all sharing
     checks/workday_extension.run_workday_extension_checks, category
     "Workday Extension". Two are always-MANUAL echoes/attestations, three are
-    programmatic (one Dataverse read, one minimalBots components read, one
-    pure-local)."""
+    programmatic (one minimalBots components read + two pure-local)."""
 
     _ALL = (
         "WD-CONN-AUTH-001",
@@ -345,13 +364,6 @@ class TestWorkdayExtensionCheckpoints:
 
     def test_dv_conn_spec_declares_dataverse_and_pp_admin(self):
         spec = registry.resolve("DV-CONN-001")
-        assert spec.clients == frozenset({registry.DATAVERSE, registry.PP_ADMIN})
-        assert spec.requires_dataverse_endpoint is True
-        assert spec.prereqs == ()
-        assert Role.ESS_MAKER.value in spec.roles
-
-    def test_rest_and_local_check_client_requirements(self):
-        spec = registry.resolve("WD-REST-001")
         assert spec.clients == frozenset(
             {registry.DATAVERSE, registry.PP_ADMIN}
         )
@@ -359,22 +371,13 @@ class TestWorkdayExtensionCheckpoints:
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 
-        for cp in ("WD-REST-002",):
+    def test_rest_and_local_checks_are_clientless(self):
+        for cp in ("WD-REST-001", "WD-REST-002"):
             spec = registry.resolve(cp)
             assert spec.clients == frozenset()
             assert spec.requires_dataverse_endpoint is False
             assert spec.prereqs == ()
             assert Role.ESS_MAKER.value in spec.roles
-
-    def test_wd_env_001_declares_dataverse_and_pp_admin(self):
-        spec = registry.resolve("WD-ENV-001")
-        assert spec.key == "WD-ENV-001"
-        assert spec.clients == frozenset(
-            {registry.DATAVERSE, registry.PP_ADMIN}
-        )
-        assert spec.requires_dataverse_endpoint is True
-        assert spec.prereqs == ()
-        assert Role.ESS_MAKER.value in spec.roles
 
     def test_net_check_is_clientless_and_ppadmin_gated(self):
         spec = registry.resolve("WD-NET-001")

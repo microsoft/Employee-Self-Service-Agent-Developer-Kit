@@ -11,7 +11,13 @@ testsets", "show test sets tagged for review", or "I am the reviewer." Those
 requests must first use `src/skills/evaluations/review/SKILL.md` to list
 `review_requested` sets and obtain a user selection. This validator is invoked
 only when quality validation is explicitly requested or when an evaluation
-create/update/review flow calls it after editing cases.
+create/update flow calls it after editing cases. Human/SME review alone does
+not invoke quality scoring.
+
+Read `src/skills/evaluations/experience-contract.md`. Its
+**Post-generation quality report** is the sole maker-facing presentation
+contract. Do not emit a progress message or separate preamble before it.
+This is a review of authored prompts/assertions, not tenant runtime execution.
 
 ---
 
@@ -46,9 +52,12 @@ skip Step 2 and go straight to Step 3.
   file can introduce new redundancy, shift utterance-type balance, or create
   coverage gaps with unedited files.
 
-At the top of your report, indicate which path was used:
-- Script succeeded: `📊 Scored using evaluate_evals.py (Copilot API)`
-- Script failed, fall back: `⚠️ Automated scoring failed ({reason}) — scored manually`
+Keep whether the script or fallback path was used in the returned internal
+evidence. Do not add a scoring-method banner to the maker-facing scorecard.
+When automated scoring fails, report the actual failure to the parent as
+operational evidence before returning a manually scored result. Record that
+internal status as `⚠️ Automated scoring failed ({reason}) — scored manually`;
+do not render it as a scorecard banner.
 
 The script automatically skips `MultiTurnEvaluationCase` files — no action
 needed.
@@ -132,38 +141,23 @@ Each case matches what its corresponding topic actually does.
 
 ## Step 3 — Present the quality report
 
-For each scored category, show this exact table format:
+Render **Post-generation quality report** from
+`src/skills/evaluations/experience-contract.md` exactly. The visible scorecard
+always uses these eight labels and this order: Validity, Realism, Assertion
+Quality, Coverage, Diversity, Redundancy, Failure Modes, Discriminative. Map
+the rubric's `Failure Mode Coverage` and `Discriminative Power` results to the
+two shortened display labels. Topic Alignment remains internal supporting
+evidence when applicable; it does not add a ninth scorecard line.
 
-> **Quality: `{category}`** — overall **{score}/5** ({label})
->
-> **How is this scored?** Each of your test cases is reviewed against 8–9
-> dimensions and assigned a 1–5 score. The overall score is a holistic
-> judgment across all dimensions.
->
-> | Dimension | Score | What it checks |
-> |-----------|-------|----------------|
-> | Validity | {n}/5 | Inputs are grammatically correct and plausible as real user utterances |
-> | Realism | {n}/5 | Inputs sound like things real employees would say, not formal policy language |
-> | Assertion Quality | {n}/5 | Expected outputs are specific and describe observable agent behavior |
-> | Coverage | {n}/5 | Cases span a meaningful spread of sub-topics and positive/boundary/negative types |
-> | Diversity | {n}/5 | Inputs use genuinely different vocabulary, structure, and formality levels |
-> | Redundancy | {n}/5 | No two cases test the exact same input and expected behavior |
-> | Failure Mode Coverage | {n}/5 | Negative/edge cases reflect realistic failure modes, not contrived refusals |
-> | Discriminative Power | {n}/5 | Inputs are clearly scoped so they won't accidentally trigger the wrong topic |
-> | Topic Alignment | {n}/5 | Each case matches what its corresponding topic actually does |
+The parent already displayed the generated prompts and expected responses.
+Never repeat those case tables, rebuild them, quote them beneath findings, or
+create a new table during quality validation. Return only the compact scorecard;
+detailed case evidence remains internal unless the maker enters the fix flow.
 
-Include the Topic Alignment row **only** for `topic-triggering` and
-`integration-data` categories. Omit the row entirely for all other categories —
-do not show it as N/A or blank.
-
-Score labels: 5 = ✓ Excellent, 4 = ✓ Good, 3 = ⚠ Fair, 2 = ✗ Weak, 1 = ✗ Poor
-
-For any dimension that scored **3/5 or below**, list the specific test cases
-that contributed to the low score directly under that row:
-
-> ⚠️ **`{dimension}`** scored **{n}/5** — test cases that caused this:
-> - `{filename}.mcs.yml` — {issue description}
-> - `{filename}.mcs.yml` — {issue description}
+Derive positive, boundary, and negative counts by classifying each actual case,
+not from filenames. Retain flagged filenames, issues, recommendations, optional
+Topic Alignment, and automated/manual evidence in the result returned to the
+parent, but do not append them to the compact maker-facing scorecard.
 
 ---
 
@@ -175,40 +169,31 @@ Classify each category:
   dimension scored **3/5 or below**, surface those dimensions and flagged
   cases, then add:
 
-  > No fix required to push — but consider addressing before running live evaluations.
+  > No quality fix is required by this gate, but consider addressing these
+  > findings before running in Copilot Studio. Method/deployment checks still apply.
 
 - **Review** (overall 3/5) — has flagged cases, surface them to the user.
 - **Fail** (overall 1/5 or 2/5) — serious quality issues, do not push without fixes.
 
-If all categories **Pass** with no low-scoring dimensions, say:
+If all categories **Pass**, the compact scorecard and its optional-improvement
+lines are the complete maker-facing quality result. Do not append a second pass
+statement.
 
-> ✅ All categories passed quality validation. Proceeding to review.
-
-If all pass but some dimensions scored 3/5 or below, say:
-
-> ✅ Quality gate passed. Some dimensions scored low — see details above.
-
-If any category is **Review** or **Fail**, show:
-
-> ⚠️ **`{category}`** scored **{score}/5** ({label}).
->
-> These test cases were flagged:
->
-> | # | File | Dimension | Issue |
-> |---|------|-----------|-------|
-> | 1 | `{filename}.mcs.yml` | {dimension} | {issue description} |
-> | 2 | `{filename}.mcs.yml` | {dimension} | {issue description} |
->
-> **Recommendation:** {recommendation}
->
-> Return this report to the parent agent. The parent create/update flow will
-> prompt the user for A/B/C and apply fixes in batch before re-validating.
+If any category is **Review** or **Fail**, return the detailed flagged-case
+evidence to the parent for the A/B/C fix interaction, but keep the scorecard
+itself in the exact compact format. The parent may use case numbers during that
+fix interaction; it must not rewrite the scorecard as a table.
 
 ---
 
 ## Step 5 — Return to parent
 
 Return the quality report to the parent agent. The parent will handle
-user interaction, fixes, and re-validation.
+user interaction, fixes, and re-validation, then offer the shared four maker
+actions. Do not show a competing menu or automatically push, request human
+review, or run an evaluation. An explicit repeat quality review returns to
+those choices, not another automatic review.
 
-This is a gate, not a hard blocker — the user can always choose to push as-is.
+The user may continue as-is through the existing quality fix/continue flow.
+That choice does not bypass method admission, missing-content errors,
+deployment consent, connection selection, or review-state gates.

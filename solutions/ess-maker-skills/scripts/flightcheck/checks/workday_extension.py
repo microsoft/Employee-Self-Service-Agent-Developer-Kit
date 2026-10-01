@@ -21,19 +21,20 @@ via ``--checkpoint``:
     checkpoint echoes the observed ``connectionParametersSet.name`` for the
     operator to confirm, rather than PASS/FAIL on a guessed value.
   * ``DV-CONN-001`` (S5.4) — the Dataverse connection reference the extension
-    pack ships (``…_92b66``, connector ``shared_commondataserviceforapps``) is
-    bound to an **active** connection, and its owner is echoed so the operator
-    can confirm it is their **own** account. Programmatic PASS/FAIL on a
-    documented-tier Dataverse ``connectionreferences`` read.
-  * ``WD-REST-001`` (S5.5) — every OAuth Workday connection used by the
-    selected agent has a ``restBaseUri`` trimmed so it ends exactly at
-    ``/ccx/api`` (or ``/api`` for hosts that omit ``/ccx``), with nothing
-    appended. Evidence comes from enabled topics, per-flow
-    detail, and the bound physical Power Platform connection.
-  * ``WD-REST-002`` (S5.7) — the agent's ``user-context-setup.mcs.yml`` topic
-    contains a ``BeginDialog`` redirect to the Workday user-context system topic
-    (``WorkdaySystemGetUserContextV2`` on the simplified pack). Pure local-file
-    check; SKIPPED on the legacy install path.
+    pack ships (connector ``shared_commondataserviceforapps``, consumed by the
+    ESSDAHRWorkday flow) is present, bound (``connectionid`` populated), and
+    active (``statuscode == 1``), and its owner is echoed so the operator can
+    confirm it is their **own** account. Programmatic PASS/FAIL on a documented
+    Dataverse ``connectionreferences`` Web API read — the same binding source
+    CA's own Workday checks use (WD-PKG-001 / WD-CONN-012 in
+    ``checks/workday.py``), not the minimalBots components API (the Workday
+    Dataverse ref is flow-scoped and does not surface in the DA bot
+    ``connectionReferenceChanges`` payload).
+  * ``WD-REST-001`` (S5.5) — the captured ``restBaseUrl`` is present and
+    **trimmed to** ``/api``. Pure-config check, no client.
+  * ``WD-REST-002`` (S5.7) — the agent's mapped admin user-context topic
+    contains a ``BeginDialog`` redirect to the mapped Workday user-context
+    system topic. Pure local-file check; SKIPPED on the legacy install path.
   * ``WD-NET-001`` (S5.8) — the Workday REST + SOAP endpoints are allowlisted at
     the corporate firewall. **Always MANUAL attestation:** the kit has no
     reliable probe (a local reachability test proves only the dev machine's
@@ -45,12 +46,10 @@ Design invariants (per ``scripts/flightcheck/AGENTS.md``):
     failure degrades to a WARNING for that checkpoint instead of aborting the
     whole run.
   * **One CheckResult per checkpoint** (principle 7).
-  * **No guessed API shapes** — the API-backed checks read documented or
-    validated fields only (Dataverse ``connectionid`` / ``statuscode`` for
-    DV-CONN-001; Power Automate ``connectionReferences.connectionName`` plus
-    PowerApps ``connectionParametersSet.values`` for WD-REST-001; BAP
-    ``connectionParametersSet.name`` / ``createdBy``), and degrade gracefully
-    when a client is unavailable.
+  * **No guessed API shapes** — the API-backed checks read documented fields
+    only (Dataverse ``connectionreferences`` connector/connection ids and
+    ``statuscode``; BAP ``connectionParametersSet.name`` / ``createdBy``), and
+    degrade gracefully when a client or token is unavailable.
   * **Every** ``CheckResult`` declares ``roles=`` (enforced by
     ``tests/flightcheck/test_check_roles.py``).
 """
@@ -62,15 +61,11 @@ import os
 import re
 import sys
 from pathlib import Path, PureWindowsPath
-from urllib.parse import unquote, urlsplit
 
 import yaml
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
-from ._workday_connection_params import (
-    resolve_active_workday_oauth_connections,
-)
 
 # scripts/auth.py is on sys.path via cli.py at runtime (tests add it too); this
 # mirrors checks/environment.py's top-level import so query_all is patchable as
@@ -104,7 +99,8 @@ _WORKDAY_AUTH_REF_SUFFIX = "ff0df"
 _WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
     "msdyn_sharedworkdaysoap_workdayruntime"
 )
-# The Dataverse connection reference the simplified pack ships.
+# The Dataverse connection reference the simplified pack ships (connector
+# ``shared_commondataserviceforapps``), consumed by the ESSDAHRWorkday flow.
 _DATAVERSE_CONNECTOR_SUFFIX = "/apis/shared_commondataserviceforapps"
 _DATAVERSE_REF_SUFFIX = "92b66"
 _DATAVERSE_RUNTIME_REF_LOGICAL_NAME = (
@@ -124,7 +120,7 @@ _CONN_AUTH_DESC = (
 _DV_CONN_DESC = (
     "Dataverse connection reference bound to an active connection you own"
 )
-_REST_URL_DESC = "Workday REST API root is trimmed to /ccx/api"
+_REST_URL_DESC = "Workday REST base URL present and trimmed to '/api'"
 _REDIRECT_DESC = (
     "User-context topic redirects to the Workday user-context system topic"
 )
@@ -316,7 +312,11 @@ def _query_connection_references(runner):
     Dataverse token/endpoint is not available.
 
     Documented-tier read (Dataverse Web API v9.2) — no cassette required; tests
-    stub ``query_all``.
+    stub ``query_all``. This is the connection-binding source CA's own Workday
+    checks use (WD-PKG-001 / WD-CONN-012 in checks/workday.py), not the
+    minimalBots components API: the Workday Dataverse ref is flow-scoped and
+    surfaces in the Dataverse ``connectionreferences`` table, not in the DA bot
+    ``connectionReferenceChanges`` payload.
     """
     env_url = getattr(runner, "env_url", None)
     dv_token = getattr(runner, "dv_token", None)
@@ -486,7 +486,7 @@ def _check_connection_auth(runner) -> list[CheckResult]:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# DV-CONN-001 — Dataverse connection reference binding (S5.4, PASS/FAIL).
+# DV-CONN-001 — Workday SOAP connection reference binding (S5.4, PASS/FAIL).
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -623,179 +623,48 @@ def _check_dv_connection(runner) -> list[CheckResult]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _rest_base_uri_problem(rest_base_uri: str) -> str | None:
-    """Return why a Workday REST root is invalid, or ``None`` when valid.
-
-    The Workday REST base must be trimmed so it ends exactly at ``/ccx/api``
-    (or ``/api`` for hosts that omit ``/ccx``). Anything appended after the
-    ``/api`` segment — a version segment, the tenant name, or a resource path —
-    silently breaks the managed connection, so a trailing segment is precisely
-    the misconfiguration this check exists to catch.
-    """
-    try:
-        parsed = urlsplit(rest_base_uri)
-        hostname = parsed.hostname
-    except ValueError:
-        return "must be a valid absolute URL"
-    if parsed.scheme.casefold() != "https":
-        return "must use HTTPS"
-    if not hostname:
-        return "must include a host"
-    if parsed.username is not None or parsed.password is not None:
-        return "must not contain user information"
-    if parsed.query:
-        return "must not contain a query string"
-    if parsed.fragment:
-        return "must not contain a fragment"
-
-    path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
-    raw_segments = path.split("/")
-    if raw_segments and raw_segments[0] == "":
-        raw_segments = raw_segments[1:]
-    segments = [unquote(segment) for segment in raw_segments]
-    if any("/" in part for part in segments) or segments not in (
-        ["ccx", "api"],
-        ["api"],
-    ):
-        return "must be trimmed to end exactly at /ccx/api with nothing appended"
-    return None
-
-
 def _check_rest_base_url(runner) -> list[CheckResult]:
-    try:
-        resolution = resolve_active_workday_oauth_connections(runner)
-    except RuntimeError as exc:
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description=_REST_URL_DESC,
-            result=(
-                "Unable to run WD-REST-001 while inspecting the selected "
-                f"agent's Workday connection: {exc}"
-            ),
-            remediation=(
-                "Confirm the account has Dataverse read access and Power "
-                "Platform Administrator access to read the selected agent's "
-                "enabled topics, flow details, and connections, then re-run "
-                "FlightCheck."
-            ),
-            doc_link=_DOC_SIMPLIFIED,
-        )]
+    config = getattr(runner, "config", None) or {}
+    rest = config.get("restBaseUrl")
 
-    if resolution is None:
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description=_REST_URL_DESC,
-            result=(
-                "Selected-agent Dataverse or Power Platform Admin evidence is "
-                "not available, so the Workday REST base URI cannot be checked."
-            ),
-            remediation=(
-                "Run FlightCheck with a configured active-agent botId, "
-                "Dataverse access, and Power Platform Administrator access."
-            ),
-            doc_link=_DOC_SIMPLIFIED,
-        )]
-
-    if not resolution.has_workday_binding:
+    if not rest:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-001", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description=_REST_URL_DESC,
             result=(
-                "The selected agent's enabled topics do not invoke a flow "
-                "bound to the Workday connector."
+                "No Workday REST base URL has been captured yet (restBaseUrl "
+                "is empty)."
             ),
             remediation=(
-                "If this environment is meant to use Workday, install/repair "
-                "the Workday extension pack and confirm the selected agent's "
-                "enabled topics invoke its Workday flows. If Workday is not "
-                "used here, no action is needed."
+                "Capture the Workday REST base URL and trim it to end at "
+                "'/api' (e.g. https://<host>/ccx/api)."
             ),
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    problems: list[tuple[str, str]] = []
-    for connection in resolution.connections:
-        rest = connection.values.get("restBaseUri", "")
-        if not rest:
-            problems.append(
-                (connection.display_name, "restBaseUri is missing or empty")
-            )
-        elif problem := _rest_base_uri_problem(rest):
-            problems.append((connection.display_name, problem))
-
-    if problems:
-        details = "; ".join(
-            f"{name}: {problem}" for name, problem in sorted(problems)
-        )
+    trimmed = str(rest).rstrip("/")
+    if trimmed.endswith("/api"):
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=_REST_URL_DESC,
-            result=(
-                "One or more selected-agent Workday OAuth connections have an "
-                f"invalid REST API root: {details}."
-            ),
-            remediation=(
-                "Trim restBaseUri to https://<host>/ccx/api so nothing "
-                "follows /api — no tenant name, version, resource path, "
-                "query, fragment, or credentials. Do not substitute baseUri; "
-                "it is the SOAP endpoint."
-            ),
+            result=f"REST base URL is present and trimmed to '/api': {rest}",
             doc_link=_DOC_SIMPLIFIED,
         )]
 
-    if resolution.unresolved_bindings:
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description=_REST_URL_DESC,
-            result=(
-                "The Workday REST base URI could not be inspected for these "
-                "selected-agent flow bindings: "
-                + ", ".join(resolution.unresolved_bindings)
-                + "."
-            ),
-            remediation=(
-                "Confirm each named Workday flow binding resolves to a visible "
-                "Power Platform connection, then re-run FlightCheck."
-            ),
-            doc_link=_DOC_SIMPLIFIED,
-        )]
-
-    if not resolution.connections:
-        observed = (
-            ": " + ", ".join(resolution.ignored_non_oauth_bindings)
-            if resolution.ignored_non_oauth_bindings
-            else ""
-        )
-        return [CheckResult(roles=_MAKER_ROLES,
-            checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
-            description=_REST_URL_DESC,
-            result=(
-                "The selected agent's Workday flow bindings do not resolve to "
-                f"an OAuth Workday connection{observed}."
-            ),
-            remediation=(
-                "Bind WorkdayRESTExecution to the Microsoft Entra ID "
-                "Integrated Workday connection. Basic/ISU connections are not "
-                "the runtime source for this REST checkpoint."
-            ),
-            doc_link=_DOC_SIMPLIFIED,
-        )]
-
-    names = ", ".join(connection.display_name for connection in resolution.connections)
     return [CheckResult(roles=_MAKER_ROLES,
         checkpoint_id="WD-REST-001", category=_CATEGORY,
-        priority=Priority.HIGH.value, status=Status.PASSED.value,
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
         description=_REST_URL_DESC,
         result=(
-            "The Workday REST API root is trimmed to "
-            "https://<host>/ccx/api on "
-            f"{len(resolution.connections)} selected-agent connection(s): {names}."
+            f"REST base URL is present but not trimmed to '/api': {rest}. It "
+            "must end at '/api' with no trailing path or version segment."
+        ),
+        remediation=(
+            "Edit the captured restBaseUrl so it ends at '/api' (e.g. "
+            "https://<host>/ccx/api) — remove any trailing path, version, or "
+            "resource segment."
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]

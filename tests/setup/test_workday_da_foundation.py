@@ -27,7 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 6' in schema
+    assert '"schemaVersion": 7' in schema
+    assert '"substage": "not-started"' in schema
+    assert "config.pre-v7.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
@@ -109,7 +111,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
         "exactly one response form using one structured\n"
         "`vscode_askQuestions` call"
     ) in tenant
-    assert '"header": "Identity provider"' in tenant
+    assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
     assert "multiline text\nbox" in tenant

@@ -15,7 +15,7 @@ Build a list of connected integrations (if any):
   - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
     its `agentSlug` exactly matches the active agent, and every phase is
     `done`; or
-  - `.local/connect/workday-da/config.json` has `schemaVersion: 6`,
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 7`,
     `status: "ready"`, and `scope.agent.slug` and `scope.agent.botId` exactly
     match the active native agent.
   Shared provider state without an exact active-agent match must not make a

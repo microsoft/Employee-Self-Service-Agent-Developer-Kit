@@ -91,11 +91,12 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_LIST_JSON:`. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices.
+Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio agent collection, then directly inspects every returned identity through the native agent API before classifying its realm. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices. A command failure or malformed collection is unavailable inventory evidence, not an empty environment; preserve the reported failure and use the existing target-recovery choices.
 
 When supported candidates are returned, show their display names and realms and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
 
-- For a selected `devAgents` identity, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
+- For a selected `devAgents` identity with a non-empty returned schema, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
+- For a selected `devAgents` identity without a returned schema, do not synthesize one or withhold the candidate. Run both exact identity probes in the parent's product-line reconciliation so its native component fallback can establish the schema before validation or attachment.
 - For a selected `prodAgents` identity, do not require a Dev schema from the list result. Run the parent's exact `inspect-agent` route and continue through its existing `da-prod-to-dev.md` handoff. Do not validate or attach the Prod ID as though it were Dev.
 
 When both `devAgents` and `prodAgents` are empty, say:
@@ -126,7 +127,7 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed` or `Failed` normally. When its status is `Manual`, present this guidance and confirmation before applying the result:
+Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed`, `Warning`, or `Failed` normally. A `Warning` records the missing-capacity runtime or billing risk and completes the setup checkpoint without hiding that risk. When its status is `Manual`, present this guidance and confirmation before applying the result:
 
 **Message:**
 
@@ -141,7 +142,7 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 3. Under **Products**, select **Copilot Studio**.
 4. Select **Manage Copilot Credits**.
 5. Find **{friendly environment name or selected Power Platform environment}**.
-6. Confirm that the environment has more than zero allocated Copilot Credits. If it does not, allocate credits and save the change.
+6. Confirm that the environment has allocated Copilot Credits. Setup requires a nonzero allocation; for initial use, we recommend allocating **500 or more Copilot Credits**.
 
 **End message.**
 
@@ -149,7 +150,7 @@ Then ask exactly:
 
 **After checking Power Platform Admin Center, is Copilot Studio message capacity allocated to this environment?**
 
-Offer exactly:
+Present these standard choices:
 
 - **Yes — capacity is allocated**
 - **Not yet**
@@ -160,7 +161,7 @@ For **Yes — capacity is allocated**, apply the same current evidence with expl
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --manual-attested
 ```
 
-For **Not yet**, apply the result without `--manual-attested`. Leave capacity blocked, preserve the manual verification guidance, and return control to the maker.
+For **Not yet**, re-run `ENV-CAPACITY-001` so the known zero allocation is recorded as a `Warning`, apply that result without `--manual-attested`, and continue setup with the capacity risk visible.
 
 Resolve `{POWER_PLATFORM_ADMIN_ORIGIN}` from the selected service ring: `prod` is `https://admin.powerplatform.microsoft.com`, `preprod` is `https://admin.preprod.powerplatform.microsoft.com`, and `test` is `https://admin.test.powerplatform.microsoft.com`. Do not send a maker from a non-production setup ring to the production admin center.
 
@@ -170,7 +171,7 @@ When canonical `SETUP-05` contains a registry-declared `requirement`, also apply
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint "DA-CONN-*" --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN/results.json
 ```
 
-Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the setup-readiness verdict. Use the three maintained checks and the exact Self-Help diagnostic projection below for maker-facing evidence and remediation. After attachment, attempt every available check before producing the final runtime-readiness table. When maker action is required or an operation prevents later checks from running, state the observed blocker and supported recovery. Do not use a FlightCheck result to roll back a completed maker-facing checklist stage.
+Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the setup-readiness evidence. Use the three maintained checks and the exact Self-Help diagnostic projection below for maker-facing evidence and remediation. After successful materialization, render the compact in-progress runtime-readiness line defined below before the first check and whenever one of its four check statuses changes. Finish each snapshot before running the next operation or opening a maker question. Do not repeat a snapshot when no status changed. Attempt every available check before producing the final runtime-readiness table. When maker action is required or an operation prevents later checks from running, render the current in-progress line, then state the observed blocker and supported recovery. Do not use a FlightCheck result to roll back a completed maker-facing checklist stage.
 
 Read `src/reference/da-product-setup-registry.json` as the authoritative product requirement registry. Attachment resolves the product only by an exact registered catalog display name or agent schema name and records the declared requirement on `SETUP-05`. Do not infer requiredness from a partial name, persona wording, or the logical references returned by FlightCheck.
 
@@ -186,7 +187,7 @@ For the exact registry-required row:
 
 When the registry declares no connection requirement for the resolved product, keep `SETUP-05` skipped and render Connections as **➖ Not required**. When the agent does not exactly match a registered product, also keep `SETUP-05` skipped, but state that no foundation connection requirement was applied because the product identity is not registered; do not claim that the registry declares no requirement for that product. A required connection does not prevent creation, attachment, or workspace materialization, but it does keep canonical `connectReady` false until its exact post-attachment evidence is ready.
 
-`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready** and `Failed` is **⛔ Action required**. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation and never overrides a known zero allocation or another failed result. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
+`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready**. `Warning` is **⚠️ Setup complete with capacity risk**: preserve the warning evidence and continue the remaining setup, but explain the runtime or billing impact before agent use. `Failed` is **⛔ Action required** for a checkpoint error that prevents trustworthy evaluation, such as an unavailable environment identity. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation and never overrides a known zero allocation or another failed result. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
 
 ## Interpret results
 
@@ -200,7 +201,21 @@ If content was synced to the local workspace but the returned result is not work
 
 > The agent content was synced to your local workspace, but the workspace is not ready to connect. Setup is not complete and has stopped.
 
-Do not invent a cause or run another operation without new maker intent.
+Preserve the observed evidence and offer **Retry workspace materialization** and **Go back**. **Retry workspace materialization** reruns attachment after the maker confirms that the reported prerequisite was addressed. When the error specifically identifies an unmanaged workspace or changed managed files, also offer the parent skill's **Reset and use this workspace** or the explicit **Checkpoint and refresh** path as applicable. Do not offer reset for an unrelated service or projection failure.
+
+After successful materialization, use this compact two-line snapshot while readiness evidence is still being gathered:
+
+**Message:**
+
+**Runtime readiness:** Agent access {agent access progress status} · Capacity {environment capacity progress status} · Connections {connections progress status} · Content {agent content progress status}
+
+**{readiness progress status}: {readiness progress summary}**
+
+**End message.**
+
+Use **✅ Ready** only for current passing evidence, **🔄 Checking** only for the operation that will run next, **⬜ Pending** for an applicable check that has not run, **⛔ Action required** for an authoritative actionable failure, **⛔ Manual confirmation required** for unreadable capacity awaiting the maker's answer, **⚠️ Check unavailable** for an attempted check without a verdict, **⚠️ Ready with limitation** for the supported connection warning state, **➖ Not required** only when the registry explicitly declares no requirement, and **✅ Ready — manually confirmed** only after accepted capacity attestation.
+
+While checks remain, render the second line's status as **🔄 {resolved count} of 4 resolved** and say that setup is still verifying runtime readiness. Count **Ready**, **Ready — manually confirmed**, **Ready with limitation**, **Action required**, **Check unavailable**, and **Not required** as resolved; do not count **Checking**, **Pending**, or **Manual confirmation required**. When maker action is required before checks can continue, render the second line's status as **⛔ Waiting for action** and identify the blocking check without converting pending checks into failures. Do not calculate or display the final **Overall** verdict in this in-progress snapshot.
 
 After successful materialization and after the three setup-readiness checks and broad connection diagnostic have been attempted, build the agent link from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both even when `connectReady` is false.
 
@@ -275,7 +290,7 @@ If the remote snapshot changed, or the existing workspace uses an older projecti
 
 > The local workspace differs from the current agent snapshot. Refresh will create a checkpoint and replace the managed agent files; it will not merge them.
 
-Offer exactly:
+Present these standard choices:
 
 - **Checkpoint and refresh**
 - **Keep local files unchanged**

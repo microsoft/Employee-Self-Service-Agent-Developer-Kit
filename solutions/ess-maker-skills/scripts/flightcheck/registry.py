@@ -31,9 +31,12 @@ target.
 
 **Scope:** the ESS + Workday *setup* checkpoints only — not the entire
 FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` /
-``ENV-004`` (+ detail) rows stay validated by the existing ``--scope``
-runs and are deliberately out of registry scope. See
+connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` row stay
+validated by the existing ``--scope`` runs and are deliberately out of
+registry scope. ``ENV-004`` was re-pointed to the Declarative Agent
+minimalBots components + ALM API and is now registered here (clients
+``AGENTBUILDER``) so it can run via the plan/``--checkpoint`` path like the
+other DA checks. See
 ``plans/workday-setup/flightcheck-single-checkpoint.md``.
 """
 
@@ -279,22 +282,16 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
     ),
     # ---- Solution: ESS-SOLN-001 (skill-2 install-ess) ----
-    # ESS-SOLN-001: the base ESS agent solution (msdyn_copilotforemployeeselfservice*)
-    # is installed in the target env. Queries the Dataverse `solutions` table
-    # (DATAVERSE client, already wired in cli.py's single-checkpoint path — no
-    # new client init). Prereq ENV-002 (Dataverse provisioned) transitively
-    # pulls ENV-001 (environment exists). Environment Maker owns the fix; the
-    # AppSource install itself is a manual portal action, but this check
-    # definitively verifies the outcome, so the S2.1 checklist row auto-completes
-    # (`prog` gate) on a PASSED result.
+    # ESS-SOLN-001: the base ESS DA package is present in the agent's GRS/ALM
+    # state. Reads the AgentBuilder minimalBots ALM configure API instead of
+    # Dataverse solution-table state.
     CheckpointSpec(
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,
         category_label="Solution",
-        clients=frozenset({DATAVERSE}),
+        clients=frozenset({AGENTBUILDER}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
-        prereqs=("ENV-002",),
+        requires_dataverse_endpoint=False,
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
@@ -455,20 +452,8 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.WORKDAY_ADMIN.value,),
         is_family=True,
     ),
-    # WD-ENV-001 — selected-agent topics -> flow detail -> physical Workday
-    # connection parameters.
-    CheckpointSpec(
-        key="WD-ENV-001",
-        category_fn=run_workday_checks,
-        category_label="Workday",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
-        requires_config=True,
-        requires_dataverse_endpoint=True,
-        priority=Priority.CRITICAL.value,
-        roles=(Role.ESS_MAKER.value,),
-    ),
     # WD-ENV-* — legacy Workday environment-variable checks (banned on the
-    # simplified flavor; registered so the remaining family resolves).
+    # simplified flavor; registered so the family resolves).
     CheckpointSpec(
         key="WD-ENV",
         category_fn=run_workday_checks,
@@ -595,8 +580,11 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the ESS Dataverse connection reference from the
+    # Dataverse connectionreferences table (DATAVERSE), plus a best-effort BAP
+    # owner echo (PP_ADMIN). Mirrors the Custom Agent origin, which validates
+    # the Workday extension's Dataverse binding via connectionreferences rather
+    # than the invoker-scoped Workday SOAP connection.
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
@@ -607,15 +595,32 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # WD-REST-001 — REST root read from the selected agent's flow-bound
-    # physical Workday OAuth connection.
+    # ENV-004 — re-pointed from the Dataverse connectionreference table to the
+    # Declarative Agent minimalBots components + ALM configure API
+    # (AGENTBUILDER). Reads every configured agent's connection references
+    # (bound/unbound) and, when an expected GRS commit SHA is configured, pins
+    # the deployed ALM commit (ENV-004-GRS). category_fn is
+    # run_environment_checks; the plan path filters emitted rows to the ENV-004
+    # target (the ENV-004-UR-* / ENV-004-GRS detail rows are supplementary, and
+    # the GRS verdict also folds into the ENV-004 summary status).
+    CheckpointSpec(
+        key="ENV-004",
+        category_fn=run_environment_checks,
+        category_label="Environment",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value, Role.ESS_MAKER.value),
+    ),
+    # WD-REST-001 — pure config check (restBaseUrl trimmed to /api), no client.
     CheckpointSpec(
         key="WD-REST-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset(),
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),

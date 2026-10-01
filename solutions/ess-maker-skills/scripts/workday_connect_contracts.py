@@ -12,6 +12,8 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from workday_connect_model import (
+    ADMINISTRATOR_PARTIAL_FIELDS,
+    ADMINISTRATOR_PHASES,
     PhaseStatus,
     WorkdayConnectModelError,
     load_catalog,
@@ -29,6 +31,43 @@ WORKDAY_NETWORK_READINESS_OUTCOMES = {
     "confirmed-hosts-allowed",
     "no-customer-firewall-change-required",
 }
+WORKDAY_ROLLOUT_TYPES = {
+    "entire-workforce",
+    "limited-or-test",
+}
+WORKDAY_DOMAIN_PERMISSION_OUTCOMES = {
+    "get-permission-verified",
+}
+WORKDAY_AUTHORIZATION_OUTCOMES = {
+    "verified",
+    "task-not-authorized-remediated",
+}
+WORKDAY_API_CLIENT_OUTCOMES = {
+    "existing-client-verified",
+    "new-client-registered",
+}
+WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES = (
+    "Core Payroll",
+    "Organizations and Roles",
+    "Staffing",
+    "Time Off and Leave",
+)
+WORKDAY_AUTHORIZATION_RETEST_OUTCOMES = {
+    "verified-after-remediation",
+}
+ENTRA_PRESERVATION_OUTCOMES = {
+    "preserved",
+    "remediated",
+}
+_SECRET_VALUE_MARKERS = (
+    "-----begin certificate-----",
+    "-----begin private key-----",
+    "-----begin rsa private key-----",
+    "client_secret=",
+    '"client_secret"',
+    '"access_token"',
+    '"refresh_token"',
+)
 
 
 class WorkdayConnectContractError(WorkdayConnectModelError):
@@ -159,6 +198,50 @@ def _required_text(
     return value
 
 
+def _safe_nonsecret_text(value: Any, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise WorkdayConnectContractError(f"{label} is required.")
+    if len(text) > 2048 or "\x00" in text:
+        raise WorkdayConnectContractError(
+            f"{label} exceeds the safe evidence limit."
+        )
+    normalized = text.casefold()
+    if any(marker in normalized for marker in _SECRET_VALUE_MARKERS):
+        raise WorkdayConnectContractError(
+            f"{label} appears to contain secret or certificate material."
+        )
+    return text
+
+
+def _reject_secret_like_value(value: Any, label: str) -> None:
+    if isinstance(value, str):
+        normalized = value.casefold()
+        if len(value) > 2048 or "\x00" in value or any(
+            marker in normalized for marker in _SECRET_VALUE_MARKERS
+        ):
+            raise WorkdayConnectContractError(
+                f"{label} appears to contain secret or certificate material."
+            )
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_secret_like_value(item, f"{label}.{key}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_secret_like_value(item, f"{label}[{index}]")
+
+
+def _certificate_thumbprint(value: Any, label: str) -> str:
+    normalized = re.sub(r"[\s:]", "", str(value or ""))
+    if not re.fullmatch(r"[0-9A-Fa-f]{4,128}", normalized):
+        raise WorkdayConnectContractError(
+            f"{label} must contain hexadecimal thumbprint characters only."
+        )
+    return normalized.upper()
+
+
 def _normalized_uri(value: Any) -> str:
     return str(value or "").strip().rstrip("/").casefold()
 
@@ -173,6 +256,11 @@ def _candidate(candidate: Any) -> dict[str, Any]:
         raise WorkdayConnectContractError(
             "Discovered Entra identifierUris must be an array."
         )
+    reply_urls = candidate.get("replyUrls") or []
+    if not isinstance(reply_urls, list):
+        raise WorkdayConnectContractError(
+            "Discovered Entra replyUrls must be an array."
+        )
     return {
         "displayName": _required_text(
             candidate, "displayName", "Entra app display name"
@@ -186,6 +274,11 @@ def _candidate(candidate: Any) -> dict[str, Any]:
         ),
         "identifierUris": [
             str(value).strip() for value in identifier_uris if str(value).strip()
+        ],
+        "replyUrls": [
+            _absolute_https_url(value, "Discovered Entra Reply URL")
+            for value in reply_urls
+            if str(value or "").strip()
         ],
     }
 
@@ -335,6 +428,9 @@ _ENTRA_CHECKS = {
     "userAssignment",
     "nameId",
     "samlSigningOption",
+    "existingScopesPreserved",
+    "authorizedClientsPreserved",
+    "permissionsPreserved",
 }
 _GRAPH_ONLY_ENTRA_CHECKS = _ENTRA_CHECKS - {
     "nameId",
@@ -348,7 +444,13 @@ def _normalize_entra_check(name: str, value: Any) -> dict[str, Any]:
             f"Entra verification check '{name}' must contain evidence."
         )
     allowed = {"outcome", "provenance"}
-    if name in {"nameId", "samlSigningOption"}:
+    if name in {
+        "nameId",
+        "samlSigningOption",
+        "existingScopesPreserved",
+        "authorizedClientsPreserved",
+        "permissionsPreserved",
+    }:
         allowed.add("observedValue")
     unexpected = sorted(set(value) - allowed)
     if unexpected:
@@ -409,7 +511,13 @@ def _normalize_entra_check(name: str, value: Any) -> dict[str, Any]:
         "outcome": outcome,
         "provenance": provenance,
     }
-    if name in {"nameId", "samlSigningOption"}:
+    if name in {
+        "nameId",
+        "samlSigningOption",
+        "existingScopesPreserved",
+        "authorizedClientsPreserved",
+        "permissionsPreserved",
+    }:
         observed_value = _required_text(
             value,
             "observedValue",
@@ -424,6 +532,19 @@ def _normalize_entra_check(name: str, value: Any) -> dict[str, Any]:
                 "Entra verification check 'samlSigningOption' must record "
                 "'Sign SAML response and assertion'."
             )
+        if (
+            name
+            in {
+                "existingScopesPreserved",
+                "authorizedClientsPreserved",
+                "permissionsPreserved",
+            }
+            and observed_value not in ENTRA_PRESERVATION_OUTCOMES
+        ):
+            raise WorkdayConnectContractError(
+                f"Entra verification check '{name}' must record preserved "
+                "or remediated."
+            )
         result["observedValue"] = observed_value
     return result
 
@@ -436,6 +557,24 @@ def validate_entra_verification(
     if not isinstance(verification, Mapping):
         raise WorkdayConnectContractError(
             "Entra verification must contain a JSON object."
+        )
+    _reject_secret_like_value(verification, "Entra verification")
+    allowed = {
+        "tenantId",
+        "selectedDirectory",
+        "application",
+        "scopeGuid",
+        "replyUrl",
+        "microsoftEntraIdentifier",
+        "loginUrl",
+        "certificate",
+        "checks",
+    }
+    unexpected = sorted(set(verification) - allowed)
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Entra verification contains unsupported fields: "
+            + ", ".join(unexpected)
         )
     application = _candidate(verification.get("application"))
     scope = state.get("scope") or {}
@@ -457,6 +596,12 @@ def validate_entra_verification(
     tenant = _required_text(scope, "workdayTenant", "Workday tenant")
     expected_entity_id = workday_saml_entity_id(tenant)
     expected_app_uri = f"api://{application['appId']}"
+    expected_entra_identifier = (
+        f"https://sts.windows.net/{expected_tenant_id}/"
+    )
+    expected_login_url = (
+        f"https://login.microsoftonline.com/{expected_tenant_id}/saml2"
+    )
     observed_uris = {_normalized_uri(value) for value in application["identifierUris"]}
     missing_uris = [
         value
@@ -489,6 +634,66 @@ def validate_entra_verification(
         name: _normalize_entra_check(name, supplied_checks[name])
         for name in sorted(_ENTRA_CHECKS)
     }
+    selected_directory = verification.get("selectedDirectory")
+    if not isinstance(selected_directory, Mapping):
+        raise WorkdayConnectContractError(
+            "The selected Microsoft Entra directory must contain an object."
+        )
+    selected_directory_id = _required_text(
+        selected_directory,
+        "tenantId",
+        "Selected Microsoft Entra directory tenant ID",
+    )
+    selected_directory_name = _required_text(
+        selected_directory,
+        "displayName",
+        "Selected Microsoft Entra directory display name",
+    )
+    if selected_directory_id.casefold() != expected_tenant_id.casefold():
+        raise WorkdayConnectContractError(
+            "The selected Microsoft Entra directory does not match the "
+            "preflight tenant."
+        )
+    observed_entra_identifier = _required_text(
+        verification,
+        "microsoftEntraIdentifier",
+        "Microsoft Entra Identifier",
+    )
+    if _normalized_uri(observed_entra_identifier) != _normalized_uri(
+        expected_entra_identifier
+    ):
+        raise WorkdayConnectContractError(
+            "The Microsoft Entra Identifier does not match the selected "
+            "directory."
+        )
+    observed_login_url = _required_text(
+        verification,
+        "loginUrl",
+        "Microsoft Entra Login URL",
+    )
+    if _normalized_uri(observed_login_url) != _normalized_uri(
+        expected_login_url
+    ):
+        raise WorkdayConnectContractError(
+            "The Microsoft Entra Login URL does not match the selected "
+            "directory."
+        )
+    reply_url = _absolute_https_url(
+        verification.get("replyUrl"),
+        "Microsoft Entra Reply URL",
+    )
+    if not application["replyUrls"]:
+        raise WorkdayConnectContractError(
+            "The Graph-authenticated Entra application evidence contains no "
+            "Reply URLs."
+        )
+    if _normalized_uri(reply_url) not in {
+        _normalized_uri(value) for value in application["replyUrls"]
+    }:
+        raise WorkdayConnectContractError(
+            "The Microsoft Entra Reply URL is not present in the "
+            "Graph-authenticated application/service-principal evidence."
+        )
     scope_guid = _required_text(
         verification,
         "scopeGuid",
@@ -500,12 +705,20 @@ def validate_entra_verification(
             "Entra certificate metadata must contain an object."
         )
     safe_certificate = {
-        key: _required_text(
+        "thumbprint": _certificate_thumbprint(
+            certificate.get("thumbprint"),
+            "Entra signing certificate thumbprint",
+        ),
+        "validFrom": _required_text(
             certificate,
-            key,
-            f"Entra signing certificate {key}",
-        )
-        for key in ("thumbprint", "validFrom", "validTo")
+            "validFrom",
+            "Entra signing certificate validFrom",
+        ),
+        "validTo": _required_text(
+            certificate,
+            "validTo",
+            "Entra signing certificate validTo",
+        ),
     }
     return {
         "identifiers": {
@@ -513,14 +726,52 @@ def validate_entra_verification(
             "entraAppObjectId": application["objectId"],
             "entraServicePrincipalId": application["servicePrincipalId"],
             "entraAppIdUri": expected_app_uri,
+            "microsoftEntraIdentifier": expected_entra_identifier,
+            "entraLoginUrl": expected_login_url,
+            "replyUrl": reply_url,
             "workdaySamlEntityId": expected_entity_id,
             "scopeGuid": scope_guid,
             "signingCertificate": safe_certificate,
         },
         "evidence": {
             "tenantId": observed_tenant_id,
+            "selectedDirectory": {
+                "tenantId": selected_directory_id,
+                "displayName": selected_directory_name,
+            },
             "applicationDisplayName": application["displayName"],
             "checks": normalized_checks,
+        },
+        "partialEvidence": {
+            "selectedDirectoryId": selected_directory_id,
+            "selectedDirectoryDisplayName": selected_directory_name,
+            "applicationId": application["appId"],
+            "applicationDisplayName": application["displayName"],
+            "applicationObjectId": application["objectId"],
+            "servicePrincipalId": application["servicePrincipalId"],
+            "applicationIdentifierUris": application["identifierUris"],
+            "applicationReplyUrls": application["replyUrls"],
+            "scopeGuid": scope_guid,
+            "replyUrl": reply_url,
+            "microsoftEntraIdentifier": expected_entra_identifier,
+            "loginUrl": expected_login_url,
+            "entraChecks": normalized_checks,
+            "nameIdSource": normalized_checks["nameId"]["observedValue"],
+            "samlSigningOption": normalized_checks[
+                "samlSigningOption"
+            ]["observedValue"],
+            "certificateThumbprint": safe_certificate["thumbprint"],
+            "certificateValidFrom": safe_certificate["validFrom"],
+            "certificateValidTo": safe_certificate["validTo"],
+            "scopePreservationOutcome": normalized_checks[
+                "existingScopesPreserved"
+            ]["observedValue"],
+            "authorizedClientPreservationOutcome": normalized_checks[
+                "authorizedClientsPreserved"
+            ]["observedValue"],
+            "permissionPreservationOutcome": normalized_checks[
+                "permissionsPreserved"
+            ]["observedValue"],
         },
     }
 
@@ -548,12 +799,21 @@ def build_workday_admin_packet(
         "entraAppIdUri",
         "Entra application ID URI",
     )
-    entra_tenant_id = _required_text(
-        scope,
-        "entraTenantId",
-        "Microsoft Entra tenant ID",
+    expected_issuer = _required_text(
+        identifiers,
+        "microsoftEntraIdentifier",
+        "Microsoft Entra Identifier",
     )
-    expected_issuer = f"https://sts.windows.net/{entra_tenant_id}/"
+    login_url = _required_text(
+        identifiers,
+        "entraLoginUrl",
+        "Microsoft Entra Login URL",
+    )
+    reply_url = _required_text(
+        identifiers,
+        "replyUrl",
+        "Microsoft Entra Reply URL",
+    )
     signing_certificate = identifiers.get("signingCertificate")
     if not isinstance(signing_certificate, Mapping):
         raise WorkdayConnectContractError(
@@ -592,6 +852,8 @@ def build_workday_admin_packet(
             "serviceProviderId": entity_id,
             "entraApplicationIdUri": entra_app_id_uri,
             "expectedIdentityProviderIssuer": expected_issuer,
+            "loginUrl": login_url,
+            "replyUrl": reply_url,
             "certificateValidFrom": certificate_valid_from,
             "certificateValidTo": certificate_valid_to,
         },
@@ -657,9 +919,17 @@ def build_workday_admin_packet(
             "and compare its validity dates",
             f"Set the Workday Service Provider ID to {entity_id}",
             "Enable OAuth 2.0 Clients and SAML in Tenant Setup - Security",
-            "Register the signed-in employee API client with Client Grant "
-            "Type SAML Bearer, the required functional areas, and Include "
-            "Workday Owned Scope",
+            "Reuse an approved signed-in employee API client when it already "
+            "matches the required contract; otherwise register one with "
+            "Client Grant Type SAML Bearer, the required functional areas, "
+            "and Include Workday Owned Scope set to Yes",
+            f"Set the Workday identity-provider SSO service URL to {login_url}",
+            f"Set the Workday sign-on redirect URL to {reply_url}",
+            "Choose whether the rollout covers the entire workforce or a "
+            "limited/test employee security group",
+            "Grant Get on Worker Data: Public Worker Reports and "
+            "Integration Permissions, keeping domain permissions separate "
+            "from OAuth functional-area scopes",
             "Verify an active authentication policy allows SAML for the "
             "intended employee population",
             "Confirm the returned Workday REST and SOAP hosts are reachable "
@@ -677,6 +947,18 @@ def build_workday_admin_packet(
                 "soapBaseUrl",
                 "authenticationPolicyOutcome",
                 "networkReadinessOutcome",
+                "apiClientOutcome",
+                "clientGrantType",
+                "includeWorkdayOwnedScope",
+                "identityProviderSsoServiceUrl",
+                "signOnRedirectUrl",
+                "rolloutType",
+                "employeeSecurityGroup",
+                "publicWorkerReportsOutcome",
+                "integrationPermissionsGetOutcome",
+                "functionalAreaScopes",
+                "optionalDomains",
+                "authorizationOutcome",
             ],
             "note": (
                 "Return configuration evidence only. Do not paste passwords, "
@@ -724,6 +1006,452 @@ def _https_url(value: Any, label: str) -> str:
     return text
 
 
+def _absolute_https_url(value: Any, label: str) -> str:
+    text = str(value or "").strip().rstrip("/")
+    parsed = urlparse(text)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise WorkdayConnectContractError(
+            f"{label} must be an HTTPS URL."
+        ) from exc
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or port not in {None, 443}
+    ):
+        raise WorkdayConnectContractError(f"{label} must be an HTTPS URL.")
+    return text
+
+
+def _safe_string_list(
+    value: Any,
+    label: str,
+    *,
+    allow_empty: bool,
+) -> list[str]:
+    if not isinstance(value, list):
+        raise WorkdayConnectContractError(f"{label} must be an array.")
+    if any(not isinstance(item, str) for item in value):
+        raise WorkdayConnectContractError(
+            f"{label} must contain strings."
+        )
+    normalized = [
+        _safe_nonsecret_text(item, f"{label} item")
+        for item in value
+    ]
+    if any(not item for item in normalized):
+        raise WorkdayConnectContractError(
+            f"{label} must contain non-empty strings."
+        )
+    if not allow_empty and not normalized:
+        raise WorkdayConnectContractError(
+            f"{label} must contain at least one value."
+        )
+    if len(normalized) != len(set(normalized)):
+        raise WorkdayConnectContractError(
+            f"{label} must not contain duplicates."
+        )
+    return normalized
+
+
+def _optional_domains(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise WorkdayConnectContractError(
+            "Workday optionalDomains must be an array."
+        )
+    normalized = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise WorkdayConnectContractError(
+                "Every optional Workday domain must identify its supported "
+                "scenario."
+            )
+        unexpected = sorted(set(item) - {"domain", "scenario"})
+        if unexpected:
+            raise WorkdayConnectContractError(
+                "Optional Workday domain contains unsupported fields: "
+                + ", ".join(unexpected)
+            )
+        domain = _safe_nonsecret_text(
+            item.get("domain"),
+            "Optional Workday domain",
+        )
+        scenario = _safe_nonsecret_text(
+            item.get("scenario"),
+            "Optional Workday domain supported scenario",
+        )
+        key = (domain.casefold(), scenario.casefold())
+        if key in seen:
+            raise WorkdayConnectContractError(
+                "Workday optionalDomains must not contain duplicates."
+            )
+        seen.add(key)
+        normalized.append({"domain": domain, "scenario": scenario})
+    return normalized
+
+
+def validate_administrator_partial_evidence(
+    state: Mapping[str, Any],
+    phase_id: str,
+    fields: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate independent safe fields without discarding sibling values."""
+    if phase_id not in ADMINISTRATOR_PHASES:
+        raise WorkdayConnectContractError(
+            "Administrator partial evidence is supported only for Entra and "
+            "Workday administrator phases."
+        )
+    if not isinstance(fields, Mapping):
+        raise WorkdayConnectContractError(
+            "Administrator partial evidence fields must contain an object."
+        )
+    unexpected = sorted(
+        set(fields) - ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+    )
+    if unexpected:
+        raise WorkdayConnectContractError(
+            "Administrator partial evidence contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+    scope = state.get("scope") or {}
+    administrator = (
+        ((state.get("phases") or {}).get(phase_id) or {}).get(
+            "administrator"
+        )
+        or {}
+    )
+    available_fields = {
+        **dict(administrator.get("partialEvidence") or {}),
+        **dict(fields),
+    }
+    valid_fields: dict[str, Any] = {}
+    field_errors: dict[str, str] = {}
+
+    def validate_field(name: str, value: Any) -> Any:
+        _reject_secret_like_value(value, name)
+        if phase_id == "entra":
+            if name == "selectedDirectoryId":
+                observed = str(value or "").strip()
+                expected = _required_text(
+                    scope,
+                    "entraTenantId",
+                    "Microsoft Entra tenant ID",
+                )
+                if observed.casefold() != expected.casefold():
+                    raise WorkdayConnectContractError(
+                        "Selected directory does not match the preflight tenant."
+                    )
+                return observed
+            if name in {
+                "applicationId",
+                "applicationDisplayName",
+                "applicationObjectId",
+                "servicePrincipalId",
+                "scopeGuid",
+                "selectedDirectoryDisplayName",
+                "nameIdSource",
+                "samlSigningOption",
+            }:
+                return _safe_nonsecret_text(value, name)
+            if name == "applicationIdentifierUris":
+                return _safe_string_list(
+                    value,
+                    "Entra applicationIdentifierUris",
+                    allow_empty=False,
+                )
+            if name == "applicationReplyUrls":
+                reply_urls = _safe_string_list(
+                    value,
+                    "Entra applicationReplyUrls",
+                    allow_empty=False,
+                )
+                return [
+                    _absolute_https_url(item, "Entra application Reply URL")
+                    for item in reply_urls
+                ]
+            if name == "entraChecks":
+                if not isinstance(value, Mapping):
+                    raise WorkdayConnectContractError(
+                        "entraChecks must contain an object."
+                    )
+                unexpected_checks = sorted(set(value) - _ENTRA_CHECKS)
+                if unexpected_checks:
+                    raise WorkdayConnectContractError(
+                        "entraChecks contains unsupported checks: "
+                        + ", ".join(unexpected_checks)
+                    )
+                return {
+                    check_name: _normalize_entra_check(
+                        check_name,
+                        check_value,
+                    )
+                    for check_name, check_value in value.items()
+                }
+            if name in {
+                "replyUrl",
+                "microsoftEntraIdentifier",
+                "loginUrl",
+            }:
+                normalized = _absolute_https_url(value, name)
+                tenant_id = _required_text(
+                    scope,
+                    "entraTenantId",
+                    "Microsoft Entra tenant ID",
+                )
+                expected = {
+                    "microsoftEntraIdentifier": (
+                        f"https://sts.windows.net/{tenant_id}/"
+                    ),
+                    "loginUrl": (
+                        "https://login.microsoftonline.com/"
+                        f"{tenant_id}/saml2"
+                    ),
+                }.get(name)
+                if expected and _normalized_uri(normalized) != _normalized_uri(
+                    expected
+                ):
+                    raise WorkdayConnectContractError(
+                        f"{name} does not match the selected directory."
+                    )
+                if name == "replyUrl":
+                    reply_urls = available_fields.get(
+                        "applicationReplyUrls"
+                    )
+                    if isinstance(reply_urls, list) and reply_urls and (
+                        _normalized_uri(normalized)
+                        not in {
+                            _normalized_uri(item)
+                            for item in reply_urls
+                        }
+                    ):
+                        raise WorkdayConnectContractError(
+                            "replyUrl is not present in the "
+                            "Graph-authenticated application evidence."
+                        )
+                return normalized
+            if name in {
+                "scopePreservationOutcome",
+                "authorizedClientPreservationOutcome",
+                "permissionPreservationOutcome",
+            }:
+                normalized = str(value or "").strip()
+                if normalized not in ENTRA_PRESERVATION_OUTCOMES:
+                    raise WorkdayConnectContractError(
+                        f"{name} must be preserved or remediated."
+                    )
+                return normalized
+            if name in {"certificateValidFrom", "certificateValidTo"}:
+                _date_only(str(value or ""), name)
+                return str(value).strip()
+            if name == "certificateThumbprint":
+                return _certificate_thumbprint(
+                    value,
+                    "certificateThumbprint",
+                )
+            return _safe_nonsecret_text(value, name)
+
+        tenant = _required_text(scope, "workdayTenant", "Workday tenant")
+        if name == "enabledServiceProviderId":
+            observed = _required_text({name: value}, name, name)
+            expected = workday_saml_entity_id(tenant)
+            if _normalized_uri(observed) != _normalized_uri(expected):
+                raise WorkdayConnectContractError(
+                    "Enabled Service Provider ID does not match the Workday "
+                    "tenant."
+                )
+            return expected
+        if name == "oauthTokenUrl":
+            normalized = _https_url(value, "Workday OAuth token URL")
+            _require_endpoint_path(
+                normalized,
+                f"/ccx/oauth2/{tenant}/token",
+                "Workday OAuth token URL",
+            )
+            return normalized
+        if name == "restBaseUrl":
+            normalized = _https_url(value, "Workday REST base URL")
+            _require_endpoint_path(
+                normalized,
+                "/ccx/api",
+                "Workday REST base URL",
+            )
+            return normalized
+        if name == "soapBaseUrl":
+            normalized = _https_url(value, "Workday SOAP base URL")
+            _require_endpoint_path(
+                normalized,
+                "/ccx/service",
+                "Workday SOAP base URL",
+            )
+            return normalized
+        if name == "identityProviderOutcome":
+            normalized = str(value or "").strip()
+            if normalized != "verified-entra-issuer":
+                raise WorkdayConnectContractError(
+                    "identityProviderOutcome must verify the Entra issuer."
+                )
+            return normalized
+        if name == "certificateSelectionOutcome":
+            normalized = str(value or "").strip()
+            if normalized != "entra-signing-certificate-selected":
+                raise WorkdayConnectContractError(
+                    "certificateSelectionOutcome must verify the Entra "
+                    "signing certificate."
+                )
+            return normalized
+        if name == "certificateValidityOutcome":
+            normalized = str(value or "").strip()
+            if normalized != "matches-verified-entra-certificate":
+                raise WorkdayConnectContractError(
+                    "certificateValidityOutcome must verify the Entra "
+                    "certificate dates."
+                )
+            return normalized
+        if name == "authenticationPolicyOutcome":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_AUTHENTICATION_POLICY_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    "authenticationPolicyOutcome is unsupported."
+                )
+            return normalized
+        if name == "networkReadinessOutcome":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_NETWORK_READINESS_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    "networkReadinessOutcome is unsupported."
+                )
+            return normalized
+        if name == "apiClientOutcome":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_API_CLIENT_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    "apiClientOutcome must verify an approved existing client "
+                    "or a newly registered client."
+                )
+            return normalized
+        if name == "clientGrantType":
+            normalized = str(value or "").strip().casefold()
+            if normalized != "saml-bearer":
+                raise WorkdayConnectContractError(
+                    "clientGrantType must be saml-bearer."
+                )
+            return normalized
+        if name == "includeWorkdayOwnedScope":
+            normalized = str(value or "").strip().casefold()
+            if normalized != "yes":
+                raise WorkdayConnectContractError(
+                    "includeWorkdayOwnedScope must be yes."
+                )
+            return normalized
+        if name in {
+            "identityProviderSsoServiceUrl",
+            "signOnRedirectUrl",
+        }:
+            normalized = _absolute_https_url(value, name)
+            expected_key = (
+                "entraLoginUrl"
+                if name == "identityProviderSsoServiceUrl"
+                else "replyUrl"
+            )
+            expected = _required_text(
+                state.get("identifiers") or {},
+                expected_key,
+                expected_key,
+            )
+            if _normalized_uri(normalized) != _normalized_uri(expected):
+                raise WorkdayConnectContractError(
+                    f"{name} does not match the verified Entra value."
+                )
+            return normalized
+        if name == "rolloutType":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_ROLLOUT_TYPES:
+                raise WorkdayConnectContractError(
+                    "rolloutType is unsupported."
+                )
+            return normalized
+        if name in {
+            "publicWorkerReportsOutcome",
+            "integrationPermissionsGetOutcome",
+        }:
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_DOMAIN_PERMISSION_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    f"{name} must verify Get permission."
+                )
+            return normalized
+        if name == "authorizationOutcome":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_AUTHORIZATION_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    "authorizationOutcome is unsupported."
+                )
+            return normalized
+        if name in {
+            "authorizationRemediationDomain",
+            "authorizationRemediationScenario",
+        }:
+            return _safe_nonsecret_text(value, name)
+        if name == "authorizationRetestOutcome":
+            normalized = str(value or "").strip()
+            if normalized not in WORKDAY_AUTHORIZATION_RETEST_OUTCOMES:
+                raise WorkdayConnectContractError(
+                    "authorizationRetestOutcome must confirm verification "
+                    "after remediation."
+                )
+            return normalized
+        if name == "functionalAreaScopes":
+            supplied = _safe_string_list(
+                value,
+                "Workday functionalAreaScopes",
+                allow_empty=False,
+            )
+            expected = {
+                item.casefold()
+                for item in WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES
+            }
+            if {item.casefold() for item in supplied} != expected:
+                raise WorkdayConnectContractError(
+                    "functionalAreaScopes must contain exactly Core Payroll, "
+                    "Organizations and Roles, Staffing, and Time Off and "
+                    "Leave."
+                )
+            return list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES)
+        if name == "optionalDomains":
+            return _optional_domains(value)
+        return _safe_nonsecret_text(value, name)
+
+    for name, value in fields.items():
+        try:
+            valid_fields[name] = validate_field(name, value)
+        except WorkdayConnectContractError as exc:
+            field_errors[name] = str(exc)
+    combined = {
+        **dict(administrator.get("partialEvidence") or {}),
+        **valid_fields,
+    }
+    if (
+        combined.get("rolloutType") == "limited-or-test"
+        and str(combined.get("employeeSecurityGroup") or "").strip().casefold()
+        in {"all employees", "all workers"}
+    ):
+        valid_fields.pop("employeeSecurityGroup", None)
+        field_errors["employeeSecurityGroup"] = (
+            "A limited or test rollout cannot use All Employees."
+        )
+    return {
+        "validFields": valid_fields,
+        "fieldErrors": field_errors,
+    }
+
+
 def _require_endpoint_path(
     url: str,
     expected_path: str,
@@ -754,6 +1482,10 @@ def validate_workday_admin_response(
         raise WorkdayConnectContractError(
             "Workday administrator response must contain a JSON object."
         )
+    _reject_secret_like_value(
+        response,
+        "Workday administrator response",
+    )
     allowed = {
         "activeIdentityProviderIssuer",
         "identityProviderOutcome",
@@ -769,6 +1501,21 @@ def validate_workday_admin_response(
         "soapBaseUrl",
         "authenticationPolicyOutcome",
         "networkReadinessOutcome",
+        "apiClientOutcome",
+        "clientGrantType",
+        "includeWorkdayOwnedScope",
+        "identityProviderSsoServiceUrl",
+        "signOnRedirectUrl",
+        "rolloutType",
+        "employeeSecurityGroup",
+        "publicWorkerReportsOutcome",
+        "integrationPermissionsGetOutcome",
+        "functionalAreaScopes",
+        "optionalDomains",
+        "authorizationOutcome",
+        "authorizationRemediationDomain",
+        "authorizationRemediationScenario",
+        "authorizationRetestOutcome",
     }
     unexpected = sorted(set(response) - allowed)
     if unexpected:
@@ -839,7 +1586,7 @@ def validate_workday_admin_response(
     )
     _require_endpoint_path(
         soap_base_url,
-        f"/ccx/service/{tenant}",
+        "/ccx/service",
         "Workday SOAP base URL",
     )
     endpoint_hosts = {
@@ -855,6 +1602,11 @@ def validate_workday_admin_response(
         "oauthClientId",
         "authenticationPolicyOutcome",
         "networkReadinessOutcome",
+        "apiClientOutcome",
+        "clientGrantType",
+        "includeWorkdayOwnedScope",
+        "identityProviderSsoServiceUrl",
+        "signOnRedirectUrl",
     }
     values = {key: _required_text(response, key, key) for key in required}
     if (
@@ -870,6 +1622,41 @@ def validate_workday_admin_response(
             "networkReadinessOutcome must confirm the Workday hosts are "
             "allowed or that no customer firewall change is required."
         )
+    if values["apiClientOutcome"] not in WORKDAY_API_CLIENT_OUTCOMES:
+        raise WorkdayConnectContractError(
+            "apiClientOutcome must confirm an approved existing API client "
+            "or a newly registered API client."
+        )
+    if values["clientGrantType"].casefold() != "saml-bearer":
+        raise WorkdayConnectContractError(
+            "clientGrantType must be saml-bearer."
+        )
+    values["clientGrantType"] = "saml-bearer"
+    if values["includeWorkdayOwnedScope"].casefold() != "yes":
+        raise WorkdayConnectContractError(
+            "includeWorkdayOwnedScope must be yes."
+        )
+    values["includeWorkdayOwnedScope"] = "yes"
+    expected_login_url = _required_text(
+        state.get("identifiers") or {},
+        "entraLoginUrl",
+        "Verified Microsoft Entra Login URL",
+    )
+    expected_reply_url = _required_text(
+        state.get("identifiers") or {},
+        "replyUrl",
+        "Verified Microsoft Entra Reply URL",
+    )
+    for field, expected in (
+        ("identityProviderSsoServiceUrl", expected_login_url),
+        ("signOnRedirectUrl", expected_reply_url),
+    ):
+        observed = _absolute_https_url(response.get(field), field)
+        if _normalized_uri(observed) != _normalized_uri(expected):
+            raise WorkdayConnectContractError(
+                f"{field} does not match the verified Entra value."
+            )
+        values[field] = observed
     signing_certificate = (state.get("identifiers") or {}).get("signingCertificate")
     if not isinstance(signing_certificate, Mapping):
         raise WorkdayConnectContractError(
@@ -937,6 +1724,97 @@ def validate_workday_admin_response(
             "The supplied Workday certificate Valid To date conflicts "
             "with the verified certificate-date confirmation."
         )
+    least_privilege_required = {
+        "rolloutType",
+        "employeeSecurityGroup",
+        "publicWorkerReportsOutcome",
+        "integrationPermissionsGetOutcome",
+        "authorizationOutcome",
+    }
+    values.update(
+        {
+            key: _required_text(response, key, key)
+            for key in least_privilege_required
+        }
+    )
+    if values["rolloutType"] not in WORKDAY_ROLLOUT_TYPES:
+        raise WorkdayConnectContractError(
+            "rolloutType must be entire-workforce or limited-or-test."
+        )
+    if (
+        values["rolloutType"] == "limited-or-test"
+        and values["employeeSecurityGroup"].casefold()
+        in {"all employees", "all workers"}
+    ):
+        raise WorkdayConnectContractError(
+            "A limited or test rollout cannot use All Employees."
+        )
+    if (
+        values["publicWorkerReportsOutcome"]
+        not in WORKDAY_DOMAIN_PERMISSION_OUTCOMES
+    ):
+        raise WorkdayConnectContractError(
+            "publicWorkerReportsOutcome must confirm Get permission on "
+            "Worker Data: Public Worker Reports."
+        )
+    if (
+        values["integrationPermissionsGetOutcome"]
+        not in WORKDAY_DOMAIN_PERMISSION_OUTCOMES
+    ):
+        raise WorkdayConnectContractError(
+            "integrationPermissionsGetOutcome must confirm Get permission "
+            "under Integration Permissions."
+        )
+    if values["authorizationOutcome"] not in WORKDAY_AUTHORIZATION_OUTCOMES:
+        raise WorkdayConnectContractError(
+            "authorizationOutcome must confirm verification or bounded "
+            "Task not authorized remediation."
+        )
+    supplied_functional_area_scopes = _safe_string_list(
+        response.get("functionalAreaScopes"),
+        "Workday functionalAreaScopes",
+        allow_empty=False,
+    )
+    expected_functional_area_scopes = {
+        value.casefold()
+        for value in WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES
+    }
+    if {
+        value.casefold() for value in supplied_functional_area_scopes
+    } != expected_functional_area_scopes:
+        raise WorkdayConnectContractError(
+            "functionalAreaScopes must contain exactly Core Payroll, "
+            "Organizations and Roles, Staffing, and Time Off and Leave."
+        )
+    functional_area_scopes = list(
+        WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES
+    )
+    optional_domains = _optional_domains(response.get("optionalDomains"))
+    remediation_evidence: dict[str, str] = {}
+    if values["authorizationOutcome"] == "task-not-authorized-remediated":
+        remediation_evidence = {
+            "authorizationRemediationDomain": _safe_nonsecret_text(
+                response.get("authorizationRemediationDomain"),
+                "authorizationRemediationDomain",
+            ),
+            "authorizationRemediationScenario": _safe_nonsecret_text(
+                response.get("authorizationRemediationScenario"),
+                "authorizationRemediationScenario",
+            ),
+            "authorizationRetestOutcome": _required_text(
+                response,
+                "authorizationRetestOutcome",
+                "authorizationRetestOutcome",
+            ),
+        }
+        if (
+            remediation_evidence["authorizationRetestOutcome"]
+            not in WORKDAY_AUTHORIZATION_RETEST_OUTCOMES
+        ):
+            raise WorkdayConnectContractError(
+                "authorizationRetestOutcome must confirm verification after "
+                "the bounded authorization remediation."
+            )
     certificate_name = str(response.get("certificateName") or "").strip()
     certificate_evidence = {
         "certificateSelectionOutcome": certificate_selection_outcome,
@@ -963,6 +1841,62 @@ def validate_workday_admin_response(
             **certificate_evidence,
             "authenticationPolicyOutcome": values["authenticationPolicyOutcome"],
             "networkReadinessOutcome": values["networkReadinessOutcome"],
+            "apiClientOutcome": values["apiClientOutcome"],
+            "clientGrantType": values["clientGrantType"],
+            "includeWorkdayOwnedScope": values[
+                "includeWorkdayOwnedScope"
+            ],
+            "identityProviderSsoServiceUrl": values[
+                "identityProviderSsoServiceUrl"
+            ],
+            "signOnRedirectUrl": values["signOnRedirectUrl"],
+            "rolloutType": values["rolloutType"],
+            "employeeSecurityGroup": values["employeeSecurityGroup"],
+            "publicWorkerReportsOutcome": values[
+                "publicWorkerReportsOutcome"
+            ],
+            "integrationPermissionsGetOutcome": values[
+                "integrationPermissionsGetOutcome"
+            ],
+            "functionalAreaScopes": functional_area_scopes,
+            "optionalDomains": optional_domains,
+            "authorizationOutcome": values["authorizationOutcome"],
+            **remediation_evidence,
+        },
+        "partialEvidence": {
+            "identityProviderOutcome": identity_provider_outcome,
+            "enabledServiceProviderId": expected_entity_id,
+            "certificateSelectionOutcome": certificate_selection_outcome,
+            "certificateValidityOutcome": certificate_validity_outcome,
+            "oauthClientId": values["oauthClientId"],
+            "oauthTokenUrl": oauth_token_url,
+            "restBaseUrl": rest_base_url,
+            "soapBaseUrl": soap_base_url,
+            "authenticationPolicyOutcome": values[
+                "authenticationPolicyOutcome"
+            ],
+            "networkReadinessOutcome": values["networkReadinessOutcome"],
+            "apiClientOutcome": values["apiClientOutcome"],
+            "clientGrantType": values["clientGrantType"],
+            "includeWorkdayOwnedScope": values[
+                "includeWorkdayOwnedScope"
+            ],
+            "identityProviderSsoServiceUrl": values[
+                "identityProviderSsoServiceUrl"
+            ],
+            "signOnRedirectUrl": values["signOnRedirectUrl"],
+            "rolloutType": values["rolloutType"],
+            "employeeSecurityGroup": values["employeeSecurityGroup"],
+            "publicWorkerReportsOutcome": values[
+                "publicWorkerReportsOutcome"
+            ],
+            "integrationPermissionsGetOutcome": values[
+                "integrationPermissionsGetOutcome"
+            ],
+            "functionalAreaScopes": functional_area_scopes,
+            "optionalDomains": optional_domains,
+            "authorizationOutcome": values["authorizationOutcome"],
+            **remediation_evidence,
         },
     }
 

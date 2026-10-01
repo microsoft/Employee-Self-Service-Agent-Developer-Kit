@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import Any, Callable, Mapping
 
 from auth import authenticate, query_all, update_record
@@ -574,15 +575,15 @@ def _discover_physical_connections(
         runner=runner,
     )
     references_catalog = context["referencesCatalog"]
-    workday = _select_connection(
-        connections,
-        references_catalog["workday"]["connectorName"],
-        explicit_id=workday_connection_id,
-    )
     dataverse = _select_connection(
         connections,
         references_catalog["dataverse"]["connectorName"],
         explicit_id=dataverse_connection_id,
+    )
+    workday = _select_connection(
+        connections,
+        references_catalog["workday"]["connectorName"],
+        explicit_id=workday_connection_id,
     )
     return workday, dataverse
 
@@ -749,20 +750,36 @@ def _run_authorization(
     *,
     runner: Callable[..., subprocess.CompletedProcess],
 ) -> None:
+    authorization = plan["delegatedAuthorization"]
+    script = str(authorization["script"])
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if not shell:
+        print(
+            f"[ERROR] Cannot run {script}: PowerShell was not found.",
+            file=sys.stderr,
+        )
         raise WorkdayConnectRuntimeError(
             "PowerShell is required for delegated flow authorization."
         )
-    authorization = plan["delegatedAuthorization"]
+    flow_names = {
+        str(flow.get("workflowId") or "").casefold(): str(flow.get("name") or "")
+        for flow in plan.get("flows", [])
+        if isinstance(flow, Mapping)
+    }
     for workflow_id in authorization["workflowIds"]:
+        flow_name = flow_names.get(str(workflow_id).casefold())
+        target = f'flow "{flow_name}"' if flow_name else f"workflow {workflow_id}"
+        print(
+            f"[INFO] Running {script} for {target}.",
+            file=sys.stderr,
+        )
         try:
             result = runner(
                 [
                     shell,
                     "-NoProfile",
                     "-File",
-                    str(Path(__file__).parent / authorization["script"]),
+                    str(Path(__file__).parent / script),
                     "-OrgUrl",
                     plan["scope"]["dataverseUrl"],
                     "-BotId",
@@ -780,6 +797,11 @@ def _run_authorization(
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
+            print(
+                f"[ERROR] {script} failed for {target}: "
+                "execution did not finish within 10 minutes.",
+                file=sys.stderr,
+            )
             raise WorkdayConnectRuntimeError(
                 "Delegated flow authorization did not finish within "
                 f"10 minutes for workflow {workflow_id}."
@@ -808,10 +830,19 @@ def _run_authorization(
                     f"The authorization script exited with code "
                     f"{result.returncode} without its success marker."
                 )
+            print(
+                f"[ERROR] {script} failed for {target}: {evidence}",
+                file=sys.stderr,
+            )
             raise WorkdayConnectRuntimeError(
                 "Delegated flow authorization failed for workflow "
                 f"{workflow_id}. {evidence}"
             )
+        print(
+            f"[INFO] {script} completed for {target}; "
+            "Dataverse authorization was verified.",
+            file=sys.stderr,
+        )
 
 
 def _require_approved_flow_targets(

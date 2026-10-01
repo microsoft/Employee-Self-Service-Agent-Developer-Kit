@@ -79,6 +79,25 @@ def _pac_runner(command, **_kwargs):
     raise AssertionError(command)
 
 
+def _pac_runner_with_connections(payload):
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    return runner
+
+
 def _records():
     catalog = runtime.load_catalog()
     logical_names = [
@@ -246,6 +265,38 @@ def test_physical_connection_verification_returns_selected_connection_ids():
     }
 
 
+def test_physical_connection_verification_reports_dataverse_before_workday():
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections({"value": []}),
+        )
+
+    assert raised.value.details["connector"] == (
+        "shared_commondataserviceforapps"
+    )
+
+
+def test_physical_connection_verification_reports_workday_after_dataverse():
+    payload = {
+        "value": [
+            value
+            for value in _connections()["value"]
+            if value["name"] == DATAVERSE_CONNECTION
+        ]
+    }
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections(payload),
+        )
+
+    assert raised.value.details["connector"] == "shared_workdaysoap"
+
+
 @pytest.mark.parametrize(
     ("connector_name", "duplicate_id", "display_name"),
     [
@@ -405,7 +456,7 @@ def test_runtime_plan_rejects_connection_id_drift_after_verification():
         )
 
 
-def test_runtime_apply_verifies_all_mutations(monkeypatch):
+def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     records = _records()
     verified_hashes = []
     recorded_stages = []
@@ -466,9 +517,22 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    expected_flows = set(records["flows"])
+    for flow_name in expected_flows:
+        assert f'[INFO] Running {script} for flow "{flow_name}".' in messages
+        assert (
+            f'[INFO] {script} completed for flow "{flow_name}"; '
+            "Dataverse authorization was verified."
+        ) in messages
+    assert messages.count("Dataverse authorization was verified.") == len(
+        expected_flows
+    )
+    assert "[ERROR]" not in messages
 
 
-def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
+def test_runtime_records_verified_stages_before_later_failure(monkeypatch, capsys):
     records = _records()
     recorded_stages = []
 
@@ -521,6 +585,12 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for flow " in messages
+    assert f"[ERROR] {script} failed for flow " in messages
+    assert "explicit [FAIL] result" in messages
+    assert "Dataverse authorization was verified." not in messages
 
 
 def test_runtime_requires_completed_connection_phase():
@@ -687,7 +757,7 @@ def test_runtime_rejects_a_different_dataverse_identity():
         )
 
 
-def test_runtime_authorization_timeout_is_structured(monkeypatch):
+def test_runtime_authorization_timeout_is_structured(monkeypatch, capsys):
     plan = {
         "scope": {
             "dataverseUrl": "https://contoso.crm.dynamics.com",
@@ -712,3 +782,12 @@ def test_runtime_authorization_timeout_is_structured(monkeypatch):
             plan,
             runner=timed_out,
         )
+
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for workflow workflow-id." in messages
+    assert (
+        f"[ERROR] {script} failed for workflow workflow-id: "
+        "execution did not finish within 10 minutes."
+    ) in messages
+    assert "Dataverse authorization was verified." not in messages

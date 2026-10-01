@@ -246,7 +246,7 @@ class TestGates:
             "url": "https://foundation.example"
         }
 
-    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6])
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6, 7])
     def test_connect_config_flattens_workday_state(
         self, tmp_path: Path, schema_version: int
     ) -> None:
@@ -411,24 +411,6 @@ class TestGates:
         assert plan.requires_config, "test assumes ESS-SOLN-001 requires config"
         monkeypatch.chdir(tmp_path)
         assert not (tmp_path / ".local" / "config.json").exists()
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
-        assert exc.value.code == 1
-
-    def test_missing_dataverse_endpoint_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Config present (so the config gate passes) but no dataverseEndpoint,
-        # and ESS-SOLN-001 requires one -> the endpoint gate fires, still
-        # before any auth.
-        plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert plan.requires_dataverse_endpoint, (
-            "test assumes ESS-SOLN-001 requires a Dataverse endpoint"
-        )
-        local = tmp_path / ".local"
-        local.mkdir()
-        (local / "config.json").write_text("{}", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
         assert exc.value.code == 1

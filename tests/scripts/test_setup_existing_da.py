@@ -577,6 +577,66 @@ def test_list_agents_classifies_every_verified_realm() -> None:
     assert client.configuration_calls == 1
 
 
+def test_list_agents_uses_collection_schema_for_unpublished_dev() -> None:
+    class InventorySchemaClient(FakeClient):
+        def list_agents(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "cdsBotId": self.agent_id,
+                    "displayName": self.agent_name,
+                    "schemaName": self.schema_name,
+                    "publishedOn": None,
+                }
+            ]
+
+    client = InventorySchemaClient(
+        include_agent_schema=False,
+        published_config_available=False,
+    )
+
+    result = setup_existing_da.inspect_listed_agents(client)
+
+    assert result["devAgents"] == [
+        {
+            "cdsBotId": AGENT_ID,
+            "displayName": "Employee Self-Service HR",
+            "schemaName": SCHEMA_NAME,
+            "publishedOn": None,
+            "botId": AGENT_ID,
+            "fullBotName": "Employee Self-Service HR",
+            "realm": "dev",
+            "managedProperties": {"isManaged": True},
+        }
+    ]
+    assert result["productIdentityUnavailableCount"] == 0
+    assert client.configuration_calls == 0
+
+
+def test_list_agents_keeps_schema_when_service_surfaces_conflicting_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class ConflictingSchemaClient(FakeClient):
+        def list_agents(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "cdsBotId": self.agent_id,
+                    "displayName": self.agent_name,
+                    "schemaName": "gptagent_collection",
+                }
+            ]
+
+    client = ConflictingSchemaClient(schema_name="gptagent_direct")
+
+    result = setup_existing_da.inspect_listed_agents(client)
+    captured = capsys.readouterr()
+
+    assert len(result["devAgents"]) == 1
+    assert result["devAgents"][0]["schemaName"] == "gptagent_direct"
+    assert result["productIdentityUnavailableCount"] == 0
+    assert client.configuration_calls == 0
+    assert "returned different schemas" in captured.err
+
+
 def test_list_agents_preserves_test_and_unknown_realm_facts() -> None:
     test_agent_id = "00000000-0000-4000-8000-000000007777"
     unknown_agent_id = "00000000-0000-4000-8000-000000008888"
@@ -795,7 +855,9 @@ def test_list_agents_keeps_dev_agent_when_product_identity_is_unavailable(
                 response=response,
             )
 
-    result = setup_existing_da.inspect_listed_agents(UnclassifiedClient())
+    result = setup_existing_da.inspect_listed_agents(
+        UnclassifiedClient(include_agent_schema=False)
+    )
     captured = capsys.readouterr()
 
     assert len(result["devAgents"]) == 1
@@ -827,7 +889,7 @@ def test_list_agents_keeps_dev_agent_after_configuration_500(
             )
 
     result = setup_existing_da.inspect_listed_agents(
-        FailingConfigurationClient()
+        FailingConfigurationClient(include_agent_schema=False)
     )
     captured = capsys.readouterr()
 
@@ -842,7 +904,10 @@ def test_list_agents_classifies_failed_dev_confirmation_as_unresolved(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     result = setup_existing_da.inspect_listed_agents(
-        FakeClient(configuration_realm="Prod")
+        FakeClient(
+            configuration_realm="Prod",
+            include_agent_schema=False,
+        )
     )
     captured = capsys.readouterr()
 
@@ -2278,6 +2343,33 @@ def test_capacity_manual_result_requires_explicit_attestation(
     assert blocked["mode"] is None
 
 
+def test_capacity_warning_records_risk_without_blocking_setup(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Warning",
+    )
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    assert result["state"] == "done"
+    assert result["mode"] == "automated"
+    assert result["evidenceStatuses"] == ["Warning"]
+    assert result["failureCauses"] == []
+    assert step["state"] == "done"
+    assert "capacity risk" in step["note"].lower()
+    assert "not a foundation setup blocker" in step["note"].lower()
+
+
 def test_capacity_manual_result_accepts_explicit_attestation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -2384,6 +2476,57 @@ def test_authentication_uses_workspace_cache_and_account_hint(
     )
     assert observed == {
         "ring": "test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "force_account_selection": False,
+        "account_hint": "test.user@example.test",
+    }
+
+
+def test_list_agents_authentication_uses_read_only_inventory_scopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def authenticate_inventory(
+        ring: str,
+        *,
+        tenant_id: str | None,
+        cache_path: Path,
+        force_account_selection: bool,
+        account_hint: str,
+    ) -> tuple[str, str]:
+        observed.update(
+            {
+                "ring": ring,
+                "tenant_id": tenant_id,
+                "cache_path": cache_path,
+                "force_account_selection": force_account_selection,
+                "account_hint": account_hint,
+            }
+        )
+        return "token", TENANT_ID
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_agent_inventory",
+        authenticate_inventory,
+    )
+    args = SimpleNamespace(
+        command="list-agents",
+        tenant_id=TENANT_ID,
+        select_account=False,
+        account="test.user@example.test",
+        kit_root=tmp_path,
+    )
+
+    assert setup_existing_da._authentication_from_args(args, "test") == (
+        "token",
+        TENANT_ID,
+    )
+    assert observed == {
+        "ring": "test",
+        "tenant_id": TENANT_ID,
         "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
