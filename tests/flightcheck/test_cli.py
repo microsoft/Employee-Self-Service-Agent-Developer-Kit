@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -579,6 +579,45 @@ class _RecordingPVA:
 
     def authenticate(self):
         return "pva-token"
+
+
+@pytest.mark.parametrize("scope", ["environment", "full"])
+def test_legacy_environment_scope_uses_bap_only_but_full_keeps_mixed_auth(
+    scope, tmp_path, monkeypatch,
+):
+    local_dir = tmp_path / ".local"
+    local_dir.mkdir()
+    (local_dir / "config.json").write_text(
+        '{"agents":[],"dataverseEndpoint":"https://org.crm.dynamics.com"}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("auth.authenticate", lambda *a, **kw: "dv-token")
+    monkeypatch.setattr("auth.discover_tenant", lambda *a, **kw: "tenant-id")
+    for name in ("GraphClient", "PVAClient", "PowerPlatformClient", "AzureArmClient"):
+        monkeypatch.setattr(cli, name, _OkClient)
+    client = Mock()
+    monkeypatch.setattr(cli, "PPAdminClient", lambda _: client)
+    monkeypatch.setattr(cli, "derive_environment_id", lambda *a, **kw: "env-id")
+    monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+    monkeypatch.setattr(cli, "_resolve_target_selection", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "_apply_runtime_reachability_consent", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "save_results", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "sys.argv", [
+            "cli.py", "--scope", scope, "--ring", "prod", "--no-open", "--no-telemetry",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    if scope == "environment":
+        client.authenticate.assert_called_once_with(
+            include_powerapps=False, include_flow=False,
+        )
+    else:
+        client.authenticate.assert_called_once_with()
 
 
 class TestPvaScopeGating:

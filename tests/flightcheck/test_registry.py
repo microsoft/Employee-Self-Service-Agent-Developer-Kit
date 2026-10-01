@@ -183,6 +183,7 @@ class TestTransitiveRequirements:
 
     def test_env002_pulls_env001_prereq(self):
         plan = registry.transitive_requirements("ENV-002")
+        assert plan.clients == frozenset({registry.BAP})
         # Single category function (run_environment_checks) covers both.
         assert len(plan.ordered_fns) == 1
         assert plan.requires_config is False

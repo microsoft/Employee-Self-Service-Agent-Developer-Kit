@@ -1097,6 +1097,7 @@ def _run_single_checkpoint(args):
     if needed & {
         registry.GRAPH,
         registry.PP_ADMIN,
+        registry.BAP,
         registry.PVA,
         registry.DATAVERSE,
         registry.POWERPLATFORM,
@@ -1142,12 +1143,15 @@ def _run_single_checkpoint(args):
             print(f"  Graph: WARNING — {e}")
             graph = None
 
-    if registry.PP_ADMIN in needed:
+    if needed & {registry.PP_ADMIN, registry.BAP}:
         if not quiet_auth:
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            pp_admin.authenticate(
+                include_powerapps=registry.PP_ADMIN in needed,
+                include_flow=registry.PP_ADMIN in needed,
+            )
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
@@ -1155,7 +1159,7 @@ def _run_single_checkpoint(args):
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
-    if not env_id and registry.PP_ADMIN in needed and env_url:
+    if not env_id and needed & {registry.PP_ADMIN, registry.BAP} and env_url:
         env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
 
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
@@ -1366,6 +1370,7 @@ def _run_profile(args):
     if needed & {
         registry.GRAPH,
         registry.PP_ADMIN,
+        registry.BAP,
         registry.PVA,
         registry.DATAVERSE,
         registry.POWERPLATFORM,
@@ -1404,12 +1409,15 @@ def _run_profile(args):
             print(f"  Graph: WARNING — {e}")
             graph = None
 
-    if registry.PP_ADMIN in needed:
+    if needed & {registry.PP_ADMIN, registry.BAP}:
         if not quiet_auth:
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            pp_admin.authenticate(
+                include_powerapps=registry.PP_ADMIN in needed,
+                include_flow=registry.PP_ADMIN in needed,
+            )
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
@@ -1417,7 +1425,7 @@ def _run_profile(args):
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
-    if not env_id and registry.PP_ADMIN in needed and env_url:
+    if not env_id and needed & {registry.PP_ADMIN, registry.BAP} and env_url:
         env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
 
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
@@ -2029,7 +2037,10 @@ def main():
         print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            if args.scope == "environment":
+                pp_admin.authenticate(include_powerapps=False, include_flow=False)
+            else:
+                pp_admin.authenticate()
             print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")

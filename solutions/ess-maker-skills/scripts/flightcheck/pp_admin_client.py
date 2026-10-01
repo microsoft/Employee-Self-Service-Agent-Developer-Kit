@@ -43,12 +43,14 @@ POWERAPPS_BASE = "https://api.powerapps.com"
 # 404 (the path simply does not exist on that host); the equivalent
 # admin endpoint that DOES exist is on `api.flow.microsoft.com`. It
 # also requires its own audience token (service.flow.microsoft.com),
-# not the powerapps.com token used for the BAP / connection endpoints.
+# not the powerapps.com token used for connection endpoints.
 # Probed 2026-05 — see tests/captures/probe_flows_endpoint.py for the
 # data.
 FLOW_BASE = "https://api.flow.microsoft.com"
 
-# The BAP / PowerApps APIs use this resource scope.
+# BAP environment and DLP APIs require their own audience.
+BAP_SCOPE = "https://api.bap.microsoft.com/.default"
+# PowerApps connection APIs retain their separate resource scope.
 PP_SCOPE = "https://service.powerapps.com//.default"
 # Power Automate (Flow) admin API uses its own audience.
 FLOW_SCOPE = "https://service.flow.microsoft.com//.default"
@@ -142,27 +144,33 @@ class PPAdminClient:
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
         self._token: str | None = None
+        self._bap_token: str | None = None
         self._flow_token: str | None = None
         self.signed_in_username: str | None = None
 
     def authenticate(
         self,
         *,
+        include_bap: bool = True,
+        include_powerapps: bool = True,
         include_flow: bool = True,
         preferred_username: str | None = None,
     ) -> str:
         """Acquire Power Platform access tokens.
 
-        Always acquires the PowerApps audience token used for BAP, PowerApps
-        connections, and DLP. By default it also acquires the separate Flow
-        audience token used by Power Automate admin endpoints.
+        By default acquires separate BAP, PowerApps and Flow audience tokens
+        for mixed FlightCheck runs. BAP-only callers disable PowerApps and
+        Flow; connection-only callers disable BAP and Flow. ``include_flow``
+        controls only Flow authentication, not the other audiences.
 
-        Set ``include_flow=False`` for BAP-only operations such as environment
-        discovery. This avoids an unnecessary second interactive sign-in while
-        preserving the existing default for callers that query flows.
-
-        Returns the PowerApps token for backwards compatibility.
+        Returns the PowerApps token when requested (backwards compatibility),
+        otherwise the BAP token, otherwise the Flow token. The first sign-in
+        selects the account; subsequent audiences must use that same identity.
         """
+        if not (include_bap or include_powerapps or include_flow):
+            raise ValueError("Request at least one Power Platform audience.")
+        self._token = self._bap_token = self._flow_token = None
+        self.signed_in_username = None
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
         cache_path = os.path.join(".local", ".token_cache.bin")
@@ -175,11 +183,16 @@ class PPAdminClient:
             CLIENT_ID, authority=authority, token_cache=cache
         )
 
-        accounts = app.get_accounts()
+        selected_username = preferred_username
+        selected_oid = None
+        selected_tid = None
+        acquired_identity = False
 
-        def acquire(scope: str, label: str) -> tuple[str, str | None]:
+        def acquire(scope: str, label: str) -> str:
+            nonlocal selected_username, selected_oid, selected_tid, acquired_identity
             result = None
-            preferred = str(preferred_username or "").casefold()
+            accounts = app.get_accounts()
+            preferred = str(selected_username or "").casefold()
             selected_account = next(
                 (
                     account for account in accounts
@@ -193,17 +206,20 @@ class PPAdminClient:
                     [scope],
                     account=selected_account,
                 )
-            if not result or "access_token" not in result:
+            cached_token = (result or {}).get("access_token")
+            if not isinstance(cached_token, str) or not cached_token.strip():
                 print(f"Opening browser for Power Platform sign-in ({label})...")
                 selected_account = None
                 interactive_options = {"prompt": "select_account"}
-                if preferred_username:
-                    interactive_options["login_hint"] = preferred_username
+                if selected_username:
+                    interactive_options["login_hint"] = selected_username
                 result = app.acquire_token_interactive(
                     [scope],
                     **interactive_options,
                 )
-            if "access_token" not in result:
+            result = result or {}
+            token = result.get("access_token")
+            if not isinstance(token, str) or not token.strip():
                 # Don't echo error_description - it can include tenant IDs and
                 # internal flow details (CWE-209). Mirrors the auth.py pattern.
                 error = result.get("error", "unknown_error")
@@ -214,11 +230,30 @@ class PPAdminClient:
                 or claims.get("upn")
                 or (selected_account or {}).get("username")
             )
-            return result["access_token"], username
+            oid, tid = claims.get("oid"), claims.get("tid")
+            if acquired_identity:
+                if (
+                    (selected_tid and tid and selected_tid != tid)
+                    or (selected_oid and oid and selected_oid != oid)
+                    or (
+                        selected_username and username
+                        and selected_username.casefold() != username.casefold()
+                    )
+                ):
+                    raise RuntimeError(
+                        f"Power Platform auth failed for {label} "
+                        "(account_mismatch). Sign in with the same account."
+                    )
+            selected_username = username or selected_username
+            selected_oid = oid or selected_oid
+            selected_tid = tid or selected_tid
+            acquired_identity = True
+            return token
 
-        pp_token, pp_username = acquire(PP_SCOPE, "PowerApps/BAP")
+        pp_token = acquire(PP_SCOPE, "PowerApps") if include_powerapps else None
+        bap_token = acquire(BAP_SCOPE, "BAP") if include_bap else None
         flow_token = (
-            acquire(FLOW_SCOPE, "Power Automate (Flow)")[0]
+            acquire(FLOW_SCOPE, "Power Automate (Flow)")
             if include_flow
             else None
         )
@@ -237,22 +272,26 @@ class PPAdminClient:
                 f.write(cache.serialize())
 
         self._token = pp_token
+        self._bap_token = bap_token
         self._flow_token = flow_token
-        self.signed_in_username = pp_username
-        return self._token
+        self.signed_in_username = selected_username
+        token = pp_token or bap_token or flow_token
+        assert token is not None  # At least one requested audience succeeded.
+        return token
 
     def authenticate_silent(self) -> bool:
-        """Acquire a PowerApps/BAP token from cache WITHOUT prompting.
+        """Acquire a BAP token from cache WITHOUT prompting.
 
         Unlike :meth:`authenticate`, this never opens a browser: it only
         tries ``acquire_token_silent`` against the shared MSAL cache
         (``.local/.token_cache.bin``). Intended for best-effort background
         lookups (e.g. resolving an environment SKU during telemetry) that
         must never block or interrupt the user. Returns True if a token was
-        obtained (``self._token`` set), False otherwise. Only the PowerApps
-        audience is acquired — callers needing flow endpoints must use the
-        interactive :meth:`authenticate`.
+        obtained (``self._bap_token`` set), False otherwise. Neither PowerApps
+        nor Flow is acquired. This is only for optional BAP lookups; mandatory
+        checks must use :meth:`authenticate` and surface authentication errors.
         """
+        self._bap_token = None
         try:
             authority = f"https://login.microsoftonline.com/{self.tenant_id}"
             cache = msal.SerializableTokenCache()
@@ -267,10 +306,11 @@ class PPAdminClient:
             accounts = app.get_accounts()
             if not accounts:
                 return False
-            result = app.acquire_token_silent([PP_SCOPE], account=accounts[0])
-            if not result or "access_token" not in result:
+            result = app.acquire_token_silent([BAP_SCOPE], account=accounts[0])
+            token = (result or {}).get("access_token")
+            if not isinstance(token, str) or not token.strip():
                 return False
-            self._token = result["access_token"]
+            self._bap_token = token
             return True
         except Exception:  # noqa: BLE001 — best-effort, never raise to caller
             return False
@@ -281,6 +321,16 @@ class PPAdminClient:
             raise RuntimeError("Call authenticate() first")
         return {
             "Authorization": f"Bearer {self._token}",
+            "Accept": "application/json",
+        }
+
+    @property
+    def bap_headers(self) -> dict:
+        """Headers for BAP environment and DLP requests, never PowerApps."""
+        if not self._bap_token:
+            raise RuntimeError("Call authenticate(include_bap=True) first")
+        return {
+            "Authorization": f"Bearer {self._bap_token}",
             "Accept": "application/json",
         }
 
@@ -302,7 +352,10 @@ class PPAdminClient:
 
     def _get(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> dict:
         url = f"{base}{path}"
-        h = self.flow_headers if use_flow_token else self.headers
+        h = (
+            self.bap_headers if base == BAP_BASE
+            else self.flow_headers if use_flow_token else self.headers
+        )
         resp = _SESSION.get(url, headers=h, params=params, timeout=60)
         if resp.status_code in (401, 403):
             return {"_error": "insufficient_permissions", "_status": resp.status_code}
@@ -321,7 +374,10 @@ class PPAdminClient:
         """
         items: list = []
         url = f"{base}{path}"
-        h = self.flow_headers if use_flow_token else self.headers
+        h = (
+            self.bap_headers if base == BAP_BASE
+            else self.flow_headers if use_flow_token else self.headers
+        )
         while url:
             resp = _SESSION.get(url, headers=h, params=params, timeout=60)
             if resp.status_code in (401, 403):
