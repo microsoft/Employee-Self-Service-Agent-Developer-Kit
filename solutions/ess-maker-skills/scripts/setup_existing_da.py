@@ -78,7 +78,7 @@ SETUP_STEP_NOTES = {
         "Any known capacity risk remains visible in its evidence."
     ),
     "SETUP-03": (
-        "Confirms the environment and exact editable Dev agent."
+        "Confirms the environment and exact editable native agent."
     ),
     "SETUP-04": (
         "Preferred-solution configuration does not apply to the DA-only "
@@ -1584,12 +1584,9 @@ def validate_existing_dev_connection(
     expected_schema_name: str | None = None,
     allow_missing_schema: bool = False,
     allow_unenrolled_authoring: bool = False,
-    allow_route_independent_authoring: bool = False,
 ) -> dict[str, Any]:
-    """Validate a directly addressable agent as editable Dev identity."""
-    if require_alm_family and (
-        allow_unenrolled_authoring or allow_route_independent_authoring
-    ):
+    """Validate one directly addressable native authoring identity."""
+    if require_alm_family and allow_unenrolled_authoring:
         raise ExistingDASetupError(
             "ALM-family validation cannot bypass ALM route validation."
         )
@@ -1618,13 +1615,6 @@ def validate_existing_dev_connection(
             _confirm_direct_authoring_identity(normalized_agent_id, agent)
             realm = None
             alm_is_enrolled = False
-        elif allow_route_independent_authoring:
-            alm_is_enrolled, realm = (
-                _confirm_direct_native_authoring_identity(
-                    normalized_agent_id,
-                    agent,
-                )
-            )
         else:
             realm = _confirm_direct_dev_authoring_identity(
                 normalized_agent_id,

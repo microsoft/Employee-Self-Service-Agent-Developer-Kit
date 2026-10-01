@@ -275,6 +275,17 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             ),
         ]
 
+    configured_agent = runner.config.get("agent", {})
+    configured_alm = (
+        configured_agent.get("alm")
+        if isinstance(configured_agent, dict)
+        else None
+    )
+    allow_unenrolled_authoring = (
+        isinstance(configured_alm, dict)
+        and configured_alm.get("isEnrolled") is False
+    )
+
     try:
         connection = validate_existing_dev_connection(
             client,
@@ -287,7 +298,7 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             )
             or None,
             allow_missing_schema=True,
-            allow_route_independent_authoring=True,
+            allow_unenrolled_authoring=allow_unenrolled_authoring,
         )
     except AgentBuilderHTTPError as exc:
         status = (
