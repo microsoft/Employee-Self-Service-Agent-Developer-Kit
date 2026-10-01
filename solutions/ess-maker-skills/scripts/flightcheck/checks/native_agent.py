@@ -9,7 +9,11 @@ import uuid
 from typing import Any
 
 from agentbuilder import AgentBuilderHTTPError
-from setup_existing_da import validate_existing_dev_connection
+from setup_existing_da import (
+    ExistingDASetupError,
+    inspect_agent_route,
+    validate_existing_dev_connection,
+)
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import active_agent
@@ -275,18 +279,27 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             ),
         ]
 
-    configured_agent = runner.config.get("agent", {})
-    configured_alm = (
-        configured_agent.get("alm")
-        if isinstance(configured_agent, dict)
-        else None
-    )
-    allow_unenrolled_authoring = (
-        isinstance(configured_alm, dict)
-        and configured_alm.get("isEnrolled") is False
-    )
-
     try:
+        route = inspect_agent_route(
+            client,
+            environment_id=environment_id,
+            agent_id=agent_id,
+        )
+        route_alm = route.get("alm")
+        is_enrolled = (
+            route_alm.get("isEnrolled")
+            if isinstance(route_alm, dict)
+            else None
+        )
+        if is_enrolled is False:
+            allow_unenrolled_authoring = True
+        elif is_enrolled is True and route.get("realm") == "dev":
+            allow_unenrolled_authoring = False
+        else:
+            raise ExistingDASetupError(
+                "Direct agent lookup did not identify an editable Dev or "
+                "unenrolled authoring target."
+            )
         connection = validate_existing_dev_connection(
             client,
             environment_id=environment_id,

@@ -176,12 +176,11 @@ def test_exact_mapped_connected_reference_passes() -> None:
     assert "unverified" not in detail.result
 
 
-def test_native_flightcheck_accepts_explicit_unenrolled_authoring() -> None:
+def test_native_flightcheck_accepts_swagger_unenrolled_null_realm() -> None:
     runner = _Runner(
         agentbuilder=_AgentBuilder([], realm=None),
         connectivity=_Connectivity([]),
     )
-    runner.config["agent"]["alm"] = {"isEnrolled": False}
 
     results = run_native_agent_checks(runner)
 
@@ -189,20 +188,7 @@ def test_native_flightcheck_accepts_explicit_unenrolled_authoring() -> None:
     assert _by_id(results, "DA-CONTENT-001").status == "Passed"
 
 
-def test_native_flightcheck_does_not_infer_unenrolled_from_null_realm() -> None:
-    runner = _Runner(
-        agentbuilder=_AgentBuilder([], realm=None),
-        connectivity=_Connectivity([]),
-    )
-
-    results = run_native_agent_checks(runner)
-
-    access = _by_id(results, "DA-AGENT-001")
-    assert access.status == "Failed"
-    assert "ALM-enrolled Dev agent" in access.result
-
-
-def test_native_flightcheck_rejects_stale_unenrolled_state_for_dev() -> None:
+def test_native_flightcheck_uses_direct_dev_over_stale_local_alm_state() -> None:
     runner = _Runner(
         agentbuilder=_AgentBuilder([], realm="dev"),
         connectivity=_Connectivity([]),
@@ -211,9 +197,8 @@ def test_native_flightcheck_rejects_stale_unenrolled_state_for_dev() -> None:
 
     results = run_native_agent_checks(runner)
 
-    access = _by_id(results, "DA-AGENT-001")
-    assert access.status == "Failed"
-    assert "already enrolled in ALM with realm 'dev'" in access.result
+    assert _by_id(results, "DA-AGENT-001").status == "Passed"
+    assert _by_id(results, "DA-CONTENT-001").status == "Passed"
 
 
 @pytest.mark.parametrize("realm", ("test", "prod"))
@@ -229,7 +214,7 @@ def test_native_flightcheck_rejects_enrolled_non_dev_realm(
 
     access = _by_id(results, "DA-AGENT-001")
     assert access.status == "Failed"
-    assert "ALM-enrolled Dev agent" in access.result
+    assert "editable Dev or unenrolled authoring target" in access.result
     assert all(
         result.checkpoint_id != "DA-CONTENT-001"
         for result in results
