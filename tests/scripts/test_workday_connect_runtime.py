@@ -79,6 +79,25 @@ def _pac_runner(command, **_kwargs):
     raise AssertionError(command)
 
 
+def _pac_runner_with_connections(payload):
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    return runner
+
+
 def _records():
     catalog = runtime.load_catalog()
     logical_names = [
@@ -244,6 +263,38 @@ def test_physical_connection_verification_returns_selected_connection_ids():
             },
         ],
     }
+
+
+def test_physical_connection_verification_reports_dataverse_before_workday():
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections({"value": []}),
+        )
+
+    assert raised.value.details["connector"] == (
+        "shared_commondataserviceforapps"
+    )
+
+
+def test_physical_connection_verification_reports_workday_after_dataverse():
+    payload = {
+        "value": [
+            value
+            for value in _connections()["value"]
+            if value["name"] == DATAVERSE_CONNECTION
+        ]
+    }
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections(payload),
+        )
+
+    assert raised.value.details["connector"] == "shared_workdaysoap"
 
 
 @pytest.mark.parametrize(

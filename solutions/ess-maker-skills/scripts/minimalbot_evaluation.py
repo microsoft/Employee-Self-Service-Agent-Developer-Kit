@@ -28,6 +28,7 @@ import base64
 import copy
 from datetime import datetime, timezone
 import fnmatch
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -55,6 +56,12 @@ except ImportError:  # pragma: no cover - dependency guard mirrors siblings
     )
 
 from agentbuilder import RING_CONFIG, ring_from_environment_host
+from evaluation_method_policy import (
+    EvaluationMethodError,
+    document_kind,
+    validate_evaluation_documents,
+    validate_evaluation_folder,
+)
 
 
 # Shared public client ID used across the ADK's MSAL flows (matches auth.py).
@@ -69,6 +76,10 @@ PPAPI_BASE = str(RING_CONFIG[DEFAULT_RING]["audience"])
 COMPONENTS_API_VERSION = "2022-03-01-preview"
 MAKEREVAL_API_VERSION = "2024-10-01"
 MCS_CONNECTOR = "shared_microsoftcopilotstudio"
+NATIVE_REVIEW_LOCAL_ONLY_WARNING = (
+    "Existing native Push uploads evaluation YAML only. review.json stays local "
+    "and is not published as shared review state."
+)
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
 _EXPECTED_WORKDAY_TOPIC_COUNTS = {
@@ -886,25 +897,24 @@ class MinimalBotEvaluationClient:
         *,
         dry_run: bool = False,
         only_globs: list[str] | None = None,
+        plan: dict[str, Any] | None = None,
+        source_folder: Path | None = None,
     ) -> dict[str, Any]:
         """Push ``evaluations/<set>/`` folders under ``agent_folder``.
 
-        Mirrors the POC's fresh-insert model: each push inserts a brand-new
-        copy of every evaluation set (new component IDs, timestamped display
-        name) so repeated pushes never collide with optimistic concurrency.
-
-        ``only_globs`` (from ``push.py --only``) restricts the push to the
-        evaluation sets whose files match at least one glob. Because each push
-        mints fresh component IDs, honouring the scope is a correctness
-        requirement — pushing unscoped sets would duplicate every unrelated
-        deployed set on a targeted update.
+        New or changed sets use the existing fresh-copy insert contract.
+        Confirmed unchanged sets reuse their IDs. Review sidecars are retained
+        locally; this API uploads evaluation YAML, not shared review metadata.
         """
-        eval_root = Path(agent_folder) / "evaluations"
-        if not eval_root.is_dir():
+        root = Path(agent_folder)
+        eval_root = root / "evaluations"
+        if source_folder is not None and not dry_run:
+            raise MinimalBotEvaluationError("Alternate source folders are preview-only.")
+        if source_folder is None and not eval_root.is_dir():
             raise MinimalBotEvaluationError(
                 f"No evaluations folder found at {eval_root}."
             )
-        set_folders = sorted(
+        set_folders = [Path(source_folder)] if source_folder is not None else sorted(
             path for path in eval_root.iterdir()
             if path.is_dir() and any(path.glob("*.mcs.yml"))
         )
@@ -913,8 +923,7 @@ class MinimalBotEvaluationClient:
                 f"No evaluation sets found under {eval_root}."
             )
 
-        if only_globs:
-            root = Path(agent_folder)
+        if only_globs and source_folder is None:
             scoped = [
                 folder for folder in set_folders
                 if _folder_matches_globs(folder, root, only_globs)
@@ -923,68 +932,371 @@ class MinimalBotEvaluationClient:
                 raise MinimalBotEvaluationError(
                     "No evaluation sets matched the requested --only/--only-from "
                     f"scope: {only_globs}. Refusing to fall back to a broader "
-                    "push (an unscoped MinimalBot push would duplicate every "
-                    "deployed set)."
+                    "push affecting unselected sets."
                 )
             set_folders = scoped
 
-        changes: list[dict[str, Any]] = []
-        pushed_sets: list[dict[str, str]] = []
+        files: dict[str, str] = {}
         for folder in set_folders:
-            folder_changes, parent_id, display_name = self._folder_changes(folder)
-            changes.extend(folder_changes)
-            pushed_sets.append({
-                "folder": folder.name,
-                "testSetId": parent_id,
-                "displayName": display_name,
-                "cases": str(len(folder_changes) - 1),
-            })
+            if any(path.parent != folder for path in folder.rglob("*.mcs.yml")):
+                raise MinimalBotEvaluationError(
+                    "Nested evaluation documents are not supported in a selected set."
+                )
+            try:
+                validate_evaluation_folder(folder)
+            except EvaluationMethodError as exc:
+                raise MinimalBotEvaluationError(str(exc)) from exc
+            paths = sorted(folder.glob("*.mcs.yml"))
+            if (folder / "review.json").is_file():
+                paths.append(folder / "review.json")
+            for path in paths:
+                files[f"evaluations/{folder.name}/{path.name}"] = path.read_text(
+                    encoding="utf-8"
+                )
+        review_outcome: dict[str, Any] = {"reviewMetadataPersisted": False}
+        if any(path.endswith("/review.json") for path in files):
+            review_outcome["reviewWarning"] = NATIVE_REVIEW_LOCAL_ONLY_WARNING
 
-        if dry_run:
-            return {
-                "dryRun": True,
-                "sets": pushed_sets,
+        target = {
+            "environmentId": self.environment_id,
+            "botId": self.bot_id,
+            "ring": self.ring,
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(files, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        pending_path = root / ".evaluation-pending.json"
+        pending = self._read_tracking(pending_path)
+        component_map = self._read_tracking(root / ".component-map.json")
+        prefixes = tuple(f"evaluations/{folder.name}/" for folder in set_folders)
+        tracking = {
+            "entries": {
+                path: entry for path, entry in component_map.items()
+                if path.startswith(prefixes)
+            },
+            "baseline": {
+                f"evaluations/{folder.name}/{path.name}": path.read_text(encoding="utf-8")
+                for folder in set_folders
+                for path in (root / ".baseline" / "evaluations" / folder.name).glob("*")
+                if path.is_file() and (path.name.endswith(".mcs.yml") or path.name == "review.json")
+            },
+        }
+        if pending:
+            if pending.get("target") != target or pending.get("fingerprint") != fingerprint:
+                raise MinimalBotEvaluationError(
+                    "An unresolved native deployment has a different target or "
+                    "source. Reconcile that deployment before pushing again."
+                )
+            plan = pending
+        if plan is not None and (
+            plan.get("target") != target or plan.get("fingerprint") != fingerprint
+        ):
+            raise MinimalBotEvaluationError(
+                "The selected native deployment changed after preview. Preview again."
+            )
+        if plan is not None and not pending and plan.get("tracking") != tracking:
+            raise MinimalBotEvaluationError(
+                "Native tracking changed after preview. Preview again instead of inserting a duplicate."
+            )
+        if plan is None:
+            changes = []
+            entries = {}
+            pushed_sets = []
+            for folder in set_folders:
+                paths = sorted(folder.glob("*.mcs.yml"))
+                relative_paths = [f"evaluations/{folder.name}/{path.name}" for path in paths]
+                tracked = [path for path in relative_paths if path in component_map]
+                baseline = root / ".baseline" / "evaluations" / folder.name
+                baseline_files = {
+                    path.relative_to(root / ".baseline").as_posix():
+                    path.read_text(encoding="utf-8")
+                    for path in baseline.glob("*.mcs.yml")
+                }
+                selected_files = {path: files[path] for path in relative_paths}
+                reuse = baseline_files == selected_files and len(tracked) == len(paths)
+                if reuse:
+                    folder_changes = []
+                    for relative in relative_paths:
+                        entry = component_map[relative]
+                        if (
+                            not isinstance(entry, dict)
+                            or entry.get("nativeTarget") != target
+                            or not isinstance(entry.get("nativeDefinition"), dict)
+                            or not entry.get("botcomponentid") or not entry.get("name")
+                        ):
+                            raise MinimalBotEvaluationError(
+                                "Native deployment tracking is incomplete or "
+                                "belongs to a different target. Reconcile it first."
+                            )
+                        folder_changes.append({"component": {
+                            "id": entry["botcomponentid"],
+                            "parentBotComponentId": entry.get("parentbotcomponentid"),
+                            "definition": entry["nativeDefinition"],
+                        }})
+                        entries[relative] = entry
+                    parents = [
+                        entry for entry in (component_map[path] for path in relative_paths)
+                        if not entry.get("parentbotcomponentid")
+                    ]
+                    if len(parents) != 1:
+                        raise MinimalBotEvaluationError("Native parent identity is ambiguous.")
+                    parent_id = parents[0]["botcomponentid"]
+                    display_name = parents[0]["name"]
+                else:
+                    folder_changes, parent_id, display_name = self._folder_changes(folder)
+                    parents = [
+                        path for path in paths
+                        if document_kind(yaml.safe_load(
+                            files[f"evaluations/{folder.name}/{path.name}"]
+                        ), context=str(path))
+                        == "EvaluationSet"
+                    ]
+                    ordered = parents + [path for path in paths if path not in parents]
+                    for path, change in zip(ordered, folder_changes):
+                        component = change["component"]
+                        entries[f"evaluations/{folder.name}/{path.name}"] = {
+                            "botcomponentid": component["id"],
+                            "parentbotcomponentid": component.get("parentBotComponentId"),
+                            "componenttype": 19,
+                            "schemaname": component["schemaName"],
+                            "name": display_name if path in parents else path.stem,
+                            "description": "",
+                            "nativeDefinition": component["definition"],
+                            "nativeTarget": target,
+                        }
+                    changes.extend(folder_changes)
+                pushed_sets.append({
+                    "folder": folder.name,
+                    "testSetId": parent_id,
+                    "displayName": display_name,
+                    "cases": str(len(paths) - 1),
+                })
+            plan = {
+                "target": target, "fingerprint": fingerprint, "files": files,
+                "changes": changes, "entries": entries, "sets": pushed_sets,
                 "componentCount": len(changes),
+                "tracking": tracking,
             }
+        if set(plan.get("files", {})) != set(files) or plan.get("files") != files:
+            raise MinimalBotEvaluationError("The native plan does not match selected files.")
+        if dry_run:
+            return {**plan, "dryRun": True, "status": "ready", **review_outcome}
 
         before = self.read_components()
-        change_token = str(before.get("changeToken") or "")
-        if not change_token:
+        expected = self._expected_components(plan)
+        inserted_ids = {_component_id(change) for change in plan["changes"]}
+        actual = self._remote_components(before)
+        existing_ids = set(expected) - inserted_ids
+        self._verify_components(expected, actual, existing_ids)
+        present_new = inserted_ids & set(actual)
+        if present_new:
+            self._verify_components(expected, actual, inserted_ids)
+        elif pending and inserted_ids:
             raise MinimalBotEvaluationError(
-                "MinimalBot component read did not return a changeToken."
+                "The prior native write has an uncertain outcome and its IDs "
+                "are not visible. No automatic replay was performed."
             )
-
-        payload = {
-            "changeToken": change_token,
-            "botComponentChanges": changes,
-            "connectionReferenceChanges": [],
-            "connectorDefinitionChanges": [],
-        }
-
-        response, _ = self._request(
-            "PUT", self._components_url, body=payload, operation="push")
-        if response.status_code != 200:
+        if inserted_ids and not present_new:
+            change_token = str(before.get("changeToken") or "")
+            if not change_token:
+                raise MinimalBotEvaluationError(
+                    "MinimalBot component read did not return a changeToken."
+                )
+            self._write_tracking(pending_path, plan, exclusive=True)
+            response, _ = self._request(
+                "PUT", self._components_url,
+                body={
+                    "changeToken": change_token,
+                    "botComponentChanges": plan["changes"],
+                    "connectionReferenceChanges": [],
+                    "connectorDefinitionChanges": [],
+                },
+                operation="push",
+            )
+            if response.status_code != 200:
+                raise MinimalBotEvaluationError(
+                    f"MinimalBot push failed (HTTP {response.status_code}); "
+                    "pending IDs retained for reconciliation."
+                )
+            actual = self._remote_components(self.read_components())
+        self._verify_components(expected, actual, set(expected))
+        current = {}
+        for folder in set_folders:
+            for path in folder.rglob("*.mcs.yml"):
+                if path.parent != folder:
+                    raise MinimalBotEvaluationError(
+                        "Source changed during deployment: nested evaluation document added."
+                    )
+                current[f"evaluations/{folder.name}/{path.name}"] = path.read_text(
+                    encoding="utf-8"
+                )
+            if (folder / "review.json").is_file():
+                current[f"evaluations/{folder.name}/review.json"] = (
+                    (folder / "review.json").read_text(encoding="utf-8")
+                )
+        if current != plan["files"]:
             raise MinimalBotEvaluationError(
-                f"MinimalBot push failed (HTTP {response.status_code})."
+                "Source changed during native deployment. Remote state may be "
+                "committed; local synchronization was not recorded."
             )
-
-        verify = self.read_components()
-        expected = {_component_id(change) for change in changes}
-        actual = {
-            _component_id(change)
-            for change in verify.get("botComponentChanges", [])
-        }
-        missing = sorted(expected - actual)
-        if missing:
-            raise MinimalBotEvaluationError(
-                f"MinimalBot verification failed; missing components: {missing}"
-            )
+        self._commit_tracking(root, plan)
+        if inserted_ids and pending_path.exists():
+            saved_pending = self._read_tracking(pending_path)
+            if saved_pending.get("fingerprint") != fingerprint or saved_pending.get("target") != target:
+                raise MinimalBotEvaluationError(
+                    "Pending deployment ownership changed; refusing to clear another deployment."
+                )
+            pending_path.unlink()
         return {
             "dryRun": False,
-            "sets": pushed_sets,
-            "componentCount": len(changes),
+            "status": "pushed" if inserted_ids else "up_to_date",
+            "sets": plan["sets"],
+            "componentCount": len(plan["changes"]),
             "verifiedComponents": len(expected),
+            **review_outcome,
         }
+
+    @staticmethod
+    def _read_tracking(path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise MinimalBotEvaluationError(f"Unable to read native tracking {path}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise MinimalBotEvaluationError(f"Invalid native tracking object: {path}")
+        return value
+
+    @staticmethod
+    def _write_tracking(
+        path: Path, value: dict[str, Any], *, exclusive: bool = False,
+    ) -> None:
+        from push import _atomic_write_text
+        try:
+            content = json.dumps(value, indent=2)
+            if exclusive:
+                with path.open("x", encoding="utf-8") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            else:
+                _atomic_write_text(str(path), content)
+        except OSError as exc:
+            raise MinimalBotEvaluationError(
+                f"Unable to persist native tracking {path}: {exc}"
+            ) from exc
+
+    def verify_deployed_components(
+        self, plan: dict[str, Any], response: dict[str, Any],
+    ) -> None:
+        """Verify every component tracked by a deployment plan."""
+        expected = self._expected_components(plan)
+        self._verify_components(
+            expected, self._remote_components(response), set(expected),
+        )
+
+    @staticmethod
+    def _expected_components(plan: dict[str, Any]) -> dict[str, Any]:
+        entries = plan.get("entries")
+        if not isinstance(entries, dict) or not entries or any(
+            not isinstance(entry, dict) or not entry.get("botcomponentid")
+            or not isinstance(entry.get("nativeDefinition"), dict)
+            for entry in entries.values()
+        ):
+            raise MinimalBotEvaluationError("Invalid native identity/definition tracking.")
+        expected = {
+            entry["botcomponentid"]: {
+                "definition": entry["nativeDefinition"],
+                "parentBotComponentId": entry.get("parentbotcomponentid"),
+            }
+            for entry in entries.values()
+        }
+        if len(expected) != len(entries):
+            raise MinimalBotEvaluationError("Duplicate native tracked component identities.")
+        return expected
+
+    @staticmethod
+    def _remote_components(response: dict[str, Any]) -> dict[str, Any]:
+        changes = response.get("botComponentChanges")
+        if not isinstance(changes, list):
+            raise MinimalBotEvaluationError("Native component response has no change list.")
+        components = {}
+        for change in changes:
+            if not isinstance(change, dict) or not isinstance(change.get("component"), dict):
+                raise MinimalBotEvaluationError("Malformed native component response.")
+            component = change["component"]
+            component_id = str(component.get("id") or "")
+            if not component_id or component_id in components:
+                raise MinimalBotEvaluationError("Missing or duplicate native component identity.")
+            components[component_id] = component
+        return components
+
+    @staticmethod
+    def _verify_components(expected, actual, ids) -> None:
+        for component_id in ids:
+            remote = actual.get(component_id)
+            wanted = expected[component_id]
+            if (
+                remote is None
+                or remote.get("definition") != wanted["definition"]
+                or remote.get("parentBotComponentId") != wanted.get("parentBotComponentId")
+            ):
+                raise MinimalBotEvaluationError(
+                    f"Native verification failed for component {component_id}: "
+                    "missing component, different definition, or parent mismatch."
+                )
+        for parent_id in ids:
+            if expected[parent_id].get("parentBotComponentId"):
+                continue
+            expected_children = {
+                component_id for component_id, component in expected.items()
+                if component.get("parentBotComponentId") == parent_id
+            }
+            actual_children = {
+                component_id for component_id, component in actual.items()
+                if component.get("parentBotComponentId") == parent_id
+            }
+            if expected_children != actual_children:
+                raise MinimalBotEvaluationError(
+                    f"Native verification failed for {parent_id}: different child identities."
+                )
+
+    def _commit_tracking(self, root: Path, plan: dict[str, Any]) -> None:
+        from push import _atomic_write_text
+        prefixes = tuple(f"evaluations/{item['folder']}/" for item in plan["sets"])
+        component_map = {
+            path: entry
+            for path, entry in self._read_tracking(root / ".component-map.json").items()
+            if not path.startswith(prefixes)
+        }
+        component_map.update(plan["entries"])
+        try:
+            for item in plan["sets"]:
+                baseline = root / ".baseline" / "evaluations" / item["folder"]
+                for path in baseline.glob("*"):
+                    if (
+                        path.is_file()
+                        and (path.name.endswith(".mcs.yml") or path.name == "review.json")
+                        and (
+                            path.name == "review.json"
+                            or path.relative_to(root / ".baseline").as_posix() not in plan["files"]
+                        )
+                    ):
+                        path.unlink()
+            # Only uploaded YAML belongs in the deployed baseline; sidecars stay local.
+            for relative, content in plan["files"].items():
+                if relative.endswith("/review.json"):
+                    continue
+                path = root / ".baseline" / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_text(str(path), content)
+            self._write_tracking(root / ".component-map.json", component_map)
+        except OSError as exc:
+            raise MinimalBotEvaluationError(
+                "Native deployment verified remotely, but local synchronization "
+                f"failed. Reconcile the pending deployment before continuing: {exc}"
+            ) from exc
 
     def _folder_changes(
         self,
@@ -1005,15 +1317,21 @@ class MinimalBotEvaluationClient:
                 )
             documents.append((path, document))
 
-        parents = [item for item in documents if item[1].get("kind") == "EvaluationSet"]
-        cases = [item for item in documents if item[1].get("kind") == "EvaluationData"]
+        parents = [
+            item for item in documents
+            if document_kind(item[1], context=str(item[0])) == "EvaluationSet"
+        ]
+        cases = [
+            item for item in documents
+            if document_kind(item[1], context=str(item[0])) == "EvaluationData"
+        ]
         # Never silently omit authored files. Any document whose kind this
         # transport can't convert (e.g. MultiTurnEvaluationCase, which is a
         # supported authored child elsewhere in the kit) must fail the push
         # rather than deploy a set that differs from local source.
         unsupported = [
             item for item in documents
-            if item[1].get("kind") not in _EVAL_KINDS
+            if document_kind(item[1], context=str(item[0])) not in _EVAL_KINDS
         ]
         if unsupported:
             details = ", ".join(
@@ -1156,6 +1474,7 @@ class MinimalBotEvaluationClient:
         bot_schema_name: str,
         references: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        """Bind tool profiles that can be resolved without blocking the run."""
         bindings = []
         for change in references:
             reference = change.get("connectionReference") or change
@@ -1166,9 +1485,10 @@ class MinimalBotEvaluationClient:
             )
             if not connector_id or not reference_name:
                 continue
-            connection = self._select_one(
-                self._connected(connector_id), connector_id
-            )
+            connections = self._connected(connector_id)
+            if len(connections) != 1:
+                continue
+            connection = connections[0]
             bindings.append({
                 "connectorId": connector_id,
                 "connectionId": _connection_id(connection),
@@ -1194,6 +1514,24 @@ class MinimalBotEvaluationClient:
         if not test_set_id:
             raise MinimalBotEvaluationError("A test set ID is required to run.")
         components = self.read_components()
+        deployed = self._remote_components(components)
+        parent = deployed.get(test_set_id)
+        if parent is None or parent.get("parentBotComponentId"):
+            raise MinimalBotEvaluationError(
+                "The selected deployed evaluation parent was not found on this agent."
+            )
+        children = [
+            component.get("definition")
+            for component in deployed.values()
+            if component.get("parentBotComponentId") == test_set_id
+        ]
+        try:
+            validate_evaluation_documents(
+                parent.get("definition"), children,
+                context=f"Deployed test set {test_set_id}",
+            )
+        except EvaluationMethodError as exc:
+            raise MinimalBotEvaluationError(str(exc)) from exc
         mcs_id = mcs_connection_id or _connection_id(
             self._select_one(self._connected(MCS_CONNECTOR), MCS_CONNECTOR)
         )
@@ -1205,7 +1543,8 @@ class MinimalBotEvaluationClient:
         now = datetime.now(timezone.utc)
         body = {
             "evaluationRunName": (
-                run_name or f"MinimalBot run {now:%Y-%m-%d %H:%M UTC}"
+                run_name
+                or f"{_component_name(parent)} - {now:%Y-%m-%d %H:%M UTC}"
             ),
             "runOnPublishedBot": run_on_published_bot,
             "mcsConnectionId": mcs_id,

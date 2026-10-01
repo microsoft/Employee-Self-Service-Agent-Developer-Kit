@@ -23,6 +23,18 @@ separate user turns. First list the eligible test sets, ask the user to select
 or confirm one, and STOP. Do not execute a set merely because it is the only
 candidate, appeared in prior conversation, or resembles the user's wording.
 
-After `evaluation_runs.py run` succeeds, copy its `userGuidance` field verbatim
+Flow A includes the selected set's required scoped deployment through
+`src/skills/evaluations/deployment-flow.md` before starting the current deployed
+identity. Include preparable workspace/current-agent sets, not just previously
+deployed IDs. Run does not require a separate push command, does not request or
+complete review, and never silently chooses a connection profile.
+
+After `evaluation_runs.py run-prepared` succeeds, copy its `userGuidance` field verbatim
 into the response. Never finish a successful run-start turn without the
-10-15-minute wait notice.
+10-15-minute wait notice and direction to return to chat for results.
+
+Render the returned `agentStudioUrl` immediately as an optional **Copilot Studio** link
+with the selected set, new run ID, and actual state. Do not say "Done" before
+completion. If the start has no valid run ID, do not show a success link. If
+navigation identity is unavailable after a real start, report the run ID/state
+and missing link without guessing a URL or starting the run again.

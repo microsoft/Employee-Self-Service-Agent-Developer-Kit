@@ -167,20 +167,25 @@ Branch on the result:
   [`checklist-updater.md`](../shared/checklist-updater.md) with
   `STEP_ID="S1.2"`, `GATE="prog"`, `NEW_STATE="done"`,
   `CHECKPOINT_RESULT="PASSED"`. Go to **Done**.
-- **`FAILED` / `WARNING`** (no capacity, or a billing-risk warning):
+- **`WARNING`** (no prepaid capacity, with a runtime or billing risk):
 
   **Message:**
 
-  This environment has no Copilot Studio message capacity allocated yet. Open
+  This environment has no prepaid Copilot Studio message capacity allocated.
+  Setup can continue, but the agent may have no runtime message capacity or
+  may use Azure Pay-as-you-go billing. Open
   [Power Platform admin center → Licensing → Copilot Studio → Manage capacity](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview),
-  allocate capacity to this environment, then tell me when it's done and I'll
-  re-check.
+  review the current billing path, and allocate capacity before agent use when
+  required.
 
   **End message.**
 
-  After the user confirms, re-run `--checkpoint ENV-CAPACITY-001` (this is the
-  verification gate — never accept "done" without a re-check). When it passes,
-  update S1.2 as `done` (`GATE="prog"`, `CHECKPOINT_RESULT="PASSED"`).
+  Preserve the warning evidence and update **S1.2** as `done`
+  (`GATE="prog"`, `CHECKPOINT_RESULT="WARNING"`). Continue setup without
+  reporting capacity as verified.
+- **`FAILED`** (the checkpoint could not identify or evaluate the target
+  environment) → keep **S1.2** incomplete, show the exact result and
+  remediation, and re-run the checkpoint after correcting the error.
 - **`MANUAL`** (capacity could not be read programmatically — the licensing API
   was unavailable or your role can't read it). This row falls back to
   **attestation**:
@@ -197,7 +202,9 @@ Branch on the result:
   Update **S1.2** via [`checklist-updater.md`](../shared/checklist-updater.md)
   with `STEP_ID="S1.2"`, `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`, and
   `ACK` set from the user's explicit confirmation (only `ACK=true` on an explicit
-  "Yes, it's allocated"). A `MANUAL` result never completes the row on its own.
+  "Yes, it's allocated"). If the user confirms no allocation, re-run the
+  checkpoint so it records a `Warning`, then continue with the risk visible. A
+  `MANUAL` result never completes the row on its own.
 
 ---
 

@@ -53,3 +53,14 @@ def test_resolve_evaluation_folder_rejects_missing_path(tmp_path):
         assert str(exc) == "workspace/evaluations/missing"
     else:
         raise AssertionError("Expected missing evaluation folder to fail")
+
+
+def test_report_disclaimer_keeps_quality_errors_visible(capsys):
+    evaluate_evals.render_report([{
+        "category": "Selected", "total_cases": 1, "sampled": 1,
+        "error": "Quality judge unavailable",
+    }], "Agent", 1)
+    report = capsys.readouterr().out
+    assert "not whether your agent passes the tests in your tenant" in report
+    assert "Run the evaluation in Copilot Studio" in report
+    assert "ERROR: Quality judge unavailable" in report

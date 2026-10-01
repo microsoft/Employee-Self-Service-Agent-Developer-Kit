@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from typing import Any, Iterable
 
 import responses
@@ -22,6 +24,12 @@ MOCK_AGENT_ID = "00000000-0000-0000-0000-000000002222"
 MOCK_FAMILY_ID = "00000000-0000-0000-0000-000000003333"
 MOCK_CONNECTION_ID = "mock-servicenow-connection"
 MOCK_WORKDAY_CONNECTION_ID = "mock-workday-connection"
+# The GRS commit pin captured in the validated ALM configure response
+# (agentbuilder_readiness.yaml line 82). ENV-004-GRS pins on ``commitSha``;
+# ESS-SOLN-001 tests reference the same value via ``MOCK_COMMIT_SHA``.
+COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
+MOCK_COMMIT_SHA = COMMIT_SHA
+MOCK_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 MOCK_AGENTBUILDER_BASE = (
     "https://00000000000000000000000000000000."
     "0.environment.api.test.powerplatform.com"
@@ -37,12 +45,29 @@ def agent() -> dict[str, Any]:
     }
 
 
-def configuration() -> dict[str, Any]:
+def configuration(*, commit_sha: str = COMMIT_SHA) -> dict[str, Any]:
+    """The minimalBots ALM ``configure`` response (realm Dev).
+
+    ``commitSha`` is the GRS commit pin ``ENV-004-GRS`` reads; ``schemaName``
+    and ``grsRepositoryId`` are what ``ESS-SOLN-001`` reads.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/environment.py
+        (ENV-004-GRS)
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/solution.py
+        (ESS-SOLN-001)
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml line 82
+      (``realm``/``cdsBotId``/``schemaName``/``grsRepositoryId``/``commitSha``);
+      ``schemaName`` is ``gptagent_copilotforemployeeselfservicehr``.
+    """
     return {
         "realm": "Dev",
         "cdsBotId": MOCK_AGENT_ID,
-        "schemaName": "gptagent_mockemployeeselfservice",
-        "grsRepositoryId": MOCK_FAMILY_ID,
+        "schemaName": MOCK_SCHEMA_NAME,
+        "grsRepositoryId": MOCK_ENV_ID,
+        "commitSha": commit_sha,
     }
 
 
@@ -186,6 +211,47 @@ def components_with_references(
         [] if references is None else list(references)
     )
     return payload
+
+
+def export_package_bytes(
+    *,
+    filename: str = "agent/manifest.json",
+    content: bytes = b'{"schemaName":"gptagent_mockemployeeselfservice"}',
+) -> bytes:
+    """Real in-memory zip archive for AgentBuilder ALM export tests.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/publishing.py
+
+    Source (validated):
+      AgentBuilder ALM export is implemented by
+      AgentBuilderClient.export_package, which streams the response from
+      POST /copilotstudio/minimalBots/alm/{agent_id}/export into a caller-owned
+      .zip path. The route, method, and binary package contract are pinned by
+      tests/scripts/test_agentbuilder.py::test_realm_discovery_configuration_and_export_use_native_alm_requests.
+      The FlightCheck check validates the archive by reading the zip central
+      directory and running testzip() CRC validation, so this builder returns
+      an actual zipfile archive rather than a magic-byte stub.
+    """
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(filename, content)
+    return stream.getvalue()
+
+
+def import_package_result(
+    *,
+    agent_id: str = MOCK_AGENT_ID,
+    schema_name: str = "gptagent_mockemployeeselfservice_imported",
+) -> dict[str, Any]:
+    """Successful AgentBuilderClient.import_package result shape."""
+    return {
+        "responseStatus": "valid",
+        "result": {
+            "cdsBotId": agent_id,
+            "schemaName": schema_name,
+        },
+    }
 
 
 def connection(

@@ -839,7 +839,7 @@ def validate_workday_admin_response(
     )
     _require_endpoint_path(
         soap_base_url,
-        f"/ccx/service/{tenant}",
+        "/ccx/service",
         "Workday SOAP base URL",
     )
     endpoint_hosts = {

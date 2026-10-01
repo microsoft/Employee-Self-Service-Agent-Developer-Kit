@@ -41,6 +41,35 @@ def test_flightcheck_scopes_are_read_only_and_ring_specific() -> None:
     )
 
 
+def test_agent_inventory_scopes_are_read_only_and_ring_specific() -> None:
+    assert agentbuilder.agent_inventory_read_scopes("test") == (
+        "https://api.test.powerplatform.com/"
+        "CopilotStudio.MakerOperations.Read",
+        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+    assert all(
+        "ReadWrite" not in scope
+        for scope in agentbuilder.agent_inventory_read_scopes("test")
+    )
+
+
+def test_flightcheck_scopes_request_write_only_when_explicitly_enabled() -> None:
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        allow_write=True,
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/"
+        "CopilotStudio.MinimalBot.ReadWrite",
+    )
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+
+
 @responses.activate
 def test_native_readiness_clients_follow_validated_contract() -> None:
     responses.add(**native.get_agent())
@@ -58,7 +87,7 @@ def test_native_readiness_clients_follow_validated_contract() -> None:
     assert agent_client.get_agent(native.MOCK_AGENT_ID)["realm"] == "dev"
     assert (
         agent_client.get_dev_configuration(native.MOCK_AGENT_ID)["schemaName"]
-        == "gptagent_mockemployeeselfservice"
+        == native.MOCK_SCHEMA_NAME
     )
     assert (
         agent_client.fetch_components(native.MOCK_AGENT_ID)[
@@ -353,7 +382,7 @@ def test_explicit_host_rejects_cross_ring_and_paths() -> None:
 def test_client_uses_only_configured_environment_host() -> None:
     session = FakeSession(
         [
-            FakeResponse([]),
+            FakeResponse({"Entities": [], "ContinuationToken": ""}),
             FakeResponse({"botId": AGENT_ID}),
             FakeResponse({"routeRealm": 0}),
             FakeResponse(
@@ -433,6 +462,103 @@ def test_update_components_uses_native_change_set_contract() -> None:
     assert session.calls[0]["params"] == {
         "api-version": agentbuilder.NATIVE_ALM_API_VERSION
     }
+
+
+def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
+    first_agent = {
+        "cdsBotId": AGENT_ID,
+        "displayName": "Employee Self-Service",
+        "publishedOn": None,
+    }
+    second_agent = {
+        "cdsBotId": "00000000-0000-4000-8000-000000003333",
+        "displayName": "Employee Self-Service HR",
+        "publishedOn": None,
+    }
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "Entities": [first_agent],
+                    "ContinuationToken": "next-page",
+                }
+            ),
+            FakeResponse(
+                {
+                    "entities": [second_agent],
+                    "continuationToken": "",
+                }
+            ),
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    assert client.list_agents() == [first_agent, second_agent]
+    assert session.calls[0]["url"] == f"{HOST}/copilotstudio/agents"
+    assert session.calls[0]["params"] == {"api-version": "2024-10-01"}
+    assert session.calls[1]["params"] == {
+        "api-version": "2024-10-01",
+        "continuationToken": "next-page",
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        [],
+        {"Entities": None, "ContinuationToken": ""},
+        {"Entities": ["not-an-object"], "ContinuationToken": ""},
+        {"Entities": [], "ContinuationToken": 123},
+    ),
+)
+def test_agent_listing_rejects_invalid_collection_shape(body: Any) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(body)]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="Agent listing"):
+        client.list_agents()
+
+
+def test_agent_listing_rejects_repeated_continuation() -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(
+                    {
+                        "Entities": [],
+                        "ContinuationToken": "same-page",
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "Entities": [],
+                        "ContinuationToken": "same-page",
+                    }
+                ),
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="repeated a continuation token",
+    ):
+        client.list_agents()
 
 
 def test_realm_configuration_rejects_unknown_realm() -> None:
@@ -686,6 +812,54 @@ def test_import_package_classifies_invalid_success_shape(
         "responseStatus": "invalid",
         "reason": "invalid-agent-identity",
     }
+
+
+def test_delete_agent_issues_native_minimalbots_delete() -> None:
+    session = FakeSession([FakeResponse({}, status_code=204)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    call = session.calls[0]
+    assert call["method"] == "DELETE"
+    assert call["url"] == f"{HOST}/copilotstudio/minimalBots/api/{AGENT_ID}"
+    assert call["params"] == {"api-version": agentbuilder.DEFAULT_API_VERSION}
+    assert call["allow_redirects"] is False
+
+
+def test_delete_agent_treats_missing_agent_as_idempotent_success() -> None:
+    session = FakeSession([FakeResponse({}, status_code=404)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    assert len(session.calls) == 1
+
+
+def test_delete_agent_raises_on_unexpected_status() -> None:
+    session = FakeSession([FakeResponse({}, status_code=403)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError, match="HTTP 403"):
+        client.delete_agent(AGENT_ID)
 
 
 def test_lists_ring_environments_with_agentbuilder_token() -> None:

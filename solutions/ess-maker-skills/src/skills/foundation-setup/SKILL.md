@@ -25,6 +25,14 @@ the final handoff. Operational sequencing and response-policy prose are
 instruction-only. Successful internal operations continue directly to the next
 defined maker interaction.
 
+## Standard choices and ad hoc recovery
+
+Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged, initially unselected, and with custom entry disabled inside the interactive control.
+
+The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
+
+Typed intent may select only a documented setup route or bounded read-only recovery. It never authorizes an unlisted mutation or replaces an explicit confirmation required before create, import, replacement, reset, cleanup, or another consequential action.
+
 This is the DA-GA `/setup` entry point. It owns only:
 
 - maker authentication;
@@ -78,14 +86,15 @@ python scripts/setup_existing_da.py cached-accounts
 
 Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
 
-- Ask exactly one account question: **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in.
-- Build the choices in this order: **Skip — Use the Microsoft account picker** first, followed by every cached sign-in name. Do not preselect or recommend an option. Allow a different account sign-in name as free-form input. Do not add a separate **Use another account** choice or a follow-up account question.
+- When no cached account is returned, do not ask an account question. Use the Microsoft account picker on the first command that can authenticate.
+- When exactly one cached account `{CACHED_ACCOUNT}` is returned, ask **Continue with {CACHED_ACCOUNT}?** and present **Continue** and **Use a different user** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Continue** retains that account. **Use a different user** uses the Microsoft account picker on the first command that can authenticate.
+- When two or more cached accounts are returned, ask **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in. Build the standard choices in this order: **Use the Microsoft account picker** first, followed by every cached sign-in name. Do not preselect or recommend an option. Disable custom entry inside the control.
 
-Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
+Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
 
-When the maker selects **Skip — Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
+When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
-If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and ask which sign-in name the maker selected before continuing.
+If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
@@ -187,7 +196,7 @@ When an occupied workspace needs a new environment, offer **Reset and use this w
 
 > This workspace is already connected to a different Power Platform environment. How would you like to continue?
 
-Use the host's interactive single-selection control and offer exactly:
+Use the host's interactive single-selection control and present these standard choices:
 
 - **Reset and use this workspace**
 - **Use suggested location -- {suggested absolute sibling-folder path}**
@@ -208,7 +217,7 @@ For **Reset and use this workspace**, show:
 
 > Resetting this workspace will archive its current local agent files, setup records, and FlightCheck results. It will not change or delete any agent in Copilot Studio. Continue?
 
-Offer exactly:
+Present these standard choices:
 
 - **Reset workspace**
 - **Go back**
@@ -230,7 +239,7 @@ python scripts/setup_existing_da.py select-agent \
 
 Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectReady` value is not `true`; otherwise present the completion choices below. This operation changes only local active-agent selection.
 
-The final handoff is the sole completion summary. After it, offer exactly these context-appropriate choices:
+The final handoff is the detailed completion report and the standard completion choice surface. After it, present these context-appropriate choices:
 
 - **Finish setup**
 - **Switch to another configured agent** -- only when another configured agent exists.
@@ -238,25 +247,62 @@ The final handoff is the sole completion summary. After it, offer exactly these 
 - **Reset and use this workspace**
 - **Create and open a new workspace**
 
-Do not preselect a choice. **Finish setup** closes the setup flow. Do not render
-another setup completion summary. After the maker selects it, show:
+Do not preselect a choice. **Finish setup** closes the setup flow and renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
 
 **Message:**
 
 The {agent display name} agent is now active.
 
+Here's your ESS agent setup:
+
+- ✅ Choose the starting point and target environment
+- ✅ Verify access and agent identity
+- ✅ Establish an editable Dev agent
+- ✅ Materialize the local workspace
+- ✅ Review the setup handoff
+
+> **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+
+### Runtime readiness
+
+| Check                | Status                         | Details                                 |
+| -------------------- | ------------------------------ | --------------------------------------- |
+| Agent access         | {agent access status}          | {agent access evidence summary}         |
+| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |
+| Connections          | {connections status}           | {connections evidence summary}          |
+| Agent content        | {agent content status}         | {agent content evidence summary}        |
+| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |
+
+{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}
+
+Next steps:
+
 - Run `/landing-page` to configure branding and the content employees see.
-- Run `/connect` to choose an integration.
+- Run `/connect` to add or change an integration.
+{SUPPORTED_INTEGRATION_SHORTCUTS}
 - Type `/menu` to see all available capabilities.
 
 **End message.**
 
 Then end the request.
 
+Replace `{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}` with the
+body of every applicable block from the detailed handoff, in the same order.
+Omit each block's outer `**Message:**` and `**End message.**` markers so the
+durable snapshot remains one complete Message block. Omit the placeholder when
+no block applies.
+
+Build `{SUPPORTED_INTEGRATION_SHORTCUTS}` only from authoritative product
+identity and the active agent's supported connection routes. Include the
+`/connect workday` shortcut only for a supported HR architecture. Include
+another shortcut only when its route explicitly supports the resolved product.
+Render no shortcut lines when product identity is unresolved or the active
+agent does not support them.
+
 **Install another product in this environment** begins `da-mos-starter.md` at
 its first product-installation decision surface with the recorded environment
 and ring. Every other selected follow-up begins at that follow-up's first
-decision surface rather than rendering another completion summary.
+decision surface rather than rendering the durable completion snapshot.
 
 ## Start
 
@@ -278,7 +324,7 @@ For a usable local target, ask:
 
 > **{agent display name}** is the active agent in this workspace. What would you like to do?
 
-Offer exactly these context-appropriate choices:
+Present these standard context-appropriate choices:
 
 - **Continue with this agent**, or **Resume setup for this agent** when its canonical agent record is incomplete or blocked.
 - **Switch to another configured agent** -- only when another configured agent exists.
@@ -331,9 +377,9 @@ Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
 environment metadata.
 
 - When `routeStatus` is `not-found`, the earlier native identity probe still
-  proves that the agent exists. Say that setup could not establish an authoring
-  route for that agent, then offer **Choose a different agent**, **Choose a
-  different environment**, and **Go back** using the exact recovery routes in
+  proves that the agent exists. Say that no ALM route is established for local
+  authoring, then offer **Choose a different agent**, **Choose a different
+  environment**, and **Go back** using the exact recovery routes in
   `product-line-reconciliation.md`. Do not call the agent missing and do not
   continue to validation or attachment.
 - When `realm` is `prod`, read
@@ -365,13 +411,13 @@ When the request identifies an environment but not an agent or create-versus-con
 
 > What would you like to set up in `{environment name or the selected Power Platform environment}`?
 
-Offer exactly:
+Present these standard choices:
 
 - **Create a fresh agent in this environment**
 - **Connect to an existing agent in this environment**
 - **Cancel setup**
 
-Require an explicit selection; all choices begin unselected.
+Continue when the maker selects a standard choice or supplies a clear setup intent in chat; all standard choices begin unselected.
 Resolve the environment label from known context. This question confirms the selected target; the access-verification stage remains current until a service operation succeeds.
 
 - For **Create a fresh agent in this environment**, continue directly through `src/skills/foundation-setup/da-mos-starter.md` with the retained environment and ring.
@@ -382,7 +428,7 @@ When the request does not identify an agent or environment and no usable local t
 
 > Do you already have an ESS agent in Copilot Studio?
 
-Offer exactly:
+Present these standard choices:
 
 - **Yes, I have an agent** — ask for its Copilot Studio URL.
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
