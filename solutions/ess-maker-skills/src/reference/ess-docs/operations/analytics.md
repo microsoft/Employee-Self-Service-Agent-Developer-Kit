@@ -1,14 +1,10 @@
 # Analytics pointer
 
 The **`/analytics`** slash command jumps a maker directly from VS Code to
-their Copilot Studio agent's analytics dashboard. It is one of the two
-surfaces of the *ADK Copilot Studio Analytics Pointer* MVP (September
-2026). The other surface is a one-time reminder printed by
-`install_ess_agent.py` right after a successful ESS install.
-
-Both surfaces call the same resolver
-(`solutions/ess-maker-skills/scripts/analytics_pointer.py`) and produce
-the same maker-facing line so the two experiences stay consistent.
+the current DA agent's Copilot Studio analytics dashboard. It uses the
+shared resolver in `solutions/ess-maker-skills/scripts/analytics_pointer.py`.
+The current DA-GA setup flow has no separate CEA installation path, so this
+command does not branch between DA and CEA analytics surfaces.
 
 ## What the maker sees
 
@@ -20,7 +16,7 @@ Copilot Studio analytics for your agent:
 ```
 
 **When the association is missing** (no `.local/config.json`, or the
-maker AAD / env ID / agent ID isn't captured there yet):
+environment ID / agent ID isn't captured there yet):
 
 > I can't find a linked Copilot Studio agent for this workspace, so I
 > can't build an analytics link yet. Run `/setup` to link an agent, then
@@ -42,14 +38,13 @@ The PM spec (ADO PR 5465946) forbids shipping against a
 reverse-engineered URL, so the default-off state ensures nothing that
 depends on the unconfirmed contract can accidentally reach production.
 
-When the flag turns on for real, both the `/analytics` slash command and
-the post-deploy reminder become active for that install. There is no
-per-surface flag — one switch controls both.
+When the flag turns on for real, the `/analytics` slash command becomes
+active. There is no CEA-specific branch in the DA-GA solution.
 
 ## Reminder state
 
-The post-deploy reminder is one-time per `(maker_aad, env_id, agent_id)`
-triplet. State is written by a `ReminderStore` selected via
+Optional local reminder state is one-time per DA workspace association.
+State is written by a `ReminderStore` selected via
 `ADK_ANALYTICS_STORE`:
 
 | Value | Implementation | Scope | Status |

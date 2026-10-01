@@ -9,15 +9,14 @@ PM spec reviewed on ADO PR 5465946 ("ADK Copilot Studio Analytics Pointer").
 The pointer has two surfaces:
 
 * **/analytics slash command** — permanent action. Reads
-  ``.local/config.json``, resolves the (maker, env, agent) triplet, and
-  either prints a validated deep link to the agent's Copilot Studio
+  ``.local/config.json``, resolves the DA environment and agent association,
+  and either prints a validated deep link to the agent's Copilot Studio
   analytics page or emits the FR7 repair/relink message when the
   association is missing.
 
-* **Post-deploy report reminder** — one-time reminder printed by
-  ``install_ess_agent.py`` after the ``INSTALLED_ESS_AGENT_JSON:`` line,
-  exactly once per ``(maker_aad, env_id, agent_id)`` triplet. State lives
-  in the ReminderStore (see below).
+The current Maker Kit supports the DA workspace flow only. CEA installation
+is no longer an entry point in this solution, so the pointer does not branch
+on an experience type or construct a CEA-specific destination.
 
 --------------------------------------------------------------------------
 CRITICAL CAVEAT — READ BEFORE TOUCHING resolve_pointer_url()
@@ -53,13 +52,12 @@ locked. See the ADO PR for status.
 STORAGE — Dataverse follow-up
 --------------------------------------------------------------------------
 
-The PM spec calls for the reminder state to live in a Dataverse
+The PM spec calls for reminder state to live in a Dataverse
 ``adk_makerreminder`` row so it is server-side and de-duplicates across
-maker machines. That table is defined in the ESS Dataverse solution
-package, which is NOT part of this repo — the solution is pre-built and
-installed via ``install_ess_agent.py``. So for this MVP we ship a
-**local-file** implementation and log the Dataverse implementation as a
-follow-up. When the ESS Dataverse solution is next updated, add:
+maker machines. The current DA setup flow does not expose a server-side
+reminder store, so this module retains a **local-file** implementation for
+the optional reminder/dismissal state and logs the Dataverse implementation
+as a follow-up. When the ESS Dataverse solution is next updated, add:
 
     Table: adk_makerreminder
       adk_makeraad        (String / lookup on systemuser, primary key part)
@@ -82,8 +80,8 @@ The ``/analytics`` prompt drives this module through the CLI at the
 bottom of the file (``--show``, ``--dismiss``, ``--status``) so the
 SKILL.md doesn't need to shell out to Python for individual functions.
 The Python API (``resolve_pointer_url``, ``read_association``,
-``render_pointer_line``, ``get_reminder_store``) is what the
-``install_ess_agent.py`` reminder path calls directly.
+``render_pointer_line``, ``get_reminder_store``) is also usable by future
+post-setup reminder surfaces without duplicating the resolver logic.
 """
 
 from __future__ import annotations
@@ -156,14 +154,10 @@ def _load_local_config(path: str | os.PathLike[str] | None = None) -> dict[str, 
 def _extract_env_id(cfg: dict[str, Any]) -> str:
     """Extract the Power Platform (BAP) environment ID from local config.
 
-    Setup.py writes ``dataverseEndpoint`` but not a raw ``environmentId`` yet;
-    checks/prerequisites uses ``runner.env_id`` set by cli.py after a BAP
-    round-trip. For the analytics pointer we accept either:
-      * ``config["environmentId"]`` (future setup writes this),
-      * ``config["agent"]["environmentId"]`` (mirrors drive_topic.py),
-      * empty when neither is present (FR7 repair state).
-    We deliberately do NOT round-trip BAP here — the /analytics command must
-    stay a millisecond-level local read.
+    The current DA setup writes ``environmentId`` at the top level and on the
+    active agent. We accept either location for compatibility with older
+    workspaces. We deliberately do NOT round-trip BAP here — the /analytics
+    command must stay a millisecond-level local read.
     """
     val = cfg.get("environmentId")
     if val:
@@ -189,11 +183,9 @@ def _extract_agent_id(cfg: dict[str, Any]) -> str:
 def _extract_maker_aad(cfg: dict[str, Any]) -> str:
     """Extract the Maker AAD oid from local config, if setup captured one.
 
-    Setup.py doesn't currently persist the Maker's AAD oid; when it starts,
-    it will land under ``config["makerAad"]``. Until then this returns "" and
-    the LocalFileReminderStore uses the ADK install ``instance_id`` as a
-    per-machine stand-in (documented in LocalFileReminderStore). The
-    DataverseReminderStore follow-up will require the real oid.
+    Setup.py doesn't currently persist the Maker's AAD oid. If a future
+    setup flow adds it, this helper accepts either the top-level or active
+    agent field. The local reminder store does not require it.
     """
     val = cfg.get("makerAad") or cfg.get("maker_aad")
     if val:
@@ -211,16 +203,11 @@ def read_association(
 ) -> tuple[str, str, str] | None:
     """Return ``(maker_aad, env_id, agent_id)`` from ``.local/config.json``.
 
-    Returns ``None`` when ANY of the three cannot be extracted. That
-    ``None`` maps directly to the FR7 "association missing" repair path in
-    the /analytics slash command and to the "skip the reminder" path in
-    ``install_ess_agent.py``.
-
-    Note: ``maker_aad`` is currently soft — see :func:`_extract_maker_aad`.
-    Callers that want a fallback identity (e.g. LocalFileReminderStore keying
-    on a per-machine ADK instance_id when maker_aad is empty) implement that
-    themselves; this function stays strict so telemetry ``unresolved_reason``
-    honestly reports ``missing_association`` when any of the three is absent.
+    The DA setup flow persists the environment and bot IDs, but does not
+    persist the maker's AAD object ID. The maker ID is therefore optional for
+    local pointer resolution; the reminder store uses a machine-local
+    fallback key when it is absent. ``None`` is returned only when the
+    workspace has no active DA association.
     """
     cfg = _load_local_config(path)
     if not cfg:
@@ -228,7 +215,7 @@ def read_association(
     env_id = _extract_env_id(cfg)
     agent_id = _extract_agent_id(cfg)
     maker_aad = _extract_maker_aad(cfg)
-    if not env_id or not agent_id or not maker_aad:
+    if not env_id or not agent_id:
         return None
     return maker_aad, env_id, agent_id
 
@@ -301,9 +288,8 @@ def render_pointer_line(
 
     * ``/analytics`` slash command — ``reminder_framing=False``. Plain, in-
       the-moment framing ("here is your link" / "run /setup").
-    * Post-deploy reminder from ``install_ess_agent.py`` — ``reminder_framing=
-      True``. Softer, "one-time notice" framing so the maker doesn't read it
-      as an error just because we're printing it after a successful install.
+    * Optional reminder surface — ``reminder_framing=True``. Softer,
+      "one-time notice" framing so the maker doesn't read it as an error.
 
     The switch only affects wording, never the underlying state. When
     ``url`` is non-empty we show it verbatim (no shortening / no click
@@ -340,12 +326,12 @@ def render_pointer_line(
 # --- ReminderStore protocol + implementations ---------------------------
 
 class ReminderStore(Protocol):
-    """One-time-reminder gate for the post-deploy pointer.
+    """One-time-reminder gate for an optional pointer reminder.
 
     Implementations MUST be idempotent: ``mark_completed`` for an already-
     completed triplet is a no-op success, and ``is_completed`` never mutates.
-    All calls MUST be fail-open: a store error must not crash the caller
-    (install_ess_agent), it must be logged/ignored and treated as "not yet
+    All calls MUST be fail-open: a store error must not crash the caller; it
+    must be logged/ignored and treated as "not yet
     shown" so the maker still gets the reminder eventually.
     """
 
@@ -387,7 +373,10 @@ class LocalFileReminderStore:
 
     @staticmethod
     def _key(maker_aad: str, env_id: str, agent_id: str) -> str:
-        return f"{maker_aad}|{env_id}|{agent_id}"
+        # Current DA setup does not persist maker_aad. Keep reminder state
+        # machine-local until a server-backed identity is available.
+        owner = maker_aad or "local-machine"
+        return f"{owner}|{env_id}|{agent_id}"
 
     def _read(self) -> dict[str, Any]:
         try:
@@ -408,7 +397,7 @@ class LocalFileReminderStore:
             pass
 
     def is_completed(self, maker_aad: str, env_id: str, agent_id: str) -> bool:
-        if not maker_aad or not env_id or not agent_id:
+        if not env_id or not agent_id:
             return False
         data = self._read()
         entries = data.get("completed") or {}
@@ -417,7 +406,7 @@ class LocalFileReminderStore:
     def mark_completed(
         self, maker_aad: str, env_id: str, agent_id: str, reason: str
     ) -> None:
-        if not maker_aad or not env_id or not agent_id:
+        if not env_id or not agent_id:
             return
         data = self._read()
         entries = data.get("completed")
@@ -565,11 +554,11 @@ def _cli_show(args: argparse.Namespace) -> int:
 
 
 def _cli_dismiss(args: argparse.Namespace) -> int:
-    """Mark the pointer reminder as completed for the current triplet.
+    """Mark the pointer reminder as completed for the current association.
 
     Used by the /analytics command when the maker says "don't show this
     again" — a click-time dismissal path from the reminder surface. When
-    the triplet is unresolvable we silently no-op (dismissing nothing is
+    the association is unresolvable we silently no-op (dismissing nothing is
     still a valid maker choice; we don't want to error at them).
     """
     assoc = read_association(path=args.config)

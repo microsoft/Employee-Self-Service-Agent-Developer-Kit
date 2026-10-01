@@ -1,8 +1,7 @@
 # Analytics Skill
 
-Print a direct link to the current agent's Copilot Studio analytics
-dashboard, so the maker can jump straight from VS Code to their agent's
-usage metrics.
+Print a direct link to the current DA agent's Copilot Studio analytics
+dashboard, so the maker can jump straight from VS Code to its usage metrics.
 
 Every **Message** block is the exact text to show the user. Copy it
 verbatim. Do not rephrase, add commentary, or tell the user what tools
@@ -62,12 +61,12 @@ Stop here.
 ## Case 2: flag ON, association missing (`flag == "on"` AND `association == null`)
 
 This is the FR7 repair state. Either `.local/config.json` doesn't have
-an active agent linked, or one of `maker_aad` / `env_id` / `agent_id` is
-missing. The fix is `/setup`.
+an active DA agent linked, or one of `env_id` / `agent_id` is missing. The
+fix is `/setup`.
 
 **Message:**
 
-I can't find a linked Copilot Studio agent for this workspace, so I
+I can't find a linked DA Copilot Studio agent for this workspace, so I
 can't build an analytics link yet. Run `/setup` to link an agent, then
 run `/analytics` again.
 
@@ -115,9 +114,8 @@ Stop here.
 
 If the maker explicitly asks to "stop showing the analytics reminder"
 or similar, run `python scripts/analytics_pointer.py --dismiss` in the
-terminal. That marks the reminder complete for the current
-`(maker, env, agent)` triplet so the post-deploy report won't show it
-again. Then:
+terminal. That marks the reminder complete for the current local DA workspace
+association. Then:
 
 **Message:**
 

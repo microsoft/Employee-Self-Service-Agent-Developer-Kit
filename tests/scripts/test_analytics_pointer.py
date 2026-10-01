@@ -142,6 +142,31 @@ def test_read_association_returns_triplet_when_present(tmp_path: Path):
     assert result == ("maker-oid", "env-guid", "bot-guid")
 
 
+def test_read_association_accepts_current_da_setup_config_without_maker(
+    tmp_path: Path,
+):
+    """Current DA setup persists the environment and bot IDs, not maker AAD."""
+    import analytics_pointer
+
+    cfg_path = tmp_path / ".local" / "config.json"
+    _write_config(cfg_path, {
+        "setup": "complete",
+        "environmentId": "env-guid",
+        "activeAgent": "employee-self-service-hr",
+        "agent": {
+            "botId": "bot-guid",
+            "slug": "employee-self-service-hr",
+            "environmentId": "env-guid",
+        },
+    })
+
+    assert analytics_pointer.read_association(path=cfg_path) == (
+        "",
+        "env-guid",
+        "bot-guid",
+    )
+
+
 def test_read_association_accepts_env_id_on_agent(tmp_path: Path):
     """Some setups nest ``environmentId`` under ``agent``. That should also
     resolve — mirrors drive_topic.py's fallback."""
@@ -269,6 +294,20 @@ def test_local_file_reminder_store_ignores_empty_ids(tmp_path: Path):
     if (tmp_path / "reminder.json").exists():
         data = json.loads((tmp_path / "reminder.json").read_text(encoding="utf-8"))
         assert not data.get("completed")
+
+
+def test_local_file_reminder_store_supports_da_association_without_maker(
+    tmp_path: Path,
+):
+    import analytics_pointer
+
+    store = analytics_pointer.LocalFileReminderStore(
+        path=tmp_path / "reminder.json",
+    )
+    store.mark_completed("", "env-guid", "bot-guid", "manual_dismiss")
+
+    assert store.is_completed("", "env-guid", "bot-guid") is True
+    assert store.is_completed("", "env-guid", "other-bot") is False
 
 
 # --- get_reminder_store --------------------------------------------------

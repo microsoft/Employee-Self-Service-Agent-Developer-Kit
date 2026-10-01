@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Jump to your Copilot Studio agent's analytics dashboard"
+description: "Jump to your DA agent's analytics dashboard"
 ---
 
 # Analytics
