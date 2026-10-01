@@ -175,11 +175,35 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Do not decide checkpoint success in this action" in entra
     assert "upn" in oidc
     assert "Configure an OIDC provider to verify ID tokens" in oidc
-    assert "Multi-Provider SSO" in oidc
-    assert "structured response such as `upn, user_name`" in oidc
-    assert (
-        "[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})" in oidc
+    assert "multi-provider sso" in " ".join(oidc.split()).casefold()
+    assert "for example\n`upn, user_name`" in oidc
+    assert "[this ServiceNow instance]({SERVICENOW_INSTANCE_URL})" in oidc
+    elevate = oidc.index("select `Elevate role`")
+    application_registry = oidc.index(
+        "`All` → `System OAuth` → `Application Registry` → `New`"
     )
+    configure_oidc = oidc.index(
+        "`Configure an OIDC provider to verify ID tokens`"
+    )
+    assert elevate < application_registry < configure_oidc
+    assert oidc.count("`Application Registry`") == 1
+    assert "Name = `Microsoft Entra ID - ESS Copilot`" in oidc
+    assert "Client ID = verified App A Application client ID" in oidc
+    assert "Entity state = `Active`" in oidc
+    assert "tenant-approved non-empty\n     placeholder" in oidc
+    assert "cache lifespan = `120`" in oidc
+    assert "Application = `Global`" in oidc
+    assert "JTI verification = disabled" in oidc
+    assert "stop and\n     tell the ServiceNow Admin" in oidc
+    assert "Do not continue, guess a specific plugin" in oidc
+    assert "preferred: `upn`" in oidc
+    assert "alternative: `email` → `email`" in oidc
+    assert "verified custom claim" in oidc
+    assert "selects **Not yet**" in oidc
+    assert oidc.count("Ask one completion question") == 1
+    assert "PR #217 S4.3/S4.4 is authoritative" in oidc
+    assert "enable the tenant-supported" not in oidc
+    assert "plugin must be enabled" not in oidc.casefold()
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc
     assert "Do not create a test user" in oidc

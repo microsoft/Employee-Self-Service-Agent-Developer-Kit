@@ -25,37 +25,37 @@ requires one new complete OIDC handoff.
 
 Open the stable instance root once:
 
-[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})
+[this ServiceNow instance]({SERVICENOW_INSTANCE_URL})
 
 Use the exact URL from preflight discovery `links.serviceNowInstance.url`.
 
-1. Open `All` → `System OAuth` → `Application Registry` → `New` and confirm
-   `Configure an OIDC provider to verify ID tokens` is available. If it is
-   unavailable, enable the tenant-supported OIDC or Multi-Provider SSO
-   capability before continuing.
-2. From the profile menu, select `Elevate role` and elevate to
+1. From the profile menu, select `Elevate role` and elevate to
    `security_admin`. If **New** is missing in the security configuration, the
    role is not elevated.
-3. Return to `All` → `System OAuth` → `Application Registry` → `New` →
-   `Configure an OIDC provider to verify ID tokens`.
-4. Reuse the exact valid ESS OIDC entity when the ServiceNow Admin confirms it
-   matches the verified App A and settings below. Otherwise create or repair
-   the missing or unhealthy entity:
+2. Go to `All` → `System OAuth` → `Application Registry` → `New`.
+3. Select `Configure an OIDC provider to verify ID tokens`.
+   - If this option is still unavailable after correct elevation, stop and
+     tell the ServiceNow Admin to confirm the tenant's OIDC / Multi-Provider
+     SSO capability according to tenant policy.
+   - Do not continue, guess a specific plugin, or record phase completion.
+4. Create or reuse the exact valid ESS OIDC entity:
+   - Name = `Microsoft Entra ID - ESS Copilot`;
    - Client ID = verified App A Application client ID;
-   - if the form requires **Client secret**, the connector does not use that
-     value for this flow; the admin enters a tenant-approved placeholder
-     locally and never returns or persists it;
-   - entity Active.
+   - Entity state = `Active`;
+   - if `Client secret` is required, enter a tenant-approved non-empty
+     placeholder locally; never return or persist it.
 5. In `OAuth OIDC Provider Configuration`, set:
    - metadata URL =
      `https://login.microsoftonline.com/<tenant-id>/.well-known/openid-configuration`;
    - cache lifespan = `120`;
    - Application = `Global`;
    - JTI verification = disabled.
-6. Set `User Claim` and `User Field`. Prefer `upn` mapped to the
-   ServiceNow field containing the same UPN (commonly `user_name` or `email`).
-   An evidence-based alternative is allowed only when claim and field values
-   match exactly.
+6. Set `User Claim` and `User Field`:
+   - preferred: `upn` → the ServiceNow field containing the same UPN,
+     commonly `user_name`;
+   - alternative: `email` → `email`;
+   - a verified custom claim is allowed only when its value exactly matches
+     the selected field.
 7. Open `All` → `User Administration` → `Users` and confirm a real signed-in
    test user has one matching Active record. Do not return the employee's
    identifier to the skill. Do not create a test user as part of this skill.
@@ -66,12 +66,11 @@ certificate.
 
 ## Completion signal and evidence
 
-Ask one completion question for the whole ServiceNow OIDC step. Accept one
-structured response such as `upn, user_name` after the Maker confirms that
-OIDC capability is available, the entity is Active, and one matching Active
-user exists. While the question is pending, do not return an action result. If
-the admin is not done or answers **Not sure**, return
-`ACTION_RESULT = "waiting"`.
+Ask one completion question for the whole ServiceNow OIDC step. The completed
+response is only the non-secret `<claim>, <field>`, for example
+`upn, user_name`. If the work is incomplete, the Maker selects **Not yet**.
+While the question is pending, do not return an action result. If the Maker
+selects **Not yet**, return `ACTION_RESULT = "waiting"`.
 
 After verification or completion, record one bundled phase handoff. Use
 `reused` for a valid existing mapping and `completed` when configuration or
@@ -84,3 +83,6 @@ python scripts/connect_servicenow_da.py record-admin-phase --phase servicenow-oi
 Return `ACTION_RESULT = "recorded"` after the phase handoff is persisted. The
 phase's `Manual` result is structured attestation because no supported
 read-only ServiceNow security-object API is used.
+
+Source contract: PR #217 S4.3/S4.4 is authoritative. Microsoft Learn's current
+ServiceNow connector User Login/OIDC setup is a secondary reference only.
