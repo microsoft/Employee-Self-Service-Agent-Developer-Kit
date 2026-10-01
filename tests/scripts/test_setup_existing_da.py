@@ -2343,6 +2343,33 @@ def test_capacity_manual_result_requires_explicit_attestation(
     assert blocked["mode"] is None
 
 
+def test_capacity_warning_records_risk_without_blocking_setup(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Warning",
+    )
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    assert result["state"] == "done"
+    assert result["mode"] == "automated"
+    assert result["evidenceStatuses"] == ["Warning"]
+    assert result["failureCauses"] == []
+    assert step["state"] == "done"
+    assert "capacity risk" in step["note"].lower()
+    assert "not a foundation setup blocker" in step["note"].lower()
+
+
 def test_capacity_manual_result_accepts_explicit_attestation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
