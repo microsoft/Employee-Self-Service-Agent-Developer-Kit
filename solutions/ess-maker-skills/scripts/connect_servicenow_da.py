@@ -1969,6 +1969,7 @@ def record_agent_connection_attestation(
     state = _load_lifecycle_state(context, components)
     result = {
         "kind": "maker-attestation",
+        "status": "completed",
         "mode": "maker-ui",
         "connectionId": normalized_connection_id,
         "displayName": physical.get("displayName"),
@@ -2580,6 +2581,7 @@ def record_keep_current_topic_choice(
         ),
     }
     result = {
+        "kind": "maker-attestation",
         "status": "recorded",
         "customerChoice": "keep-current",
         "before": counts,
@@ -2747,9 +2749,14 @@ def reconcile_publish_receipt(
         )
         if key in receipt
     }
+    reconciled_at = _utc_now()
     reconciled = {
         **receipt,
+        "kind": "maker-attestation",
         "status": "confirmation-required",
+        "completedAt": (
+            receipt.get("completedAt") or expected_last_published_at
+        ),
         "requestedComponentHash": (
             receipt.get("requestedComponentHash")
             or receipt.get("componentHash")
@@ -2758,8 +2765,9 @@ def reconcile_publish_receipt(
         "componentHash": expected_component_hash,
         "serverLastPublishedAt": expected_last_published_at,
         "verifiedBy": "maker-attested-current-revision",
-        "attestedAt": _utc_now(),
-        "reconciledAt": _utc_now(),
+        "recordedAt": reconciled_at,
+        "attestedAt": reconciled_at,
+        "reconciledAt": reconciled_at,
         "legacyReceipt": legacy_receipt,
     }
     evidence["publish"] = reconciled
@@ -2846,9 +2854,12 @@ def publish(
         _write_lifecycle_state(context, state)
         raise ServiceNowConnectError(publish_error["remediation"]) from exc
     published_component_hash = _component_hash(published_components)
+    completed_at = _utc_now()
     publish_record = {
+        "kind": "maker-attestation",
         "requestedAt": requested_at,
-        "completedAt": _utc_now(),
+        "completedAt": completed_at,
+        "recordedAt": completed_at,
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "requestedComponentHash": requested_component_hash,
@@ -2866,6 +2877,7 @@ def publish(
         "mutationMayHaveOccurred": True,
     }
     state.setdefault("evidence", {})["publish"] = publish_record
+    state["componentHash"] = published_component_hash
     _write_lifecycle_state(context, state)
     return state
 
@@ -2922,6 +2934,7 @@ def record_test_attestation(
         )
     attestation = {
         "kind": "maker-attestation",
+        "status": "completed" if result == "pass" else "failed",
         "promptCategory": prompt_category,
         "result": result,
         "failureCategory": failure_category,

@@ -359,17 +359,24 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
   when the action returned `applied` or `recorded` in this invocation, the
   current checkpoint status is exactly `Manual`, its safe `path` (with
   `{phaseId}` resolved to the current phase) points to a provider-owned object
-  whose `status` is in `acceptedRecordStatuses`, and that object's nested
-  evidence has `kind` equal to `requiredEvidenceKind` plus a non-empty
-  `recordedAt`. Reject paths with arrays, `..`, file syntax, or unresolved
-  placeholders. Persist the acknowledgement with
+  whose `status` is in `acceptedRecordStatuses`. Resolve its safe
+  `evidenceObjectPath` beneath that record, or use the record itself when the
+  configured value is `""`; that evidence object must have `kind` equal to
+  `requiredEvidenceKind` plus a non-empty `recordedAt`. Require every
+  configured `requiredValues` entry to match the evidence object exactly. For
+  each configured `bindings` entry, resolve the
+  safe relative `evidencePath` under that evidence object and safe provider-state
+  `statePath`; both must exist and be equal. Reject paths with arrays, `..`,
+  slashes, file syntax, unresolved placeholders, or non-scalar comparisons.
+  Persist the acknowledgement with
   `source: "matching-action-evidence"`, the evidence path, kind, and evidence
-  timestamp.
+  timestamp plus the compared binding values.
   Otherwise use the normal acknowledgement question. Never reuse this shortcut
   for an older action, unrelated phase evidence, `Warning`, or mismatched
   status/kind/timestamp. A persisted matching-evidence acknowledgement may be
   reused on resume only while the checkpoint remains `Manual` and the current
-  evidence `recordedAt` and kind still match; otherwise remove it and ask.
+  evidence `recordedAt`, kind, required values, and all binding values still
+  match; otherwise remove it and ask.
   set `phases.{id}.status = "done"`, `lastVerifiedAt` = now, record each
   checkpoint's status in `checkpointResults`. For each acknowledged
   `Manual`/`Warning` result, also record

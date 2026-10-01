@@ -19,6 +19,16 @@ AGENT_ID = "00000000-0000-4000-8000-000000002222"
 CONNECTION_ID = "00000000-0000-4000-8000-000000003333"
 APP_CLIENT_ID = "00000000-0000-4000-8000-000000006666"
 AGENT_SLUG = "employee-self-service-hr"
+_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "skills"
+    / "connect"
+    / snow.PROVIDER_KEY
+    / "contract.json"
+)
 
 
 def _context() -> dict:
@@ -45,6 +55,13 @@ def _lifecycle_path(root: Path) -> Path:
         / "agents"
         / AGENT_SLUG
         / "lifecycle.json"
+    )
+
+
+def _phase_contract(phase_id: str) -> dict:
+    contract = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    return next(
+        phase for phase in contract["phases"] if phase["id"] == phase_id
     )
 
 
@@ -333,6 +350,8 @@ def test_keep_current_topic_choice_records_without_mutation(
     assert result["changedTopics"] == []
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["evidence"]["topics"]["customerChoice"] == "keep-current"
+    assert state["evidence"]["topics"]["kind"] == "maker-attestation"
+    assert state["evidence"]["topics"]["status"] == "recorded"
     assert state["provider"] == snow.PROVIDER_KEY
 
 
@@ -549,6 +568,7 @@ def test_record_agent_connection_validates_health_and_persists_attestation(
     )
 
     assert result["connectionId"] == CONNECTION_ID.replace("-", "")
+    assert result["status"] == "completed"
     assert result["binding"]["connectionId"] == result["connectionId"]
     assert result["physicalStatus"] == "Connected"
     assert result["makerAttested"] is True
@@ -592,9 +612,54 @@ def test_publish_receipt_uses_post_publish_component_revision(
     receipt = result["evidence"]["publish"]
 
     assert receipt["requestedComponentHash"] == snow._component_hash(before)
+    assert receipt["kind"] == "maker-attestation"
     assert receipt["publishedComponentHash"] == snow._component_hash(after)
     assert receipt["componentHash"] == snow._component_hash(after)
+    assert receipt["recordedAt"] == receipt["completedAt"]
     assert receipt["status"] == "completed"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["componentHash"] == snow._component_hash(after)
+
+
+def test_validation_pending_publish_receipt_matches_current_manual_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    before = _components(CONNECTION_ID)
+    after = copy.deepcopy(before)
+    after["changeToken"] = "published-token"
+
+    class FakeAgentBuilder:
+        def __init__(self) -> None:
+            self.fetch_count = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            self.fetch_count += 1
+            return before if self.fetch_count == 1 else after
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            return {"validationPending": True}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.publish(_context(), confirmed=True)
+    receipt = result["evidence"]["publish"]
+
+    assert receipt["kind"] == "maker-attestation"
+    assert receipt["status"] == "confirmation-required"
+    assert receipt["recordedAt"] == receipt["completedAt"]
+    assert receipt["publishedComponentHash"] == result["componentHash"]
+    acknowledgement = _phase_contract("publish")[
+        "manualAcknowledgementEvidence"
+    ]
+    assert receipt["status"] in acknowledgement["acceptedRecordStatuses"]
+    assert receipt["kind"] == acknowledgement["requiredEvidenceKind"]
+    assert receipt["publishedComponentHash"] == result["componentHash"]
 
 
 def test_publish_refetch_failure_requires_reconciliation_without_retry(
@@ -680,6 +745,9 @@ def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
     state_path = _lifecycle_path(tmp_path)
     state_path.parent.mkdir(parents=True)
     state = snow._state_base(_context(), components)
+    state["evidence"]["credential"] = {
+        "connectionId": CONNECTION_ID.replace("-", "")
+    }
     state["evidence"]["publish"] = {
         "requestedAt": "2026-09-30T20:22:44.806391Z",
         "completedAt": "2026-09-30T20:22:54.575668Z",
@@ -716,7 +784,70 @@ def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
     assert reconciled["publishedComponentHash"] == component_hash
     assert reconciled["componentHash"] == component_hash
     assert reconciled["verifiedBy"] == "maker-attested-current-revision"
+    assert reconciled["recordedAt"] == reconciled["reconciledAt"]
+    assert reconciled["completedAt"] == "2026-09-30T20:22:54.575668Z"
     assert reconciled["legacyReceipt"]["componentHash"] == "a" * 64
+
+    test_record = snow.record_test_attestation(
+        _context(),
+        prompt_category="list-my-open-hr-cases",
+        result="pass",
+        failure_category=None,
+    )
+    assert test_record["binding"]["publishCompletedAt"] == (
+        reconciled["completedAt"]
+    )
+    assert test_record["binding"]["publishedComponentHash"] == component_hash
+    acknowledgement = _phase_contract("test")[
+        "manualAcknowledgementEvidence"
+    ]
+    assert test_record["status"] in acknowledgement[
+        "acceptedRecordStatuses"
+    ]
+    assert test_record["kind"] == acknowledgement["requiredEvidenceKind"]
+    assert test_record["result"] == acknowledgement["requiredValues"]["result"]
+
+
+def test_reconcile_legacy_publish_receipt_uses_server_time_when_completion_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    component_hash = snow._component_hash(components)
+    last_published_at = "2026-09-30T20:22:44.5041453Z"
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state = snow._state_base(_context(), components)
+    state["evidence"]["publish"] = {
+        "requestedAt": "2026-09-30T20:22:44.806391Z",
+        "status": "needs_remediation",
+        "componentHash": "a" * 64,
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    class FakeAgentBuilder:
+        def get_agent(self, _agent_id: str) -> dict:
+            return {"lastPublishedAt": last_published_at}
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    reconciled = snow.reconcile_publish_receipt(
+        _context(),
+        expected_component_hash=component_hash,
+        expected_last_published_at=last_published_at,
+        confirmed=True,
+    )
+
+    assert reconciled["completedAt"] == last_published_at
+    assert reconciled["recordedAt"]
 
 
 def test_reconcile_publish_receipt_rejects_revision_drift(
@@ -1985,6 +2116,7 @@ def test_record_test_attestation_persists_result(
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result["result"] == "pass"
+    assert result["status"] == "completed"
     assert state["evidence"]["test"]["promptCategory"] == (
         "list-my-open-hr-cases"
     )

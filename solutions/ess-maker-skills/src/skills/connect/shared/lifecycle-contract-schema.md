@@ -65,7 +65,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `roleQueryPassNames` | array of strings | required when `gateMode` is `"programmatic"` | Role names in the query's result that count as holding `requiredRole` (include the role itself and any role that supersedes it, e.g. `System Administrator`). |
 | `actionDoc` | string (path) | no | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass. It is required whenever the phase needs an action before verification, including non-mutating maker evidence collection. |
 | `actionExecution` | string | no (default `"once"`) | `"once"` runs the action until it returns a successful result and then relies on live checkpoint verification. `"every-invocation"` reruns the action before verification on every lifecycle invocation, including a previously completed phase. Use this only for current maker evidence that no supported API can verify. |
-| `manualAcknowledgementEvidence` | object | no | Explicit opt-in for an admin-owned action's structured completion response to acknowledge a matching `Manual` checkpoint row from the same phase and invocation. Requires `path`, `acceptedRecordStatuses`, and `requiredEvidenceKind`. Without this field, historical acknowledgement behavior is unchanged. |
+| `manualAcknowledgementEvidence` | object | no | Explicit opt-in for a current action's structured evidence to acknowledge a matching `Manual` checkpoint row from the same phase and invocation. Requires `path`, `evidenceObjectPath`, `acceptedRecordStatuses`, and `requiredEvidenceKind`; optional `requiredValues` and `bindings` further bind the exact observation to current provider state. `evidenceObjectPath` is `"evidence"` for a handoff wrapper or `""` when `path` already names the evidence record. Without this field, historical acknowledgement behavior is unchanged. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
 | `rollbackPushGlob` | string | no | Static path used when the action always pushes the same local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` value when publishing the rollback. |
 | `rollbackPushGlobFromAction` | boolean | no | Set to `true` when the action resolves the pushed path dynamically. The action must return `ACTION_ROLLBACK_PUSH_GLOB`; the runner validates and persists it before checkpoint verification. Do not combine this with `rollbackPushGlob`. |
@@ -85,14 +85,25 @@ persisted questions, or sequential pause turns.
   provider-owned object for the current
   `{phaseId}`;
 - that object's `status` appears in `acceptedRecordStatuses`;
-- its nested evidence has `kind` exactly equal to `requiredEvidenceKind`; and
-- its nested evidence contains a non-empty `recordedAt`.
+- `evidenceObjectPath` safely resolves beneath that record (or `""` selects
+  the record itself);
+- that evidence object has `kind` exactly equal to `requiredEvidenceKind`; and
+- that evidence object contains a non-empty `recordedAt`.
+- every `requiredValues` entry exactly matches the evidence record; and
+- every `bindings` entry resolves a safe relative `evidencePath` beneath the
+  evidence record and a safe provider-state `statePath`, and their values are
+  equal.
 
 The runner may then persist the normal `checkpointAcknowledgements` entry with
 source `matching-action-evidence` without asking a second generic question. It must not
 infer acknowledgement from an older action, unrelated evidence, a different
 phase, `Warning`, or mismatched evidence. Providers without this field,
 including existing Workday contracts, retain the historical prompt.
+
+All configured paths use dot-separated object keys only. Reject arrays,
+slashes, `..`, unresolved placeholders, missing values, and non-scalar
+comparisons. Bindings are comparisons within the already loaded provider state;
+they never read a file, environment variable, or external service.
 
 ### Evolving a phase's checkpoint list
 

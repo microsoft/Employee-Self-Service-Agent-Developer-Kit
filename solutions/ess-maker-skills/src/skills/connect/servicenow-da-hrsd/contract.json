@@ -35,6 +35,7 @@
       "actionExecution": "once",
       "manualAcknowledgementEvidence": {
         "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
         "acceptedRecordStatuses": ["completed", "reused"],
         "requiredEvidenceKind": "structured-admin-attestation"
       },
@@ -49,6 +50,7 @@
       "actionExecution": "once",
       "manualAcknowledgementEvidence": {
         "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
         "acceptedRecordStatuses": ["completed", "reused"],
         "requiredEvidenceKind": "structured-admin-attestation"
       },
@@ -63,6 +65,7 @@
       "actionExecution": "once",
       "manualAcknowledgementEvidence": {
         "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
         "acceptedRecordStatuses": ["completed", "reused"],
         "requiredEvidenceKind": "structured-admin-attestation"
       },
@@ -84,6 +87,22 @@
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
       "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.topics",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["recorded"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "customerChoice": "keep-current",
+          "makerAttested": true
+        },
+        "bindings": [
+          {
+            "evidencePath": "boundComponentHash",
+            "statePath": "componentHash"
+          }
+        ]
+      },
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"
@@ -95,6 +114,35 @@
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/connect-agent.md",
       "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.agentConnection",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["completed"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "makerAttested": true,
+          "physicalStatus": "Connected",
+          "authMode": "entraIDUserLogin"
+        },
+        "bindings": [
+          {"evidencePath": "binding.provider", "statePath": "provider"},
+          {"evidencePath": "binding.profile", "statePath": "profile"},
+          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
+          {"evidencePath": "binding.agentId", "statePath": "agentId"},
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.componentHash",
+            "statePath": "componentHash"
+          },
+          {
+            "evidencePath": "connectionId",
+            "statePath": "evidence.credential.connectionId"
+          }
+        ]
+      },
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"
@@ -106,6 +154,29 @@
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-parameter-sharing.md",
       "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.parameterSharing",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["enabled", "not-exposed"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {"makerAttested": true},
+        "bindings": [
+          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
+          {"evidencePath": "binding.agentId", "statePath": "agentId"},
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.componentHash",
+            "statePath": "componentHash"
+          },
+          {
+            "evidencePath": "binding.connectionId",
+            "statePath": "evidence.credential.connectionId"
+          }
+        ]
+      },
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"
@@ -117,6 +188,18 @@
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
       "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.publish",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["confirmation-required"],
+        "requiredEvidenceKind": "maker-attestation",
+        "bindings": [
+          {
+            "evidencePath": "publishedComponentHash",
+            "statePath": "componentHash"
+          }
+        ]
+      },
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"
@@ -128,6 +211,31 @@
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/test-connection.md",
       "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.test",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["completed"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "promptCategory": "list-my-open-hr-cases",
+          "result": "pass",
+          "failureCategory": null
+        },
+        "bindings": [
+          {
+            "evidencePath": "binding.connectionId",
+            "statePath": "evidence.credential.connectionId"
+          },
+          {
+            "evidencePath": "binding.publishedComponentHash",
+            "statePath": "componentHash"
+          },
+          {
+            "evidencePath": "binding.publishCompletedAt",
+            "statePath": "evidence.publish.completedAt"
+          }
+        ]
+      },
       "mutates": false
     }
   ]

@@ -163,26 +163,20 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "plugin-prerequisites",
         "entra-registration",
         "servicenow-oidc",
-    ):
-        acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
-        assert acknowledgement["path"] == (
-            "adminSetup.phaseHandoffs.{phaseId}"
-        )
-        assert acknowledgement["acceptedRecordStatuses"] == [
-            "completed",
-            "reused",
-        ]
-        assert acknowledgement["requiredEvidenceKind"] == (
-            "structured-admin-attestation"
-        )
-    for phase_id in (
-        "preflight",
-        "credential",
         "topics",
         "agent-connection",
         "parameter-sharing",
         "publish",
         "test",
+    ):
+        acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
+        assert "path" in acknowledgement
+        assert "evidenceObjectPath" in acknowledgement
+        assert acknowledgement["acceptedRecordStatuses"]
+        assert acknowledgement["requiredEvidenceKind"]
+    for phase_id in (
+        "preflight",
+        "credential",
     ):
         assert "manualAcknowledgementEvidence" not in by_id[phase_id]
     runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
@@ -213,7 +207,25 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert "they do not create a role gate" in runner
 
 
-def _matching_admin_evidence_acknowledges(
+def _resolve_safe_path(value: object, path: str) -> object:
+    if (
+        ".." in path
+        or "[" in path
+        or "]" in path
+        or "/" in path
+        or "{" in path
+        or "}" in path
+    ):
+        return None
+    current = value
+    for part in path.split(".") if path else ():
+        if not part or not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _matching_action_evidence_acknowledges(
     phase: dict,
     checkpoint_status: str,
     provider_state: dict,
@@ -228,25 +240,34 @@ def _matching_admin_evidence_acknowledges(
     ):
         return False
     path = config.get("path")
-    if not isinstance(path, str) or path.count("{phaseId}") != 1:
+    if not isinstance(path, str) or path.count("{phaseId}") > 1:
         return False
     resolved = path.replace("{phaseId}", phase["id"])
-    if ".." in resolved or "[" in resolved or "]" in resolved:
+    record = _resolve_safe_path(provider_state, resolved)
+    if not isinstance(record, dict):
         return False
-    current: object = provider_state
-    for part in resolved.split("."):
-        if not part or not isinstance(current, dict):
+    evidence_path = config.get("evidenceObjectPath")
+    if not isinstance(evidence_path, str):
+        return False
+    evidence = _resolve_safe_path(record, evidence_path)
+    if not isinstance(evidence, dict):
+        return False
+    if (
+        record.get("status") not in config.get("acceptedRecordStatuses", [])
+        or evidence.get("kind") != config.get("requiredEvidenceKind")
+        or not evidence.get("recordedAt")
+    ):
+        return False
+    for field, expected in config.get("requiredValues", {}).items():
+        if _resolve_safe_path(evidence, field) != expected:
             return False
-        current = current.get(part)
-    if not isinstance(current, dict):
-        return False
-    evidence = current.get("evidence")
-    return bool(
-        current.get("status") in config.get("acceptedRecordStatuses", [])
-        and isinstance(evidence, dict)
-        and evidence.get("kind") == config.get("requiredEvidenceKind")
-        and evidence.get("recordedAt")
-    )
+    for binding in config.get("bindings", []):
+        if (
+            _resolve_safe_path(evidence, binding["evidencePath"])
+            != _resolve_safe_path(provider_state, binding["statePath"])
+        ):
+            return False
+    return True
 
 
 def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
@@ -280,26 +301,20 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
         "entra-registration",
         "servicenow-oidc",
     ):
-        assert _matching_admin_evidence_acknowledges(
+        assert _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",
             state,
             action_succeeded_this_invocation=True,
         )
 
-    assert not _matching_admin_evidence_acknowledges(
-        phases["test"],
-        "Manual",
-        state,
-        action_succeeded_this_invocation=True,
-    )
-    assert not _matching_admin_evidence_acknowledges(
+    assert not _matching_action_evidence_acknowledges(
         phases["plugin-prerequisites"],
         "Warning",
         state,
         action_succeeded_this_invocation=True,
     )
-    assert not _matching_admin_evidence_acknowledges(
+    assert not _matching_action_evidence_acknowledges(
         phases["plugin-prerequisites"],
         "Manual",
         state,
@@ -308,7 +323,7 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
         "kind"
     ] = "unrelated"
-    assert not _matching_admin_evidence_acknowledges(
+    assert not _matching_action_evidence_acknowledges(
         phases["plugin-prerequisites"],
         "Manual",
         state,
@@ -321,7 +336,7 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"][
         "status"
     ] = "pending"
-    assert not _matching_admin_evidence_acknowledges(
+    assert not _matching_action_evidence_acknowledges(
         phases["plugin-prerequisites"],
         "Manual",
         state,
@@ -333,7 +348,7 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
         "recordedAt"
     ] = ""
-    assert not _matching_admin_evidence_acknowledges(
+    assert not _matching_action_evidence_acknowledges(
         phases["plugin-prerequisites"],
         "Manual",
         state,
@@ -354,7 +369,7 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
         phases["plugin-prerequisites"][
             "manualAcknowledgementEvidence"
         ]["path"] = unsafe_path
-        assert not _matching_admin_evidence_acknowledges(
+        assert not _matching_action_evidence_acknowledges(
             phases["plugin-prerequisites"],
             "Manual",
             state,
@@ -363,6 +378,113 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
     phases["plugin-prerequisites"][
         "manualAcknowledgementEvidence"
     ]["path"] = original
+
+
+def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
+    contract = json.loads(
+        (_CONNECT / "servicenow-da-hrsd" / "contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    phases = {phase["id"]: phase for phase in contract["phases"]}
+    state = {
+        "provider": "servicenow-da-hrsd",
+        "profile": "hrsd",
+        "agentSlug": "employee-self-service-hr",
+        "agentId": "agent-id",
+        "environmentId": "environment-id",
+        "componentHash": "component-hash",
+        "evidence": {
+            "credential": {"connectionId": "connection-id"},
+            "topics": {
+                "kind": "maker-attestation",
+                "status": "recorded",
+                "recordedAt": "2026-10-01T00:00:00Z",
+                "customerChoice": "keep-current",
+                "makerAttested": True,
+                "boundComponentHash": "component-hash",
+            },
+            "agentConnection": {
+                "kind": "maker-attestation",
+                "status": "completed",
+                "recordedAt": "2026-10-01T00:00:00Z",
+                "makerAttested": True,
+                "physicalStatus": "Connected",
+                "authMode": "entraIDUserLogin",
+                "connectionId": "connection-id",
+                "binding": {
+                    "provider": "servicenow-da-hrsd",
+                    "profile": "hrsd",
+                    "agentSlug": "employee-self-service-hr",
+                    "agentId": "agent-id",
+                    "environmentId": "environment-id",
+                    "componentHash": "component-hash",
+                },
+            },
+            "parameterSharing": {
+                "kind": "maker-attestation",
+                "status": "not-exposed",
+                "recordedAt": "2026-10-01T00:00:00Z",
+                "makerAttested": True,
+                "binding": {
+                    "agentSlug": "employee-self-service-hr",
+                    "agentId": "agent-id",
+                    "environmentId": "environment-id",
+                    "componentHash": "component-hash",
+                    "connectionId": "connection-id",
+                },
+            },
+            "publish": {
+                "kind": "maker-attestation",
+                "status": "confirmation-required",
+                "recordedAt": "2026-10-01T00:00:00Z",
+                "completedAt": "2026-10-01T00:00:00Z",
+                "publishedComponentHash": "component-hash",
+            },
+            "test": {
+                "kind": "maker-attestation",
+                "status": "completed",
+                "recordedAt": "2026-10-01T00:00:00Z",
+                "promptCategory": "list-my-open-hr-cases",
+                "result": "pass",
+                "failureCategory": None,
+                "binding": {
+                    "connectionId": "connection-id",
+                    "publishedComponentHash": "component-hash",
+                    "publishCompletedAt": "2026-10-01T00:00:00Z",
+                },
+            },
+        },
+    }
+
+    for phase_id in (
+        "topics",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ):
+        assert _matching_action_evidence_acknowledges(
+            phases[phase_id],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
+
+    state["componentHash"] = "later-drift"
+    for phase_id in (
+        "topics",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ):
+        assert not _matching_action_evidence_acknowledges(
+            phases[phase_id],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
 
 
 def test_matching_action_ack_resume_requires_same_evidence_provenance() -> None:
