@@ -237,9 +237,11 @@ authorization script, and verifies connection-reference bindings, flow state,
 and authorization after each ordered stage. User Context V2 and selected-agent
 flow attachment are verified separately below. The controller records each
 verified stage immediately, so a later failure resumes from durable evidence
-rather than hiding earlier successful changes. Report permission issues only
-from an explicit forbidden response, `[FAIL]` marker, ambiguity result, or
-nonzero script exit.
+rather than hiding earlier successful changes. Runtime apply identifies
+`alm/Enable-CosmosDAFlowAuthorization.ps1` before each invocation and reports
+whether its authorization verification completed or failed for the reviewed
+flow. Report permission issues only from an explicit forbidden response,
+`[FAIL]` marker, ambiguity result, or nonzero script exit.
 
 Do not direct the maker to agent Connection Settings unless `runtime-apply`
 returns `applied.verified: true` and confirms all three verified stages:
