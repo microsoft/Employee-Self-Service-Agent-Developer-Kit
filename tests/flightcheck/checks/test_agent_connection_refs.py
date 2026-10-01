@@ -92,9 +92,10 @@ class _FakePP:
         )
 
 
-def _runner(*, config, details=None):
+def _runner(*, config, details=None, agent_slug=None):
     return SimpleNamespace(
         config=config,
+        agent_slug=agent_slug,
         env_url="https://example.crm.dynamics.com",
         dv_token="dv-token",
         env_id="env-1",
@@ -364,6 +365,59 @@ def test_active_bindings_use_selected_agent_only(monkeypatch):
     assert len(queried_filters) == 1
     assert "selected-bot" in queried_filters[0]
     assert "healthy-sibling" not in queried_filters[0]
+
+
+def test_active_bindings_honor_explicit_agent_slug_override(monkeypatch):
+    """--agent-slug targets the requested agent, not the persisted default."""
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    queried_filters: list[str] = []
+
+    def _fake(env_url, token, entity_set, select, filter_expr=None):
+        queried_filters.append(filter_expr or "")
+        return [_topic(_invoke(FLOW_A))]
+
+    monkeypatch.setattr(mod, "query_all", _fake)
+    runner = _runner(
+        config={
+            "agent": {"botId": "default-bot", "slug": "default-agent"},
+            "agents": [
+                {"botId": "default-bot", "slug": "default-agent"},
+                {"botId": "requested-bot", "slug": "requested-agent"},
+            ],
+        },
+        details={FLOW_A: _detail_with_ref(FLOW_A, "shared_office365")},
+        agent_slug="requested-agent",
+    )
+
+    bindings = mod.build_active_agent_connection_bindings(runner)
+
+    assert bindings is not None
+    assert len(queried_filters) == 1
+    assert "requested-bot" in queried_filters[0]
+    assert "default-bot" not in queried_filters[0]
+
+
+def test_active_bindings_refuse_when_slug_matches_no_agent(monkeypatch):
+    """An unmatched --agent-slug SKIPs rather than using the default botId."""
+    from flightcheck.checks import _agent_connection_refs as mod
+
+    def _fake(*a, **k):
+        raise AssertionError("must not query when slug is unresolved")
+
+    monkeypatch.setattr(mod, "query_all", _fake)
+    runner = _runner(
+        config={
+            "agent": {"botId": "default-bot", "slug": "default-agent"},
+            "agents": [
+                {"botId": "default-bot", "slug": "default-agent"},
+            ],
+        },
+        details={FLOW_A: _detail_with_ref(FLOW_A, "shared_office365")},
+        agent_slug="typo-agent",
+    )
+
+    assert mod.build_active_agent_connection_bindings(runner) is None
 
 
 def test_active_bindings_include_physical_connection_name(monkeypatch):

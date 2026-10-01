@@ -73,6 +73,7 @@ import re
 from dataclasses import dataclass
 
 from ._dlp_utils import normalize_connector_id
+from ..agent_scope import validate_agent_slug
 from auth import query_all  # scripts/auth.py, on path via cli.py
 
 
@@ -114,9 +115,61 @@ class ActiveConnectionBinding:
     connection_name: str
 
 
-def _active_agent_bot_id(config: dict) -> str | None:
-    """Return the selected agent's bot ID, never a sibling agent's ID."""
-    bot_id = (config.get("agent") or {}).get("botId")
+def _selected_agent_bot_id(runner) -> str | None:
+    """Return the bot ID of the agent selected for this invocation.
+
+    Honors an explicit ``--agent-slug`` override. Resolution mirrors the
+    other checks (``workday_da._selected_agent``): the selected slug is
+    ``runner.agent_slug`` (the validated ``--agent-slug`` arg), then
+    ``config['activeAgent']``, then the backward-compat
+    ``config['agent'].slug``. The slug is matched against ``config['agents']``
+    (slug -> botId), falling back to the backward-compat ``config['agent']``
+    record only when it carries the same slug.
+
+    Subject-identity invariant: when a slug is selected but no configured
+    agent matches it, this returns ``None`` (the caller SKIPs) rather than
+    substituting a sibling or the persisted default agent's botId. The
+    backward-compat ``config['agent'].botId`` is used only when no slug
+    context exists at all.
+    """
+    config = getattr(runner, "config", None) or {}
+    if not isinstance(config, dict):
+        return None
+
+    legacy_agent = config.get("agent")
+    legacy_agent = legacy_agent if isinstance(legacy_agent, dict) else {}
+
+    slug = (
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or legacy_agent.get("slug")
+    )
+
+    if slug:
+        try:
+            selected_slug = validate_agent_slug(str(slug))
+        except ValueError:
+            return None
+        agents = config.get("agents")
+        if isinstance(agents, list):
+            for agent in agents:
+                if (
+                    isinstance(agent, dict)
+                    and str(agent.get("slug") or "") == selected_slug
+                ):
+                    return _clean_bot_id(agent.get("botId"))
+        if str(legacy_agent.get("slug") or "") == selected_slug:
+            return _clean_bot_id(legacy_agent.get("botId"))
+        # Slug selected but no agent matches it: refuse rather than
+        # querying a different agent's botId.
+        return None
+
+    # No slug context at all — use the backward-compat active-agent record.
+    return _clean_bot_id(legacy_agent.get("botId"))
+
+
+def _clean_bot_id(bot_id) -> str | None:
+    """Return a non-empty, stripped bot ID string, else ``None``."""
     if not isinstance(bot_id, str) or not bot_id.strip():
         return None
     return bot_id.strip()
@@ -164,8 +217,7 @@ def build_active_agent_connection_bindings(
     ``properties.connectionReferences``. Permission failures raise so callers
     can surface a WARNING instead of treating missing visibility as absence.
     """
-    config = getattr(runner, "config", None) or {}
-    bot_id = _active_agent_bot_id(config)
+    bot_id = _selected_agent_bot_id(runner)
     env_url = getattr(runner, "env_url", None)
     dv_token = getattr(runner, "dv_token", None)
     pp = getattr(runner, "pp_admin", None)
