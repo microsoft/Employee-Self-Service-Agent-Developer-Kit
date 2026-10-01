@@ -18,7 +18,7 @@ family) it records:
 * the **owning category function** (the same callable ``cli.py`` registers
   for ``--scope`` runs),
 * the **clients** that function needs to evaluate this checkpoint
-  (``graph`` / ``dataverse`` / ``pp_admin`` / ``pva``),
+  (``graph`` / ``dataverse`` / ``bap`` / ``pp_admin`` / ``pva``),
 * whether it needs ``.local/config.json`` and a ``dataverseEndpoint``,
 * the **prerequisite checkpoint IDs** whose category functions must run
   first to hydrate shared state.
@@ -71,6 +71,9 @@ from flightcheck.checks.topics import run_topic_checks
 GRAPH = "graph"
 DATAVERSE = "dataverse"
 PP_ADMIN = "pp_admin"
+# BAP-only environment/DLP reads share runner.pp_admin without requiring
+# the PowerApps connection or Flow audiences used by legacy mixed checks.
+BAP = "bap"
 PVA = "pva"
 # Power Platform Licensing API client (PowerPlatformClient) — distinct from the
 # BAP admin client (PP_ADMIN). Used to read per-environment Copilot Studio
@@ -83,6 +86,7 @@ ALL_CLIENTS = frozenset(
         GRAPH,
         DATAVERSE,
         PP_ADMIN,
+        BAP,
         PVA,
         POWERPLATFORM,
         AGENTBUILDER,
@@ -183,7 +187,7 @@ _SPECS: list[CheckpointSpec] = [
         key="ENV-001",
         category_fn=run_environment_checks,
         category_label="Environment",
-        clients=frozenset({PP_ADMIN}),
+        clients=frozenset({BAP}),
         requires_config=False,
         requires_dataverse_endpoint=True,
         priority=Priority.CRITICAL.value,
@@ -193,7 +197,7 @@ _SPECS: list[CheckpointSpec] = [
         key="ENV-002",
         category_fn=run_environment_checks,
         category_label="Environment",
-        clients=frozenset({PP_ADMIN}),
+        clients=frozenset({BAP}),
         requires_config=False,
         requires_dataverse_endpoint=True,
         prereqs=("ENV-001",),

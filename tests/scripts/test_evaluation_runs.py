@@ -1597,6 +1597,7 @@ def test_resolve_mcs_connection_uses_ppapi_signed_in_account(monkeypatch):
 
     assert selected["id"] == "current"
     assert observed["authenticate"] == {
+        "include_bap": False,
         "include_flow": False,
         "preferred_username": "maker@example.com",
     }
@@ -1740,9 +1741,11 @@ def test_resolve_tool_connections_uses_signed_in_account(
             ),
         }],
     }]
-    assert observed["authenticate"]["preferred_username"] == (
-        "maker@example.com"
-    )
+    assert observed["authenticate"] == {
+        "include_bap": False,
+        "include_flow": False,
+        "preferred_username": "maker@example.com",
+    }
 
 
 def test_resolve_tool_connections_does_not_require_unrelated_profile(
