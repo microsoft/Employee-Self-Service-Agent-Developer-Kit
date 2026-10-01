@@ -112,6 +112,22 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     )
 
 
+def test_entra_waiting_boundary_follows_required_rediscovery() -> None:
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
+        encoding="utf-8"
+    )
+
+    rediscovery = entra.index("If `requiresRediscovery` is `true`")
+    waiting = entra.index(
+        "administrator-stage --phase entra --substage awaiting-completion"
+    )
+
+    assert rediscovery < waiting
+    assert "Only after rediscovery returns `requiresRediscovery: false`" in (
+        entra
+    )
+
+
 def test_every_controller_command_is_documented() -> None:
     import workday_connect as controller
 
@@ -371,7 +387,10 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Microsoft Entra ID Integrated" in text
     assert "**Display name (optional)**" in text
     assert "**Authentication type**" in text
-    assert "**Microsoft Entra resource URL \\***" in text
+    assert (
+        "**Microsoft Entra resource URL (Application ID URI) \\***"
+        in text
+    )
     assert "Do not use the Entra application ID URI beginning with `api://`" in text
     assert "**Workday OAuth token URL \\***" in text
     assert "**Workday OAuth client ID \\***" in text
@@ -464,14 +483,41 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     ).read_text(encoding="utf-8")
 
     assert ".component-map.json" in action
-    assert "{AGENT_SCHEMA}.topic.Workday" in action
-    assert "all 21 Workday dialog topics" in " ".join(action.split())
+    assert "{AGENT_SCHEMA}.topic.EmployeeUpdatePhoneNumber" in action
+    assert "{AGENT_SCHEMA}.topic.GetReferenceData" in action
+    assert "all 23" in " ".join(action.split())
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
     assert "record-topic-activation" in action
     assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
+
+
+def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
+    configure = (
+        _WORKDAY_DA / "configure-power-platform.md"
+    ).read_text(encoding="utf-8")
+    action = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "wire-runtime-template-config.md"
+    ).read_text(encoding="utf-8")
+
+    assert configure.index("wire-runtime-template-config.md") < (
+        configure.index("wire-user-context-redirect.md")
+    )
+    assert "Conversation Start" in action
+    assert "exactly once as its first action" in action
+    assert "remove only that exact obsolete nested" in action
+    assert "record-runtime-template-wiring" in action
+    assert "runtime-template-configured" in action
 
 
 def test_readiness_requires_real_employee_runtime_evidence() -> None:

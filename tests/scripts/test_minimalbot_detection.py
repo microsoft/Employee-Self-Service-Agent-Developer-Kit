@@ -16,6 +16,7 @@ which ``tests/AGENTS.md`` exempts from the cassette rule.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -656,10 +657,14 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
     _write_workday_topics(tmp_path)
     component_map_path = tmp_path / ".component-map.json"
     component_map = json.loads(component_map_path.read_text(encoding="utf-8"))
-    for entry in component_map.values():
-        entry["schemaName"] = entry["schemaName"].replace(
-            "contoso",
-            "gptagent_copilotforemployeeselfservicehr",
+    reviewed = (
+        "EmployeeUpdatePhoneNumber",
+        "GetReferenceData",
+    )
+    for entry, suffix in zip(component_map.values(), reviewed, strict=True):
+        entry["schemaName"] = (
+            "gptagent_copilotforemployeeselfservicehr.topic."
+            + suffix
         )
     component_map_path.write_text(
         json.dumps(component_map),
@@ -668,12 +673,66 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
 
     with pytest.raises(
         mbe.MinimalBotEvaluationError,
-        match="expected 21",
+        match="reviewed 23-topic",
     ):
         mbe.resolve_workday_dialogs(
             tmp_path,
             "gptagent_copilotforemployeeselfservicehr",
         )
+
+
+def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
+    schema = "gptagent_copilotforemployeeselfservicehr"
+    expected_topics = frozenset(
+        json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "fixtures"
+                / "workday_hr_reviewed_topics.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    assert mbe._REVIEWED_WORKDAY_TOPIC_SUFFIXES[schema] == expected_topics
+    component_map = {}
+    for index, suffix in enumerate(
+        sorted(expected_topics),
+        start=1,
+    ):
+        path = f"topics/workday-{index}.mcs.yml"
+        tmp_path.joinpath(path).parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.joinpath(path).write_text(
+            "kind: AdaptiveDialog\n",
+            encoding="utf-8",
+        )
+        component_map[path] = {
+            "componentKind": "DialogComponent",
+            "componentId": f"workday-{index}",
+            "schemaName": f"{schema}.topic.{suffix}",
+            "displayName": f"Workday {suffix}",
+        }
+    handoff_path = "topics/employee-handoff.mcs.yml"
+    tmp_path.joinpath(handoff_path).write_text(
+        "kind: AdaptiveDialog\n",
+        encoding="utf-8",
+    )
+    component_map[handoff_path] = {
+        "componentKind": "DialogComponent",
+        "componentId": "employee-handoff",
+        "schemaName": f"{schema}.topic.WorkdayEmployeeScenariosHandoff",
+        "displayName": "Workday Employee Scenarios Handoff",
+    }
+    tmp_path.joinpath(".component-map.json").write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+    resolved = mbe.resolve_workday_dialogs(tmp_path, schema)
+
+    assert len(resolved) == 23
+    schemas = {entry["schemaName"] for entry in resolved}
+    assert f"{schema}.topic.EmployeeUpdatePhoneNumber" in schemas
+    assert f"{schema}.topic.GetReferenceData" in schemas
+    assert f"{schema}.topic.WorkdayEmployeeScenariosHandoff" not in schemas
 
 
 def test_minimalbot_activation_rejects_local_topic_content_changes(

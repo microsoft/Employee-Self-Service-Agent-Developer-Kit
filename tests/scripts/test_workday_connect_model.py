@@ -23,10 +23,20 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 6
+    assert state["schemaVersion"] == 7
     assert state["lifecycle"]["correlationId"]
     assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
+    assert state["phases"]["entra"]["administrator"] == {
+        "substage": "not-started",
+        "partialEvidence": {},
+        "invalidFields": [],
+        "updatedAt": None,
+    }
+    assert state["phases"]["workday-admin"]["administrator"] == (
+        state["phases"]["entra"]["administrator"]
+    )
+    assert "administrator" not in state["phases"]["runtime"]
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:
@@ -120,5 +130,35 @@ def test_blocked_phase_requires_complete_blocker_evidence() -> None:
     with pytest.raises(
         model.WorkdayConnectModelError,
         match="complete blocker",
+    ):
+        model.validate_state(state)
+
+
+def test_administrator_partial_evidence_is_allow_listed() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["phases"]["entra"]["administrator"]["partialEvidence"] = {
+        "accessToken": "must-not-be-stored",
+    }
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="must not be persisted",
+    ):
+        model.validate_state(state)
+
+
+def test_evidence_validated_requires_complete_phase() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["phases"]["entra"]["administrator"]["substage"] = (
+        "evidence-validated"
+    )
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="before the phase is complete",
     ):
         model.validate_state(state)
