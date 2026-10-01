@@ -82,7 +82,7 @@ same order as the Workday connection form:
 | --- | --- |
 | **Display name (optional)** | Leave blank, or enter a maker-chosen recognizable connection name. |
 | **Authentication type** | `Microsoft Entra ID Integrated` |
-| **Microsoft Entra resource URL \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
+| **Microsoft Entra resource URL (Application ID URI) \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
 | **Workday OAuth token URL \*** | The exact saved Token Endpoint copied from **View API Client** in Workday. |
 | **Workday OAuth client ID \*** | The saved Workday OAuth client ID copied from **View API Client**, not the Microsoft Entra application ID. |
 | **SOAP base URL \*** | The saved SOAP service base ending at `/ccx/service`, without the tenant name. |
@@ -256,7 +256,8 @@ running the guarded action in
 This scoped action must complete and
 `record-runtime-template-wiring` must record
 `runtime-template-configured` before changing the Admin User Context topic.
-Run the live verification command from the solution root:
+The guarded action runs this live verification command itself; do not invoke
+it a second time here:
 
 ```powershell
 python scripts/workday_connect.py record-runtime-template-wiring

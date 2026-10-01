@@ -17,7 +17,7 @@ import uuid
 
 
 STATE_SCHEMA_VERSION = 7
-CONTROLLER_CONTRACT_VERSION = 2
+CONTROLLER_CONTRACT_VERSION = 3
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
 
@@ -195,6 +195,7 @@ ADMINISTRATOR_SUBSTAGES = (
     "administrator-engaged",
     "handoff-presented",
     "awaiting-completion",
+    "completion-confirmed",
     "collecting-evidence",
     "evidence-validated",
 )
@@ -204,9 +205,16 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
             "selectedDirectoryId",
             "selectedDirectoryDisplayName",
             "applicationId",
+            "applicationDisplayName",
+            "applicationObjectId",
+            "servicePrincipalId",
+            "applicationIdentifierUris",
+            "applicationReplyUrls",
+            "scopeGuid",
             "replyUrl",
             "microsoftEntraIdentifier",
             "loginUrl",
+            "entraChecks",
             "nameIdSource",
             "samlSigningOption",
             "certificateThumbprint",
@@ -229,6 +237,11 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
             "soapBaseUrl",
             "authenticationPolicyOutcome",
             "networkReadinessOutcome",
+            "apiClientOutcome",
+            "clientGrantType",
+            "includeWorkdayOwnedScope",
+            "identityProviderSsoServiceUrl",
+            "signOnRedirectUrl",
             "rolloutType",
             "employeeSecurityGroup",
             "publicWorkerReportsOutcome",
@@ -236,6 +249,9 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
             "functionalAreaScopes",
             "optionalDomains",
             "authorizationOutcome",
+            "authorizationRemediationDomain",
+            "authorizationRemediationScenario",
+            "authorizationRetestOutcome",
         }
     ),
 }
@@ -792,7 +808,11 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
             "unsupported fields: " + ", ".join(unexpected_fields)
         )
     for field, field_value in partial_evidence.items():
-        if field == "functionalAreaScopes":
+        if field in {
+            "functionalAreaScopes",
+            "applicationIdentifierUris",
+            "applicationReplyUrls",
+        }:
             if (
                 not isinstance(field_value, list)
                 or not field_value
@@ -803,8 +823,24 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
                 or len(field_value) != len(set(field_value))
             ):
                 raise WorkdayConnectModelError(
-                    "Workday administrator functionalAreaScopes must contain "
-                    "unique non-empty strings."
+                    f"Administrator field '{field}' must contain unique "
+                    "non-empty strings."
+                )
+            continue
+        if field == "entraChecks":
+            if (
+                not isinstance(field_value, dict)
+                or not field_value
+                or any(
+                    not isinstance(key, str)
+                    or not key.strip()
+                    or not isinstance(item, dict)
+                    for key, item in field_value.items()
+                )
+            ):
+                raise WorkdayConnectModelError(
+                    "Entra administrator entraChecks must contain named "
+                    "evidence objects."
                 )
             continue
         if field == "optionalDomains":

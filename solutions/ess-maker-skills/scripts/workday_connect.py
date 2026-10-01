@@ -9,7 +9,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from workday_connect_agent import (
     WorkdayConnectAgentError,
@@ -245,28 +245,125 @@ def _set_workday_tenant(
     }
 
 
+def _require_administrator_completion(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> None:
+    substage = state["phases"][phase_id]["administrator"]["substage"]
+    if ADMINISTRATOR_SUBSTAGES.index(substage) < (
+        ADMINISTRATOR_SUBSTAGES.index("completion-confirmed")
+    ):
+        raise WorkdayConnectStoreError(
+            f"Confirm the '{phase_id}' administrator completed the presented "
+            "handoff before collecting evidence."
+        )
+
+
+def _merge_entra_verification(
+    state: Mapping[str, Any],
+    verification: Mapping[str, Any],
+) -> dict[str, Any]:
+    partial = dict(
+        state["phases"]["entra"]["administrator"]["partialEvidence"]
+    )
+    merged = dict(verification)
+    merged.setdefault("tenantId", partial.get("selectedDirectoryId"))
+    selected_directory_value = merged.get("selectedDirectory")
+    if selected_directory_value is None or isinstance(
+        selected_directory_value,
+        Mapping,
+    ):
+        selected_directory = dict(selected_directory_value or {})
+        selected_directory.setdefault(
+            "tenantId",
+            partial.get("selectedDirectoryId"),
+        )
+        selected_directory.setdefault(
+            "displayName",
+            partial.get("selectedDirectoryDisplayName"),
+        )
+        if selected_directory:
+            merged["selectedDirectory"] = selected_directory
+    application_value = merged.get("application")
+    if application_value is None or isinstance(application_value, Mapping):
+        application = dict(application_value or {})
+        for target, source in (
+            ("displayName", "applicationDisplayName"),
+            ("appId", "applicationId"),
+            ("objectId", "applicationObjectId"),
+            ("servicePrincipalId", "servicePrincipalId"),
+            ("identifierUris", "applicationIdentifierUris"),
+            ("replyUrls", "applicationReplyUrls"),
+        ):
+            application.setdefault(target, partial.get(source))
+        if application:
+            merged["application"] = application
+    certificate_value = merged.get("certificate")
+    if certificate_value is None or isinstance(certificate_value, Mapping):
+        certificate = dict(certificate_value or {})
+        for target, source in (
+            ("thumbprint", "certificateThumbprint"),
+            ("validFrom", "certificateValidFrom"),
+            ("validTo", "certificateValidTo"),
+        ):
+            certificate.setdefault(target, partial.get(source))
+        if certificate:
+            merged["certificate"] = certificate
+    for key, partial_key in (
+        ("scopeGuid", "scopeGuid"),
+        ("replyUrl", "replyUrl"),
+        ("microsoftEntraIdentifier", "microsoftEntraIdentifier"),
+        ("loginUrl", "loginUrl"),
+        ("checks", "entraChecks"),
+    ):
+        merged.setdefault(key, partial.get(partial_key))
+    return merged
+
+
+def _section_matches(
+    state: Mapping[str, Any],
+    section: str,
+    values: Mapping[str, Any],
+) -> bool:
+    current = state.get(section) or {}
+    return all(current.get(key) == value for key, value in values.items())
+
+
+def _action_evidence(
+    state: Mapping[str, Any],
+    phase_id: str,
+    action: str,
+) -> dict[str, Any] | None:
+    for record in state["phases"][phase_id]["evidence"]:
+        if record.get("action") != action:
+            continue
+        return {
+            key: value
+            for key, value in record.items()
+            if key not in {"action", "capturedAt"}
+        }
+    return None
+
+
 def _entra_handoff(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
     administrator = state["phases"]["entra"]["administrator"]
-    if ADMINISTRATOR_SUBSTAGES.index(
-        administrator["substage"]
-    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented"):
-        return {
-            "packet": None,
-            "alreadyPresented": True,
-            "status": store.status(),
-        }
     packet = build_entra_handoff(
         state,
         _json_input(args, "discovery", "Entra discovery"),
     )
-    store.record_administrator_progress("entra", "handoff-presented")
+    already_presented = ADMINISTRATOR_SUBSTAGES.index(
+        administrator["substage"]
+    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
+    if not packet["requiresRediscovery"] and not already_presented:
+        store.record_administrator_progress("entra", "handoff-presented")
     return {
         "packet": packet,
-        "alreadyPresented": False,
+        "alreadyPresented": already_presented,
+        "rediscoveryRequired": packet["requiresRediscovery"],
         "status": store.status(),
     }
 
@@ -312,8 +409,14 @@ def _record_administrator_evidence(
         raise WorkdayConnectStoreError(
             "Administrator invalidFields must be an array."
         )
+    if any(not isinstance(field, str) for field in invalid_fields):
+        raise WorkdayConnectStoreError(
+            "Administrator invalidFields must contain field names."
+        )
+    state = store.load()
+    _require_administrator_completion(state, args.phase)
     validated = validate_administrator_partial_evidence(
-        store.load(),
+        state,
         args.phase,
         fields,
     )
@@ -350,11 +453,66 @@ def _record_entra(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    _require_administrator_completion(state, "entra")
     result = validate_entra_verification(
-        store.load(),
-        _json_input(args, "verification", "Entra verification"),
+        state,
+        _merge_entra_verification(
+            state,
+            _json_input(args, "verification", "Entra verification"),
+        ),
     )
-    store.merge_section("identifiers", result["identifiers"])
+    if state["phases"]["entra"]["status"] == "complete":
+        identifiers_match = _section_matches(
+            state,
+            "identifiers",
+            result["identifiers"],
+        )
+        application_evidence_match = _action_evidence(
+            state,
+            "entra",
+            "exact-application-discovered",
+        ) == {
+            "outcome": "verified",
+            "tenantId": result["evidence"]["tenantId"],
+            "applicationDisplayName": result["evidence"][
+                "applicationDisplayName"
+            ],
+        }
+        configuration_evidence_match = _action_evidence(
+            state,
+            "entra",
+            "administrator-configuration-verified",
+        ) == {
+            "outcome": "verified",
+            "checks": result["evidence"]["checks"],
+        }
+        if (
+            identifiers_match
+            and application_evidence_match
+            and configuration_evidence_match
+        ):
+            return {
+                "verified": True,
+                "replayed": True,
+                "tenantFoundationReused": (
+                    state["phases"]["workday-admin"]["status"]
+                    == "complete"
+                ),
+                "status": store.status(),
+            }
+        store.merge_section("identifiers", result["identifiers"])
+        return {
+            "verified": False,
+            "replayed": False,
+            "driftDetected": True,
+            "status": store.status(),
+        }
+    store.merge_section(
+        "identifiers",
+        result["identifiers"],
+        verified_phase="entra",
+    )
     store.record_administrator_progress(
         "entra",
         "collecting-evidence",
@@ -384,10 +542,6 @@ def _record_entra(
         once_per_lifecycle=True,
     )
     store.set_phase_status("entra", "complete")
-    store.record_administrator_progress(
-        "entra",
-        "evidence-validated",
-    )
     _, reused = store.restore_workday_foundation()
     if reused:
         store.record_lifecycle_event(
@@ -409,22 +563,18 @@ def _workday_admin_packet(
 ) -> dict[str, Any]:
     state = store.load()
     administrator = state["phases"]["workday-admin"]["administrator"]
-    if ADMINISTRATOR_SUBSTAGES.index(
-        administrator["substage"]
-    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented"):
-        return {
-            "packet": None,
-            "alreadyPresented": True,
-            "status": store.status(),
-        }
     packet = build_workday_admin_packet(state)
-    store.record_administrator_progress(
-        "workday-admin",
-        "handoff-presented",
-    )
+    already_presented = ADMINISTRATOR_SUBSTAGES.index(
+        administrator["substage"]
+    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
+    if not already_presented:
+        store.record_administrator_progress(
+            "workday-admin",
+            "handoff-presented",
+        )
     return {
         "packet": packet,
-        "alreadyPresented": False,
+        "alreadyPresented": already_presented,
         "status": store.status(),
     }
 
@@ -433,16 +583,78 @@ def _record_workday_admin(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    _require_administrator_completion(state, "workday-admin")
+    response = {
+        **dict(
+            state["phases"]["workday-admin"]["administrator"][
+                "partialEvidence"
+            ]
+        ),
+        **_json_input(args, "response", "Workday administrator response"),
+    }
     result = validate_workday_admin_response(
-        store.load(),
-        _json_input(args, "response", "Workday administrator response"),
+        state,
+        response,
     )
-    store.merge_section("identifiers", result["identifiers"])
-    store.merge_section("endpoints", result["endpoints"])
+    if state["phases"]["workday-admin"]["status"] == "complete":
+        evidence_match = _action_evidence(
+            state,
+            "workday-admin",
+            "administrator-response-validated",
+        ) == {
+            "outcome": "verified",
+            **result["evidence"],
+        }
+        if (
+            _section_matches(
+                state,
+                "identifiers",
+                result["identifiers"],
+            )
+            and _section_matches(
+                state,
+                "endpoints",
+                result["endpoints"],
+            )
+            and evidence_match
+        ):
+            return {
+                "verified": True,
+                "replayed": True,
+                "status": store.status(),
+            }
+        store.merge_section("identifiers", result["identifiers"])
+        store.merge_section("endpoints", result["endpoints"])
+        return {
+            "verified": False,
+            "replayed": False,
+            "driftDetected": True,
+            "status": store.status(),
+        }
+    store.merge_section(
+        "identifiers",
+        result["identifiers"],
+        verified_phase="workday-admin",
+    )
+    store.merge_section(
+        "endpoints",
+        result["endpoints"],
+        verified_phase="workday-admin",
+    )
     store.record_administrator_progress(
         "workday-admin",
         "collecting-evidence",
         valid_fields=result["partialEvidence"],
+        invalid_fields=(
+            [
+                "authorizationRemediationDomain",
+                "authorizationRemediationScenario",
+                "authorizationRetestOutcome",
+            ]
+            if result["evidence"]["authorizationOutcome"] == "verified"
+            else []
+        ),
     )
     store.complete_action(
         "workday-admin",
@@ -456,10 +668,6 @@ def _record_workday_admin(
         once_per_lifecycle=True,
     )
     store.set_phase_status("workday-admin", "complete")
-    store.record_administrator_progress(
-        "workday-admin",
-        "evidence-validated",
-    )
     store.capture_tenant_foundation()
     return {
         "verified": True,

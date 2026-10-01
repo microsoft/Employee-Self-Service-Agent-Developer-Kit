@@ -16,6 +16,7 @@ which ``tests/AGENTS.md`` exempts from the cassette rule.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -682,9 +683,19 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
 
 def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
     schema = "gptagent_copilotforemployeeselfservicehr"
+    expected_topics = frozenset(
+        json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "fixtures"
+                / "workday_hr_reviewed_topics.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    assert mbe._REVIEWED_WORKDAY_TOPIC_SUFFIXES[schema] == expected_topics
     component_map = {}
     for index, suffix in enumerate(
-        sorted(mbe._REVIEWED_WORKDAY_TOPIC_SUFFIXES[schema]),
+        sorted(expected_topics),
         start=1,
     ):
         path = f"topics/workday-{index}.mcs.yml"

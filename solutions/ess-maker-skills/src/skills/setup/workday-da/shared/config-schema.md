@@ -74,8 +74,10 @@ administrator phases also store:
 ```
 
 The bounded substages are `not-started`, `administrator-engaged`,
-`handoff-presented`, `awaiting-completion`, `collecting-evidence`, and
-`evidence-validated`. Only allow-listed, non-secret fields may enter
+`handoff-presented`, `awaiting-completion`, `completion-confirmed`,
+`collecting-evidence`, and `evidence-validated`. Each transition advances by
+at most one substage; exact replay is allowed. Only allow-listed, non-secret
+fields may enter
 `partialEvidence`. Invalid fields are removed from partial evidence and
 reopened without discarding valid sibling values.
 

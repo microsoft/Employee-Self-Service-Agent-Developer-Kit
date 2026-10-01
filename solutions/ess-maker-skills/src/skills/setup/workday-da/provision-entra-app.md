@@ -36,7 +36,8 @@ configure, update, grant, or enable an Entra setting.
    Never select by display name alone and never use substring matching.
 
 Build discovery JSON with `displayName`, application `appId`, application
-`objectId`, service-principal `servicePrincipalId`, and `identifierUris`.
+`objectId`, service-principal `servicePrincipalId`, `identifierUris`, and the
+service principal's Graph-authenticated `replyUrls`.
 Write it directly to `.local/connect/workday-da/entra-discovery.json` using a
 structured file-write tool; never interpolate Graph values into a generated
 shell command. Then run:
@@ -95,19 +96,22 @@ administrator's name, credentials, or other identifying information. This
 availability answer is not authorization evidence; the stable role-template
 check and verified Graph reread remain authoritative.
 
-After the handoff is presented and the administrator is working, persist the
-waiting boundary:
-
-```powershell
-python scripts/workday_connect.py administrator-stage --phase entra --substage awaiting-completion
-```
-
 If `requiresRediscovery` is `true`, ask an Entra administrator to open
 **Microsoft Entra admin center -> Enterprise applications -> New application**,
 find the official **Workday** gallery application, and create it in the selected
 tenant. Stop after creation and repeat exact application discovery. Entra must
 assign the application and service-principal IDs before later settings can be
-planned safely.
+planned safely. The creation packet does not advance the handoff substage.
+Rerunning `entra-handoff` after rediscovery returns the complete actionable
+packet even when an earlier packet was already displayed.
+
+Only after rediscovery returns `requiresRediscovery: false`, the actionable
+handoff is presented, and the administrator is working, persist the waiting
+boundary:
+
+```powershell
+python scripts/workday_connect.py administrator-stage --phase entra --substage awaiting-completion
+```
 
 ## Administrator guide for missing or changed settings
 
@@ -199,6 +203,13 @@ and app-registration pairing, `entraAppId`, `entraAppObjectId`,
 `microsoftEntraIdentifier`, `entraLoginUrl`, `replyUrl`, `scopeGuid`, and safe
 certificate metadata. Never persist certificate contents.
 
+Record the explicit completion boundary before collecting either partial or
+final evidence:
+
+```powershell
+python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
+```
+
 For a portal-only setting that Graph cannot prove, include its non-secret
 administrator confirmation in the `checks` object rather than claiming the
 skill changed it.
@@ -213,7 +224,9 @@ python scripts/workday_connect.py record-administrator-evidence --phase entra --
 
 On resume, use the Entra administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
-`outstandingFields`.
+`outstandingFields`. If the packet output was lost or the discovered target
+changed, rerun `entra-handoff`; it safely rebuilds and returns the current
+non-secret packet.
 
 Write the Graph reread directly to
 `.local/connect/workday-da/entra-verification.json` using a structured
@@ -222,6 +235,12 @@ file-write tool, then run:
 ```powershell
 python scripts/workday_connect.py record-entra --verification-file ".local\connect\workday-da\entra-verification.json"
 ```
+
+If an exact replay matches the persisted evidence, the controller returns
+`replayed: true`. If a completed phase now returns `driftDetected: true`, the
+controller has reopened Entra and invalidated downstream deployment state.
+Rerun exact discovery and the administrator handoff for the changed target;
+do not continue from the stale tenant foundation.
 
 The JSON must contain the Graph-authenticated `tenantId`, selected directory,
 exact enterprise-application/app-registration pairing, Reply URL, Microsoft
@@ -244,6 +263,9 @@ object for each check:
     "identifierUris": [
       "http://www.workday.com/{workdayTenant}",
       "api://11111111-1111-1111-1111-111111111111"
+    ],
+    "replyUrls": [
+      "https://{approved-workday-reply-url}"
     ]
   },
   "scopeGuid": "44444444-4444-4444-4444-444444444444",

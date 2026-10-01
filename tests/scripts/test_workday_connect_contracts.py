@@ -107,6 +107,97 @@ def _entra_checks():
     }
 
 
+def _entra_verification(*, reply_urls=None, reply_url=None):
+    app_id = "44444444-4444-4444-4444-444444444444"
+    return {
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "selectedDirectory": {
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "displayName": "Contoso",
+        },
+        "application": {
+            "displayName": "Workday exact",
+            "appId": app_id,
+            "objectId": "55555555-5555-5555-5555-555555555555",
+            "servicePrincipalId": "66666666-6666-6666-6666-666666666666",
+            "identifierUris": [
+                "http://www.workday.com/contoso_impl",
+                f"api://{app_id}",
+            ],
+            "replyUrls": (
+                reply_urls
+                if reply_urls is not None
+                else ["https://www.workday.com/saml/acs"]
+            ),
+        },
+        "scopeGuid": "77777777-7777-7777-7777-777777777777",
+        "replyUrl": reply_url or "https://www.workday.com/saml/acs",
+        "microsoftEntraIdentifier": (
+            "https://sts.windows.net/"
+            "00000000-0000-0000-0000-000000000000/"
+        ),
+        "loginUrl": (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2"
+        ),
+        "certificate": {
+            "thumbprint": "AA11",
+            "validFrom": "2026-01-01T00:00:00Z",
+            "validTo": "2027-01-01T00:00:00Z",
+        },
+        "checks": _entra_checks(),
+    }
+
+
+def _workday_state():
+    state = _state()
+    state["identifiers"]["signingCertificate"] = {
+        "thumbprint": "AA11",
+        "validFrom": "2026-01-01T00:00:00Z",
+        "validTo": "2027-01-01T00:00:00Z",
+    }
+    return state
+
+
+def _workday_response(**overrides):
+    response = {
+        "identityProviderOutcome": "verified-entra-issuer",
+        "enabledServiceProviderId": "http://www.workday.com/contoso_impl",
+        "certificateSelectionOutcome": "entra-signing-certificate-selected",
+        "certificateValidityOutcome": "matches-verified-entra-certificate",
+        "oauthClientId": "safe-client-id",
+        "apiClientOutcome": "existing-client-verified",
+        "clientGrantType": "saml-bearer",
+        "includeWorkdayOwnedScope": "yes",
+        "identityProviderSsoServiceUrl": (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2"
+        ),
+        "signOnRedirectUrl": "https://www.workday.com/saml/acs",
+        "oauthTokenUrl": (
+            "https://example.workday.com/ccx/oauth2/contoso_impl/token"
+        ),
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
+        "authenticationPolicyOutcome": "existing-active-policy",
+        "networkReadinessOutcome": "confirmed-hosts-allowed",
+        "rolloutType": "limited-or-test",
+        "employeeSecurityGroup": "ESS Workday Pilot Employees",
+        "publicWorkerReportsOutcome": "get-permission-verified",
+        "integrationPermissionsGetOutcome": "get-permission-verified",
+        "functionalAreaScopes": [
+            "Core Payroll",
+            "Organizations and Roles",
+            "Staffing",
+            "Time Off and Leave",
+        ],
+        "optionalDomains": [],
+        "authorizationOutcome": "verified",
+    }
+    response.update(overrides)
+    return response
+
+
 def test_entra_handoff_selects_only_exact_service_provider_id():
     handoff = build_entra_handoff(
         _state(),
@@ -222,6 +313,9 @@ def test_entra_verification_requires_all_expected_graph_evidence():
                     "http://www.workday.com/contoso_impl",
                     f"api://{app_id}",
                 ],
+                "replyUrls": [
+                    "https://www.workday.com/saml/acs",
+                ],
             },
             "scopeGuid": "77777777-7777-7777-7777-777777777777",
             "replyUrl": "https://www.workday.com/saml/acs",
@@ -249,6 +343,19 @@ def test_entra_verification_requires_all_expected_graph_evidence():
         "provenance": "administrator-attestation",
         "observedValue": "Sign SAML response and assertion",
     }
+
+
+def test_entra_verification_binds_reply_url_to_graph_evidence():
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="not present",
+    ):
+        validate_entra_verification(
+            _state(),
+            _entra_verification(
+                reply_urls=["https://www.workday.com/other/acs"],
+            ),
+        )
 
 
 def test_saml_signing_option_records_the_exact_required_value():
@@ -510,6 +617,14 @@ def test_workday_admin_response_validates_exact_endpoints():
                 "matches-verified-entra-certificate"
             ),
             "oauthClientId": "safe-client-id",
+            "apiClientOutcome": "existing-client-verified",
+            "clientGrantType": "saml-bearer",
+            "includeWorkdayOwnedScope": "yes",
+            "identityProviderSsoServiceUrl": (
+                "https://login.microsoftonline.com/"
+                "00000000-0000-0000-0000-000000000000/saml2"
+            ),
+            "signOnRedirectUrl": "https://www.workday.com/saml/acs",
             "oauthTokenUrl": (
                 "https://example.workday.com/ccx/oauth2/contoso_impl/token"
             ),
@@ -521,7 +636,12 @@ def test_workday_admin_response_validates_exact_endpoints():
             "employeeSecurityGroup": "ESS Workday Pilot Employees",
             "publicWorkerReportsOutcome": "get-permission-verified",
             "integrationPermissionsGetOutcome": "get-permission-verified",
-            "functionalAreaScopes": ["Staffing", "Personal Data"],
+            "functionalAreaScopes": [
+                "Core Payroll",
+                "Organizations and Roles",
+                "Staffing",
+                "Time Off and Leave",
+            ],
             "optionalDomains": [],
             "authorizationOutcome": "verified",
         },
@@ -536,6 +656,88 @@ def test_workday_admin_response_validates_exact_endpoints():
     assert result["evidence"]["rolloutType"] == "limited-or-test"
     assert result["evidence"]["employeeSecurityGroup"] == (
         "ESS Workday Pilot Employees"
+    )
+
+
+def test_workday_admin_response_enforces_limited_rollout_group():
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="cannot use All Employees",
+    ):
+        validate_workday_admin_response(
+            _workday_state(),
+            _workday_response(employeeSecurityGroup="All Employees"),
+        )
+
+
+def test_workday_admin_response_requires_exact_functional_area_scopes():
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="must contain exactly",
+    ):
+        validate_workday_admin_response(
+            _workday_state(),
+            _workday_response(
+                functionalAreaScopes=["Staffing", "Personal Data"],
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("clientGrantType", "authorization-code", "saml-bearer"),
+        ("includeWorkdayOwnedScope", "no", "must be yes"),
+        (
+            "identityProviderSsoServiceUrl",
+            "https://login.microsoftonline.com/other/saml2",
+            "does not match",
+        ),
+        (
+            "signOnRedirectUrl",
+            "https://www.workday.com/other/acs",
+            "does not match",
+        ),
+    ],
+)
+def test_workday_admin_response_enforces_api_client_and_saml_mapping(
+    field,
+    value,
+    message,
+):
+    with pytest.raises(WorkdayConnectContractError, match=message):
+        validate_workday_admin_response(
+            _workday_state(),
+            _workday_response(**{field: value}),
+        )
+
+
+def test_workday_admin_response_requires_bounded_authorization_retest():
+    response = _workday_response(
+        authorizationOutcome="task-not-authorized-remediated",
+    )
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="authorizationRemediationDomain",
+    ):
+        validate_workday_admin_response(_workday_state(), response)
+
+    result = validate_workday_admin_response(
+        _workday_state(),
+        {
+            **response,
+            "authorizationRemediationDomain": (
+                "Worker Data: Public Worker Reports"
+            ),
+            "authorizationRemediationScenario": (
+                "Signed-in employee profile read"
+            ),
+            "authorizationRetestOutcome": "verified-after-remediation",
+        },
+    )
+
+    assert result["evidence"]["authorizationRetestOutcome"] == (
+        "verified-after-remediation"
     )
 
 
@@ -555,6 +757,23 @@ def test_partial_workday_evidence_keeps_valid_siblings() -> None:
         "rolloutType": "limited-or-test",
     }
     assert set(result["fieldErrors"]) == {"oauthTokenUrl"}
+
+
+def test_partial_administrator_evidence_rejects_secret_material() -> None:
+    result = validate_administrator_partial_evidence(
+        _state(),
+        "entra",
+        {
+            "certificateThumbprint": (
+                "-----BEGIN PRIVATE KEY-----\nnot-safe"
+            ),
+        },
+    )
+
+    assert result["validFields"] == {}
+    assert "secret or certificate material" in (
+        result["fieldErrors"]["certificateThumbprint"]
+    )
 
 
 def test_workday_admin_response_rejects_certificate_date_drift():
@@ -583,6 +802,14 @@ def test_workday_admin_response_rejects_certificate_date_drift():
                 "certificateValidFrom": "2026-01-01",
                 "certificateValidTo": "2028-01-01",
                 "oauthClientId": "safe-client-id",
+                "apiClientOutcome": "existing-client-verified",
+                "clientGrantType": "saml-bearer",
+                "includeWorkdayOwnedScope": "yes",
+                "identityProviderSsoServiceUrl": (
+                    "https://login.microsoftonline.com/"
+                    "00000000-0000-0000-0000-000000000000/saml2"
+                ),
+                "signOnRedirectUrl": "https://www.workday.com/saml/acs",
                 "oauthTokenUrl": (
                     "https://example.workday.com/ccx/oauth2/contoso_impl/token"
                 ),
@@ -607,6 +834,14 @@ def test_workday_admin_response_rejects_conflicting_confirmed_defaults():
         "certificateSelectionOutcome": "entra-signing-certificate-selected",
         "certificateValidityOutcome": "matches-verified-entra-certificate",
         "oauthClientId": "safe-client-id",
+        "apiClientOutcome": "existing-client-verified",
+        "clientGrantType": "saml-bearer",
+        "includeWorkdayOwnedScope": "yes",
+        "identityProviderSsoServiceUrl": (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2"
+        ),
+        "signOnRedirectUrl": "https://www.workday.com/saml/acs",
         "oauthTokenUrl": (
             "https://example.workday.com/ccx/oauth2/contoso_impl/token"
         ),

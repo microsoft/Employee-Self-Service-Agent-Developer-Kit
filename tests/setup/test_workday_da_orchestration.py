@@ -112,6 +112,22 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     )
 
 
+def test_entra_waiting_boundary_follows_required_rediscovery() -> None:
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
+        encoding="utf-8"
+    )
+
+    rediscovery = entra.index("If `requiresRediscovery` is `true`")
+    waiting = entra.index(
+        "administrator-stage --phase entra --substage awaiting-completion"
+    )
+
+    assert rediscovery < waiting
+    assert "Only after rediscovery returns `requiresRediscovery: false`" in (
+        entra
+    )
+
+
 def test_every_controller_command_is_documented() -> None:
     import workday_connect as controller
 
@@ -371,7 +387,10 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "Microsoft Entra ID Integrated" in text
     assert "**Display name (optional)**" in text
     assert "**Authentication type**" in text
-    assert "**Microsoft Entra resource URL \\***" in text
+    assert (
+        "**Microsoft Entra resource URL (Application ID URI) \\***"
+        in text
+    )
     assert "Do not use the Entra application ID URI beginning with `api://`" in text
     assert "**Workday OAuth token URL \\***" in text
     assert "**Workday OAuth client ID \\***" in text

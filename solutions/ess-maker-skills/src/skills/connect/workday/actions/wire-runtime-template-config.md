@@ -137,10 +137,8 @@ On any error after mutation, restore and push only the two mapped topic paths:
 ```text
 python scripts/checkpoint.py --revert-reason "pre-workday-runtime-template-wiring" --only "{CONVERSATION_START_TOPIC_PATH}"
 python scripts/checkpoint.py --revert-reason "pre-workday-runtime-template-wiring" --only "{WORKDAY_USER_CONTEXT_TOPIC_PATH}"
-python scripts/push.py --only "{CONVERSATION_START_TOPIC_PATH}" --dry-run
-python scripts/push.py --only "{WORKDAY_USER_CONTEXT_TOPIC_PATH}" --dry-run
-python scripts/push.py --only "{CONVERSATION_START_TOPIC_PATH}" --yes
-python scripts/push.py --only "{WORKDAY_USER_CONTEXT_TOPIC_PATH}" --yes
+python scripts/push.py --only "{CONVERSATION_START_TOPIC_PATH}" --only "{WORKDAY_USER_CONTEXT_TOPIC_PATH}" --dry-run --preferred-username "{POWER_PLATFORM_MAKER}"
+python scripts/push.py --only "{CONVERSATION_START_TOPIC_PATH}" --only "{WORKDAY_USER_CONTEXT_TOPIC_PATH}" --yes --preferred-username "{POWER_PLATFORM_MAKER}"
 ```
 
 If any restore or push fails, leave the runtime phase active and report the

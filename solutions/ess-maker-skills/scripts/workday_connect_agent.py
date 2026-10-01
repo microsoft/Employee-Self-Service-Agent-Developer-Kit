@@ -108,6 +108,7 @@ def _agent_folder(
 def _mapped_dialog(
     agent_folder: Path,
     display_name: str,
+    expected_schema_name: str,
 ) -> dict[str, str]:
     component_map = _read_json(agent_folder / ".component-map.json")
     matches = []
@@ -164,7 +165,13 @@ def _mapped_dialog(
             f"Expected exactly one mapped {display_name} topic; found "
             f"{len(matches)}."
         )
-    return matches[0]
+    match = matches[0]
+    if match["schemaName"].casefold() != expected_schema_name.casefold():
+        raise WorkdayConnectAgentError(
+            f"Mapped {display_name} schema name does not match the reviewed "
+            f"agent contract: {match['schemaName']}."
+        )
+    return match
 
 
 def _topic_document(topic: Mapping[str, str]) -> dict[str, Any]:
@@ -182,18 +189,49 @@ def _topic_document(topic: Mapping[str, str]) -> dict[str, Any]:
     return document
 
 
-def _begin_dialog_targets(value: Any) -> list[str]:
+def _begin_dialog_targets(
+    value: Any,
+    *,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[str]:
+    if _depth > 100:
+        raise WorkdayConnectAgentError(
+            "Mapped topic nesting exceeds the supported verification depth."
+        )
+    seen = _seen if _seen is not None else set()
     targets = []
+    if isinstance(value, (Mapping, list)):
+        identity = id(value)
+        if identity in seen:
+            raise WorkdayConnectAgentError(
+                "Mapped topic contains a recursive YAML alias."
+            )
+        seen.add(identity)
     if isinstance(value, Mapping):
         if value.get("kind") == "BeginDialog":
             target = str(value.get("dialog") or "").strip()
             if target:
                 targets.append(target)
         for child in value.values():
-            targets.extend(_begin_dialog_targets(child))
+            targets.extend(
+                _begin_dialog_targets(
+                    child,
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
     elif isinstance(value, list):
         for child in value:
-            targets.extend(_begin_dialog_targets(child))
+            targets.extend(
+                _begin_dialog_targets(
+                    child,
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+    if isinstance(value, (Mapping, list)):
+        seen.remove(id(value))
     return targets
 
 
@@ -211,17 +249,24 @@ def verify_runtime_template_wiring(
     """Verify Conversation Start initializes Workday templates exactly once."""
     context = _agent_verification_context(workspace_root, state)
     agent_folder = Path(context["agentFolder"])
+    agent_schema = str(context["agentSchema"])
     conversation_start = _mapped_dialog(
         agent_folder,
         "Conversation Start",
+        f"{agent_schema}.topic.ConversationStart",
     )
     runtime_template = _mapped_dialog(
         agent_folder,
         "Workday [System] - 1: Set Runtime Template Configurations",
+        (
+            f"{agent_schema}.topic."
+            "WorkdaySystemSetRuntimeTemplateConfigurations"
+        ),
     )
     user_context = _mapped_dialog(
         agent_folder,
         "Workday [System] - 1: Set User Context V2",
+        f"{agent_schema}.topic.WorkdaySystemGetUserContextV2",
     )
     target_schema = runtime_template["schemaName"]
     conversation_document = _topic_document(conversation_start)
@@ -257,7 +302,11 @@ def verify_runtime_template_wiring(
             "key": topic["path"],
             "yaml": Path(topic["localPath"]).read_text(encoding="utf-8"),
         }
-        for topic in (conversation_start, user_context)
+        for topic in (
+            conversation_start,
+            runtime_template,
+            user_context,
+        )
     ]
     try:
         converted = converter(conversion_items)
@@ -271,7 +320,11 @@ def verify_runtime_template_wiring(
         if isinstance(item, Mapping)
     }
     expectations = []
-    for topic in (conversation_start, user_context):
+    for topic in (
+        conversation_start,
+        runtime_template,
+        user_context,
+    ):
         converted_topic = converted_by_key.get(topic["path"])
         if (
             not isinstance(converted_topic, Mapping)
@@ -281,14 +334,20 @@ def verify_runtime_template_wiring(
             raise WorkdayConnectAgentError(
                 f"Workday topic conversion failed for {topic['path']}."
             )
-        expectations.append(
-            {
-                "componentId": topic["componentId"],
-                "schemaName": topic["schemaName"],
-                "dialog": converted_topic["objectModel"],
-                "requireCleanDiagnostics": False,
-            }
-        )
+        expectation = {
+            "componentId": topic["componentId"],
+            "schemaName": topic["schemaName"],
+            "dialog": converted_topic["objectModel"],
+            "requireCleanDiagnostics": topic is conversation_start,
+        }
+        if topic is conversation_start:
+            expectation.update(
+                {
+                    "state": "Active",
+                    "status": "Active",
+                }
+            )
+        expectations.append(expectation)
     try:
         client = client_factory(dict(context["foundation"]))
         client.authenticate(
