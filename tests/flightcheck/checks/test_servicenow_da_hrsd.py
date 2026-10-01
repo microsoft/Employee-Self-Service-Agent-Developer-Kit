@@ -213,22 +213,25 @@ def _write_state(root: Path, components: dict) -> None:
     }
     handoffs["entra-registration"]["evidence"]["clientId"] = APP_CLIENT_ID
     handoffs["servicenow-oidc"]["evidence"].update(
-        {"claim": "upn", "userField": "user_name"}
+        {
+            "oidcCapabilityConfirmed": True,
+            "claim": "upn",
+            "userField": "user_name",
+        }
     )
     path.write_text(
         json.dumps(
             {
-                "schemaVersion": 4,
+                "schemaVersion": 5,
                 "provider": snow.PROVIDER_KEY,
                 "agentSlug": AGENT_SLUG,
                 "agentId": AGENT_ID,
                 "environmentId": ENVIRONMENT_ID,
                 "adminSetup": {
-                    "schemaVersion": 2,
+                    "schemaVersion": 3,
                     "scope": "hrsd",
                     "authMode": "entraIDUserLogin",
                     "preflight": {
-                        "scenario": "connected",
                         "instanceName": "dev123",
                         "discovery": discovery,
                     },
@@ -324,6 +327,38 @@ def test_admin_prerequisites_pass_with_graph_and_structured_evidence(
             == Status.PASSED.value
         )
     assert statuses["SN-DA-HRSD-OIDC-001"] == Status.MANUAL.value
+
+
+def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"].pop(
+        "oidcCapabilityConfirmed"
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        row
+        for row in run_servicenow_da_hrsd_checks(_runner(components))
+        if row.checkpoint_id == "SN-DA-HRSD-OIDC-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "OIDC capability confirmation is missing" in result.result
 
 
 def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(

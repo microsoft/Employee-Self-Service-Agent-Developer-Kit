@@ -23,12 +23,16 @@ requires one new complete OIDC handoff.
 
 ## Complete admin instructions
 
-1. From the profile menu, select **Elevate role** and elevate to
+1. Open **All -> System OAuth -> Application Registry -> New** and confirm
+   **Configure an OIDC provider to verify ID tokens** is available. If it is
+   unavailable, enable the tenant-supported OIDC or Multi-Provider SSO
+   capability before continuing.
+2. From the profile menu, select **Elevate role** and elevate to
    `security_admin`. If **New** is missing in the security configuration, the
    role is not elevated.
-2. Open **All -> System OAuth -> Application Registry -> New -> Configure an
+3. Open **All -> System OAuth -> Application Registry -> New -> Configure an
    OIDC provider to verify ID tokens**.
-3. Reuse the exact valid ESS OIDC entity when the ServiceNow Admin confirms it
+4. Reuse the exact valid ESS OIDC entity when the ServiceNow Admin confirms it
    matches the verified App A and settings below. Otherwise create or repair
    the missing or unhealthy entity:
    - Client ID = verified App A Application client ID;
@@ -36,17 +40,17 @@ requires one new complete OIDC handoff.
      value for this flow; the admin enters a tenant-approved placeholder
      locally and never returns or persists it;
    - entity Active.
-4. In **OAuth OIDC Provider Configuration**, set:
+5. In **OAuth OIDC Provider Configuration**, set:
    - metadata URL =
      `https://login.microsoftonline.com/<tenant-id>/.well-known/openid-configuration`;
    - cache lifespan = `120`;
    - Application = `Global`;
    - JTI verification = disabled.
-5. Set **User Claim** and **User Field**. Prefer `upn` mapped to the
+6. Set **User Claim** and **User Field**. Prefer `upn` mapped to the
    ServiceNow field containing the same UPN (commonly `user_name` or `email`).
    An evidence-based alternative is allowed only when claim and field values
    match exactly.
-6. Open **All -> User Administration -> Users** and confirm a real signed-in
+7. Open **All -> User Administration -> Users** and confirm a real signed-in
    test user has one matching Active record. Do not return the employee's
    identifier to the skill. Do not create a test user as part of this skill.
 
@@ -56,16 +60,12 @@ certificate.
 
 ## Completion signal and evidence
 
-The Maker should return once, after the entire step is complete, with:
-
-- the non-secret claim identifier;
-- the non-secret ServiceNow user-field identifier; and
-- confirmation that the OIDC entity is Active and a matching Active user
-  exists.
-
-Ask one completion question for the whole ServiceNow OIDC step. While the
-question is pending, do not return an action result. If the admin is not done,
-return `ACTION_RESULT = "waiting"`.
+Ask one completion question for the whole ServiceNow OIDC step. Accept one
+structured response such as `upn, user_name` after the Maker confirms that
+OIDC capability is available, the entity is Active, and one matching Active
+user exists. While the question is pending, do not return an action result. If
+the admin is not done or answers **Not sure**, return
+`ACTION_RESULT = "waiting"`.
 
 After verification or completion, record one bundled phase handoff. Use
 `reused` for a valid existing mapping and `completed` when configuration or

@@ -1,27 +1,27 @@
 # Discover existing admin setup before creating anything
 
-Treat preflight discovery and instance confirmation as one complete high-level
-step with one pause boundary.
+Preflight is state/API driven. It does not ask the Maker to classify setup
+progress.
 
 - **Goal:** discover remote setup first, automatically reuse each valid
   existing item, and send only missing or unhealthy items to their owning
   setup phase.
-- **Owner role:** Maker coordinating with the ServiceNow/Entra admins who know
-  which tenant resources already exist.
-- **Completion evidence:** confirmed ServiceNow instance URL, existing-setup
-  scenario, and current read-only resource discovery.
+- **Owner role:** the skill reads canonical `/setup` state, lifecycle state,
+  and supported read-only discovery.
+- **Completion evidence:** a trusted or explicitly supplied public ServiceNow
+  instance URL plus current read-only resource discovery.
 
 Read `adminSetup.phaseHandoffs.preflight` first. If it is already
-`completed`, refresh `inspect-admin-setup`. If the stored scenario and
-instance are still present and stored phase checkpoint results are empty or
+`completed`, refresh `inspect-admin-setup`. If the stored instance is still
+present and stored phase checkpoint results are empty or
 all in this phase's `completionStatuses`, do not ask again; return
 `ACTION_RESULT = "recorded"` so the runner can reverify. Discovery changes do
 not require a global reuse decision: later phases own verification and repair
 for their individual resources.
 
-Any prior result outside `completionStatuses`, or missing scenario/instance
-evidence, requires the complete preflight step again with one new bundled
-pause.
+Any prior result outside `completionStatuses` requires a fresh read-only
+discovery. Missing instance evidence requires only the standalone URL question
+below.
 
 Run:
 
@@ -29,7 +29,7 @@ Run:
 python scripts/connect_servicenow_da.py migrate-state
 ```
 
-Run read-only discovery before asking the single preflight question:
+Run read-only discovery:
 
 ```text
 python scripts/connect_servicenow_da.py inspect-admin-setup
@@ -46,37 +46,23 @@ Local state absence is not evidence that a remote app, OIDC provider, plugin,
 or connection is absent. Never create, patch, or recreate a remote object from
 this action.
 
-Then use one bundled question form for the complete preflight step. It must
-collect:
+If `instanceInputRequired` is `false`, briefly summarize what was found and do
+not ask a progress/scenario question.
 
-1. which situation matches:
-
-- a Connected Microsoft Entra ID User Login connection already exists;
-- the Entra app and ServiceNow OIDC setup exist, but no connection exists;
-- only the ServiceNow instance/plugins exist;
-- start from scratch;
-- unsure, discover what is visible.
-
-2. the confirmed ServiceNow public HTTPS instance URL, never credentials,
-   tokens, secrets, or a portal URL.
-
-Do not ask whether to reuse or configure missing resources. These are not
-alternatives: every later phase must reuse a valid exact item and configure or
-repair only its missing or unhealthy item. A Connected physical connection
-does not prove that the Entra app, consent, plugins, OIDC provider, or user
-mapping are complete.
-
-While this one bundled form is pending, do not return an action result. If the
-Maker is not ready, return `ACTION_RESULT = "waiting"`.
-
-After the single Maker return, persist the scenario and normalized instance,
-then refresh discovery:
+Only when `instanceInputRequired` is `true`, use one standalone
+`vscode_askQuestions` free-form question for the public ServiceNow HTTPS
+instance URL. Never ask for credentials, tokens, secrets, or a portal URL.
+While that question is pending, do not return an action result. If the Maker
+is not ready to provide the URL, return `ACTION_RESULT = "waiting"`. After the
+answer, persist the normalized instance and refresh discovery:
 
 ```text
-python scripts/connect_servicenow_da.py record-preflight --scenario <connected|app-oidc|plugins-only|scratch|unsure> --instance-url <https://instance.service-now.com>
+python scripts/connect_servicenow_da.py record-preflight --instance-url <https://instance.service-now.com>
 python scripts/connect_servicenow_da.py inspect-admin-setup
 ```
 
 Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
 subsequent plugin, Entra, OIDC, and credential phases independently reverify
 their own evidence and automatically skip only the valid item they own.
+A Connected physical connection does not prove that the Entra app, consent,
+HR Core, OIDC provider, or user mapping are complete.

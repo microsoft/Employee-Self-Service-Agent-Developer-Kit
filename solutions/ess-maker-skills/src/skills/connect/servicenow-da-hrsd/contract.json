@@ -1,5 +1,5 @@
 {
-  "contractRevision": 2,
+  "contractRevision": 3,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -22,11 +22,16 @@
     },
     {
       "id": "plugin-prerequisites",
-      "label": "Confirm the scope-derived ServiceNow plugins and OIDC capability",
+      "label": "Confirm HR Service Delivery Core is installed and Active",
       "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
       "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation"
+      },
       "mutates": false
     },
     {
@@ -36,6 +41,11 @@
       "completionStatuses": ["Passed", "Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
       "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation"
+      },
       "mutates": false
     },
     {
@@ -45,6 +55,11 @@
       "completionStatuses": ["Manual"],
       "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-servicenow-oidc.md",
       "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation"
+      },
       "mutates": false
     },
     {

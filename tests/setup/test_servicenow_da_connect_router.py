@@ -124,13 +124,24 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Absence of\n  an answer is not cancellation" in topics
     assert "explicitly selects\n  **Not now**" in topics
     assert "automatically reuse each valid" in preflight
-    assert "Do not ask whether to reuse or configure missing resources" in (
-        preflight
-    )
-    assert "Connected physical connection\ndoes not prove" in preflight
+    assert "does not ask the Maker to classify setup\nprogress" in preflight
+    assert "which situation matches" not in preflight
+    assert "--scenario" not in preflight
+    assert "instanceInputRequired" in preflight
+    assert "Connected physical connection does not prove" in preflight
     assert 'ACTION_RESULT = "waiting"' in preflight
     assert "Local state absence is not evidence" in preflight
     assert "com.sn_hr_core" in plugins
+    assert (
+        "https://{instanceName}.service-now.com/now/app-manager/home/plugin/"
+        "id/com.sn_hr_core/details"
+    ) in plugins
+    assert "Is HR Service Delivery Core installed and Active?" in plugins
+    assert "Choices: **Yes**, **No**, **Not sure**" in plugins
+    assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
+        plugins
+    )
+    assert "Multi-Provider SSO" not in plugins
     assert "ITSM must not inherit" in plugins
     assert "Never run `az ad app create`" in entra
     assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra
@@ -155,6 +166,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "one category evaluation" in entra
     assert "Do not decide checkpoint success in this action" in entra
     assert "upn" in oidc
+    assert "Configure an OIDC provider to verify ID tokens" in oidc
+    assert "Multi-Provider SSO" in oidc
+    assert "structured response such as `upn, user_name`" in oidc
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc
     assert "Do not create a test user" in oidc
@@ -162,7 +176,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
-    assert "one bundled question form" in preflight
+    assert "one standalone\n`vscode_askQuestions` free-form question" in (
+        preflight
+    )
     assert "record-reuse-decision" not in preflight
     assert "reuse-discovered" not in preflight
     assert "configure-missing" not in preflight
@@ -172,7 +188,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "reconcile-publish-receipt" in publish
     assert "It never publishes or mutates the remote agent" in publish
     assert 'ACTION_RESULT = "recorded"' in publish
-    assert "Ask one question only" in plugins
+    assert "ask exactly one question" in plugins
     assert "pause exactly once" in entra
     assert "pause exactly once" in oidc
     assert "Do not pause between" in entra

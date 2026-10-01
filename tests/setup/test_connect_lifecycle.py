@@ -117,7 +117,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 2
+    assert contract["contractRevision"] == 3
     assert contract["stateMigrationCommand"].endswith("migrate-state")
     assert [phase["id"] for phase in contract["phases"]] == [
         "preflight",
@@ -153,17 +153,251 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert by_id["entra-registration"]["checkpoints"] == [
         "SN-DA-HRSD-ENTRA-*"
     ]
+    for phase_id in (
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+    ):
+        acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
+        assert acknowledgement["path"] == (
+            "adminSetup.phaseHandoffs.{phaseId}"
+        )
+        assert acknowledgement["acceptedRecordStatuses"] == [
+            "completed",
+            "reused",
+        ]
+        assert acknowledgement["requiredEvidenceKind"] == (
+            "structured-admin-attestation"
+        )
+    for phase_id in (
+        "preflight",
+        "credential",
+        "topics",
+        "agent-connection",
+        "parameter-sharing",
+        "publish",
+        "test",
+    ):
+        assert "manualAcknowledgementEvidence" not in by_id[phase_id]
     runner = (_CONNECT / "shared" / "lifecycle-runner.md").read_text(
         encoding="utf-8"
     )
     assert "When `TARGET` is a registered family/wildcard" in runner
     assert "Do not invoke family members again" in runner
+    assert "manualAcknowledgementEvidence" in runner
+    assert 'source: "matching-action-evidence"' in runner
+    assert "Otherwise use the normal acknowledgement question" in runner
+    assert "Matching action evidence never auto-acknowledges a warning" in (
+        (_CONNECT / "shared" / "lifecycle-contract-schema.md").read_text(
+            encoding="utf-8"
+        )
+    )
 
     workday = json.loads(
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")
     )
     assert all("actionExecution" not in phase for phase in workday["phases"])
     assert "attestedRoleScope" not in workday
+    assert all(
+        "manualAcknowledgementEvidence" not in phase
+        for phase in workday["phases"]
+    )
+
+
+def _matching_admin_evidence_acknowledges(
+    phase: dict,
+    checkpoint_status: str,
+    provider_state: dict,
+    *,
+    action_succeeded_this_invocation: bool,
+) -> bool:
+    config = phase.get("manualAcknowledgementEvidence")
+    if (
+        not isinstance(config, dict)
+        or checkpoint_status != "Manual"
+        or not action_succeeded_this_invocation
+    ):
+        return False
+    path = config.get("path")
+    if not isinstance(path, str) or path.count("{phaseId}") != 1:
+        return False
+    resolved = path.replace("{phaseId}", phase["id"])
+    if ".." in resolved or "[" in resolved or "]" in resolved:
+        return False
+    current: object = provider_state
+    for part in resolved.split("."):
+        if not part or not isinstance(current, dict):
+            return False
+        current = current.get(part)
+    if not isinstance(current, dict):
+        return False
+    evidence = current.get("evidence")
+    return bool(
+        current.get("status") in config.get("acceptedRecordStatuses", [])
+        and isinstance(evidence, dict)
+        and evidence.get("kind") == config.get("requiredEvidenceKind")
+        and evidence.get("recordedAt")
+    )
+
+
+def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
+    contract = json.loads(
+        (_CONNECT / "servicenow-da-hrsd" / "contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    phases = {phase["id"]: phase for phase in contract["phases"]}
+    state = {
+        "adminSetup": {
+            "phaseHandoffs": {
+                phase_id: {
+                    "status": "completed",
+                    "evidence": {
+                        "kind": "structured-admin-attestation",
+                        "recordedAt": "2026-10-01T00:00:00Z",
+                    },
+                }
+                for phase_id in (
+                    "plugin-prerequisites",
+                    "entra-registration",
+                    "servicenow-oidc",
+                )
+            }
+        }
+    }
+
+    for phase_id in (
+        "plugin-prerequisites",
+        "entra-registration",
+        "servicenow-oidc",
+    ):
+        assert _matching_admin_evidence_acknowledges(
+            phases[phase_id],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
+
+    assert not _matching_admin_evidence_acknowledges(
+        phases["test"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    assert not _matching_admin_evidence_acknowledges(
+        phases["plugin-prerequisites"],
+        "Warning",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    assert not _matching_admin_evidence_acknowledges(
+        phases["plugin-prerequisites"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=False,
+    )
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
+        "kind"
+    ] = "unrelated"
+    assert not _matching_admin_evidence_acknowledges(
+        phases["plugin-prerequisites"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
+        "kind"
+    ] = "structured-admin-attestation"
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"][
+        "status"
+    ] = "pending"
+    assert not _matching_admin_evidence_acknowledges(
+        phases["plugin-prerequisites"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"][
+        "status"
+    ] = "completed"
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
+        "recordedAt"
+    ] = ""
+    assert not _matching_admin_evidence_acknowledges(
+        phases["plugin-prerequisites"],
+        "Manual",
+        state,
+        action_succeeded_this_invocation=True,
+    )
+    state["adminSetup"]["phaseHandoffs"]["plugin-prerequisites"]["evidence"][
+        "recordedAt"
+    ] = "2026-10-01T00:00:00Z"
+    original = phases["plugin-prerequisites"][
+        "manualAcknowledgementEvidence"
+    ]["path"]
+    for unsafe_path in (
+        "../adminSetup.phaseHandoffs.{phaseId}",
+        "adminSetup.phaseHandoffs[0].{phaseId}",
+        "adminSetup/phaseHandoffs/{phaseId}",
+        "adminSetup.phaseHandoffs.other",
+    ):
+        phases["plugin-prerequisites"][
+            "manualAcknowledgementEvidence"
+        ]["path"] = unsafe_path
+        assert not _matching_admin_evidence_acknowledges(
+            phases["plugin-prerequisites"],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
+    phases["plugin-prerequisites"][
+        "manualAcknowledgementEvidence"
+    ]["path"] = original
+
+
+def test_matching_action_ack_resume_requires_same_evidence_provenance() -> None:
+    acknowledgement = {
+        "status": "Manual",
+        "source": "matching-action-evidence",
+        "evidencePath": (
+            "adminSetup.phaseHandoffs.plugin-prerequisites"
+        ),
+        "evidenceKind": "structured-admin-attestation",
+        "evidenceRecordedAt": "2026-10-01T00:00:00Z",
+    }
+    provider_state = {
+        "adminSetup": {
+            "phaseHandoffs": {
+                "plugin-prerequisites": {
+                    "status": "completed",
+                    "evidence": {
+                        "kind": "structured-admin-attestation",
+                        "recordedAt": "2026-10-01T00:00:00Z",
+                    },
+                }
+            }
+        }
+    }
+
+    def current() -> bool:
+        record = provider_state["adminSetup"]["phaseHandoffs"][
+            "plugin-prerequisites"
+        ]
+        evidence = record["evidence"]
+        return bool(
+            acknowledgement["status"] == "Manual"
+            and record["status"] in {"completed", "reused"}
+            and evidence["kind"] == acknowledgement["evidenceKind"]
+            and evidence["recordedAt"]
+            == acknowledgement["evidenceRecordedAt"]
+        )
+
+    assert current()
+    provider_state["adminSetup"]["phaseHandoffs"][
+        "plugin-prerequisites"
+    ]["evidence"]["recordedAt"] = "2026-10-01T00:01:00Z"
+    assert not current()
 
 
 def test_hrsd_lifecycle_reuses_one_attested_role_per_agent() -> None:

@@ -1138,24 +1138,16 @@ def test_plugin_requirements_are_scope_and_auth_dynamic() -> None:
     hrsd = snow.required_servicenow_prerequisites("hrsd")
     itsm = snow.required_servicenow_prerequisites("itsm")
 
-    assert [item["id"] for item in hrsd] == [
-        "hr-core",
-        "oidc-capability",
-    ]
-    assert [item["id"] for item in itsm] == ["oidc-capability"]
+    assert [item["id"] for item in hrsd] == ["hr-core"]
+    assert itsm == []
     assert hrsd[0]["aliases"] == ["com.sn_hr_core", "sn_hr_core"]
     with pytest.raises(snow.ServiceNowConnectError):
         snow.required_servicenow_prerequisites("hrsd", "oauth2ServiceNow")
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    ["connected", "app-oidc", "plugins-only", "scratch", "unsure"],
-)
-def test_preflight_paths_record_discovery_without_global_choice(
+def test_preflight_derives_instance_without_customer_progress_question(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    scenario: str,
 ) -> None:
     class FakeConnectivity:
         def list_connections(self) -> list[dict]:
@@ -1187,11 +1179,6 @@ def test_preflight_paths_record_discovery_without_global_choice(
         lambda _context: FakeConnectivity(),
     )
 
-    snow.record_preflight_scenario(
-        _context(),
-        scenario=scenario,
-        instance_url="https://dev123.service-now.com",
-    )
     discovery = snow.inspect_admin_setup(_context())
     refreshed = snow.inspect_admin_setup(_context())
     snow.record_admin_phase(
@@ -1206,19 +1193,49 @@ def test_preflight_paths_record_discovery_without_global_choice(
     assert "fingerprint" not in discovery
     assert "fingerprint" not in refreshed
     assert "fingerprint" not in with_client_id
+    assert discovery["instanceName"] == "dev123"
+    assert discovery["instanceInputRequired"] is False
     assert with_client_id["entraClientId"] == APP_CLIENT_ID
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert state["adminSetup"]["preflight"]["scenario"] == scenario
+    assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert state["adminSetup"]["phaseHandoffs"]["preflight"] == {
         "status": "completed",
         "evidence": {
             "kind": "read-only-resource-discovery",
-            "scenario": scenario,
             "instanceName": "dev123",
             "observedAt": with_client_id["observedAt"],
         },
     }
+
+
+def test_preflight_requests_only_missing_instance_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    discovery = snow.inspect_admin_setup(_context())
+    recorded = snow.record_preflight_instance(
+        _context(),
+        instance_url="https://dev123.service-now.com",
+    )
+    refreshed = snow.inspect_admin_setup(_context())
+
+    assert discovery["instanceInputRequired"] is True
+    assert recorded["instanceName"] == "dev123"
+    assert refreshed["instanceInputRequired"] is False
+    assert "scenario" not in recorded
+    assert "--scenario" not in snow.build_parser().format_help()
 
 
 def test_phase_local_reuse_does_not_require_global_preflight_choice(
@@ -1260,13 +1277,14 @@ def test_admin_operation_records_only_non_secret_identity_fields(
     assert app["evidence"]["clientId"] == APP_CLIENT_ID
     assert mapping["evidence"]["claim"] == "upn"
     assert mapping["evidence"]["userField"] == "user_name"
+    assert mapping["evidence"]["oidcCapabilityConfirmed"] is True
     serialized = _lifecycle_path(tmp_path).read_text(encoding="utf-8")
     assert "secret" not in serialized.casefold()
     assert "password" not in serialized.casefold()
     assert "token" not in serialized.casefold()
 
 
-def test_v2_lifecycle_migrates_to_v4_without_global_reuse_choice(
+def test_v2_lifecycle_migrates_to_v5_without_obsolete_preflight_gates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1317,7 +1335,7 @@ def test_v2_lifecycle_migrates_to_v4_without_global_reuse_choice(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 4
+    assert state["schemaVersion"] == 5
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -1348,10 +1366,11 @@ def test_v2_lifecycle_migrates_to_v4_without_global_reuse_choice(
     assert state["migration"]["schemaV4"][
         "retainedCompletedPreflight"
     ] is False
+    assert state["migration"]["schemaV5"]["removedScenarioGate"] is True
     assert first_bytes == state_path.read_bytes()
 
 
-def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
+def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1361,7 +1380,7 @@ def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
     state_path.write_text(
         json.dumps(
             {
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "provider": snow.PROVIDER_KEY,
                 "profile": "hrsd",
                 "agentSlug": AGENT_SLUG,
@@ -1377,7 +1396,7 @@ def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
                     }
                 },
                 "adminSetup": {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "scope": "hrsd",
                     "authMode": snow.AUTH_MODE,
                     "preflight": {
@@ -1403,7 +1422,16 @@ def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
                                 "decision": "configure-missing",
                                 "discoveryFingerprint": "old",
                             },
-                        }
+                        },
+                        "servicenow-oidc": {
+                            "status": "completed",
+                            "evidence": {
+                                "kind": "structured-admin-attestation",
+                                "recordedAt": "2026-09-29T00:00:00Z",
+                                "claim": "upn",
+                                "userField": "user_name",
+                            },
+                        },
                     },
                 },
                 "evidence": {"mustSurvive": True},
@@ -1416,8 +1444,9 @@ def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 4
-    assert state["adminSetup"]["schemaVersion"] == 2
+    assert state["schemaVersion"] == 5
+    assert state["adminSetup"]["schemaVersion"] == 3
+    assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert "fingerprint" not in state["adminSetup"]["preflight"]["discovery"]
     assert state["adminSetup"]["phaseHandoffs"]["preflight"]["status"] == (
@@ -1430,12 +1459,89 @@ def test_v3_migration_removes_reuse_choice_and_keeps_completed_discovery(
     assert state["phases"]["preflight"]["status"] == "done"
     assert state["evidence"]["mustSurvive"] is True
     assert state["transactions"]["topics"]["operation"]["status"] == "committed"
-    assert state["migration"]["schemaV4"][
+    assert state["migration"]["schemaV5"][
         "retainedCompletedPreflight"
+    ] is True
+    oidc_evidence = state["adminSetup"]["phaseHandoffs"][
+        "servicenow-oidc"
+    ]["evidence"]
+    assert oidc_evidence["oidcCapabilityConfirmed"] is True
+    assert oidc_evidence["oidcCapabilitySource"] == (
+        "legacy-completed-oidc-handoff"
+    )
+    assert state["migration"]["schemaV5"][
+        "inferredOidcCapabilityFromCompletedHandoff"
     ] is True
 
 
-def test_v3_migration_resets_incomplete_preflight_only(
+@pytest.mark.parametrize(
+    "evidence_update",
+    [
+        {"kind": "unrelated"},
+        {"kind": None},
+        {"recordedAt": ""},
+        {"recordedAt": None},
+        {"claim": ""},
+        {"userField": ""},
+    ],
+)
+def test_v4_migration_does_not_infer_oidc_capability_from_invalid_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    evidence_update: dict,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    evidence = {
+        "kind": "structured-admin-attestation",
+        "recordedAt": "2026-09-29T00:00:00Z",
+        "claim": "upn",
+        "userField": "user_name",
+        **evidence_update,
+    }
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {},
+                "adminSetup": {
+                    "schemaVersion": 2,
+                    "scope": "hrsd",
+                    "authMode": snow.AUTH_MODE,
+                    "preflight": {"discovery": {}},
+                    "phaseHandoffs": {
+                        "servicenow-oidc": {
+                            "status": "completed",
+                            "evidence": evidence,
+                        }
+                    },
+                },
+                "evidence": {},
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = snow._load_lifecycle_state(_context())
+    migrated = state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "evidence"
+    ]
+
+    assert migrated.get("oidcCapabilityConfirmed") is not True
+    assert state["migration"]["schemaV5"][
+        "inferredOidcCapabilityFromCompletedHandoff"
+    ] is False
+
+
+def test_v4_migration_does_not_infer_oidc_capability_from_pending_handoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1445,7 +1551,56 @@ def test_v3_migration_resets_incomplete_preflight_only(
     state_path.write_text(
         json.dumps(
             {
-                "schemaVersion": 3,
+                "schemaVersion": 4,
+                "provider": snow.PROVIDER_KEY,
+                "profile": "hrsd",
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {},
+                "adminSetup": {
+                    "schemaVersion": 2,
+                    "scope": "hrsd",
+                    "authMode": snow.AUTH_MODE,
+                    "preflight": {"discovery": {}},
+                    "phaseHandoffs": {
+                        "servicenow-oidc": {
+                            "status": "pending",
+                            "evidence": {
+                                "kind": "structured-admin-attestation",
+                                "recordedAt": "2026-09-29T00:00:00Z",
+                                "claim": "upn",
+                                "userField": "user_name",
+                            },
+                        }
+                    },
+                },
+                "evidence": {},
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = snow._load_lifecycle_state(_context())
+
+    assert state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "evidence"
+    ].get("oidcCapabilityConfirmed") is not True
+
+
+def test_v4_migration_removes_scenario_and_resets_incomplete_preflight_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
                 "provider": snow.PROVIDER_KEY,
                 "profile": "hrsd",
                 "agentSlug": AGENT_SLUG,
@@ -1464,7 +1619,7 @@ def test_v3_migration_resets_incomplete_preflight_only(
                     },
                 },
                 "adminSetup": {
-                    "schemaVersion": 1,
+                    "schemaVersion": 2,
                     "scope": "hrsd",
                     "authMode": snow.AUTH_MODE,
                     "preflight": {
@@ -1489,7 +1644,8 @@ def test_v3_migration_resets_incomplete_preflight_only(
     assert "actionApplied" not in state["phases"]["preflight"]
     assert "lastActionAt" not in state["phases"]["preflight"]
     assert state["phases"]["plugin-prerequisites"]["status"] == "done"
-    assert state["migration"]["schemaV4"][
+    assert "scenario" not in state["adminSetup"]["preflight"]
+    assert state["migration"]["schemaV5"][
         "retainedCompletedPreflight"
     ] is False
 

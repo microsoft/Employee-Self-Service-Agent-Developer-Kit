@@ -1,8 +1,6 @@
-# Verify scope-derived ServiceNow prerequisites
+# Verify HR Service Delivery Core
 
-Treat this as one complete high-level setup step. Give the Maker the full
-handoff below, then ask one completion question for the whole step. Do not
-pause between the individual prerequisite checks.
+Treat this as one complete high-level setup step and ask exactly one question.
 
 Read `adminSetup.phaseHandoffs.plugin-prerequisites` first. If it is already
 `completed` or `reused` and stored checkpoint results are empty or all in the
@@ -13,40 +11,37 @@ not a checklist-item question.
 
 ## Goal and owner
 
-- **Goal:** confirm this HRSD instance has both its HR data foundation and the
-  OIDC capability required by Microsoft Entra ID User Login.
+- **Goal:** confirm this HRSD instance has its HR data foundation.
 - **Owner role:** ServiceNow Admin.
 
 ## Complete admin instructions
 
-1. Open ServiceNow **All -> System Definition -> Plugins** (or the tenant's
-   approved plugin-management path).
-2. Confirm HR Core is installed and Active. Use plugin identifier
-   `com.sn_hr_core` / scope `sn_hr_core`.
-3. Open **All -> System OAuth -> Application Registry**.
-4. Confirm **Configure an OIDC provider to verify ID tokens** is available.
-   If it is unavailable, enable the tenant-supported OIDC/Multi-Provider SSO
-   capability.
+Open this instance-specific plugin page:
 
-HR Core is derived from the `hrsd` scope. ITSM must not inherit this HR-only
-requirement. OIDC capability is derived from `entraIDUserLogin`.
+`https://{instanceName}.service-now.com/now/app-manager/home/plugin/id/com.sn_hr_core/details`
+
+Confirm **HR Service Delivery Core** is installed and Active:
+
+- Plugin ID: `com.sn_hr_core`
+- Scope: `sn_hr_core`
+
+This requirement is derived from the `hrsd` scope. ITSM must not inherit it.
+OIDC capability belongs to the later ServiceNow OIDC phase.
 
 ## Completion signal and evidence
 
-The Maker should return one non-secret confirmation that:
+Use `vscode_askQuestions` with exactly this question:
 
-- HR Core is installed and Active; and
-- the OIDC provider registration option is available.
+> Is HR Service Delivery Core installed and Active?
 
-There is no supported kit API for activating these ServiceNow capabilities.
-If either item is missing, show the exact remediation above and return
-`ACTION_RESULT = "waiting"`.
+Choices: **Yes**, **No**, **Not sure**. Leave the selection unset.
 
-Ask one question only: whether the ServiceNow Admin completed the entire
-plugin-prerequisites step. While that question is pending, do not return an
-action result. After explicit completion or verification of valid existing prerequisites,
-record the single phase handoff. Use `reused` when both existing prerequisites
-were verified and `completed` when the admin had to configure either item:
+- **Yes:** record the phase handoff with `reused` when it was already valid,
+  or `completed` when the admin installed/activated it.
+- **No / Not sure:** show the direct link and identifiers above, return
+  `ACTION_RESULT = "waiting"`, and do not record completion.
+
+After **Yes**, record the single phase handoff:
 
 ```text
 python scripts/connect_servicenow_da.py record-admin-phase --phase plugin-prerequisites --status <completed|reused>

@@ -42,17 +42,10 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 PROVIDER_KEY = "servicenow-da-hrsd"
 PROFILE_KEY = "hrsd"
-LIFECYCLE_SCHEMA_VERSION = 4
-ADMIN_SETUP_SCHEMA_VERSION = 2
+LIFECYCLE_SCHEMA_VERSION = 5
+ADMIN_SETUP_SCHEMA_VERSION = 3
 AUTH_MODE = "entraIDUserLogin"
 SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
-PREFLIGHT_SCENARIOS = {
-    "connected",
-    "app-oidc",
-    "plugins-only",
-    "scratch",
-    "unsure",
-}
 ADMIN_PHASES = {
     "preflight",
     "plugin-prerequisites",
@@ -177,13 +170,6 @@ def required_servicenow_prerequisites(
                 "requiredFor": ["hrsd"],
             }
         )
-    requirements.append(
-        {
-            "id": "oidc-capability",
-            "aliases": ["Multi-Provider SSO", "OIDC"],
-            "requiredFor": [AUTH_MODE],
-        }
-    )
     return requirements
 
 
@@ -193,7 +179,6 @@ def _empty_admin_setup() -> dict[str, Any]:
         "scope": PROFILE_KEY,
         "authMode": AUTH_MODE,
         "preflight": {
-            "scenario": None,
             "discovery": {},
         },
         "phaseHandoffs": {
@@ -201,6 +186,24 @@ def _empty_admin_setup() -> dict[str, Any]:
             for phase in sorted(ADMIN_PHASES)
         },
     }
+
+
+def _legacy_oidc_handoff_proves_capability(
+    handoff: object,
+) -> bool:
+    if not isinstance(handoff, dict):
+        return False
+    evidence = handoff.get("evidence")
+    return bool(
+        handoff.get("status") in {"completed", "reused"}
+        and isinstance(evidence, dict)
+        and evidence.get("kind") == "structured-admin-attestation"
+        and isinstance(evidence.get("recordedAt"), str)
+        and evidence.get("recordedAt")
+        and evidence.get("claim")
+        and evidence.get("userField")
+        and evidence.get("oidcCapabilityConfirmed") is not True
+    )
 
 
 def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
@@ -226,7 +229,7 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
         raise ServiceNowConnectError(
             "ServiceNow preflight state must be an object."
         )
-    preflight.setdefault("scenario", None)
+    preflight.pop("scenario", None)
     preflight.pop("reuseDecision", None)
     discovery = preflight.setdefault("discovery", {})
     if not isinstance(discovery, dict):
@@ -241,6 +244,14 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
         )
     for phase in sorted(ADMIN_PHASES):
         handoffs.setdefault(phase, {"status": "pending"})
+    oidc_handoff = handoffs.get("servicenow-oidc")
+    if version < 3 and _legacy_oidc_handoff_proves_capability(oidc_handoff):
+        oidc_evidence = oidc_handoff.get("evidence")
+        if isinstance(oidc_evidence, dict):
+            oidc_evidence["oidcCapabilityConfirmed"] = True
+            oidc_evidence["oidcCapabilitySource"] = (
+                "legacy-completed-oidc-handoff"
+            )
     preflight_handoff = handoffs.get("preflight")
     if isinstance(preflight_handoff, dict):
         evidence = preflight_handoff.get("evidence")
@@ -261,8 +272,6 @@ def _preflight_discovery_complete(setup: dict[str, Any]) -> bool:
         return False
     return all(
         (
-            isinstance(preflight.get("scenario"), str),
-            bool(preflight.get("scenario")),
             isinstance(preflight.get("instanceName"), str),
             bool(preflight.get("instanceName")),
             isinstance(discovery.get("observedAt"), str),
@@ -286,7 +295,6 @@ def _normalize_preflight_handoff(
             "status": "completed",
             "evidence": {
                 "kind": "read-only-resource-discovery",
-                "scenario": preflight.get("scenario"),
                 "instanceName": preflight.get("instanceName"),
                 "observedAt": discovery.get("observedAt"),
             },
@@ -1076,16 +1084,38 @@ def _migrate_lifecycle_schema(
             "reuseApprovalInferred": False,
         }
 
+    raw_admin_setup = state.get("adminSetup")
+    raw_oidc_handoff = (
+        raw_admin_setup.get("phaseHandoffs", {}).get("servicenow-oidc")
+        if isinstance(raw_admin_setup, dict)
+        and isinstance(raw_admin_setup.get("phaseHandoffs"), dict)
+        else None
+    )
+    inferred_oidc_capability = _legacy_oidc_handoff_proves_capability(
+        raw_oidc_handoff
+    )
     setup = _admin_setup(state)
     retained_preflight = _normalize_preflight_handoff(state, setup)
+    if version <= 3:
+        migration["schemaV4"] = {
+            "from": 3,
+            "to": 4,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "removedGlobalReuseDecision": True,
+            "retainedCompletedPreflight": retained_preflight,
+        }
     state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
-    migration["schemaV4"] = {
-        "from": 3 if version == 2 else version,
+    migration["schemaV5"] = {
+        "from": 4 if version <= 4 else version,
         "to": LIFECYCLE_SCHEMA_VERSION,
         "sourceSha256": source_sha256,
         "migratedAt": _utc_now(),
-        "removedGlobalReuseDecision": True,
+        "removedScenarioGate": True,
         "retainedCompletedPreflight": retained_preflight,
+        "inferredOidcCapabilityFromCompletedHandoff": (
+            inferred_oidc_capability
+        ),
     }
     return state
 
@@ -1407,20 +1437,16 @@ def _inspection_progress(
     }
 
 
-def record_preflight_scenario(
+def record_preflight_instance(
     context: dict[str, Any],
     *,
-    scenario: str,
     instance_url: str,
 ) -> dict[str, Any]:
-    if scenario not in PREFLIGHT_SCENARIOS:
-        raise ServiceNowConnectError("Unsupported ServiceNow preflight scenario.")
     instance_name = normalize_instance_name(instance_url)
     state = _load_lifecycle_state(context)
     preflight = _admin_setup(state)["preflight"]
     preflight.update(
         {
-            "scenario": scenario,
             "instanceName": instance_name,
             "instanceOrigin": (
                 f"https://{instance_name}.service-now.com"
@@ -1433,6 +1459,23 @@ def record_preflight_scenario(
     }
     _write_lifecycle_state(context, state)
     return copy.deepcopy(preflight)
+
+
+def _discovered_instance_name(
+    connections: list[dict[str, Any]],
+) -> str | None:
+    names: set[str] = set()
+    for connection in connections:
+        values = connection.get("parameterValues")
+        values = values if isinstance(values, dict) else {}
+        raw_name = values.get("token:InstanceName") or values.get("instance")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            continue
+        try:
+            names.add(normalize_instance_name(raw_name))
+        except ServiceNowConnectError:
+            continue
+    return next(iter(names)) if len(names) == 1 else None
 
 
 def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
@@ -1453,6 +1496,20 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
             str(connection.get("displayName") or ""),
         ),
     )
+    preflight = setup["preflight"]
+    instance_name = preflight.get("instanceName")
+    if not isinstance(instance_name, str) or not instance_name:
+        instance_name = _discovered_instance_name(user_login_connections)
+        if instance_name:
+            preflight.update(
+                {
+                    "instanceName": instance_name,
+                    "instanceOrigin": (
+                        f"https://{instance_name}.service-now.com"
+                    ),
+                    "instanceSource": "connector-discovery",
+                }
+            )
     handoffs = setup["phaseHandoffs"]
     app_record = handoffs.get("entra-registration")
     client_id = None
@@ -1463,7 +1520,8 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         "observedAt": _utc_now(),
         "scope": setup["scope"],
         "authMode": setup["authMode"],
-        "instanceName": setup["preflight"].get("instanceName"),
+        "instanceName": instance_name,
+        "instanceInputRequired": not bool(instance_name),
         "requiredPlugins": required_servicenow_prerequisites(
             setup["scope"],
             setup["authMode"],
@@ -1530,6 +1588,7 @@ def record_admin_phase(
             )
         evidence.update(
             {
+                "oidcCapabilityConfirmed": True,
                 "claim": normalized_claim,
                 "userField": normalized_user_field,
             }
@@ -2816,12 +2875,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preflight_parser = subparsers.add_parser(
         "record-preflight",
-        help="Record what the Maker says already exists.",
-    )
-    preflight_parser.add_argument(
-        "--scenario",
-        required=True,
-        choices=tuple(sorted(PREFLIGHT_SCENARIOS)),
+        help="Record the public ServiceNow instance URL when discovery cannot derive it.",
     )
     preflight_parser.add_argument("--instance-url", required=True)
     phase_parser = subparsers.add_parser(
@@ -2956,9 +3010,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "inspect-admin-setup":
             result = inspect_admin_setup(context)
         elif args.command == "record-preflight":
-            result = record_preflight_scenario(
+            result = record_preflight_instance(
                 context,
-                scenario=args.scenario,
                 instance_url=args.instance_url,
             )
         elif args.command == "record-admin-phase":

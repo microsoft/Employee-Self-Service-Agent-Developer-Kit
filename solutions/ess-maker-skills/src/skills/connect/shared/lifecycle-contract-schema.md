@@ -64,6 +64,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `roleQueryPassNames` | array of strings | required when `gateMode` is `"programmatic"` | Role names in the query's result that count as holding `requiredRole` (include the role itself and any role that supersedes it, e.g. `System Administrator`). |
 | `actionDoc` | string (path) | no | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass. It is required whenever the phase needs an action before verification, including non-mutating maker evidence collection. |
 | `actionExecution` | string | no (default `"once"`) | `"once"` runs the action until it returns a successful result and then relies on live checkpoint verification. `"every-invocation"` reruns the action before verification on every lifecycle invocation, including a previously completed phase. Use this only for current maker evidence that no supported API can verify. |
+| `manualAcknowledgementEvidence` | object | no | Explicit opt-in for an admin-owned action's structured completion response to acknowledge a matching `Manual` checkpoint row from the same phase and invocation. Requires `path`, `acceptedRecordStatuses`, and `requiredEvidenceKind`. Without this field, historical acknowledgement behavior is unchanged. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
 | `rollbackPushGlob` | string | no | Static path used when the action always pushes the same local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` value when publishing the rollback. |
 | `rollbackPushGlobFromAction` | boolean | no | Set to `true` when the action resolves the pushed path dynamically. The action must return `ACTION_ROLLBACK_PUSH_GLOB`; the runner validates and persists it before checkpoint verification. Do not combine this with `rollbackPushGlob`. |
@@ -73,6 +74,24 @@ handoff and one pause boundary. It must bundle every internal checklist item,
 the responsible admin role, completion criteria, and requested non-secret
 evidence. Internal checklist items are not separate lifecycle phases,
 persisted questions, or sequential pause turns.
+
+`manualAcknowledgementEvidence` is valid only when:
+
+- the action returned `applied` or `recorded` in the current invocation;
+- the emitted checkpoint status is exactly `Manual`;
+- `path` is a safe dot path containing only identifiers and `{phaseId}`, with
+  no array indexing, `..`, file path, or external lookup, and resolves to a
+  provider-owned object for the current
+  `{phaseId}`;
+- that object's `status` appears in `acceptedRecordStatuses`;
+- its nested evidence has `kind` exactly equal to `requiredEvidenceKind`; and
+- its nested evidence contains a non-empty `recordedAt`.
+
+The runner may then persist the normal `checkpointAcknowledgements` entry with
+source `matching-action-evidence` without asking a second generic question. It must not
+infer acknowledgement from an older action, unrelated evidence, a different
+phase, `Warning`, or mismatched evidence. Providers without this field,
+including existing Workday contracts, retain the historical prompt.
 
 ### Evolving a phase's checkpoint list
 
@@ -97,9 +116,9 @@ this schema does not invent a parallel status vocabulary:
 | Checkpoint status | Phase effect |
 |---|---|
 | `Passed` | Counts toward `done`. |
-| `Manual` | Counts toward `done` only when listed in `completionStatuses` and the user explicitly attests. |
+| `Manual` | Counts toward `done` only when listed in `completionStatuses` and the user explicitly attests, either through the normal acknowledgement prompt or a matching current action acknowledgement contract. |
 | `NotConfigured` / `Skipped` | Counts toward `done` only when explicitly listed in `completionStatuses`. |
-| `Warning` | Counts toward `done` only when explicitly listed in `completionStatuses` and the user chooses to continue. |
+| `Warning` | Counts toward `done` only when explicitly listed in `completionStatuses` and the user chooses to continue. Matching action evidence never auto-acknowledges a warning. |
 | `Failed` / `Error` | Blocks the phase. The runner shows the remediation and stops advancing; the user retries after fixing it, or exits and resumes later. |
 
 A phase is `done` only when **every** checkpoint's current status appears in
@@ -166,6 +185,9 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
   accepted `Manual`/`Warning` results. Each value records the acknowledged
   status and UTC `acknowledgedAt`. A resume may reuse the acknowledgement only
   when the live status still matches; a changed status requires a new decision.
+  Entries sourced from matching action evidence also record `evidencePath`,
+  `evidenceKind`, and `evidenceRecordedAt`; all three must still match current
+  provider evidence on resume.
 - Providers may add `phaseHandoffs.{phaseId}` (or an equivalently named
   provider-owned object) for one bundled admin return per high-level phase.
   Do not model each internal checklist item as a separate persisted question

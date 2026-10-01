@@ -171,7 +171,12 @@ For every phase in that contiguous `done` prefix:
 3. If every checkpoint still resolves to a status allowed by that phase's
    `completionStatuses`, and every `Manual`/`Warning` result has a matching
    persisted `checkpointAcknowledgements` entry for that checkpoint and
-   status, update `lastVerifiedAt` and leave the phase `done`. Do **not**
+   status, update `lastVerifiedAt` and leave the phase `done`. For an
+   acknowledgement whose source is `matching-action-evidence`, also re-resolve
+   the configured safe evidence path and require the current evidence kind and
+   `recordedAt` to equal the acknowledgement provenance. If they differ or the
+   evidence disappeared, remove that acknowledgement and treat the result as
+   unacknowledged. Do **not**
    re-render the U.0 table for a phase that was already `done` and stays
    `done` on resume — only surface output for phases that change state or that
    are not yet done.
@@ -346,6 +351,22 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 - **All checkpoints "count toward done"** (after any needed attestation for
   `Manual`/`Warning` results — ask the same style of yes/no confirmation
   `checklist-updater.md`'s U.2 uses when a result needs acknowledgement):
+  before asking for a `Manual` row, inspect the phase's optional
+  `manualAcknowledgementEvidence`. Skip the second generic question only
+  when the action returned `applied` or `recorded` in this invocation, the
+  current checkpoint status is exactly `Manual`, its safe `path` (with
+  `{phaseId}` resolved to the current phase) points to a provider-owned object
+  whose `status` is in `acceptedRecordStatuses`, and that object's nested
+  evidence has `kind` equal to `requiredEvidenceKind` plus a non-empty
+  `recordedAt`. Reject paths with arrays, `..`, file syntax, or unresolved
+  placeholders. Persist the acknowledgement with
+  `source: "matching-action-evidence"`, the evidence path, kind, and evidence
+  timestamp.
+  Otherwise use the normal acknowledgement question. Never reuse this shortcut
+  for an older action, unrelated phase evidence, `Warning`, or mismatched
+  status/kind/timestamp. A persisted matching-evidence acknowledgement may be
+  reused on resume only while the checkpoint remains `Manual` and the current
+  evidence `recordedAt` and kind still match; otherwise remove it and ask.
   set `phases.{id}.status = "done"`, `lastVerifiedAt` = now, record each
   checkpoint's status in `checkpointResults`. For each acknowledged
   `Manual`/`Warning` result, also record

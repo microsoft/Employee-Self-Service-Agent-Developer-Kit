@@ -326,9 +326,9 @@ def _preflight_result(admin_setup: dict[str, Any]) -> CheckResult:
     if not _phase_attested(admin_setup, "preflight"):
         status = Status.NOT_CONFIGURED.value
         result = "The bundled preflight discovery handoff is incomplete."
-    elif not preflight.get("scenario"):
+    elif not preflight.get("instanceName"):
         status = Status.NOT_CONFIGURED.value
-        result = "The Maker has not described which remote setup already exists."
+        result = "The public ServiceNow instance URL is not known."
     elif not discovery.get("observedAt"):
         status = Status.NOT_CONFIGURED.value
         result = "Read-only remote setup discovery has not run."
@@ -377,13 +377,13 @@ def _plugin_result(admin_setup: dict[str, Any]) -> CheckResult:
         status,
         "Scope-derived ServiceNow plugin prerequisites",
         (
-            "The ServiceNow admin confirmed HR Core and OIDC capability."
+            "The ServiceNow admin confirmed HR Service Delivery Core."
             if not missing
             else "Missing admin confirmation for: " + ", ".join(missing) + "."
         ),
         (
-            "Ask a ServiceNow admin to confirm every scope-derived plugin or "
-            "capability is installed and Active."
+            "Ask a ServiceNow admin to confirm HR Service Delivery Core is "
+            "installed and Active."
             if missing
             else ""
         ),
@@ -782,14 +782,17 @@ def _oidc_result(admin_setup: dict[str, Any]) -> CheckResult:
     if missing:
         status = Status.NOT_CONFIGURED.value
         result = "The complete ServiceNow OIDC admin handoff is missing."
+    elif mapping.get("oidcCapabilityConfirmed") is not True:
+        status = Status.NOT_CONFIGURED.value
+        result = "The ServiceNow OIDC capability confirmation is missing."
     elif not mapping.get("claim") or not mapping.get("userField"):
         status = Status.NOT_CONFIGURED.value
         result = "The OIDC claim-to-user-field mapping is incomplete."
     else:
         status = Status.MANUAL.value
         result = (
-            "The ServiceNow admin confirmed security_admin elevation, OIDC "
-            f"provider metadata, {mapping['claim']} -> "
+            "The ServiceNow admin confirmed OIDC capability, security_admin "
+            f"elevation, provider metadata, {mapping['claim']} -> "
             f"{mapping['userField']} mapping, and a matching Active user."
         )
     return _result(
