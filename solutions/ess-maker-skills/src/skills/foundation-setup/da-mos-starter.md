@@ -156,15 +156,15 @@ When the annotations report `outcome: created`, keep the distinction between `ca
 
 The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
 
-When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Say that Copilot Studio reports an installed copy of the selected product. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list visible Dev agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches for the collided product. Never offer unrelated listed agents.
+When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Say that Copilot Studio reports an installed copy of the selected product. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches from `devAgents` or `realmNotEstablishedAgents` for the collided product. Never offer unrelated listed agents or bulk-enroll unresolved rows.
 
 When exactly one Dev identity matches, ask **Use {agent display name}?** and present **Use this agent** and **Go back** as the standard choices. Do not add a separate choose-from-existing step. When multiple Dev identities match, ask **Choose the installed {friendly product name} agent.**, present those matching identities plus **Go back** as the standard choices, and render every agent option as its exact service-provided display name only. Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either panel.
 
-For a selected matching identity, run `setup_existing_da.py validate-agent` only when the list result does not already establish its exact schema, then run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` and continue through `da-existing-dev.md`. If no Dev identity matches, use the installed-without-matching-Dev explanation and **Use an agent URL**, **Try with a different user**, and **Go back** recovery above instead of presenting other agents. This path does not replace an agent.
+For a selected matching Dev identity, run `setup_existing_da.py validate-agent` only when the list result does not already establish its exact schema, then run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` and continue through `da-existing-dev.md`. For a selected matching `realmNotEstablishedAgents` identity, run both product-line probes and follow `alm-enrollment.md`. Successful enrollment requires reconciliation and route inspection before the normal attachment path; skipped enrollment with established supported native identity returns to the attachment command below with `--allow-unenrolled-authoring`. If no exact identity matches, use the installed-without-matching-Dev explanation and **Use an agent URL**, **Try with a different user**, and **Go back** recovery above instead of presenting other agents. This path does not replace an agent.
 
 For **Go back**, preserve the collided create result and its client request UUID, then return to the complete action-oriented catalog composed from every selectable row in the latest successful catalog result and the latest agent list. Any later **Create** selection uses a new client request UUID; never repeat the collided request.
 
-## Enable ALM
+## Prepare the authoring route
 
 Build `{ACTUAL_AGENT_URL}` as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{RETURNED_AGENT_ID}/details?agentBackend=cosmos`, using the Copilot Studio origin for the selected service ring and the exact environment and agent IDs from the successful create result.
 
@@ -176,24 +176,24 @@ The agent was created.
 
 > **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
 
-Preparing its local authoring workspace...
-
 **End message.**
 
-Then run:
+Inspect the service-owned authoring route before offering enrollment:
 
 ```text
-python scripts/setup_mos_starter.py enable-alm \
+python scripts/setup_existing_da.py inspect-agent \
   --environment-id "{ENVIRONMENT_ID}" \
   --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}"
 ```
 
-Parse `DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and its response body when present, then `DA_MOS_STARTER_ALM_JSON:` on success. A failed read-back may instead emit `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`, its response body, or `DA_MOS_STARTER_ALM_VERIFY_JSON:`. Continue only for `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. If read-back definitively reports `outcome: verification-failed` and `persistedValue: false`, say, "The follow-up check showed that the agent was not prepared for local editing. Setup has stopped without attaching a workspace." If transport or read-back becomes uncertain, preserve the evidence internally, say that the agent could not be confirmed ready for local editing, and stop. An enabled or already-enabled result proceeds directly to attachment.
+When `DA_AGENT_ROUTE_JSON:` reports `routeStatus: resolved`, `alm.isEnrolled: true`, and `realm: dev`, continue directly to **Attach** without an enrollment write. When it reports `routeStatus: not-established` and `alm.isEnrolled: false`, read `alm-enrollment.md` and follow its exact **Continue (Recommended)** / **Skip enrollment** choice, mutation evidence, read-back, and route-inspection contract. A resolved Dev result from successful enrollment returns to the normal **Attach** command below. Skipped enrollment with exact supported native identity returns to the same command with `--allow-unenrolled-authoring`. For another realm, service failure, or transport failure, preserve the evidence and stop without enrollment, attachment, or publication.
+
+Do not invoke `ensure-alm` directly from this file. The shared path owns maker confirmation, operation invocation, result interpretation, and the non-mutating skip outcome.
 
 ## Attach
 
-After ALM read-back succeeds, run:
+After the initial route inspection establishes a Dev route, successful enrollment establishes and verifies that route, or skipped enrollment authorizes components-based local authoring, run:
 
 ```text
 python scripts/setup_existing_da.py attach \
@@ -204,7 +204,9 @@ python scripts/setup_existing_da.py attach \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the three setup-readiness FlightChecks and broad connection diagnostic as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
+Append `--allow-unenrolled-authoring` only for the shared path's explicit **Skip enrollment** result. Preserve `--setup-source mos-starter` and `--expected-schema-name`.
+
+The normal attachment validates the returned agent through its direct Dev route and component identity. The skip attachment validates exact direct identity and `/components` without establishing or recording a Dev ALM realm. Neither mode requires published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the three setup-readiness FlightChecks and broad connection diagnostic as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
 After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New entitled MOS product** as the starting point, including when `connectReady` is false.
 For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.

@@ -50,7 +50,7 @@ python scripts/reconcile_setup_agent.py \
 
 Append the parent setup skill's confirmed `--account`, validated `--host`, and `--api-version` values when available.
 
-Parse one `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` result from each command. Preserve `backend`, `outcome`, `stage`, `productFamily`, `productIdentity`, `identity`, and `error` as internal evidence. A native probe whose direct agent metadata omits schema reads the exact agent's component identity before classifying its product family. The probe outcomes are:
+Parse one `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` result from each command. Preserve `backend`, `outcome`, `stage`, `productFamily`, `productIdentity`, `identity`, and `error` as internal evidence. The native probe first reads the exact agent's component changeset, validates the public JSON `BotEntity.cdsBotId`, and classifies the public JSON `BotEntity.schemaName` without consulting aliases or internal storage properties. The Dataverse probe separately reads only `botid`, `name`, `schemaname`, and `ismanaged`. When either source omits its schema field or returns a null, empty, or invalid value, the result remains `found` but omits `productFamily` and reports `productIdentity.outcome: uncertain` with the source and distinct observation cause. The probe outcomes are:
 
 - `found` — that identity store returned the exact agent.
 - `not-found` — that exact identity endpoint returned HTTP 404.
@@ -60,6 +60,14 @@ Parse one `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` result from each command. Pres
 
 Do not convert `authentication-required`, `access-denied`, or `uncertain` into `not-found`.
 
+## Preview optional ALM enrollment
+
+When the maker selected one exact `realmNotEstablishedAgents` inventory identity, the native collection already returned that exact BotEntity, the native probe returned `not-found` at `agent-lookup`, neither probe returned `found`, `authentication-required`, or `access-denied`, and the other probe returned `not-found` or `uncertain`, read `src/skills/foundation-setup/alm-enrollment.md` and follow it instead of applying the stopped-result rules below.
+
+This exception does not establish product family, route realm, support, or enrollment. It permits only the exact enrollment choice and, after maker confirmation, the bounded `ensure-alm` operation defined in that file. That operation must establish the exact BotEntity identity during its precondition fetch before its one possible write. Do not inspect a route, validate, or attach before that identity check succeeds.
+
+Do not apply this exception to an externally supplied agent URL. When an exact URL's probes do not return `found`, apply the stopped-result rules below without presenting an enrollment choice.
+
 ## Interpret the observations
 
 Schema classification is case-insensitive and prefix-based:
@@ -67,29 +75,22 @@ Schema classification is case-insensitive and prefix-based:
 - `msdyn_copilotforemployeeselfservice*` is the solution-backed Employee Self-Service family supported by the compatible `main-ca` kit.
 - `gptagent_copilotforemployeeselfservice*` is the DA-GA family.
 - Any other non-empty schema is custom or unknown.
-- A missing schema remains `unknown` evidence, but an exact native `found`
-  observation may use the narrow compatibility exception below.
+- An omitted field or a null, empty, or invalid schema value is unresolved product identity, not an unknown or unsupported family. Preserve its distinct `productIdentity` evidence and stop.
 
 Apply the first matching rule:
 
 1. When both probes returned `found`, stop before any realm or ALM operation. Say that both supported identity stores returned an agent for the same ID, so setup cannot safely choose a backend. Preserve both observations; do not select one from the URL hint.
 2. When exactly one probe returned `found`, that observation proves existence and backend even if the other probe returned `not-found`, an access outcome, or an uncertainty outcome. Preserve a backend-hint mismatch as internal evidence, use the backend that actually returned the agent, and do not call the agent missing.
-3. When the authoritative `found` observation has `productIdentity.outcome` equal to `uncertain`, say that the agent was found in that backend but its product family could not be established. Preserve the component-identity error internally. Do not call the agent missing or unsupported and do not continue to realm inspection.
+3. When the authoritative `found` observation has `productIdentity.outcome` equal to `uncertain`, say that the agent was found in that backend but its product family could not be established. Preserve the schema-identity source, observation, and error internally. Do not call the agent missing or unsupported and do not continue to realm inspection.
 4. For a native `found` DA-GA observation, continue at the next DA-GA setup operation. Only this result makes native ALM realm inspection applicable.
-5. As a temporary compatibility exception, when exactly one probe returned
-   `found`, its backend is `native`, and `identity.schemaName` is empty or
-   missing, continue at the next DA-GA setup operation. Preserve
-   `productFamily: unknown` as evidence. Do not apply this exception to a
-   non-empty unknown schema, a Dataverse observation, two `found` observations,
-   or any outcome other than `found`.
-6. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
-7. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
-8. For any `found` custom or non-empty unknown observation, follow **Unsupported agent** below.
-9. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
-10. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
-11. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection.
+5. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
+6. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
+7. For any `found` custom or non-empty unknown observation, follow **Unsupported agent** below.
+8. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
+9. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
+10. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection unless the selected-inventory conditions under **Preview optional ALM enrollment** apply.
 
-Rules 1, 3, 6, 8, 9, 10, and 11 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
+Rules 1, 3, 5, 7, 8, 9, and 10 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
 
 ## Use the compatible kit
 

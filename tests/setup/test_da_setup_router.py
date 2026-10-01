@@ -38,6 +38,13 @@ _PRODUCT_LINE_RECONCILIATION = (
     / "foundation-setup"
     / "product-line-reconciliation.md"
 )
+_ALM_ENROLLMENT = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "alm-enrollment.md"
+)
 _PRODUCT_LINE_RELEASES = (
     _SOLUTION / "src" / "reference" / "product-line-releases.json"
 )
@@ -82,6 +89,10 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     normalized_prompt = " ".join(prompt.split())
     reconciliation = _PRODUCT_LINE_RECONCILIATION.read_text(encoding="utf-8")
     normalized_reconciliation = " ".join(reconciliation.split())
+    enrollment = _ALM_ENROLLMENT.read_text(
+        encoding="utf-8"
+    )
+    normalized_enrollment = " ".join(enrollment.split())
     existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
     mos_starter = _DA_MOS_STARTER.read_text(encoding="utf-8")
     alm_import = _DA_ALM_IMPORT.read_text(encoding="utf-8")
@@ -139,18 +150,60 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "When both probes returned `found`" in reconciliation
     assert "When both probes returned `not-found`" in reconciliation
     assert "Preserve a backend-hint mismatch as internal evidence" in reconciliation
+    assert _ALM_ENROLLMENT.is_file()
+    assert "## Preview optional ALM enrollment" in reconciliation
+    assert "Do not apply this exception to an externally supplied agent URL." in (
+        reconciliation
+    )
+    assert "current request supplied one exact Copilot Studio agent URL" not in (
+        reconciliation
+    )
+    assert "alm-enrollment.md" in reconciliation
+    assert (
+        "An externally supplied URL whose identity probes did not return `found` "
+        "does not qualify"
+    ) in normalized_enrollment
+    assert "Continue (Recommended)" in enrollment
+    assert "Skip enrollment" in enrollment
+    assert (
+        "Leave the selection initially unset and disable free-form input."
+        in normalized_enrollment
+    )
+    assert "python scripts/setup_existing_da.py ensure-alm" in enrollment
+    assert "DA_ALM_ENROLLMENT_JSON:" in enrollment
+    assert "stop without another write or attachment" in normalized_enrollment
+    assert "ALM enrollment skipped. The agent was not changed." in enrollment
+    assert "Local authoring does not require ALM enrollment." in enrollment
+    assert "--allow-unenrolled-authoring" in enrollment
+    assert (
+        "cannot prepare a local authoring workspace without an ALM authoring route"
+        not in normalized_enrollment
+    )
+    assert "rerun selected-agent product reconciliation" in normalized_enrollment
+    assert "For resolved `dev`, return to the caller's exact Dev continuation" in (
+        normalized_enrollment
+    )
+    assert "For resolved `prod`, continue through `da-prod-to-dev.md`" in enrollment
+    assert "Stop without retrying enrollment, attaching, or publishing" in (
+        normalized_enrollment
+    )
+    assert "Do not invoke `ensure-alm` after a successful import" in alm_import
+    assert (
+        "Do not invoke `ensure-alm` for an established Prod-to-Dev relationship "
+        "or successful import"
+    ) in " ".join(prod_to_dev.split())
     assert "For a native `found` DA-GA observation" in reconciliation
     assert "For a Dataverse-only `found` DA-GA observation" in reconciliation
-    assert "As a temporary compatibility exception" in reconciliation
     assert (
-        "its backend is `native`, and `identity.schemaName` is empty or missing"
-        in normalized_reconciliation
-    )
-    assert "Preserve `productFamily: unknown` as evidence." in normalized_reconciliation
+        "An omitted field or a null, empty, or invalid schema value is "
+        "unresolved product identity"
+    ) in normalized_reconciliation
+    assert "not an unknown or unsupported family" in normalized_reconciliation
+    assert "productIdentity.outcome: uncertain" in reconciliation
+    assert "As a temporary compatibility exception" not in reconciliation
     assert (
-        "Do not apply this exception to a non-empty unknown schema, a Dataverse "
-        "observation, two `found` observations, or any outcome other than `found`."
-        in normalized_reconciliation
+        "Preserve the schema-identity source, observation, and error internally."
+        in reconciliation
     )
     for mismatch_state in (
         "**Choose the starting point and target environment** as complete",
@@ -245,6 +298,12 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "installation was not changed" not in reconciliation
     assert "For a selected `devAgents` identity" in existing_dev
     assert "pass its exact returned schema" in existing_dev
+    assert "top-level `Entities` and `ContinuationToken`" in existing_dev
+    assert (
+        "direct metadata, ALM configuration, casing variants, and alternate ID "
+        "or name properties must not replace collection identity"
+    ) in " ".join(existing_dev.split())
+    assert "retained as `productIdentity` uncertainty" in existing_dev
     assert "--known-native-schema" in existing_dev
     assert mos_starter.count("selected-agent product-line reconciliation") >= 2
     assert mos_starter.count("--known-native-schema") >= 2
@@ -253,8 +312,33 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "selected-agent product-line reconciliation" in prod_to_dev
     assert "--known-native-schema" in prod_to_dev
     assert "`agentBackend` query value as an ordering hint" in foundation
-    assert "`routeStatus` is `not-found`" in foundation
+    assert "`routeStatus` is `not-established`" in foundation
+    assert "`alm.isEnrolled` is `false`" in foundation
     assert "`almEnrollment`" not in foundation
+    assert "alm-enrollment.md" in foundation
+    assert "alm-enrollment.md" in existing_dev
+    assert "does not require readable `/configure` state" in existing_dev
+
+
+def test_account_picker_establishes_account_before_reconciliation() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(foundation.split())
+
+    assert "`reconcile_setup_agent.py` does not accept `--select-account`" in (
+        normalized
+    )
+    assert (
+        'setup_existing_da.py list-environments --ring "{RING}" '
+        "--select-account"
+    ) in normalized
+    assert (
+        "pass it to every reconciliation probe with "
+        '`--account "{SETUP_ACCOUNT}"`'
+    ) in normalized
+    assert (
+        "Do not pass `--select-account` to `reconcile_setup_agent.py`."
+        in normalized
+    )
 
 
 def test_foundation_defines_setup_state_sources() -> None:
@@ -569,6 +653,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/da-existing-dev.md",
         "src/skills/foundation-setup/da-prod-to-dev.md",
         "src/skills/foundation-setup/da-mos-starter.md",
+        "src/skills/foundation-setup/alm-enrollment.md",
         "src/skills/foundation-setup/product-line-reconciliation.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
@@ -927,11 +1012,10 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_mos_starter.py create" in text
     assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
     assert "DA_MOS_STARTER_CREATE_JSON:" in text
-    assert "setup_mos_starter.py enable-alm" in text
-    assert "DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:" in text
-    assert "DA_MOS_STARTER_ALM_JSON:" in text
-    assert "DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:" in text
-    assert "DA_MOS_STARTER_ALM_VERIFY_JSON:" in text
+    assert "alm-enrollment.md" in text
+    assert "Continue (Recommended)" in text
+    assert "Skip enrollment" in text
+    assert "python scripts/setup_existing_da.py ensure-alm" not in text
     assert "setup_existing_da.py attach" in text
     assert "--setup-source mos-starter" in text
     assert '--expected-schema-name "{RETURNED_SCHEMA_NAME}"' in text
@@ -1148,7 +1232,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
     assert "The agent was created." in text
-    assert "Preparing its local authoring workspace..." in text
+    assert "Preparing its local authoring workspace..." not in text
     assert (
         "{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/"
         "{RETURNED_AGENT_ID}/details?agentBackend=cosmos"
@@ -1174,17 +1258,24 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         normalized
     )
     assert "then begin **Create**" in normalized
-    assert "An enabled or already-enabled result proceeds directly to attachment" in (
-        normalized
+    assert (
+        "When `DA_AGENT_ROUTE_JSON:` reports `routeStatus: resolved`, "
+        "`alm.isEnrolled: true`, and `realm: dev`, continue directly to **Attach** "
+        "without an enrollment write."
+    ) in normalized
+    assert "python scripts/setup_existing_da.py inspect-agent" in text
+    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+        "setup_existing_da.py attach"
     )
+    assert (
+        "Do not invoke `ensure-alm` directly from this file."
+    ) in normalized
     assert "single presentation unit defined in `da-existing-dev.md`" in normalized
     assert "Complete every check whose prerequisites remain available" in normalized
     assert "state the observed blocker and supported recovery" in normalized
     assert "application lifecycle management" not in normalized
     assert "**Prepare for local editing**" not in text
     assert "**Not now**" not in text
-    assert "outcome: verification-failed" in normalized
-    assert "Setup has stopped without attaching a workspace." in text
     assert text.count(created_agent_link) == 1
     assert "never show internal step IDs or raw technical output" in normalized
     assert "workspace is not ready to connect" in existing_dev
@@ -1259,7 +1350,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "return to the complete action-oriented catalog" in normalized
     assert "uses a new client request UUID" in normalized
     collision_choices = text[text.index("When the annotations report `outcome: collision`") :]
-    collision_choices = collision_choices[: collision_choices.index("## Enable ALM")]
+    collision_choices = collision_choices[
+        : collision_choices.index("## Prepare the authoring route")
+    ]
     assert "**Go back**" in collision_choices
     assert "**Cancel setup**" not in collision_choices
     assert "disable custom entry inside the control" in " ".join(

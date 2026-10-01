@@ -16,7 +16,9 @@ does not identify the ring, use **Resolve the service ring** in
 the environment ID or agent ID is unclear.
 
 Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
-router already inspected the supplied or recorded agent. Otherwise, use the
+router already inspected the supplied or recorded agent. The result is based on
+the direct Swagger-defined `MinimalBotCard`; this setup inspection does not call
+the ALM `/realms` endpoint. Otherwise, use the
 shared authorization message from `SKILL.md`, then run:
 
 ```text
@@ -31,11 +33,15 @@ service result reporting `routeStatus: resolved` and `realm: dev`. This route
 check does not require readable `/configure` state: an unpublished Dev agent can
 still be fetched and materialized for local authoring. Do not infer the realm
 from the URL, agent name, environment metadata, canonical setup state, or
-conversation history. When `routeStatus` is `not-found`, preserve that the
-native agent exists, explain that setup could not establish its authoring route,
-and use the parent's alternate-agent, alternate-environment, and **Go back**
-recovery routes. If the service reports another realm, explain that this setup
-path requires a Dev agent and stop.
+conversation history. When `routeStatus` is `not-established` and
+`alm.isEnrolled` is `false`, preserve that the native agent exists, explain that
+setup could not establish its ALM authoring route, then read
+`src/skills/foundation-setup/alm-enrollment.md` and follow
+its exact choice surface and operation sequence. When the maker skips enrollment
+after exact native product identity was established, that shared path returns to
+the attachment contract below with `--allow-unenrolled-authoring`; it does not
+reinterpret the absent ALM route as Dev. If the service reports another realm,
+explain that this setup path requires a Dev agent and stop.
 
 After a Dev result, show:
 
@@ -53,9 +59,13 @@ python scripts/setup_existing_da.py attach \
   --agent-id "{AGENT_ID}"
 ```
 
+Append `--allow-unenrolled-authoring` only when the maker explicitly selected
+**Skip enrollment** in `alm-enrollment.md` and selected-agent product
+reconciliation had already established the exact supported native identity.
+
 The access token supplies the tenant identity during initial inspection; do not infer it from the environment ID.
 
-The command validates the exact agent identity and direct Dev route, fetches the authoritative component change set, confirms its component identity and schema, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It does not require published Dev configuration; publishing is outside foundation setup and is not attachment remediation. It persists canonical setup progress for that agent before materialization when identity is complete. Complete the native FlightCheck maintenance below before treating the agent's `connect_ready: true` as current.
+Normally the command validates the exact agent identity and the Swagger-defined direct metadata as an enrolled Dev realm, fetches the authoritative component change set, confirms its component identity and schema, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. With the explicit unenrolled-authoring flag, it validates the exact direct `botId`, requires that same direct metadata to normalize to `alm.isEnrolled: false`, and relies on the exact `/components` identity and schema for authoring capability. Neither mode calls the ALM `/realms` endpoint. The unenrolled mode records `alm.isEnrolled: false` and omits `realm` rather than serializing `realm: null` or fabricating Dev. A later normal attachment after successful enrollment can update the same workspace to `alm.isEnrolled: true` and the normalized direct `realm: dev`. The command does not require published Dev configuration in either mode; publishing is outside foundation setup and is not attachment remediation. The command persists canonical setup progress for that agent before materialization when identity is complete. Complete the native FlightCheck maintenance below before treating the agent's `connect_ready: true` as current.
 
 If Object Model dependencies are missing, run:
 
@@ -91,15 +101,16 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio agent collection, then directly inspects every returned identity through the native agent API before classifying its realm. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` and `realmNotEstablishedAgents` as internal evidence; do not offer them as editable-agent choices. A command failure or malformed collection is unavailable inventory evidence, not an empty environment; preserve the reported failure and use the existing target-recovery choices.
+Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio agent collection using its exact public JSON fields: top-level `Entities` and `ContinuationToken`, then `cdsBotId`, `displayName`, and `schemaName` on each BotEntity. It directly inspects each returned `cdsBotId` only to validate the same identity and classify its realm; direct metadata, ALM configuration, casing variants, and alternate ID or name properties must not replace collection identity. A missing, null, empty, or invalid collection schema is retained as `productIdentity` uncertainty rather than normalized to an empty value or recovered from another property source. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` as internal evidence and do not offer them as editable-agent choices. A `realmNotEstablishedAgents` row may be offered only as an exact candidate selected individually by its service-provided display name. Every option in that agent list must contain only the service-provided display name; do not append a realm, enrollment state, ALM status, or preparation suffix. Never bulk-enroll unresolved rows. A command failure or malformed collection is unavailable inventory evidence, not an empty environment; preserve the reported failure and use the existing target-recovery choices.
 
-When supported candidates are returned, show their display names and realms and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
+When supported candidates are returned, show only their exact service-provided display names and ask the maker to choose one exact identity. Retain realm and enrollment classifications as internal routing evidence. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
 
 - For a selected `devAgents` identity with a non-empty returned schema, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
 - For a selected `devAgents` identity without a returned schema, do not synthesize one or withhold the candidate. Run both exact identity probes in the parent's product-line reconciliation so its native component fallback can establish the schema before validation or attachment.
 - For a selected `prodAgents` identity, do not require a Dev schema from the list result. Run the parent's exact `inspect-agent` route and continue through its existing `da-prod-to-dev.md` handoff. Do not validate or attach the Prod ID as though it were Dev.
+- For one selected `realmNotEstablishedAgents` identity, retain that the native collection returned the exact ID, run both exact identity probes, and then read `alm-enrollment.md`. The shared enrollment precondition must validate the exact fetched BotEntity before any write. After successful enrollment, rerun product reconciliation and route inspection before validation or attachment.
 
-When both `devAgents` and `prodAgents` are empty, say:
+When `devAgents`, `prodAgents`, and `realmNotEstablishedAgents` are all empty, say:
 
 > No visible Dev or Prod setup-source agents were listed in this environment. A directly addressable agent may still be available.
 

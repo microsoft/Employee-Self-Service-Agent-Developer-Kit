@@ -36,6 +36,7 @@ from agentbuilder import (
     list_environments,
     validate_environment_host,
 )
+from alm_enrollment import AlmEnrollmentError, ensure_alm
 from agentbuilder_object_model import (
     ObjectModelConverterError,
     object_models_to_yaml,
@@ -190,7 +191,7 @@ def inspect_agent_route(
     environment_id: str,
     agent_id: str,
 ) -> dict[str, Any]:
-    """Return the service-owned route realm for one exact agent."""
+    """Return direct service-owned ALM identity for one exact agent."""
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
     result = {
@@ -201,40 +202,24 @@ def inspect_agent_route(
         "apiVersion": client.api_version,
         "agentId": normalized_agent_id,
     }
-    try:
-        realms = client.get_realms(normalized_agent_id)
-    except AgentBuilderHTTPError as exc:
-        if exc.status_code != 404:
-            raise
-        return {
-            **result,
-            "realm": None,
-            "routeStatus": "not-found",
-            "statusCode": exc.status_code,
-            "errorCode": exc.error_code,
-            "requestId": exc.request_id,
-        }
-    route_realm = realms.get("routeRealm")
-    realm_name = next(
-        (
-            name.casefold()
-            for value, name in REALM_NAMES.items()
-            if route_realm == value
-            or (
-                isinstance(route_realm, str)
-                and route_realm.casefold() == name.casefold()
-            )
-        ),
-        None,
+    agent = client.get_agent(normalized_agent_id)
+    returned_id = _normalize_guid(
+        str(agent.get("botId") or ""),
+        "Direct agent ID",
     )
-    if realm_name is None:
+    if returned_id.casefold() != normalized_agent_id.casefold():
         raise ExistingDASetupError(
-            "Agent realm discovery did not return a recognized route realm."
+            "Direct agent lookup returned a different agent identity."
         )
+    is_enrolled, direct_realm = _minimal_bot_alm_identity(agent)
+    result["alm"] = {"isEnrolled": is_enrolled}
+    if direct_realm is not None:
+        result["realm"] = direct_realm
     return {
         **result,
-        "realm": realm_name,
-        "routeStatus": "resolved",
+        "routeStatus": (
+            "resolved" if is_enrolled else "not-established"
+        ),
     }
 
 
@@ -627,7 +612,6 @@ def _canonical_agent_matches_connection(
     return (
         agent.get("id") == connection["agent"]["id"]
         and agent.get("schema_name") == connection["agent"]["schemaName"]
-        and agent.get("realm") == connection["agent"]["realm"]
         and (
             not agent.get("alm_family_id")
             or not connection["agent"].get("almFamilyId")
@@ -843,7 +827,16 @@ def _build_canonical_setup_progress(
             "id": connection["agent"]["id"],
             "name": connection["agent"]["name"],
             "schema_name": connection["agent"]["schemaName"],
-            "realm": connection["agent"]["realm"],
+            **(
+                {"realm": connection["agent"]["realm"]}
+                if "realm" in connection["agent"]
+                else {}
+            ),
+            **(
+                {"alm": copy.deepcopy(connection["agent"]["alm"])}
+                if "alm" in connection["agent"]
+                else {}
+            ),
             "alm_family_id": connection["agent"].get("almFamilyId"),
             "workspace_slug": connection["agent"]["workspaceSlug"],
         },
@@ -1289,17 +1282,12 @@ def _safe_listed_agent(
     verification_error_type: str | None = None,
     verification_http_status: int | None = None,
 ) -> dict[str, Any]:
-    agent_id = str(
-        agent.get("botId")
-        or agent.get("cdsBotId")
-        or agent.get("componentIdUnique")
-        or ""
-    )
-    name = str(
-        agent.get("fullBotName")
-        or agent.get("displayName")
-        or agent.get("shortBotName")
-        or agent_id
+    agent_id = str(agent.get("cdsBotId") or "")
+    display_name = agent.get("displayName")
+    name = (
+        display_name.strip()
+        if isinstance(display_name, str) and display_name.strip()
+        else agent_id
     )
     result: dict[str, Any] = {
         "listedId": agent_id,
@@ -1311,7 +1299,60 @@ def _safe_listed_agent(
         result["verificationErrorType"] = verification_error_type
     if verification_http_status is not None:
         result["verificationHttpStatus"] = verification_http_status
+    product_identity = agent.get("productIdentity")
+    if isinstance(product_identity, dict):
+        result["productIdentity"] = product_identity
     return result
+
+
+def _listed_product_identity(
+    agent: dict[str, Any],
+) -> tuple[str | None, dict[str, Any] | None]:
+    if "schemaName" not in agent:
+        return None, {
+            "outcome": "uncertain",
+            "source": "agent-collection",
+            "observation": "field-absent",
+            "error": {
+                "type": "SchemaNameFieldAbsent",
+                "message": "The listed BotEntity omitted schemaName.",
+            },
+        }
+    raw_schema_name = agent["schemaName"]
+    if raw_schema_name is None:
+        return None, {
+            "outcome": "uncertain",
+            "source": "agent-collection",
+            "observation": "null",
+            "error": {
+                "type": "SchemaNameNull",
+                "message": "The listed BotEntity returned a null schemaName.",
+            },
+        }
+    if not isinstance(raw_schema_name, str):
+        return None, {
+            "outcome": "uncertain",
+            "source": "agent-collection",
+            "observation": "invalid-type",
+            "error": {
+                "type": "SchemaNameInvalidType",
+                "message": (
+                    "The listed BotEntity returned a non-string schemaName."
+                ),
+            },
+        }
+    schema_name = raw_schema_name.strip()
+    if not schema_name:
+        return None, {
+            "outcome": "uncertain",
+            "source": "agent-collection",
+            "observation": "empty",
+            "error": {
+                "type": "SchemaNameEmpty",
+                "message": "The listed BotEntity returned an empty schemaName.",
+            },
+        }
+    return schema_name, None
 
 
 def _realm_name(value: Any) -> str | None:
@@ -1338,12 +1379,7 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
     realm_not_established_agents: list[dict[str, Any]] = []
     product_identity_unavailable = 0
     for listed_agent in listed_agents:
-        agent_id = str(
-            listed_agent.get("botId")
-            or listed_agent.get("cdsBotId")
-            or listed_agent.get("componentIdUnique")
-            or ""
-        )
+        agent_id = str(listed_agent.get("cdsBotId") or "")
         try:
             normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
         except ExistingDASetupError as exc:
@@ -1379,91 +1415,52 @@ def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
                 )
             )
             continue
+        try:
+            direct_agent_id = _normalize_guid(
+                str(metadata.get("botId") or ""),
+                "Direct agent ID",
+            )
+            if direct_agent_id.casefold() != normalized_agent_id.casefold():
+                raise ExistingDASetupError(
+                    "Direct agent lookup returned a different agent identity."
+                )
+        except ExistingDASetupError as exc:
+            print(
+                f"WARNING: Agent {normalized_agent_id}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            realm_not_established_agents.append(
+                _safe_listed_agent(
+                    listed_agent,
+                    verification_error_type=type(exc).__name__,
+                )
+            )
+            continue
         realm = _realm_name(metadata.get("realm"))
-        if realm == "dev":
-            listed_schema_name = str(
-                listed_agent.get("schemaName") or ""
-            ).strip()
-            direct_schema_name = str(
-                metadata.get("schemaName") or ""
-            ).strip()
-            enriched_agent = {**listed_agent, **metadata}
-            if (
-                listed_schema_name
-                and direct_schema_name
-                and listed_schema_name.casefold()
-                != direct_schema_name.casefold()
-            ):
-                print(
-                    f"WARNING: Agent {normalized_agent_id} product identity: "
-                    "the collection and direct lookup returned different "
-                    "schemas.",
-                    file=sys.stderr,
-                )
-            if direct_schema_name or listed_schema_name:
-                enriched_agent["schemaName"] = (
-                    direct_schema_name or listed_schema_name
-                )
-                dev_agents.append(enriched_agent)
-                continue
-            try:
-                configuration = client.get_dev_configuration(
-                    normalized_agent_id
-                )
-            except AgentBuilderHTTPError as exc:
-                print(
-                    f"WARNING: Agent {normalized_agent_id} product identity: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                _print_http_error_response(
-                    exc,
-                    marker="DA_AGENT_LIST_PRODUCT_WARNING",
-                )
-                product_identity_unavailable += 1
-                enriched_agent.pop("schemaName", None)
-                dev_agents.append(enriched_agent)
-                continue
-            except ExistingDASetupError as exc:
-                print(
-                    f"WARNING: Agent {normalized_agent_id} product identity: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                product_identity_unavailable += 1
-                enriched_agent.pop("schemaName", None)
-                dev_agents.append(enriched_agent)
-                continue
-            try:
-                schema_name, _ = _confirm_dev(
-                    normalized_agent_id,
-                    enriched_agent,
-                    configuration,
-                )
-            except ExistingDASetupError as exc:
-                print(
-                    f"WARNING: Agent {normalized_agent_id} Dev validation: "
-                    f"{type(exc).__name__}: {exc}",
-                    file=sys.stderr,
-                )
-                realm_not_established_agents.append(
-                    _safe_listed_agent(
-                        enriched_agent,
-                        realm=metadata.get("realm"),
-                        verification_error_type=type(exc).__name__,
-                    )
-                )
-                continue
+        enriched_agent = {
+            **listed_agent,
+            "realm": metadata.get("realm"),
+        }
+        schema_name, product_identity = _listed_product_identity(
+            listed_agent
+        )
+        if product_identity is not None:
+            enriched_agent.pop("schemaName", None)
+            enriched_agent["productIdentity"] = product_identity
+            product_identity_unavailable += 1
+        elif schema_name is not None:
             enriched_agent["schemaName"] = schema_name
+        if realm == "dev":
             dev_agents.append(enriched_agent)
         elif realm == "test":
-            test_agents.append({**listed_agent, **metadata})
+            test_agents.append(enriched_agent)
         elif realm == "prod":
-            prod_agents.append({**listed_agent, **metadata})
+            prod_agents.append(enriched_agent)
         else:
             realm_not_established_agents.append(
                 _safe_listed_agent(
-                    {**listed_agent, **metadata},
+                    enriched_agent,
                     realm=metadata.get("realm"),
                 )
             )
@@ -1480,7 +1477,7 @@ def _confirm_dev(
     agent_id: str,
     agent: dict[str, Any],
     configuration: dict[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     realm = configuration.get("realm")
     if realm not in (0, "dev", "Dev"):
         raise ExistingDASetupError(
@@ -1494,11 +1491,10 @@ def _confirm_dev(
         raise ExistingDASetupError(
             "Explicit Dev configuration returned a different agent identity."
         )
-    card_realm = agent.get("realm")
-    if card_realm not in (None, 0, "dev", "Dev"):
-        raise ExistingDASetupError(
-            f"Direct agent lookup identified a non-Dev realm: {card_realm!r}."
-        )
+    card_realm = _confirm_direct_dev_authoring_identity(
+        agent_id,
+        agent,
+    )
     schema_name = str(
         configuration.get("schemaName")
         or agent.get("schemaName")
@@ -1513,56 +1509,68 @@ def _confirm_dev(
         raise ExistingDASetupError(
             "Dev configuration did not return an ALM-family identity."
         )
-    return schema_name, family_id
+    return schema_name, family_id, card_realm
 
 
-def _confirm_dev_route(
+def _minimal_bot_alm_identity(
+    agent: dict[str, Any],
+) -> tuple[bool, str | None]:
+    """Normalize the Swagger-defined MinimalBotCard ALM contract."""
+    raw_realm = agent.get("realm")
+    if raw_realm is None:
+        return False, None
+    realm = _realm_name(raw_realm)
+    if realm is None:
+        raise ExistingDASetupError(
+            "Direct agent lookup returned an unrecognized ALM realm."
+        )
+    return True, realm
+
+
+def _confirm_direct_authoring_identity(
     agent_id: str,
     agent: dict[str, Any],
-    realms: dict[str, Any],
-    *,
-    expected_schema_name: str | None,
-    allow_missing_schema: bool = False,
-) -> str | None:
-    route_realm = realms.get("routeRealm")
-    if route_realm not in (0, "dev", "Dev"):
+) -> None:
+    is_enrolled, card_realm = _confirm_direct_native_authoring_identity(
+        agent_id,
+        agent,
+    )
+    if is_enrolled:
         raise ExistingDASetupError(
-            f"Agent realm discovery returned realm {route_realm!r}."
+            "Direct agent lookup reports that this agent is already enrolled "
+            f"in ALM with realm {card_realm!r}."
         )
+
+
+def _confirm_direct_native_authoring_identity(
+    agent_id: str,
+    agent: dict[str, Any],
+) -> tuple[bool, str | None]:
     returned_id = _normalize_guid(
-        str(
-            agent.get("botId")
-            or agent.get("cdsBotId")
-            or agent.get("componentIdUnique")
-            or ""
-        ),
+        str(agent.get("botId") or ""),
         "Direct agent ID",
     )
     if returned_id.casefold() != agent_id.casefold():
         raise ExistingDASetupError(
             "Direct agent lookup returned a different agent identity."
         )
-    card_realm = agent.get("realm")
-    if card_realm not in (None, 0, "dev", "Dev"):
+    is_enrolled, card_realm = _minimal_bot_alm_identity(agent)
+    return is_enrolled, card_realm
+
+
+def _confirm_direct_dev_authoring_identity(
+    agent_id: str,
+    agent: dict[str, Any],
+) -> str:
+    is_enrolled, card_realm = _confirm_direct_native_authoring_identity(
+        agent_id,
+        agent,
+    )
+    if not is_enrolled or card_realm != "dev":
         raise ExistingDASetupError(
-            f"Direct agent lookup identified a non-Dev realm: {card_realm!r}."
+            "Direct agent lookup did not identify an ALM-enrolled Dev agent."
         )
-    expected_schema = str(expected_schema_name or "").strip()
-    schema_name = str(agent.get("schemaName") or expected_schema).strip()
-    if not schema_name:
-        if allow_missing_schema:
-            return None
-        raise ExistingDASetupError(
-            "Direct agent lookup did not return a schema name."
-        )
-    if (
-        expected_schema
-        and schema_name.casefold() != expected_schema.casefold()
-    ):
-        raise ExistingDASetupError(
-            "Direct agent lookup returned a different schema name."
-        )
-    return schema_name
+    return card_realm
 
 
 def validate_existing_dev_connection(
@@ -1572,18 +1580,26 @@ def validate_existing_dev_connection(
     agent_id: str,
     selection_source: str | None = None,
     setup_source: str = "existing-dev",
-    require_alm_family: bool = True,
+    require_alm_family: bool = False,
     expected_schema_name: str | None = None,
     allow_missing_schema: bool = False,
+    allow_unenrolled_authoring: bool = False,
+    allow_route_independent_authoring: bool = False,
 ) -> dict[str, Any]:
     """Validate a directly addressable agent as editable Dev identity."""
+    if require_alm_family and (
+        allow_unenrolled_authoring or allow_route_independent_authoring
+    ):
+        raise ExistingDASetupError(
+            "ALM-family validation cannot bypass ALM route validation."
+        )
     normalized_setup_source = _validate_setup_source(setup_source)
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
     agent = client.get_agent(normalized_agent_id)
     if require_alm_family:
         configuration = client.get_dev_configuration(normalized_agent_id)
-        schema_name, family_id = _confirm_dev(
+        schema_name, family_id, realm = _confirm_dev(
             normalized_agent_id,
             agent,
             configuration,
@@ -1596,20 +1612,37 @@ def validate_existing_dev_connection(
             raise ExistingDASetupError(
                 "Explicit Dev configuration returned a different schema name."
             )
+        alm_is_enrolled = True
     else:
-        realms = client.get_realms(normalized_agent_id)
-        schema_name = _confirm_dev_route(
-            normalized_agent_id,
-            agent,
-            realms,
-            expected_schema_name=expected_schema_name,
-            allow_missing_schema=allow_missing_schema,
-        )
+        if allow_unenrolled_authoring:
+            _confirm_direct_authoring_identity(normalized_agent_id, agent)
+            realm = None
+            alm_is_enrolled = False
+        elif allow_route_independent_authoring:
+            alm_is_enrolled, realm = (
+                _confirm_direct_native_authoring_identity(
+                    normalized_agent_id,
+                    agent,
+                )
+            )
+        else:
+            realm = _confirm_direct_dev_authoring_identity(
+                normalized_agent_id,
+                agent,
+            )
+            alm_is_enrolled = True
+        expected_schema = str(expected_schema_name or "").strip()
+        if allow_missing_schema:
+            schema_name = expected_schema or None
+        else:
+            schema_name = _validate_changeset_identity(
+                client.fetch_components(normalized_agent_id),
+                normalized_agent_id,
+                expected_schema_name=expected_schema or None,
+            )
         family_id = None
     agent_name = str(
         agent.get("fullBotName")
-        or agent.get("displayName")
-        or agent.get("shortBotName")
         or schema_name
         or normalized_agent_id
     )
@@ -1636,7 +1669,8 @@ def validate_existing_dev_connection(
             "id": normalized_agent_id,
             "name": agent_name,
             "schemaName": schema_name,
-            "realm": "dev",
+            **({"realm": realm} if realm is not None else {}),
+            "alm": {"isEnrolled": alm_is_enrolled},
             "almFamilyId": family_id,
             "isManaged": is_managed,
             "workspaceSlug": _slugify(agent_name),
@@ -2276,6 +2310,7 @@ def attach_existing_dev(
     selection_source: str | None = None,
     setup_source: str = "existing-dev",
     expected_schema_name: str | None = None,
+    allow_unenrolled_authoring: bool = False,
 ) -> dict[str, Any]:
     """Resolve an existing Dev agent and materialize its local DA workspace."""
     connection = validate_existing_dev_connection(
@@ -2287,6 +2322,7 @@ def attach_existing_dev(
         require_alm_family=False,
         expected_schema_name=expected_schema_name,
         allow_missing_schema=True,
+        allow_unenrolled_authoring=allow_unenrolled_authoring,
     )
     normalized_environment_id = connection["environment"]["id"]
     normalized_agent_id = connection["agent"]["id"]
@@ -2415,13 +2451,22 @@ def attach_existing_dev(
                 or had_unprojected_dialogs
                 or metadata.get("setupSource")
                 != connection["setupSource"]
+                or metadata.get("realm")
+                != connection["agent"].get("realm")
+                or metadata.get("alm") != connection["agent"]["alm"]
+                or metadata.get("almFamilyId") != family_id
             ):
                 metadata = {
                     **metadata,
                     "changesetSha256": changeset_sha,
                     "selectedBy": connection["selectedBy"],
                     "setupSource": connection["setupSource"],
+                    "alm": copy.deepcopy(connection["agent"]["alm"]),
+                    "almFamilyId": family_id,
                 }
+                metadata.pop("realm", None)
+                if "realm" in connection["agent"]:
+                    metadata["realm"] = connection["agent"]["realm"]
                 _write_json(metadata_path, metadata)
             result = {
                 **metadata,
@@ -2487,7 +2532,12 @@ def attach_existing_dev(
                 "agentId": normalized_agent_id,
                 "agentName": agent_name,
                 "schemaName": schema_name,
-                "realm": "dev",
+                **(
+                    {"realm": connection["agent"]["realm"]}
+                    if "realm" in connection["agent"]
+                    else {}
+                ),
+                "alm": copy.deepcopy(connection["agent"]["alm"]),
                 "almFamilyId": family_id,
                 "setupSource": connection["setupSource"],
                 "selectedBy": connection["selectedBy"],
@@ -2582,7 +2632,12 @@ def attach_existing_dev(
         "releaseLine": "da",
         "environmentId": normalized_environment_id,
         "powerPlatformApiEndpoint": client.host,
-        "realm": "dev",
+        **(
+            {"realm": connection["agent"]["realm"]}
+            if "realm" in connection["agent"]
+            else {}
+        ),
+        "alm": copy.deepcopy(connection["agent"]["alm"]),
         "almFamilyId": family_id,
         "setupSource": connection["setupSource"],
         "agentBuilderChangeSetPath": (
@@ -2663,25 +2718,20 @@ def summarize_agents(
     agents: list[dict[str, Any]],
     *,
     kit_root: Path | None = None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Return safe user-choice fields and exact registered product identity."""
-    choices: list[dict[str, str]] = []
+    choices: list[dict[str, Any]] = []
     for agent in agents:
-        agent_id = str(
-            agent.get("botId")
-            or agent.get("cdsBotId")
-            or agent.get("componentIdUnique")
-            or ""
-        )
+        agent_id = str(agent.get("cdsBotId") or "")
         try:
             normalized_id = _normalize_guid(agent_id, "Agent ID")
         except ExistingDASetupError:
             continue
-        name = str(
-            agent.get("fullBotName")
-            or agent.get("displayName")
-            or agent.get("shortBotName")
-            or normalized_id
+        display_name = agent.get("displayName")
+        name = (
+            display_name.strip()
+            if isinstance(display_name, str) and display_name.strip()
+            else normalized_id
         )
         choice = {"id": normalized_id, "name": name}
         schema_name = str(agent.get("schemaName") or "").strip()
@@ -2694,6 +2744,9 @@ def summarize_agents(
             choice["productIdentitySource"] = product["identitySource"]
         if schema_name:
             choice["schemaName"] = schema_name
+        product_identity = agent.get("productIdentity")
+        if isinstance(product_identity, dict):
+            choice["productIdentity"] = product_identity
         choices.append(choice)
     return sorted(
         choices,
@@ -2707,21 +2760,16 @@ def summarize_realm_agents(
     """Return safe identity and realm facts without product interpretation."""
     choices: list[dict[str, Any]] = []
     for agent in agents:
-        agent_id = str(
-            agent.get("botId")
-            or agent.get("cdsBotId")
-            or agent.get("componentIdUnique")
-            or ""
-        )
+        agent_id = str(agent.get("cdsBotId") or "")
         try:
             normalized_id = _normalize_guid(agent_id, "Agent ID")
         except ExistingDASetupError:
             continue
-        name = str(
-            agent.get("fullBotName")
-            or agent.get("displayName")
-            or agent.get("shortBotName")
-            or normalized_id
+        display_name = agent.get("displayName")
+        name = (
+            display_name.strip()
+            if isinstance(display_name, str) and display_name.strip()
+            else normalized_id
         )
         item: dict[str, Any] = {
             "id": normalized_id,
@@ -2931,6 +2979,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent-id",
         help="Agent ID override when target extraction omits it.",
     )
+    ensure_alm_command = commands.add_parser(
+        "ensure-alm",
+        help=(
+            "Enable ALM for one exact native agent and verify the "
+            "persisted setting."
+        ),
+    )
+    _add_agentbuilder_target_arguments(ensure_alm_command)
+    ensure_alm_command.add_argument(
+        "--agent-id",
+        help="Agent ID override when target extraction omits it.",
+    )
     validate_agent = commands.add_parser(
         "validate-agent",
         help="Validate one exact editable Dev agent without writing setup state.",
@@ -2939,6 +2999,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate_agent.add_argument(
         "--agent-id",
         help="Agent ID override when target extraction omits it.",
+    )
+    validate_agent.add_argument(
+        "--require-alm-family",
+        action="store_true",
+        help=(
+            "Require published Dev configuration and ALM-family identity. "
+            "Use only for an explicit family relationship contract."
+        ),
     )
     attach = commands.add_parser(
         "attach",
@@ -2953,6 +3021,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--refresh",
         action="store_true",
         help="Checkpoint and replace a changed existing workspace.",
+    )
+    attach.add_argument(
+        "--allow-unenrolled-authoring",
+        action="store_true",
+        help=(
+            "Prepare a local workspace from exact direct identity and "
+            "components for an agent whose direct metadata reports "
+            "alm.isEnrolled false. Use only after the maker explicitly skips "
+            "optional ALM enrollment."
+        ),
     )
     attach.add_argument(
         "--setup-source",
@@ -3090,7 +3168,7 @@ def main(argv: list[str] | None = None) -> int:
             agent_id=getattr(args, "agent_id", None),
             ring=args.ring,
             require_agent=args.command
-            in {"attach", "inspect-agent", "validate-agent"},
+            in {"attach", "ensure-alm", "inspect-agent", "validate-agent"},
         )
         environment_id = target["environmentId"]
         if args.command == "attach":
@@ -3134,19 +3212,37 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        if args.command == "ensure-alm":
+            result = ensure_alm(
+                client,
+                environment_id=environment_id,
+                agent_id=target["agentId"],
+            )
+            print(
+                "DA_ALM_ENROLLMENT_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+
         if args.command == "validate-agent":
             connection = validate_existing_dev_connection(
                 client,
                 environment_id=environment_id,
                 agent_id=target["agentId"],
                 selection_source=target.get("agentSelection"),
+                require_alm_family=args.require_alm_family,
             )
             result = {
                 "environmentId": connection["environment"]["id"],
                 "agentId": connection["agent"]["id"],
                 "agentName": connection["agent"]["name"],
                 "schemaName": connection["agent"]["schemaName"],
-                "realm": connection["agent"]["realm"],
+                **(
+                    {"realm": connection["agent"]["realm"]}
+                    if "realm" in connection["agent"]
+                    else {}
+                ),
+                "alm": copy.deepcopy(connection["agent"]["alm"]),
                 "almFamilyId": connection["agent"]["almFamilyId"],
                 "isManaged": connection["agent"]["isManaged"],
                 "selectedBy": connection["selectedBy"],
@@ -3178,9 +3274,11 @@ def main(argv: list[str] | None = None) -> int:
             ),
             setup_source=args.setup_source,
             expected_schema_name=args.expected_schema_name,
+            allow_unenrolled_authoring=args.allow_unenrolled_authoring,
         )
     except (
         AgentBuilderError,
+        AlmEnrollmentError,
         ExistingDASetupError,
         OSError,
         ValueError,
@@ -3200,14 +3298,15 @@ def main(argv: list[str] | None = None) -> int:
                     "DA_ENVIRONMENT_LIST_ERROR_JSON:"
                     f"{json.dumps(error_result, ensure_ascii=True)}"
                 )
-        _print_http_error_response(
-            exc,
-            marker=(
-                "DA_ENVIRONMENT_LIST_ERROR"
-                if args.command == "list-environments"
-                else "DA_EXISTING_DEV_ERROR"
-            ),
-        )
+        if not isinstance(exc, AlmEnrollmentError):
+            _print_http_error_response(
+                exc,
+                marker=(
+                    "DA_ENVIRONMENT_LIST_ERROR"
+                    if args.command == "list-environments"
+                    else "DA_EXISTING_DEV_ERROR"
+                ),
+            )
         _print_exception(exc)
         return 1
     print(f"DA_EXISTING_DEV_SETUP_JSON:{json.dumps(result, ensure_ascii=True)}")
