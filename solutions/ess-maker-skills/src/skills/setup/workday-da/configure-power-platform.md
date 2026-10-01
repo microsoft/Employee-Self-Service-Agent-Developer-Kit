@@ -249,8 +249,20 @@ is incomplete, keep Runtime active and show the controller's actual blocker.
 
 ## Agent binding after flow activation
 
-Only after runtime apply has activated the reviewed flows, wire the native
-agent's local `[Admin] - User Context - Setup` topic to
+Only after runtime apply has activated the reviewed flows, first initialize
+the Workday runtime templates from the native agent's Conversation Start by
+running the guarded action in
+`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
+This scoped action must complete and
+`record-runtime-template-wiring` must record
+`runtime-template-configured` before changing the Admin User Context topic.
+Run the live verification command from the solution root:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+Then wire the native agent's local `[Admin] - User Context - Setup` topic to
 `Workday [System] - 1: Set User Context V2` using the existing guarded
 checkpoint, scoped dry-run, approval, and push pattern in
 `src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the

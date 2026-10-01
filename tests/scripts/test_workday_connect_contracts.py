@@ -17,6 +17,7 @@ from workday_connect_contracts import (  # noqa: E402
     build_entra_handoff,
     build_workday_admin_packet,
     validate_agent_binding_evidence,
+    validate_administrator_partial_evidence,
     validate_employee_evidence,
     validate_employee_failure_evidence,
     validate_entra_verification,
@@ -33,6 +34,19 @@ def _state():
             "entraTenantId": "00000000-0000-0000-0000-000000000000",
             "workdayTenant": "contoso_impl",
             "packageFlavor": "runtime",
+        }
+    )
+    state["identifiers"].update(
+        {
+            "microsoftEntraIdentifier": (
+                "https://sts.windows.net/"
+                "00000000-0000-0000-0000-000000000000/"
+            ),
+            "entraLoginUrl": (
+                "https://login.microsoftonline.com/"
+                "00000000-0000-0000-0000-000000000000/saml2"
+            ),
+            "replyUrl": "https://www.workday.com/saml/acs",
         }
     )
     state["phases"]["preflight"]["status"] = "complete"
@@ -74,6 +88,21 @@ def _entra_checks():
             "outcome": "confirmed",
             "provenance": "administrator-attestation",
             "observedValue": "Sign SAML response and assertion",
+        },
+        "existingScopesPreserved": {
+            "outcome": "verified",
+            "provenance": "microsoft-graph",
+            "observedValue": "preserved",
+        },
+        "authorizedClientsPreserved": {
+            "outcome": "verified",
+            "provenance": "microsoft-graph",
+            "observedValue": "preserved",
+        },
+        "permissionsPreserved": {
+            "outcome": "verified",
+            "provenance": "microsoft-graph",
+            "observedValue": "preserved",
         },
     }
 
@@ -180,6 +209,10 @@ def test_entra_verification_requires_all_expected_graph_evidence():
         _state(),
         {
             "tenantId": "00000000-0000-0000-0000-000000000000",
+            "selectedDirectory": {
+                "tenantId": "00000000-0000-0000-0000-000000000000",
+                "displayName": "Contoso",
+            },
             "application": {
                 "displayName": "Workday exact",
                 "appId": app_id,
@@ -191,6 +224,15 @@ def test_entra_verification_requires_all_expected_graph_evidence():
                 ],
             },
             "scopeGuid": "77777777-7777-7777-7777-777777777777",
+            "replyUrl": "https://www.workday.com/saml/acs",
+            "microsoftEntraIdentifier": (
+                "https://sts.windows.net/"
+                "00000000-0000-0000-0000-000000000000/"
+            ),
+            "loginUrl": (
+                "https://login.microsoftonline.com/"
+                "00000000-0000-0000-0000-000000000000/saml2"
+            ),
             "certificate": {
                 "thumbprint": "AA11",
                 "validFrom": "2026-01-01T00:00:00Z",
@@ -475,6 +517,13 @@ def test_workday_admin_response_validates_exact_endpoints():
             "soapBaseUrl": "https://example.workday.com/ccx/service",
             "authenticationPolicyOutcome": "existing-active-policy",
             "networkReadinessOutcome": "confirmed-hosts-allowed",
+            "rolloutType": "limited-or-test",
+            "employeeSecurityGroup": "ESS Workday Pilot Employees",
+            "publicWorkerReportsOutcome": "get-permission-verified",
+            "integrationPermissionsGetOutcome": "get-permission-verified",
+            "functionalAreaScopes": ["Staffing", "Personal Data"],
+            "optionalDomains": [],
+            "authorizationOutcome": "verified",
         },
     )
 
@@ -484,6 +533,28 @@ def test_workday_admin_response_validates_exact_endpoints():
     )
     assert "certificateName" not in result["evidence"]
     assert result["evidence"]["networkReadinessOutcome"] == ("confirmed-hosts-allowed")
+    assert result["evidence"]["rolloutType"] == "limited-or-test"
+    assert result["evidence"]["employeeSecurityGroup"] == (
+        "ESS Workday Pilot Employees"
+    )
+
+
+def test_partial_workday_evidence_keeps_valid_siblings() -> None:
+    result = validate_administrator_partial_evidence(
+        _state(),
+        "workday-admin",
+        {
+            "oauthClientId": "safe-client-id",
+            "oauthTokenUrl": "https://example.workday.com/wrong",
+            "rolloutType": "limited-or-test",
+        },
+    )
+
+    assert result["validFields"] == {
+        "oauthClientId": "safe-client-id",
+        "rolloutType": "limited-or-test",
+    }
+    assert set(result["fieldErrors"]) == {"oauthTokenUrl"}
 
 
 def test_workday_admin_response_rejects_certificate_date_drift():
@@ -618,9 +689,9 @@ def test_agent_binding_and_employee_evidence_are_strict():
                     "WD-CONN-013": "Passed",
                 },
                 "workdayTopics": {
-                    "expected": 21,
-                    "verified": 21,
-                    "active": 21,
+                    "expected": 23,
+                    "verified": 23,
+                    "active": 23,
                     "blockingDiagnostics": [],
                 },
                 "flowAttachment": {
@@ -636,7 +707,7 @@ def test_agent_binding_and_employee_evidence_are_strict():
                 },
             },
         )["workdayTopics"]["active"]
-        == 21
+        == 23
     )
 
     diagnostic_evidence = validate_agent_binding_evidence(
@@ -650,9 +721,9 @@ def test_agent_binding_and_employee_evidence_are_strict():
                 "WD-CONN-013": "Passed",
             },
             "workdayTopics": {
-                "expected": 21,
-                "verified": 21,
-                "active": 21,
+                "expected": 23,
+                "verified": 23,
+                "active": 23,
                 "blockingDiagnostics": [{"errorCode": "NotFound"}],
             },
             "flowAttachment": {

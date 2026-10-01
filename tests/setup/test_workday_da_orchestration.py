@@ -464,14 +464,41 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     ).read_text(encoding="utf-8")
 
     assert ".component-map.json" in action
-    assert "{AGENT_SCHEMA}.topic.Workday" in action
-    assert "all 21 Workday dialog topics" in " ".join(action.split())
+    assert "{AGENT_SCHEMA}.topic.EmployeeUpdatePhoneNumber" in action
+    assert "{AGENT_SCHEMA}.topic.GetReferenceData" in action
+    assert "all 23" in " ".join(action.split())
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
     assert "record-topic-activation" in action
     assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
+
+
+def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
+    configure = (
+        _WORKDAY_DA / "configure-power-platform.md"
+    ).read_text(encoding="utf-8")
+    action = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "wire-runtime-template-config.md"
+    ).read_text(encoding="utf-8")
+
+    assert configure.index("wire-runtime-template-config.md") < (
+        configure.index("wire-user-context-redirect.md")
+    )
+    assert "Conversation Start" in action
+    assert "exactly once as its first action" in action
+    assert "remove only that exact obsolete nested" in action
+    assert "record-runtime-template-wiring" in action
+    assert "runtime-template-configured" in action
 
 
 def test_readiness_requires_real_employee_runtime_evidence() -> None:

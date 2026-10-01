@@ -42,6 +42,7 @@ structured file-write tool; never interpolate Graph values into a generated
 shell command. Then run:
 
 ```powershell
+python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 python scripts/workday_connect.py entra-handoff --discovery-file ".local\connect\workday-da\entra-discovery.json"
 ```
 
@@ -94,6 +95,13 @@ administrator's name, credentials, or other identifying information. This
 availability answer is not authorization evidence; the stable role-template
 check and verified Graph reread remain authoritative.
 
+After the handoff is presented and the administrator is working, persist the
+waiting boundary:
+
+```powershell
+python scripts/workday_connect.py administrator-stage --phase entra --substage awaiting-completion
+```
+
 If `requiresRediscovery` is `true`, ask an Entra administrator to open
 **Microsoft Entra admin center -> Enterprise applications -> New application**,
 find the official **Workday** gallery application, and create it in the selected
@@ -111,22 +119,31 @@ application by display name alone.
    `http://www.workday.com/{workdayTenant}`. Create or activate the signing
    certificate required by the tenant. Under **SAML Signing Certificate ->
    Edit**, set **Signing Option** to **Sign SAML response and assertion**.
+   Record the exact **Reply URL**, **Microsoft Entra Identifier**, and
+   **Login URL** shown for this selected directory. Do not reconstruct them
+   from another tenant or application.
 2. **Keep the two identifiers distinct.** The Workday SAML Service Provider ID
    is `http://www.workday.com/{workdayTenant}`. The Entra application ID URI is
    `api://{entraAppId}`. Never copy one into the other field.
-3. **Expose the connector scope.** Open **App registrations -> the exact
-   Workday application -> Expose an API**. Set the Application ID URI to
-   `api://{entraAppId}`, add the `user_impersonation` scope, then add authorized
-   client application `4e4707ca-5f53-46a6-a819-f7765446e6ff` for that scope.
-4. **Add delegated permissions.** Open **App registrations -> the exact
+3. **Confirm the application pairing.** Match the enterprise application to
+   its app registration by the same Application ID. Do not pair by display
+   name. Stop on no match or more than one matching app registration.
+4. **Expose the connector scope without replacing existing configuration.**
+   Open **App registrations -> the exact Workday application -> Expose an API**.
+   Preserve every unrelated existing scope and authorized client. Set
+   the Application ID URI to `api://{entraAppId}`, add or repair only the
+   `user_impersonation` scope, then add authorized client application
+   `4e4707ca-5f53-46a6-a819-f7765446e6ff` for that scope.
+5. **Add delegated permissions.** Open **App registrations -> the exact
    Workday application -> API permissions -> Add a permission -> Microsoft
    Graph -> Delegated permissions**. Add `openid`, `profile`, and `User.Read`,
-   then select **Grant admin consent** using a consent-capable administrator.
-5. **Configure assignment.** Open **Enterprise applications -> the exact
+   preserving unrelated existing permissions. Then select **Grant admin
+   consent** using a consent-capable administrator.
+6. **Configure assignment.** Open **Enterprise applications -> the exact
    Workday application -> Users and groups**. If assignment is required,
    assign the intended ESS employee security group; prefer a maintained group
    over individual users.
-6. **Configure NameID.** Open **Enterprise applications -> the exact Workday
+7. **Configure NameID.** Open **Enterprise applications -> the exact Workday
    application -> Single sign-on -> Attributes & Claims**. Edit **Unique User
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
@@ -173,16 +190,30 @@ not add a separate **Verify now** confirmation.
 
 The administrator performs those changes in the Microsoft Entra admin center.
 After the administrator confirms completion, reread the application and
-service principal through Microsoft Graph. Do not mark a planned action as
+service principal and paired app registration through Microsoft Graph. Do not
+mark a planned action as
 complete from confirmation alone; require the reread to prove it where Graph
-exposes the setting. Persist `entraAppId`,
-`entraAppObjectId`, `entraAppIdUri`, `workdaySamlEntityId`, `scopeGuid`, and
-safe certificate metadata under `identifiers`. Never persist certificate
-contents.
+exposes the setting. Persist the selected directory, enterprise-application
+and app-registration pairing, `entraAppId`, `entraAppObjectId`,
+`entraServicePrincipalId`, `entraAppIdUri`, `workdaySamlEntityId`,
+`microsoftEntraIdentifier`, `entraLoginUrl`, `replyUrl`, `scopeGuid`, and safe
+certificate metadata. Never persist certificate contents.
 
 For a portal-only setting that Graph cannot prove, include its non-secret
 administrator confirmation in the `checks` object rather than claiming the
 skill changed it.
+
+When a structured response contains both valid and invalid fields, write the
+safe validated values and the names to reopen to
+`.local/connect/workday-da/entra-partial-evidence.json`, then run:
+
+```powershell
+python scripts/workday_connect.py record-administrator-evidence --phase entra --evidence-file ".local\connect\workday-da\entra-partial-evidence.json"
+```
+
+On resume, use the Entra administrator entry returned by `status`. Do not
+redisplay a completed handoff; collect only its `invalidFields` and
+`outstandingFields`.
 
 Write the Graph reread directly to
 `.local/connect/workday-da/entra-verification.json` using a structured
@@ -192,12 +223,38 @@ file-write tool, then run:
 python scripts/workday_connect.py record-entra --verification-file ".local\connect\workday-da\entra-verification.json"
 ```
 
-The JSON must contain the Graph-authenticated `tenantId`, exact application and
-service-principal identity, both identifier URIs, the `user_impersonation`
-scope GUID, safe certificate metadata, and one evidence object for each check:
+The JSON must contain the Graph-authenticated `tenantId`, selected directory,
+exact enterprise-application/app-registration pairing, Reply URL, Microsoft
+Entra Identifier, Login URL, both application identifier URIs, the
+`user_impersonation` scope GUID, safe certificate metadata, and one evidence
+object for each check:
 
 ```json
 {
+  "tenantId": "00000000-0000-0000-0000-000000000000",
+  "selectedDirectory": {
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+    "displayName": "Contoso"
+  },
+  "application": {
+    "displayName": "Workday",
+    "appId": "11111111-1111-1111-1111-111111111111",
+    "objectId": "22222222-2222-2222-2222-222222222222",
+    "servicePrincipalId": "33333333-3333-3333-3333-333333333333",
+    "identifierUris": [
+      "http://www.workday.com/{workdayTenant}",
+      "api://11111111-1111-1111-1111-111111111111"
+    ]
+  },
+  "scopeGuid": "44444444-4444-4444-4444-444444444444",
+  "replyUrl": "https://{approved-workday-reply-url}",
+  "microsoftEntraIdentifier": "https://sts.windows.net/00000000-0000-0000-0000-000000000000/",
+  "loginUrl": "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/saml2",
+  "certificate": {
+    "thumbprint": "{thumbprint}",
+    "validFrom": "2026-01-01T00:00:00Z",
+    "validTo": "2027-01-01T00:00:00Z"
+  },
   "checks": {
     "samlMode": {
       "outcome": "verified",
@@ -232,12 +289,30 @@ scope GUID, safe certificate metadata, and one evidence object for each check:
       "outcome": "confirmed",
       "provenance": "administrator-attestation",
       "observedValue": "Sign SAML response and assertion"
+    },
+    "existingScopesPreserved": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph",
+      "observedValue": "preserved"
+    },
+    "authorizedClientsPreserved": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph",
+      "observedValue": "preserved"
+    },
+    "permissionsPreserved": {
+      "outcome": "verified",
+      "provenance": "microsoft-graph",
+      "observedValue": "preserved"
     }
   }
 }
 ```
 
 Use administrator attestation only for a portal-only setting that Graph cannot
-read. The command rejects a different tenant and incomplete or provenance-free
-evidence. Resume by rereading available settings and showing only failed
-remediation, not by repeating the full guide.
+read. For the three preservation checks, use `preserved` when the required
+setting already coexists with unrelated configuration and `remediated` when a
+targeted repair was required without replacing unrelated values. The command
+rejects a different tenant and incomplete or provenance-free evidence. Resume
+by rereading available settings and showing only failed remediation, not by
+repeating the full guide.

@@ -16,8 +16,8 @@ from typing import Any, Mapping
 import uuid
 
 
-STATE_SCHEMA_VERSION = 6
-CONTROLLER_CONTRACT_VERSION = 1
+STATE_SCHEMA_VERSION = 7
+CONTROLLER_CONTRACT_VERSION = 2
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
 
@@ -175,6 +175,7 @@ PHASE_REQUIRED_ACTIONS = {
             "connection-references-bound",
             "runtime-flows-active",
             "delegated-authorization-configured",
+            "runtime-template-configured",
             "user-context-v2-configured",
             "agent-parameter-sharing-verified",
             "flow-attachment-confirmed",
@@ -183,12 +184,70 @@ PHASE_REQUIRED_ACTIONS = {
     ),
     Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
 }
+ADMINISTRATOR_PHASES = frozenset(
+    {
+        Phase.ENTRA.value,
+        Phase.WORKDAY_ADMIN.value,
+    }
+)
+ADMINISTRATOR_SUBSTAGES = (
+    "not-started",
+    "administrator-engaged",
+    "handoff-presented",
+    "awaiting-completion",
+    "collecting-evidence",
+    "evidence-validated",
+)
+ADMINISTRATOR_PARTIAL_FIELDS = {
+    Phase.ENTRA.value: frozenset(
+        {
+            "selectedDirectoryId",
+            "selectedDirectoryDisplayName",
+            "applicationId",
+            "replyUrl",
+            "microsoftEntraIdentifier",
+            "loginUrl",
+            "nameIdSource",
+            "samlSigningOption",
+            "certificateThumbprint",
+            "certificateValidFrom",
+            "certificateValidTo",
+            "scopePreservationOutcome",
+            "authorizedClientPreservationOutcome",
+            "permissionPreservationOutcome",
+        }
+    ),
+    Phase.WORKDAY_ADMIN.value: frozenset(
+        {
+            "identityProviderOutcome",
+            "enabledServiceProviderId",
+            "certificateSelectionOutcome",
+            "certificateValidityOutcome",
+            "oauthClientId",
+            "oauthTokenUrl",
+            "restBaseUrl",
+            "soapBaseUrl",
+            "authenticationPolicyOutcome",
+            "networkReadinessOutcome",
+            "rolloutType",
+            "employeeSecurityGroup",
+            "publicWorkerReportsOutcome",
+            "integrationPermissionsGetOutcome",
+            "functionalAreaScopes",
+            "optionalDomains",
+            "authorizationOutcome",
+        }
+    ),
+}
 TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS = frozenset(
     {
         "entraAppId",
         "entraAppObjectId",
         "entraServicePrincipalId",
         "entraAppIdUri",
+        "microsoftEntraIdentifier",
+        "entraLoginUrl",
+        "replyUrl",
         "workdaySamlEntityId",
         "scopeGuid",
         "signingCertificate",
@@ -356,8 +415,17 @@ def reject_sensitive_data(document: Any, path: str = "state") -> None:
             reject_sensitive_data(value, f"{path}[{index}]")
 
 
-def default_phase_state() -> dict[str, Any]:
+def default_administrator_state() -> dict[str, Any]:
     return {
+        "substage": ADMINISTRATOR_SUBSTAGES[0],
+        "partialEvidence": {},
+        "invalidFields": [],
+        "updatedAt": None,
+    }
+
+
+def default_phase_state(phase_id: str | None = None) -> dict[str, Any]:
+    state = {
         "status": PhaseStatus.PENDING.value,
         "completedActions": [],
         "approvedPlanHash": None,
@@ -366,6 +434,9 @@ def default_phase_state() -> dict[str, Any]:
         "blocker": None,
         "updatedAt": None,
     }
+    if phase_id in ADMINISTRATOR_PHASES:
+        state["administrator"] = default_administrator_state()
+    return state
 
 
 def default_lifecycle_state() -> dict[str, Any]:
@@ -399,7 +470,9 @@ def default_state() -> dict[str, Any]:
         "tenantFoundation": None,
         "lifecycle": default_lifecycle_state(),
         "phases": {
-            definition.identifier.value: default_phase_state()
+            definition.identifier.value: default_phase_state(
+                definition.identifier.value
+            )
             for definition in PHASE_DEFINITIONS
         },
         "migration": None,
@@ -674,6 +747,132 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
                 + " and ".join(details)
                 + "."
             )
+    administrator = value.get("administrator")
+    if phase_id not in ADMINISTRATOR_PHASES:
+        if administrator is not None:
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' cannot contain administrator progress."
+            )
+        return
+    if not isinstance(administrator, dict):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator progress must be an object."
+        )
+    administrator_required = {
+        "substage",
+        "partialEvidence",
+        "invalidFields",
+        "updatedAt",
+    }
+    administrator_missing = sorted(
+        administrator_required - administrator.keys()
+    )
+    if administrator_missing:
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator progress is missing: "
+            + ", ".join(administrator_missing)
+        )
+    substage = administrator["substage"]
+    if substage not in ADMINISTRATOR_SUBSTAGES:
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' has invalid administrator substage "
+            f"'{substage}'."
+        )
+    partial_evidence = administrator["partialEvidence"]
+    if not isinstance(partial_evidence, dict):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator partialEvidence must be an object."
+        )
+    unexpected_fields = sorted(
+        set(partial_evidence) - ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+    )
+    if unexpected_fields:
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator partialEvidence contains "
+            "unsupported fields: " + ", ".join(unexpected_fields)
+        )
+    for field, field_value in partial_evidence.items():
+        if field == "functionalAreaScopes":
+            if (
+                not isinstance(field_value, list)
+                or not field_value
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in field_value
+                )
+                or len(field_value) != len(set(field_value))
+            ):
+                raise WorkdayConnectModelError(
+                    "Workday administrator functionalAreaScopes must contain "
+                    "unique non-empty strings."
+                )
+            continue
+        if field == "optionalDomains":
+            if not isinstance(field_value, list):
+                raise WorkdayConnectModelError(
+                    "Workday administrator optionalDomains must be a list."
+                )
+            for item in field_value:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) != {"domain", "scenario"}
+                    or any(
+                        not isinstance(item[key], str)
+                        or not item[key].strip()
+                        for key in ("domain", "scenario")
+                    )
+                ):
+                    raise WorkdayConnectModelError(
+                        "Every optional Workday domain must contain a "
+                        "non-empty domain and scenario."
+                    )
+            continue
+        if not isinstance(field_value, str) or not field_value.strip():
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' administrator field '{field}' must be "
+                "a non-empty string."
+            )
+    invalid_fields = administrator["invalidFields"]
+    if (
+        not isinstance(invalid_fields, list)
+        or any(
+            not isinstance(field, str)
+            or field not in ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+            for field in invalid_fields
+        )
+        or len(invalid_fields) != len(set(invalid_fields))
+    ):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator invalidFields must contain "
+            "unique supported field names."
+        )
+    overlap = sorted(set(invalid_fields) & partial_evidence.keys())
+    if overlap:
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' administrator fields cannot be both valid "
+            "and invalid: " + ", ".join(overlap)
+        )
+    if administrator["updatedAt"] is not None:
+        _validate_timestamp(
+            administrator["updatedAt"],
+            f"Phase '{phase_id}' administrator updatedAt",
+        )
+    if (
+        substage == "evidence-validated"
+        and value["status"] != PhaseStatus.COMPLETE.value
+    ):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' cannot validate administrator evidence "
+            "before the phase is complete."
+        )
+    if (
+        value["status"] == PhaseStatus.COMPLETE.value
+        and substage != "evidence-validated"
+    ):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' cannot be complete before administrator "
+            "evidence is validated."
+        )
 
 
 def _validate_tenant_foundation(value: Any) -> None:

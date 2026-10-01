@@ -9,6 +9,7 @@ administrator.
 Generate one administrator handoff:
 
 ```powershell
+python scripts/workday_connect.py administrator-stage --phase workday-admin --substage administrator-engaged
 python scripts/workday_connect.py workday-admin-packet
 ```
 
@@ -49,6 +50,12 @@ administrator finished configuration.
 
 If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
+
+Record that the handoff is waiting for the administrator:
+
+```powershell
+python scripts/workday_connect.py administrator-stage --phase workday-admin --substage awaiting-completion
+```
 
 ### Existing Microsoft Entra federation handoff
 
@@ -100,18 +107,26 @@ before the completion question and preserve the current phase.
    select **Core Payroll**, **Organizations and Roles**, **Staffing**, and
    **Time Off and Leave**. Set **Include Workday Owned Scope** to **Yes**, then
    save.
-5. **Capture non-secret connection values.** Open **View API Client** for that
+5. **Configure employee domain security separately from API scopes.** Choose
+   whether this rollout covers the entire workforce or a limited/test
+   population. Select the intended employee security group; for a limited/test
+   rollout, never default to All Employees. Grant **Get** on
+   **Worker Data: Public Worker Reports** and **Integration Permissions**.
+   Do not treat the functional-area scopes from step 4 as domain permissions.
+   Add another domain only when it is tied to a named supported scenario.
+   Do not return employee membership lists.
+6. **Capture non-secret connection values.** Open **View API Client** for that
    client and record the OAuth client ID and token endpoint. Record the tenant’s
    REST base URL ending exactly at `/ccx/api` and its SOAP service base URL
    ending exactly at `/ccx/service`. The tenant name is collected separately;
    do not append it to the SOAP base URL.
    Do not return a client secret, password, token, cookie, or certificate body.
-6. **Verify employee authentication.** Open **Manage Authentication Policies**
+7. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
    network restrictions, or route this user-delegated setup through an
    Integration System User rule.
-7. **Confirm network readiness.** Give the REST and SOAP host names from step 5
+8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
    firewall change is required. Do not wait until final employee validation to
@@ -144,22 +159,27 @@ before the completion question and preserve the current phase.
    select **Core Payroll**, **Organizations and Roles**, **Staffing**, and
    **Time Off and Leave**. Set **Include Workday Owned Scope** to **Yes**, then
    save.
-6. **Capture non-secret connection values.** Open **View API Client** for that
+6. **Configure employee domain security separately from API scopes.** Choose
+   the entire-workforce or limited/test rollout, select the intended employee
+   security group, and grant **Get** on **Worker Data: Public Worker Reports**
+   and **Integration Permissions**. Never default a limited/test rollout to All
+   Employees. Add optional domains only for a named supported scenario.
+7. **Capture non-secret connection values.** Open **View API Client** for that
    client and record the OAuth client ID and token endpoint. Record the REST
    base URL ending exactly at `/ccx/api` and the SOAP service base URL ending
    exactly at `/ccx/service`. Record the tenant name separately; do not append
    it to the SOAP base URL. Do not return a client secret, password, token,
    cookie, or certificate body.
-7. **Verify employee authentication.** Open **Manage Authentication Policies**
+8. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
    network restrictions, or route this user-delegated setup through an
    Integration System User rule.
-8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
+9. **Confirm network readiness.** Give the REST and SOAP host names from step 7
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
    firewall change is required.
-9. Record the enabled row's exact Issuer and Service Provider ID for the
+10. Record the enabled row's exact Issuer and Service Provider ID for the
    response form.
 
 After an applicable handoff is shown, ask exactly:
@@ -194,6 +214,14 @@ while retaining all required evidence:
 - SOAP base URL;
 - authentication-policy outcome;
 - network-readiness outcome.
+- rollout type: entire workforce or limited/test;
+- selected employee security-group identity, without membership data;
+- `Worker Data: Public Worker Reports` Get-permission outcome;
+- `Integration Permissions > Get` outcome;
+- exact API functional-area scopes;
+- optional domains paired with their named supported scenarios;
+- authorization outcome, including whether a bounded `Task not authorized`
+  remediation was required.
 
 Use this exact form, substituting the packet's expected issuer, Service
 Provider ID, and verified certificate dates:
@@ -278,6 +306,55 @@ Provider ID, and verified certificate dates:
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
+  },
+  {
+    "header": "Rollout",
+    "question": "Which employee population is this Workday rollout configured for?",
+    "options": [
+      { "label": "Entire workforce" },
+      { "label": "Limited or test population" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Employee security group",
+    "question": "Enter the selected Workday employee security-group name. Do not enter membership data."
+  },
+  {
+    "header": "Public worker reports",
+    "question": "Was Get permission verified for Worker Data: Public Worker Reports?",
+    "options": [
+      { "label": "Yes, Get permission is verified" },
+      { "label": "No or not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Integration permissions",
+    "question": "Was Get permission verified under Integration Permissions?",
+    "options": [
+      { "label": "Yes, Get permission is verified" },
+      { "label": "No or not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Functional-area scopes",
+    "question": "Enter the exact functional-area scopes selected on the API client."
+  },
+  {
+    "header": "Optional domains",
+    "question": "Enter each optional domain with its named supported scenario, or leave blank when none are required."
+  },
+  {
+    "header": "Authorization",
+    "question": "What was the final authorization result after the employee security changes?",
+    "options": [
+      { "label": "Verified without an authorization error" },
+      { "label": "Task not authorized was remediated and retested" },
+      { "label": "Task not authorized is unresolved" }
+    ],
+    "allowFreeformInput": false
   }
 ]
 ```
@@ -305,9 +382,23 @@ response object:
 - both hosts allowed -> `confirmed-hosts-allowed`;
 - no firewall change required ->
   `no-customer-firewall-change-required`.
+- entire workforce -> `rolloutType: entire-workforce`;
+- limited/test population -> `rolloutType: limited-or-test`;
+- selected group -> `employeeSecurityGroup`;
+- each verified domain permission ->
+  `get-permission-verified`;
+- functional-area entries -> `functionalAreaScopes` as a JSON string array;
+- optional domains -> `optionalDomains` as
+  `{"domain": "...", "scenario": "..."}` objects;
+- verified authorization -> `authorizationOutcome: verified`;
+- remediated and retested authorization ->
+  `authorizationOutcome: task-not-authorized-remediated`.
 
 Any unsupported provider, mismatch, missing certificate, date mismatch, or
-**I'm not sure** answer is a remediation outcome, not successful evidence.
+**I'm not sure** answer is a remediation outcome, not successful evidence. An
+unresolved `Task not authorized` result reopens only the affected domain and
+employee-security evidence; it must not discard valid endpoints, certificate,
+or federation evidence.
 Show the affected remediation step and keep the phase waiting.
 
 If the administrator omits a required value or replies only with wording such
@@ -316,6 +407,31 @@ search workspace files, inspect environment variables, or infer the missing
 evidence. Reopen the same structured form with only the missing or invalid
 fields; never replace it with a free-text request for several numbered answers.
 Preserve progress and stop until the structured form is complete.
+
+After each structured response, write only the safe valid fields and the field
+names that must be reopened to
+`.local/connect/workday-da/workday-admin-partial-evidence.json`:
+
+```json
+{
+  "fields": {
+    "oauthClientId": "{validated non-secret client ID}"
+  },
+  "invalidFields": [
+    "oauthTokenUrl"
+  ]
+}
+```
+
+Then persist the resumable partial result:
+
+```powershell
+python scripts/workday_connect.py record-administrator-evidence --phase workday-admin --evidence-file ".local\connect\workday-da\workday-admin-partial-evidence.json"
+```
+
+On resume, read the Workday administrator entry returned by `status`. Do not
+redisplay a completed handoff. Reopen only `invalidFields` and
+`outstandingFields`.
 
 Never collect a secret, password, token, cookie, certificate body, or private
 key. Write the response directly to
@@ -333,6 +449,11 @@ Use these exact outcome values:
   `reviewed-policy-activated`;
 - `networkReadinessOutcome`: `confirmed-hosts-allowed` or
   `no-customer-firewall-change-required`.
+- `rolloutType`: `entire-workforce` or `limited-or-test`;
+- `publicWorkerReportsOutcome` and `integrationPermissionsGetOutcome`:
+  `get-permission-verified`;
+- `authorizationOutcome`: `verified` or
+  `task-not-authorized-remediated`.
 
 For example:
 
@@ -347,7 +468,19 @@ For example:
   "restBaseUrl": "https://{workday-host}/ccx/api",
   "soapBaseUrl": "https://{workday-host}/ccx/service",
   "authenticationPolicyOutcome": "existing-active-policy",
-  "networkReadinessOutcome": "confirmed-hosts-allowed"
+  "networkReadinessOutcome": "confirmed-hosts-allowed",
+  "rolloutType": "limited-or-test",
+  "employeeSecurityGroup": "ESS Workday Pilot Employees",
+  "publicWorkerReportsOutcome": "get-permission-verified",
+  "integrationPermissionsGetOutcome": "get-permission-verified",
+  "functionalAreaScopes": [
+    "Core Payroll",
+    "Organizations and Roles",
+    "Staffing",
+    "Time Off and Leave"
+  ],
+  "optionalDomains": [],
+  "authorizationOutcome": "verified"
 }
 ```
 

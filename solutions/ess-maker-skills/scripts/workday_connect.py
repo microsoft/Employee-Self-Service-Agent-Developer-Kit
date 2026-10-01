@@ -14,9 +14,12 @@ from typing import Any, Callable
 from workday_connect_agent import (
     WorkdayConnectAgentError,
     verify_agent_binding,
+    verify_runtime_template_wiring,
     verify_topic_activation,
 )
 from workday_connect_model import (
+    ADMINISTRATOR_PHASES,
+    ADMINISTRATOR_SUBSTAGES,
     CONTROLLER_CONTRACT_VERSION,
     WorkdayConnectModelError,
     workday_saml_entity_id,
@@ -26,6 +29,7 @@ from workday_connect_contracts import (
     build_entra_handoff,
     build_workday_admin_packet,
     validate_agent_binding_evidence,
+    validate_administrator_partial_evidence,
     validate_employee_evidence,
     validate_employee_failure_evidence,
     validate_entra_verification,
@@ -139,6 +143,30 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json_input(entra_handoff, "discovery")
     record_entra = subparsers.add_parser("record-entra")
     _add_json_input(record_entra, "verification")
+    administrator_stage = subparsers.add_parser("administrator-stage")
+    administrator_stage.add_argument(
+        "--phase",
+        choices=sorted(ADMINISTRATOR_PHASES),
+        required=True,
+    )
+    administrator_stage.add_argument(
+        "--substage",
+        choices=ADMINISTRATOR_SUBSTAGES,
+        required=True,
+    )
+    record_administrator_evidence = subparsers.add_parser(
+        "record-administrator-evidence"
+    )
+    record_administrator_evidence.add_argument(
+        "--phase",
+        choices=sorted(ADMINISTRATOR_PHASES),
+        required=True,
+    )
+    _add_json_input(
+        record_administrator_evidence,
+        "evidence",
+        allow_legacy_inline=False,
+    )
     subparsers.add_parser("workday-admin-packet")
     record_admin = subparsers.add_parser("record-workday-admin")
     _add_json_input(record_admin, "response")
@@ -165,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     subparsers.add_parser("record-topic-activation")
+    subparsers.add_parser("record-runtime-template-wiring")
     record_binding = subparsers.add_parser("record-agent-binding")
     _add_json_input(
         record_binding,
@@ -220,11 +249,100 @@ def _entra_handoff(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    administrator = state["phases"]["entra"]["administrator"]
+    if ADMINISTRATOR_SUBSTAGES.index(
+        administrator["substage"]
+    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented"):
+        return {
+            "packet": None,
+            "alreadyPresented": True,
+            "status": store.status(),
+        }
+    packet = build_entra_handoff(
+        state,
+        _json_input(args, "discovery", "Entra discovery"),
+    )
+    store.record_administrator_progress("entra", "handoff-presented")
     return {
-        "packet": build_entra_handoff(
-            store.load(),
-            _json_input(args, "discovery", "Entra discovery"),
+        "packet": packet,
+        "alreadyPresented": False,
+        "status": store.status(),
+    }
+
+
+def _administrator_stage(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    state = store.record_administrator_progress(
+        args.phase,
+        args.substage,
+    )
+    return {
+        "phase": args.phase,
+        "substage": state["phases"][args.phase]["administrator"]["substage"],
+        "status": store.status(),
+    }
+
+
+def _record_administrator_evidence(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = _json_input(
+        args,
+        "evidence",
+        "administrator partial evidence",
+    )
+    allowed = {"fields", "invalidFields"}
+    unexpected = sorted(set(evidence) - allowed)
+    if unexpected:
+        raise WorkdayConnectStoreError(
+            "Administrator partial evidence contains unsupported fields: "
+            + ", ".join(unexpected)
         )
+    fields = evidence.get("fields") or {}
+    invalid_fields = evidence.get("invalidFields") or []
+    if not isinstance(fields, dict):
+        raise WorkdayConnectStoreError(
+            "Administrator partial evidence fields must be an object."
+        )
+    if not isinstance(invalid_fields, list):
+        raise WorkdayConnectStoreError(
+            "Administrator invalidFields must be an array."
+        )
+    validated = validate_administrator_partial_evidence(
+        store.load(),
+        args.phase,
+        fields,
+    )
+    combined_invalid = list(
+        dict.fromkeys(
+            [
+                *invalid_fields,
+                *validated["fieldErrors"].keys(),
+            ]
+        )
+    )
+    state = store.record_administrator_progress(
+        args.phase,
+        "collecting-evidence",
+        valid_fields=validated["validFields"],
+        invalid_fields=combined_invalid,
+    )
+    administrator = state["phases"][args.phase]["administrator"]
+    return {
+        "phase": args.phase,
+        "acceptedFields": sorted(validated["validFields"]),
+        "invalidFields": administrator["invalidFields"],
+        "fieldErrors": validated["fieldErrors"],
+        "outstandingFields": next(
+            phase["administrator"]["outstandingFields"]
+            for phase in store.status()["phases"]
+            if phase["id"] == args.phase
+        ),
+        "status": store.status(),
     }
 
 
@@ -237,6 +355,11 @@ def _record_entra(
         _json_input(args, "verification", "Entra verification"),
     )
     store.merge_section("identifiers", result["identifiers"])
+    store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields=result["partialEvidence"],
+    )
     store.complete_action(
         "entra",
         "exact-application-discovered",
@@ -261,6 +384,10 @@ def _record_entra(
         once_per_lifecycle=True,
     )
     store.set_phase_status("entra", "complete")
+    store.record_administrator_progress(
+        "entra",
+        "evidence-validated",
+    )
     _, reused = store.restore_workday_foundation()
     if reused:
         store.record_lifecycle_event(
@@ -280,7 +407,26 @@ def _workday_admin_packet(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    return {"packet": build_workday_admin_packet(store.load())}
+    state = store.load()
+    administrator = state["phases"]["workday-admin"]["administrator"]
+    if ADMINISTRATOR_SUBSTAGES.index(
+        administrator["substage"]
+    ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented"):
+        return {
+            "packet": None,
+            "alreadyPresented": True,
+            "status": store.status(),
+        }
+    packet = build_workday_admin_packet(state)
+    store.record_administrator_progress(
+        "workday-admin",
+        "handoff-presented",
+    )
+    return {
+        "packet": packet,
+        "alreadyPresented": False,
+        "status": store.status(),
+    }
 
 
 def _record_workday_admin(
@@ -293,6 +439,11 @@ def _record_workday_admin(
     )
     store.merge_section("identifiers", result["identifiers"])
     store.merge_section("endpoints", result["endpoints"])
+    store.record_administrator_progress(
+        "workday-admin",
+        "collecting-evidence",
+        valid_fields=result["partialEvidence"],
+    )
     store.complete_action(
         "workday-admin",
         "administrator-response-validated",
@@ -305,6 +456,10 @@ def _record_workday_admin(
         once_per_lifecycle=True,
     )
     store.set_phase_status("workday-admin", "complete")
+    store.record_administrator_progress(
+        "workday-admin",
+        "evidence-validated",
+    )
     store.capture_tenant_foundation()
     return {
         "verified": True,
@@ -509,6 +664,29 @@ def _record_topic_activation(
     }
 
 
+def _record_runtime_template_wiring(
+    _args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    evidence = verify_runtime_template_wiring(
+        store.workspace_root,
+        store.load(),
+    )
+    store.complete_action(
+        "runtime",
+        "runtime-template-configured",
+        evidence={
+            "outcome": "verified",
+            **evidence,
+        },
+    )
+    return {
+        "verified": True,
+        "blockingDiagnostics": evidence["blockingDiagnostics"],
+        "status": store.status(),
+    }
+
+
 def _record_validation(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
@@ -595,6 +773,8 @@ _COMMAND_HANDLERS: dict[
     "set-workday-tenant": _set_workday_tenant,
     "entra-handoff": _entra_handoff,
     "record-entra": _record_entra,
+    "administrator-stage": _administrator_stage,
+    "record-administrator-evidence": _record_administrator_evidence,
     "workday-admin-packet": _workday_admin_packet,
     "record-workday-admin": _record_workday_admin,
     "runtime-plan": _runtime_plan,
@@ -602,6 +782,7 @@ _COMMAND_HANDLERS: dict[
     "runtime-approve": _runtime_approve,
     "record-connections": _record_connections,
     "record-topic-activation": _record_topic_activation,
+    "record-runtime-template-wiring": _record_runtime_template_wiring,
     "record-agent-binding": _record_agent_binding,
     "record-validation": _record_validation,
     "record-validation-failure": _record_validation_failure,
@@ -614,6 +795,8 @@ _COMMAND_PHASES = {
     "set-workday-tenant": "entra",
     "entra-handoff": "entra",
     "record-entra": "entra",
+    "administrator-stage": None,
+    "record-administrator-evidence": None,
     "workday-admin-packet": "workday-admin",
     "record-workday-admin": "workday-admin",
     "record-connections": "connections",
@@ -621,6 +804,7 @@ _COMMAND_PHASES = {
     "runtime-approve": "runtime",
     "runtime-apply": "runtime",
     "record-topic-activation": "runtime",
+    "record-runtime-template-wiring": "runtime",
     "record-agent-binding": "runtime",
     "record-validation": "employee-validation",
     "record-validation-failure": "employee-validation",

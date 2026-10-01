@@ -81,6 +81,80 @@ def _write_workspace(root: Path) -> None:
     )
 
 
+def _write_runtime_wiring(root: Path, *, nested_call: bool = False) -> None:
+    agent = root / "workspace" / "agents" / "ess-hr"
+    component_map_path = agent / ".component-map.json"
+    component_map = json.loads(
+        component_map_path.read_text(encoding="utf-8")
+    )
+    runtime_schema = (
+        "contoso.topic.WorkdaySystemSetRuntimeTemplateConfigurations"
+    )
+    topics = agent / "topics"
+    topics.joinpath("conversation-start.mcs.yml").write_text(
+        (
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: OnConversationStart\n"
+            "  actions:\n"
+            "    - kind: BeginDialog\n"
+            f"      dialog: {runtime_schema}\n"
+            "    - kind: SendActivity\n"
+            "      activity: Welcome\n"
+        ),
+        encoding="utf-8",
+    )
+    topics.joinpath("runtime-template.mcs.yml").write_text(
+        "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n",
+        encoding="utf-8",
+    )
+    user_context_actions = (
+        "  actions:\n"
+        "    - kind: BeginDialog\n"
+        f"      dialog: {runtime_schema}\n"
+        if nested_call
+        else "  actions: []\n"
+    )
+    topics.joinpath("user-context-v2.mcs.yml").write_text(
+        "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n"
+        + user_context_actions,
+        encoding="utf-8",
+    )
+    component_map.update(
+        {
+            "topics/conversation-start.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "conversation-start",
+                "schemaName": "contoso.topic.ConversationStart",
+                "displayName": "Conversation Start",
+            },
+            "topics/runtime-template.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "runtime-template",
+                "schemaName": runtime_schema,
+                "displayName": (
+                    "Workday [System] - 1: Set Runtime Template "
+                    "Configurations"
+                ),
+            },
+            "topics/user-context-v2.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "user-context-v2",
+                "schemaName": (
+                    "contoso.topic.WorkdaySystemGetUserContextV2"
+                ),
+                "displayName": (
+                    "Workday [System] - 1: Set User Context V2"
+                ),
+            },
+        }
+    )
+    component_map_path.write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+
 class _VerifiedClient:
     def __init__(self):
         self.signed_in_username = ""
@@ -171,6 +245,63 @@ def test_topic_activation_skips_checkpoints_and_allows_diagnostics(
         expectation["requireCleanDiagnostics"] is False
         for expectation in client.expectations
     )
+
+
+def test_runtime_template_wiring_is_verified_against_live_topics(
+    tmp_path: Path,
+) -> None:
+    from workday_connect_agent import verify_runtime_template_wiring
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    client = _VerifiedClient()
+
+    evidence = verify_runtime_template_wiring(
+        tmp_path,
+        _state(),
+        client_factory=lambda _config: client,
+        converter=lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "objectModel": {"$kind": "AdaptiveDialog", "key": item["key"]},
+            }
+            for item in items
+        ],
+    )
+
+    assert evidence["verifiedComponents"] == 2
+    assert evidence["runtimeTemplate"].endswith(
+        "WorkdaySystemSetRuntimeTemplateConfigurations"
+    )
+    assert {item["componentId"] for item in client.expectations} == {
+        "conversation-start",
+        "user-context-v2",
+    }
+
+
+def test_runtime_template_wiring_rejects_obsolete_nested_call(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path, nested_call=True)
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="obsolete nested",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: _VerifiedClient(),
+        )
 
 
 def test_agent_binding_rejects_environment_drift(tmp_path: Path) -> None:
@@ -270,6 +401,63 @@ def test_controller_records_invocation_only_at_status_boundary(
 
     events = WorkdayConnectStore(tmp_path).load()["lifecycle"]["journal"]
     assert [event["event"] for event in events] == ["invoked"]
+
+
+def test_controller_persists_valid_partial_administrator_fields(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    for action in model.PHASE_REQUIRED_ACTIONS["preflight"]:
+        store.complete_action(
+            "preflight",
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status("preflight", "complete")
+    evidence_file = tmp_path / "partial.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "selectedDirectoryId": "tenant-id",
+                    "loginUrl": (
+                        "https://login.microsoftonline.com/wrong/saml2"
+                    ),
+                },
+                "invalidFields": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = workday_connect._record_administrator_evidence(
+        SimpleNamespace(
+            phase="entra",
+            evidence_file=evidence_file,
+            evidence_json=None,
+        ),
+        store,
+    )
+
+    assert result["acceptedFields"] == ["selectedDirectoryId"]
+    assert result["invalidFields"] == ["loginUrl"]
+    assert "loginUrl" in result["fieldErrors"]
+    administrator = store.load()["phases"]["entra"]["administrator"]
+    assert administrator["partialEvidence"] == {
+        "selectedDirectoryId": "tenant-id",
+    }
 
 
 def test_controller_surfaces_blocker_persistence_failure(
@@ -536,6 +724,7 @@ def test_record_agent_binding_completes_only_from_verifier_output(
         "connection-references-bound",
         "runtime-flows-active",
         "delegated-authorization-configured",
+        "runtime-template-configured",
     ):
         store.complete_action(
             "runtime",
@@ -554,9 +743,9 @@ def test_record_agent_binding_completes_only_from_verifier_output(
                 "WD-CONN-013": "Passed",
             },
             "workdayTopics": {
-                "expected": 21,
-                "verified": 21,
-                "active": 21,
+                "expected": 23,
+                "verified": 23,
+                "active": 23,
                 "blockingDiagnostics": [
                     {
                         "errorCode": "NotFound",
@@ -640,9 +829,9 @@ def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics
             "makerUsername": "maker@example.com",
             "checkpoints": {},
             "workdayTopics": {
-                "expected": 21,
-                "verified": 21,
-                "active": 21,
+                "expected": 23,
+                "verified": 23,
+                "active": 23,
                 "blockingDiagnostics": [
                     {
                         "errorCode": "NotFound",

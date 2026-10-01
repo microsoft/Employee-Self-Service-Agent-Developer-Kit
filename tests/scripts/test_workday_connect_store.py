@@ -21,7 +21,7 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 6
+    assert state["schemaVersion"] == 7
     assert state["lifecycle"]["retryCount"] == 0
     assert state["lifecycle"]["resumeCount"] == 0
     assert state["lifecycle"]["journal"] == []
@@ -64,7 +64,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v6.json").exists()
+    assert path.with_name("config.pre-v7.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -122,11 +122,167 @@ def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 6
+    assert upgraded["schemaVersion"] == 7
     assert upgraded["lifecycle"]["correlationId"]
     assert upgraded["lifecycle"]["journal"] == []
     assert upgraded["migration"]["source"] == "workday-connect-state-v5"
-    assert path.with_name("config.pre-v6.json").exists()
+    assert path.with_name("config.pre-v7.json").exists()
+
+
+def test_v6_state_migrates_with_administrator_progress(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 6
+    state["phases"]["entra"].pop("administrator")
+    state["phases"]["workday-admin"].pop("administrator")
+    state["tenantFoundation"] = {
+        "legacySchemaV6Snapshot": True,
+    }
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["schemaVersion"] == 7
+    assert upgraded["phases"]["entra"]["administrator"]["substage"] == (
+        "not-started"
+    )
+    assert upgraded["migration"]["source"] == "workday-connect-state-v6"
+    assert path.with_name("config.pre-v7.json").exists()
+
+
+def test_completed_v6_state_reopens_expanded_evidence_without_losing_safe_values(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    state = model.default_state()
+    state["schemaVersion"] = 6
+    state["phases"]["entra"].pop("administrator")
+    state["phases"]["workday-admin"].pop("administrator")
+    state["identifiers"].update(
+        {
+            "entraAppId": "app-id",
+            "workdaySamlEntityId": "http://www.workday.com/contoso",
+            "oauthClientId": "oauth-client-id",
+            "signingCertificate": {
+                "thumbprint": "AA11",
+                "validFrom": "2026-01-01",
+                "validTo": "2027-01-01",
+            },
+        }
+    )
+    state["endpoints"].update(
+        {
+            "oauthTokenUrl": (
+                "https://example.workday.com/ccx/oauth2/contoso/token"
+            ),
+            "restBaseUrl": "https://example.workday.com/ccx/api",
+            "soapBaseUrl": "https://example.workday.com/ccx/service",
+        }
+    )
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        actions = sorted(model.PHASE_REQUIRED_ACTIONS[phase_id])
+        phase = state["phases"][phase_id]
+        phase["status"] = "complete"
+        phase["completedActions"] = actions
+        phase["evidence"] = [
+            {"action": action, "outcome": "verified"}
+            for action in actions
+        ]
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert upgraded["phases"]["entra"]["status"] == "active"
+    assert upgraded["phases"]["workday-admin"]["status"] == "pending"
+    assert upgraded["phases"]["entra"]["administrator"][
+        "partialEvidence"
+    ]["applicationId"] == "app-id"
+    assert upgraded["phases"]["workday-admin"]["administrator"][
+        "partialEvidence"
+    ]["oauthClientId"] == "oauth-client-id"
+
+
+def test_administrator_progress_preserves_valid_fields_and_reopens_invalid(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+    store.complete_action(
+        "preflight",
+        "verify-package",
+        evidence={"outcome": "verified"},
+    )
+    store.set_phase_status("preflight", "complete")
+
+    store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields={
+            "selectedDirectoryId": "tenant-id",
+            "replyUrl": "https://example.test/reply",
+        },
+        invalid_fields=["loginUrl"],
+    )
+    state = store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields={"loginUrl": "https://login.example.test/saml"},
+    )
+
+    administrator = state["phases"]["entra"]["administrator"]
+    assert administrator["partialEvidence"] == {
+        "selectedDirectoryId": "tenant-id",
+        "replyUrl": "https://example.test/reply",
+        "loginUrl": "https://login.example.test/saml",
+    }
+    assert administrator["invalidFields"] == []
+
+
+def test_administrator_progress_rejects_backward_transition(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_store as store_module
+
+    store = store_module.WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
+    store.complete_action(
+        "preflight",
+        "verify-package",
+        evidence={"outcome": "verified"},
+    )
+    store.set_phase_status("preflight", "complete")
+    store.record_administrator_progress("entra", "handoff-presented")
+
+    with pytest.raises(
+        store_module.WorkdayConnectStoreError,
+        match="cannot move backward",
+    ):
+        store.record_administrator_progress(
+            "entra",
+            "administrator-engaged",
+        )
 
 
 def test_early_v6_events_are_normalized_without_losing_history(
@@ -834,6 +990,13 @@ def _set_foundation_data(store, *, workday_tenant: str = "contoso") -> None:
             "entraAppObjectId": "app-object-id",
             "entraServicePrincipalId": "service-principal-id",
             "entraAppIdUri": "api://app-id",
+            "microsoftEntraIdentifier": (
+                "https://sts.windows.net/tenant-id/"
+            ),
+            "entraLoginUrl": (
+                "https://login.microsoftonline.com/tenant-id/saml2"
+            ),
+            "replyUrl": "https://www.workday.com/saml/acs",
             "workdaySamlEntityId": (f"http://www.workday.com/{workday_tenant}"),
             "scopeGuid": "scope-id",
             "signingCertificate": {
@@ -954,7 +1117,7 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 6
+    assert upgraded["schemaVersion"] == 7
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
 
@@ -990,7 +1153,7 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 6
+    assert upgraded["schemaVersion"] == 7
     assert upgraded["status"] == "in-progress"
     assert upgraded["phases"]["runtime"]["status"] == "active"
     assert upgraded["phases"]["employee-validation"]["status"] == "pending"
@@ -1020,6 +1183,13 @@ def test_v4_migration_captures_complete_tenant_foundation(
             "entraAppObjectId": "app-object-id",
             "entraServicePrincipalId": "service-principal-id",
             "entraAppIdUri": "api://app-id",
+            "microsoftEntraIdentifier": (
+                "https://sts.windows.net/tenant-id/"
+            ),
+            "entraLoginUrl": (
+                "https://login.microsoftonline.com/tenant-id/saml2"
+            ),
+            "replyUrl": "https://www.workday.com/saml/acs",
             "workdaySamlEntityId": "http://www.workday.com/contoso",
             "scopeGuid": "scope-id",
             "signingCertificate": {
@@ -1049,13 +1219,13 @@ def test_v4_migration_captures_complete_tenant_foundation(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 6
+    assert upgraded["schemaVersion"] == 7
     assert upgraded["migration"]["source"] == "workday-connect-state-v4"
     assert upgraded["tenantFoundation"]["scope"] == {
         "entraTenantId": "tenant-id",
         "workdayTenant": "contoso",
     }
-    assert path.with_name("config.pre-v6.json").exists()
+    assert path.with_name("config.pre-v7.json").exists()
 
 
 def test_matching_foundation_restores_workday_after_entra_reread(
