@@ -50,6 +50,94 @@ def test_empty_tenant_id_returns_empty():
     assert graph_client.resolve_tenant_display_name_silent("") == ""
 
 
+def test_authenticate_uses_preferred_cached_account(monkeypatch):
+    selected_accounts = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_accounts(self):
+            return [
+                {"username": "other@example.com"},
+                {"username": "Maker@Example.com"},
+            ]
+
+        def acquire_token_silent(self, scopes, account):
+            selected_accounts.append(account)
+            return {
+                "access_token": "preferred-token",
+                "id_token_claims": {
+                    "preferred_username": "Maker@Example.com",
+                },
+            }
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("preferred cached account should be reused")
+
+    monkeypatch.setattr(
+        graph_client.msal,
+        "SerializableTokenCache",
+        FakeCache,
+    )
+    monkeypatch.setattr(
+        graph_client.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    client = graph_client.GraphClient("organizations")
+    token = client.authenticate(preferred_username="maker@example.com")
+
+    assert token == "preferred-token"
+    assert selected_accounts == [{"username": "Maker@Example.com"}]
+    assert client.signed_in_username == "Maker@Example.com"
+
+
+def test_interactive_auth_does_not_reuse_stale_cached_identity(monkeypatch):
+    interactive_options = {}
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_accounts(self):
+            return [{"username": "maker@example.com"}]
+
+        def acquire_token_silent(self, scopes, account):
+            return None
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            interactive_options.update(kwargs)
+            return {"access_token": "interactive-token"}
+
+    monkeypatch.setattr(
+        graph_client.msal,
+        "SerializableTokenCache",
+        FakeCache,
+    )
+    monkeypatch.setattr(
+        graph_client.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    client = graph_client.GraphClient("organizations")
+    client.authenticate(preferred_username="maker@example.com")
+
+    assert client.signed_in_username is None
+    assert interactive_options == {
+        "prompt": "select_account",
+        "login_hint": "maker@example.com",
+    }
+
+
 def test_no_cached_account_returns_empty_without_prompt():
     app = _fake_app(accounts=[], silent_result=None)
     with patch.object(graph_client.msal, "PublicClientApplication", return_value=app):

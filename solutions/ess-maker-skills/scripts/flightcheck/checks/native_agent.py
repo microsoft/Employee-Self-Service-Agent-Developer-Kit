@@ -38,10 +38,6 @@ def _result(
     )
 
 
-def _active_agent(config: dict[str, Any]) -> dict[str, Any]:
-    return active_agent(config)
-
-
 def _normalize_connector_id(value: Any) -> str:
     if not isinstance(value, str):
         return ""
@@ -231,7 +227,10 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
     environment_id = getattr(runner, "env_id", None) or config.get(
         "environmentId"
     )
-    agent = _active_agent(config)
+    agent = active_agent(
+        config,
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
     agent_id = agent.get("botId")
     client = getattr(runner, "agentbuilder", None)
     connectivity = getattr(runner, "connectivity", None)
@@ -282,10 +281,7 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             agent_id=agent_id,
             selection_source="flightcheck",
             require_alm_family=False,
-            expected_schema_name=str(
-                runner.config.get("agent", {}).get("schemaName") or ""
-            )
-            or None,
+            expected_schema_name=str(agent.get("schemaName") or "") or None,
         )
     except AgentBuilderHTTPError as exc:
         status = (

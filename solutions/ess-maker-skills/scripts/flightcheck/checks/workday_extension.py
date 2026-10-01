@@ -59,11 +59,8 @@ from pathlib import Path, PureWindowsPath
 import yaml
 
 from ..runner import CheckResult, Priority, Role, Status
-from ..agent_scope import (
-    active_agent_bot_id,
-    resolve_agent_directory,
-    validate_agent_slug,
-)
+from ..agent_scope import resolve_agent_directory, validate_agent_slug
+from ._da_connection_refs import read_active_agent_connection_references
 
 DOC_BASE = (
     "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
@@ -305,32 +302,7 @@ def _query_connection_references(runner):
     ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
     changeset is treated as "no references" (genuine absence), not an error.
     """
-    client = getattr(runner, "agentbuilder", None)
-    config = getattr(runner, "config", None) or {}
-    agent_id = active_agent_bot_id(config)
-    if client is None or not agent_id:
-        return None
-    changeset = client.fetch_components(agent_id) or {}
-    changes = changeset.get("connectionReferenceChanges")
-    if changes is None:
-        return []
-    if not isinstance(changes, list):
-        raise ValueError(
-            "Component fetch returned invalid connectionReferenceChanges."
-        )
-    refs = []
-    for change in changes:
-        ref = (change or {}).get("connectionReference") or {}
-        refs.append(
-            {
-                "connectionreferencelogicalname": ref.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": ref.get("connectorId"),
-                "connectionid": ref.get("connectionId"),
-            }
-        )
-    return refs
+    return read_active_agent_connection_references(runner)
 
 
 def _get_connections(runner):
@@ -369,8 +341,8 @@ def _find_connection_by_id(conns, connection_id):
 def run_workday_extension_checks(runner) -> list[CheckResult]:
     """Emit the five skill-5 Workday-extension checkpoints.
 
-    Each emitter is invoked behind a guard so a single failure degrades to a
-    WARNING for that checkpoint instead of aborting the remaining checks.
+    Each emitter is invoked behind a guard so a single failure is recorded for
+    that checkpoint without aborting the remaining checks.
     """
     emitters = (
         (_check_connection_auth, "WD-CONN-AUTH-001", _CONN_AUTH_DESC, _MAKER_ROLES),
@@ -387,7 +359,7 @@ def run_workday_extension_checks(runner) -> list[CheckResult]:
         except Exception as e:  # noqa: BLE001 — one emitter must not abort the rest
             results.append(CheckResult(roles=roles,
                 checkpoint_id=cp_id, category=_CATEGORY,
-                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                priority=Priority.HIGH.value, status=Status.ERROR.value,
                 description=description,
                 result=(
                     f"Unable to run {cp_id}: {type(e).__name__}: {e}"
@@ -396,6 +368,8 @@ def run_workday_extension_checks(runner) -> list[CheckResult]:
                     "Re-run FlightCheck; if this persists, report the "
                     f"checkpoint ID ({cp_id}) and the error above."
                 ),
+                remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+                evidence={"executionError": True},
             ))
     return results
 

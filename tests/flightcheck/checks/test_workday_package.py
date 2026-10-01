@@ -131,6 +131,33 @@ class TestPackageFlavorDetection:
         assert len(runner._workday_connection_refs) == 3
 
     @responses.activate
+    def test_duplicate_known_role_does_not_match_a_valid_fingerprint(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        duplicate = dv.workday_connection_refs_simplified()[0]
+        duplicate = {
+            **duplicate,
+            "connectionreferenceid": (
+                "00000000-0000-0000-0000-000000009999"
+            ),
+        }
+        _register_connection_refs(
+            base_url=fake_dataverse_url,
+            refs=[
+                *dv.workday_connection_refs_simplified(),
+                duplicate,
+            ],
+        )
+
+        results = _check_package_flavor(runner, wd_flows=[])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Warning"
+        assert runner._workday_package_flavor == "unknown"
+
+    @responses.activate
     def test_runtime_install_uses_simplified_behavior(
         self, runner: _MinimalRunner, fake_dataverse_url: str
     ) -> None:

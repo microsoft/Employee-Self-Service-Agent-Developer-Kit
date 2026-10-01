@@ -195,7 +195,12 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
-def authenticate(env_url, preferred_username=None):
+def authenticate(
+    env_url,
+    preferred_username=None,
+    *,
+    return_account_identity=False,
+):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
@@ -228,8 +233,11 @@ def authenticate(env_url, preferred_username=None):
         accounts[0] if accounts and not preferred else None,
     )
     result = None
+    authenticated_account = None
     if selected_account:
         result = app.acquire_token_silent([scope], account=selected_account)
+        if result and "access_token" in result:
+            authenticated_account = selected_account
 
     if (
         result
@@ -247,6 +255,7 @@ def authenticate(env_url, preferred_username=None):
             CLIENT_ID, authority=authority, token_cache=cache
         )
         result = None
+        authenticated_account = None
 
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
@@ -257,6 +266,7 @@ def authenticate(env_url, preferred_username=None):
             else {"prompt": "select_account"}
         )
         result = app.acquire_token_interactive([scope], **interactive_options)
+        authenticated_account = None
 
     if "access_token" not in result:
         # Don't echo error_description - it can include tenant IDs and
@@ -270,6 +280,12 @@ def authenticate(env_url, preferred_username=None):
     # MSAL refresh tokens; default umask (0o644) would expose them to other
     # users on shared dev VMs.
     _persist_token_cache(cache, cache_path)
+    claims = result.get("id_token_claims", {}) or {}
+    authenticated_username = (
+        claims.get("preferred_username")
+        or claims.get("upn")
+        or (authenticated_account or {}).get("username")
+    )
 
     # Record the tenant + start a telemetry session. No developer identity is
     # collected; active-install counts dedupe on a random instance_id.
@@ -277,7 +293,6 @@ def authenticate(env_url, preferred_username=None):
     try:
         import adk_telemetry
 
-        claims = result.get("id_token_claims", {}) or {}
         tenant_id = claims.get("tid", "") or tenant
         # Resolve the tenant's display name via a SILENT-ONLY Graph token
         # BEFORE emitting adk.session.start, so the very first ADK event on a
@@ -302,6 +317,8 @@ def authenticate(env_url, preferred_username=None):
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass
 
+    if return_account_identity:
+        return result["access_token"], authenticated_username
     return result["access_token"]
 
 
