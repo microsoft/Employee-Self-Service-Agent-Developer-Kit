@@ -35,6 +35,7 @@ from essmig.instructions import (
     InstructionReconciliationSkipped,
     reconcile_instructions,
 )
+from essmig.knowledge import rewrite_references
 from essmig.llm import LlmUnavailable
 from essmig.projection import (
     ManualConfigurationRequired,
@@ -45,6 +46,7 @@ from essmig.projection import (
     describe,
     parse_ca_data,
     project,
+    rewrite_prefixes,
     shape_for,
 )
 from essmig.reference import ReferenceSet
@@ -292,6 +294,7 @@ def merge(
     agent_result = _merge_agent_metadata(reference, agent_metadata)
     if agent_result is not None:
         results.append(agent_result)
+    renames: dict[str, str] = {}
     for component in sorted(components.values(), key=lambda c: c.schemaname):
         result = _merge_one(
             component,
@@ -302,11 +305,13 @@ def merge(
             entries,
             reconcile,
             resolver_factory,
+            renames,
         )
         results.append(result)
 
     _apply_unsupported_rules(entries, results)
     _ensure_knowledge_search(entries)
+    rewrite_references(agent, renames)
     return MergeResult(vertical=vertical, agent=agent, results=results)
 
 
@@ -485,6 +490,7 @@ def _merge_one(
     entries: list[Any],
     reconcile: InstructionMerger,
     resolver_factory: ResolverFactory | None = None,
+    renames: dict[str, str] | None = None,
 ) -> ComponentResult:
     suffix = component.suffix
     base_result = ComponentResult(
@@ -523,7 +529,13 @@ def _merge_one(
                 )
                 base_result.configuration = describe(component, vertical)
                 return base_result
-            entries.append(as_new_component(component, vertical))
+            entry = as_new_component(component, vertical)
+            entries.append(entry)
+            if renames is not None:
+                old_schema = rewrite_prefixes(component.schemaname, vertical)
+                new_schema = entry.get("schemaName") if isinstance(entry, dict) else None
+                if isinstance(new_schema, str) and new_schema and new_schema != old_schema:
+                    renames[old_schema] = new_schema
             base_result.outcome = Outcome.CARRIED_NEW
             base_result.detail = (
                 "No template counterpart; carried as a customer-owned component."

@@ -187,3 +187,53 @@ def test_missing_solution_xml_is_an_error(tmp_path: Path) -> None:
 def test_gpt_prefix_present_for_all_known_verticals() -> None:
     # Guards the schema-prefix map package_targets/discover rely on.
     assert set(CA_AGENT_SCHEMANAMES) == {"core", "hr", "it"}
+
+
+def _write_env_var(
+    root: Path, schema: str, *, default: str, value: str | None
+) -> None:
+    folder = root / "environmentvariabledefinitions" / schema
+    folder.mkdir(parents=True)
+    (folder / "environmentvariabledefinition.xml").write_text(
+        f'<environmentvariabledefinition schemaname="{schema}">'
+        f"<defaultvalue>{default}</defaultvalue>"
+        "</environmentvariabledefinition>",
+        encoding="utf-8",
+    )
+    if value is not None:
+        (folder / "environmentvariablevalues.json").write_text(
+            '{"environmentvariablevalues": {"environmentvariablevalue": '
+            f'{{"value": "{value}"}}}}}}',
+            encoding="utf-8",
+        )
+
+
+def test_read_env_var_values_prefers_the_set_value(tmp_path: Path) -> None:
+    _sample_package(tmp_path)
+    _write_env_var(
+        tmp_path,
+        f"{HR_PREFIX}.envVar.rSdk_abc",
+        default="ServiceNowKB2608211333",
+        value="ServiceNowKB2605142004",
+    )
+
+    values = package_source.read_env_var_values(tmp_path)
+
+    # Keyed by the agent-independent suffix so it matches the gptagent_* reference.
+    assert values["envVar.rSdk_abc"] == "ServiceNowKB2605142004"
+
+
+def test_read_env_var_values_falls_back_to_the_default(tmp_path: Path) -> None:
+    _sample_package(tmp_path)
+    _write_env_var(
+        tmp_path, f"{HR_PREFIX}.envVar.rSdk_abc", default="ServiceNowKB2608211333", value=None
+    )
+
+    values = package_source.read_env_var_values(tmp_path)
+
+    assert values["envVar.rSdk_abc"] == "ServiceNowKB2608211333"
+
+
+def test_read_env_var_values_empty_without_definitions(tmp_path: Path) -> None:
+    _sample_package(tmp_path)
+    assert package_source.read_env_var_values(tmp_path) == {}

@@ -191,6 +191,59 @@ def read_flow_export(path: str | Path) -> FlowExport | None:
         )
 
 
+def read_env_var_values(path: str | Path) -> dict[str, str]:
+    """The environment-variable values an exported CA solution carries, by suffix.
+
+    A ServiceNow (or other Graph-connector) knowledge source resolves its
+    connection through an environment variable, and that variable's *value* — the
+    Graph connector's connection id — is what binds the source. An export carries
+    each variable under ``environmentvariabledefinitions/<schema>/`` with the
+    variable's ``environmentvariabledefinition.xml`` (its ``defaultvalue``) and,
+    when a value was set, an ``environmentvariablevalues.json``.
+
+    Returns a map from the agent-independent schema *suffix* (``envVar.<id>``) to
+    the set value, falling back to the default. Keyed by suffix so a CA
+    ``msdyn_*`` variable matches the ``gptagent_*`` reference the migrated agent
+    carries. Empty when the export defines no variables.
+    """
+    with _package_root(path) as root:
+        definitions = root / "environmentvariabledefinitions"
+        if not definitions.is_dir():
+            return {}
+        values: dict[str, str] = {}
+        for folder in sorted(definitions.iterdir()):
+            if not folder.is_dir():
+                continue
+            value = _env_var_value(folder)
+            if value is not None:
+                values[schema_suffix(folder.name)] = value
+        return values
+
+
+def _env_var_value(folder: Path) -> str | None:
+    """The set value of one environment variable, falling back to its default."""
+    values_file = folder / "environmentvariablevalues.json"
+    if values_file.is_file():
+        try:
+            document = json.loads(values_file.read_text(encoding="utf-8-sig"))
+        except ValueError:
+            document = None
+        wrapper = document.get("environmentvariablevalues") if isinstance(document, dict) else None
+        entry = wrapper.get("environmentvariablevalue") if isinstance(wrapper, dict) else None
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    definition = folder / "environmentvariabledefinition.xml"
+    if definition.is_file():
+        try:
+            default = ET.parse(definition).getroot().findtext("defaultvalue")
+        except ET.ParseError:
+            default = None
+        if isinstance(default, str) and default.strip():
+            return default.strip()
+    return None
+
+
 def _workflow_entries(customizations_xml: str) -> list[dict[str, str]]:
     """``id``/``name``/``description``/``json_name`` for each ``<Workflow>`` in the export."""
     try:

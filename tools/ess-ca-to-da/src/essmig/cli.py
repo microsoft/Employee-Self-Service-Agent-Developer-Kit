@@ -23,6 +23,7 @@ from pathlib import Path
 
 from essmig import customizations as customizations_module
 from essmig import flows as flows_module
+from essmig import knowledge as knowledge_module
 from essmig import made, package_source
 from essmig import reference as reference_module
 from essmig.assessment import Assessment, assess
@@ -280,6 +281,20 @@ def _print_flows(
 
 
 
+def _print_knowledge(bindings: list[knowledge_module.GraphConnection]) -> None:
+    if not bindings:
+        return
+    print("\nKnowledge sources:")
+    for binding in bindings:
+        print(f"  - {binding.display_name} — carried as a ServiceNow knowledge source.")
+    print(
+        "    The connection is carried from your source environment and must be "
+        "rebound after import: in the agent's knowledge settings, point "
+        f"{', '.join(b.connection_name for b in bindings)} at a connection in the "
+        "target, then confirm the source returns results."
+    )
+
+
 def _print_verdict(verdict: Assessment) -> None:
     print(f"\n{verdict.verdict}.")
     for heading, items in (
@@ -352,6 +367,15 @@ def _migrate_one(
     flows_module.add_interfaces(merged.agent, flow_findings.carried)
     flows_module.register_config_flows(reference.config, flow_findings.carried)
 
+    env_values = (
+        package_source.read_env_var_values(args.from_package)
+        if args.from_package is not None
+        else {}
+    )
+    knowledge_bindings = knowledge_module.bind_connections(
+        reference.config, knowledge_module.graph_connections(merged.agent), env_values
+    )
+
     plugin = write_package(out, reference, merged.agent)
     unbound = check_pointers(merged.agent, reference.config)
     if unbound:
@@ -382,6 +406,7 @@ def _migrate_one(
         import_result=import_result,
         flow_findings=flow_findings,
         flows_zip=flows_zip,
+        knowledge_bindings=knowledge_bindings,
     )
     made_path = made.write(
         out,
@@ -396,6 +421,7 @@ def _migrate_one(
     print(summarize(merged.results) or "nothing to migrate")
     _print_verdict(assess(merged))
     _print_flows(flow_findings, flows_zip, package_path)
+    _print_knowledge(knowledge_bindings)
     if package_path is not None:
         print(f"\nPackage: {package_path}")
     if import_result is not None:

@@ -371,7 +371,25 @@ questions* — so the endpoint and scope are deliberately overridable.
 Knowledge sources **do** ride in the package: a SharePoint (or other) source is
 carried as a `KnowledgeSourceComponent`, marked customer-owned, and the GPT is
 pointed at it (`knowledgeSources: SearchAllKnowledgeSources`) so it is actually
-searched after import. Custom metrics, Copilot settings, file attachments,
+searched after import. A **ServiceNow knowledge source** reaches its content
+through a Graph-connector connection that the source names *indirectly*, by an
+environment variable: the component's `connectionId.schemaName` points at an
+`envVar.*`, and `app.config.dev.json`'s `values` block binds it under an
+`envvar:<schema>` key whose value is the Graph connector's connection id. Two
+things the platform would normally wire are reproduced for it, or the source
+silently disappears after import:
+
+- the **connection binding** — the `envvar:` entry is written into the config,
+  carrying the value from the customer's exported environment-variable definition.
+  That value names a Graph connector in the *source* tenant, so it is a starting
+  point the operator must **rebind** in the target; the report's **Knowledge
+  sources** section lists each source and its connection for exactly that.
+- the **rename fix** — a net-new knowledge source is renamed to the DA-valid
+  `knowledge.<Name>` schema, and any migrated topic that searches it has its
+  `SearchSpecificKnowledgeSources` references repointed at the new name so the
+  action does not dangle.
+
+Custom metrics, Copilot settings, file attachments,
 evaluations (test cases) and skills cannot ride in the package, but they are no
 longer dropped silently: every one is **detected and reported** under *Re-create
 these in the agent's settings* (with its configuration reproduced) or, where the DA
@@ -495,6 +513,7 @@ src/essmig/
   projection.py   CA botcomponent → agent.yml component shape
   merge.py        three-way merge + Overlays policy
   flows.py        carry customer cloud flows (interface + flows.zip solution)
+  knowledge.py    wire carried Graph-connector knowledge sources (bind + rename fix)
   instructions.py model-backed reconciliation of edited agent instructions
   llm.py          minimal GitHub Copilot API client (gh auth token)
   rules.py        constructs the DA does not support, and who must act on each

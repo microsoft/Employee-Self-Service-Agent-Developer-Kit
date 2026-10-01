@@ -19,6 +19,7 @@ from essmig.assessment import Assessment, assess
 from essmig.deliver import ImportResult
 from essmig.discovery import DiscoveryResult
 from essmig.flows import FlowFindings
+from essmig.knowledge import GraphConnection
 from essmig.merge import ComponentResult, MergeResult, Outcome
 from essmig.projection import dump
 
@@ -56,6 +57,7 @@ def write_reports(
     import_result: ImportResult | None = None,
     flow_findings: FlowFindings | None = None,
     flows_zip: Path | None = None,
+    knowledge_bindings: list[GraphConnection] | None = None,
 ) -> tuple[Path, Path]:
     """Write ``migration-report.md`` and ``migration-report.json``. Returns both paths."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -63,13 +65,19 @@ def write_reports(
     json_path = destination / "migration-report.json"
     markdown_path.write_text(
         render_markdown(
-            discovery, merged, package_path, import_result, flow_findings, flows_zip
+            discovery,
+            merged,
+            package_path,
+            import_result,
+            flow_findings,
+            flows_zip,
+            knowledge_bindings,
         ),
         encoding="utf-8",
     )
     json_path.write_text(
         json.dumps(
-            render_json(discovery, merged, import_result, flow_findings),
+            render_json(discovery, merged, import_result, flow_findings, knowledge_bindings),
             indent=2,
             default=str,
         ),
@@ -83,6 +91,7 @@ def render_json(
     merged: MergeResult,
     import_result: ImportResult | None = None,
     flow_findings: FlowFindings | None = None,
+    knowledge_bindings: list[GraphConnection] | None = None,
 ) -> dict[str, Any]:
     return {
         "generatedUtc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -91,6 +100,7 @@ def render_json(
         "assessment": assess(merged).to_json(),
         "delivery": import_result.to_json() if import_result is not None else None,
         "flows": _flows_json(flow_findings),
+        "knowledgeSources": _knowledge_json(knowledge_bindings),
         "summary": {outcome.value: merged.count(outcome) for outcome in _ORDER},
         "components": [
             {
@@ -130,6 +140,21 @@ def _flows_json(flow_findings: FlowFindings | None) -> dict[str, Any] | None:
     }
 
 
+def _knowledge_json(bindings: list[GraphConnection] | None) -> list[dict[str, Any]] | None:
+    if not bindings:
+        return None
+    return [
+        {
+            "schemaName": binding.knowledge_schema,
+            "displayName": binding.display_name,
+            "connectionName": binding.connection_name,
+            "environmentVariable": binding.envvar_schema,
+            "carriedValue": binding.value,
+        }
+        for binding in bindings
+    ]
+
+
 def render_markdown(
     discovery: DiscoveryResult,
     merged: MergeResult,
@@ -137,6 +162,7 @@ def render_markdown(
     import_result: ImportResult | None = None,
     flow_findings: FlowFindings | None = None,
     flows_zip: Path | None = None,
+    knowledge_bindings: list[GraphConnection] | None = None,
 ) -> str:
     verdict = assess(merged)
     lines: list[str] = [
@@ -156,6 +182,7 @@ def render_markdown(
     if import_result is not None:
         lines += _delivery_body(import_result)
     lines += _flows_body(flow_findings, flows_zip, package_path)
+    lines += _knowledge_body(knowledge_bindings)
     lines += ["", "## Summary", "", "| Outcome | Count |", "| --- | ---: |"]
     for outcome in _ORDER:
         count = merged.count(outcome)
@@ -276,6 +303,33 @@ def render_markdown(
     ]
     lines += ["", "## Next steps", ""] + _next_steps(package_path, import_result, flow_findings)
     return "\n".join(lines) + "\n"
+
+
+def _knowledge_body(bindings: list[GraphConnection] | None) -> list[str]:
+    if not bindings:
+        return []
+    lines = ["", "## Knowledge sources", ""]
+    lines += [
+        "Your agent carries ServiceNow knowledge source(s). Each one reaches its "
+        "content through a Graph-connector connection that is specific to the "
+        "environment it was set up in, so the connection is carried as a starting "
+        "point and must be **rebound in the target** before the source returns "
+        "results:",
+        "",
+    ]
+    for binding in bindings:
+        lines.append(
+            f"- **{binding.display_name}** — `{binding.knowledge_schema}` "
+            f"(connection: `{binding.connection_name}`)"
+        )
+    lines += [
+        "",
+        "After importing the agent package, open the agent's knowledge settings, "
+        "rebind each connection above to a connection in the target environment, "
+        "and confirm the source returns results. Until it is rebound the source is "
+        "present but cannot retrieve anything.",
+    ]
+    return lines
 
 
 def _flows_body(
