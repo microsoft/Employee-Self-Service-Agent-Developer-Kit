@@ -3,6 +3,12 @@
 Run `python scripts/connect_servicenow_da.py inspect` and show the exact active
 agent and current component revision.
 
+[Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
+
+Use `links.copilotStudioAgent.url` from `inspect`.
+
+Use `Publish` from this exact agent landing; do not invent a tab-specific URL.
+
 If the publish checkpoint is stale because a legacy receipt lacks
 `publishedComponentHash`, first run:
 

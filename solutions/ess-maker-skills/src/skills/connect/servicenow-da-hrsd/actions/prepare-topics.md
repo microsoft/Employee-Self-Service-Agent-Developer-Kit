@@ -3,6 +3,12 @@
 Run `python scripts/connect_servicenow_da.py inspect` and show the current HRSD
 topic inventory.
 
+[Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
+
+Use `links.copilotStudioAgent.url` from `inspect`.
+
+Open `Topics` and use the inventory below; do not invent a tab-specific URL.
+
 - If all HRSD topics are active, set `ACTION_RESULT = "applied"` without a
   mutation.
 - Otherwise show the inactive topic names and use the `vscode_askQuestions`

@@ -46,6 +46,23 @@ LIFECYCLE_SCHEMA_VERSION = 5
 ADMIN_SETUP_SCHEMA_VERSION = 3
 AUTH_MODE = "entraIDUserLogin"
 SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
+PORTAL_ORIGINS = {
+    "prod": {
+        "powerAutomate": "https://make.powerautomate.com",
+        "powerApps": "https://make.powerapps.com",
+        "copilotStudio": "https://copilotstudio.microsoft.com",
+    },
+    "preprod": {
+        "powerAutomate": "https://make.preprod.powerautomate.com",
+        "powerApps": "https://make.preprod.powerapps.com",
+        "copilotStudio": "https://copilotstudio.preprod.microsoft.com",
+    },
+    "test": {
+        "powerAutomate": "https://make.test.powerautomate.com",
+        "powerApps": "https://make.test.powerapps.com",
+        "copilotStudio": "https://copilotstudio.test.microsoft.com",
+    },
+}
 ADMIN_PHASES = {
     "preflight",
     "plugin-prerequisites",
@@ -146,6 +163,59 @@ def normalize_instance_name(value: str) -> str:
             "https://<instance>.service-now.com URL."
         )
     return hostname.casefold()
+
+
+def maker_portal_links(
+    context: dict[str, Any],
+    *,
+    instance_name: str | None = None,
+) -> dict[str, dict[str, str]]:
+    ring = str(context["environment"].get("ring") or "")
+    origins = PORTAL_ORIGINS.get(ring)
+    if origins is None:
+        raise ServiceNowConnectError(
+            f"Unsupported Power Platform ring for maker links: {ring!r}."
+        )
+    environment_id = str(uuid.UUID(context["environment"]["id"]))
+    agent_id = str(uuid.UUID(context["agent"]["id"]))
+    links = {
+        "entra": {
+            "label": "Open Microsoft Entra admin center",
+            "url": "https://entra.microsoft.com/",
+        },
+        "powerAutomateConnections": {
+            "label": "Open connections for this environment",
+            "url": (
+                f"{origins['powerAutomate']}/environments/"
+                f"{environment_id}/connections"
+            ),
+        },
+        "powerApps": {
+            "label": "Open Power Apps",
+            "url": f"{origins['powerApps']}/",
+        },
+        "copilotStudioAgent": {
+            "label": "Open Employee Self-Service (HR) in Copilot Studio",
+            "url": (
+                f"{origins['copilotStudio']}/environments/{environment_id}/"
+                f"copilots/{agent_id}/details?agentBackend=cosmos"
+            ),
+        },
+    }
+    if instance_name:
+        normalized_instance = normalize_instance_name(instance_name)
+        links["serviceNowInstance"] = {
+            "label": "Open this ServiceNow instance",
+            "url": f"https://{normalized_instance}.service-now.com/",
+        }
+        links["hrCorePlugin"] = {
+            "label": "Open HR Service Delivery Core",
+            "url": (
+                f"https://{normalized_instance}.service-now.com/now/"
+                "app-manager/home/plugin/id/com.sn_hr_core/details"
+            ),
+        }
+    return links
 
 
 def required_servicenow_prerequisites(
@@ -1528,6 +1598,10 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
         ),
         "connectionCandidates": user_login_connections,
         "entraClientId": client_id,
+        "links": maker_portal_links(
+            context,
+            instance_name=instance_name,
+        ),
         "limitations": [
             "ServiceNow plugin and OIDC security objects require admin "
             "confirmation when no supported read-only API is available.",
@@ -1625,6 +1699,14 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "components": summary,
+        "links": maker_portal_links(
+            context,
+            instance_name=(
+                _admin_setup(
+                    _load_lifecycle_state(context, components)
+                )["preflight"].get("instanceName")
+            ),
+        ),
     }
     if not offline:
         connectivity = _connectivity_client(context)

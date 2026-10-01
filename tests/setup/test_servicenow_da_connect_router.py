@@ -128,22 +128,30 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "which situation matches" not in preflight
     assert "--scenario" not in preflight
     assert "instanceInputRequired" in preflight
+    assert (
+        "[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})"
+        in preflight
+    )
+    assert preflight.count(
+        "[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})"
+    ) == 2
     assert "Connected physical connection does not prove" in preflight
     assert 'ACTION_RESULT = "waiting"' in preflight
     assert "Local state absence is not evidence" in preflight
     assert "com.sn_hr_core" in plugins
-    assert (
-        "https://{instanceName}.service-now.com/now/app-manager/home/plugin/"
-        "id/com.sn_hr_core/details"
-    ) in plugins
     assert "Is HR Service Delivery Core installed and Active?" in plugins
     assert "Choices: **Yes**, **No**, **Not sure**" in plugins
+    assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
         plugins
     )
     assert "Multi-Provider SSO" not in plugins
     assert "ITSM must not inherit" in plugins
     assert "Never run `az ad app create`" in entra
+    assert (
+        "[Open Microsoft Entra admin center](https://entra.microsoft.com/)"
+        in entra
+    )
     assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra
     assert "ESS Copilot - ServiceNow OIDC" in entra
     assert "Application Administrator" in entra
@@ -169,6 +177,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Configure an OIDC provider to verify ID tokens" in oidc
     assert "Multi-Provider SSO" in oidc
     assert "structured response such as `upn, user_name`" in oidc
+    assert (
+        "[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})" in oidc
+    )
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc
     assert "Do not create a test user" in oidc
@@ -184,10 +195,22 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "configure-missing" not in preflight
     assert "automatically\n  reuse it" in credential
     assert "wrong Instance Name, Resource URI, or auth mode" in credential
+    assert (
+        "[Open connections for this environment]"
+        "({POWER_AUTOMATE_CONNECTIONS_URL})"
+    ) in credential
+    assert "[Open Power Apps]({POWER_APPS_URL})" in credential
     assert "inspect-publish" in publish
     assert "reconcile-publish-receipt" in publish
     assert "It never publishes or mutates the remote agent" in publish
     assert 'ACTION_RESULT = "recorded"' in publish
+    agent_link = (
+        "[Open Employee Self-Service (HR) in Copilot Studio]"
+        "({COPILOT_STUDIO_AGENT_URL})"
+    )
+    for action in (topics, agent, parameter, publish, test):
+        assert action.count(agent_link) == 1
+        assert "tab-specific URL" in action
     assert "ask exactly one question" in plugins
     assert "pause exactly once" in entra
     assert "pause exactly once" in oidc
@@ -204,3 +227,30 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     for action in (preflight, plugins, entra, oidc, credential):
         assert "do not ask again" in action
         assert "completionStatuses" in action
+
+    combined = (
+        skill
+        + preflight
+        + plugins
+        + entra
+        + oidc
+        + credential
+        + topics
+        + agent
+        + parameter
+        + publish
+        + test
+    )
+    assert "portal /sp" not in combined
+    assert "/api/now/table/" not in combined
+    assert "app registrations/" not in combined.casefold()
+    assert "/connections/" not in credential.replace(
+        "{POWER_AUTOMATE_CONNECTIONS_URL}",
+        "",
+    )
+
+    assert (
+        "Microsoft Learn: ServiceNow for Employee Self-Service" in skill
+    )
+    assert "ServiceNow connector actions" in skill
+    assert "ServiceNow connector known issues" in skill

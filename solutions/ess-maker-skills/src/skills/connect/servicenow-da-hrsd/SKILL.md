@@ -25,6 +25,12 @@ report the old PR behavior, current evidence, proposed deviation, and impact
 for a user decision. The explicit DA-GA scope exclusions above and the
 `email`/`upn` optional-claim requirement are already approved decisions.
 
+Secondary help references (PR #217 remains authoritative):
+
+- [Microsoft Learn: ServiceNow for Employee Self-Service](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow)
+- [ServiceNow connector actions](https://learn.microsoft.com/en-us/connectors/service-now/#actions)
+- [ServiceNow connector known issues](https://learn.microsoft.com/en-us/connectors/service-now/#known-issues-and-limitations)
+
 Resolve `AGENT_SLUG` from `.local/config.json` (`activeAgent`, falling back to
 `agent.slug`). Then read `src/skills/connect/shared/lifecycle-runner.md` and
 follow it with:

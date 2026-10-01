@@ -29,24 +29,29 @@ return corrected bundled evidence.
 
 ## Complete admin instructions
 
-1. Resolve the single-tenant app by persisted Application client ID first,
+Open the stable portal root once:
+
+[Open Microsoft Entra admin center](https://entra.microsoft.com/)
+
+1. Open `Identity` → `Applications` → `App registrations`. Resolve the
+   single-tenant app by persisted Application client ID first,
    then by PR #217's deterministic display name
    `ESS Copilot - ServiceNow OIDC (<instance-name>)`. Automatically reuse one
    exact valid app. If multiple exact matches exist, ask the Maker to select
    only among those matches. Only when no valid match exists, open
    **Identity -> Applications -> App registrations -> New registration** and
    create it; no redirect URI is required.
-2. In **Token configuration -> Add optional claim -> Access**, add `email`
+2. In `Token configuration` → `Add optional claim` → `Access`, add `email`
    and `upn`.
-3. In **Expose an API**, set Application ID URI to
+3. In `Expose an API`, set Application ID URI to
    `api://<application-client-id>` and add an enabled delegated
    `user_impersonation` scope.
-4. In **Authorized client applications**, add ServiceNow connector app
+4. In `Authorized client applications`, add ServiceNow connector app
    `c26b24aa-7874-4e06-ad55-7d06b1f79b63` and select the exact
    `user_impersonation` scope.
-5. In **API permissions**, add Microsoft Graph delegated permissions
+5. In `API permissions`, add Microsoft Graph delegated permissions
    `openid`, `profile`, and `User.Read`.
-6. Select **Grant admin consent** for the tenant.
+6. Select `Grant admin consent` for the tenant.
 
 ## Completion signal and evidence
 

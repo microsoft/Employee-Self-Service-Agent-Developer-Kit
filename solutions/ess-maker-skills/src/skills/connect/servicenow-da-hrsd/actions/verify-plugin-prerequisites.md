@@ -16,9 +16,11 @@ not a checklist-item question.
 
 ## Complete admin instructions
 
-Open this instance-specific plugin page:
+Open the instance-specific plugin page returned by preflight discovery:
 
-`https://{instanceName}.service-now.com/now/app-manager/home/plugin/id/com.sn_hr_core/details`
+[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})
+
+Use the exact URL from preflight discovery `links.hrCorePlugin.url`.
 
 Confirm **HR Service Delivery Core** is installed and Active:
 

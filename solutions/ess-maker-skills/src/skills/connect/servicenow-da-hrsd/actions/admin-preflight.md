@@ -47,7 +47,12 @@ or connection is absent. Never create, patch, or recreate a remote object from
 this action.
 
 If `instanceInputRequired` is `false`, briefly summarize what was found and do
-not ask a progress/scenario question.
+not ask a progress/scenario question. When discovery returned
+`links.serviceNowInstance`, show its descriptive link once:
+
+[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})
+
+Use the exact URL from `links.serviceNowInstance.url`.
 
 Only when `instanceInputRequired` is `true`, use one standalone
 `vscode_askQuestions` free-form question for the public ServiceNow HTTPS
@@ -60,6 +65,10 @@ answer, persist the normalized instance and refresh discovery:
 python scripts/connect_servicenow_da.py record-preflight --instance-url <https://instance.service-now.com>
 python scripts/connect_servicenow_da.py inspect-admin-setup
 ```
+
+If the refreshed result contains `links.serviceNowInstance`, show the same
+[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL}) link once using its
+exact URL.
 
 Return `ACTION_RESULT = "recorded"` after discovery is persisted. The
 subsequent plugin, Entra, OIDC, and credential phases independently reverify

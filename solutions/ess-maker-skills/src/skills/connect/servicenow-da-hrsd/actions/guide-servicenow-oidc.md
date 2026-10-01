@@ -23,15 +23,21 @@ requires one new complete OIDC handoff.
 
 ## Complete admin instructions
 
-1. Open **All -> System OAuth -> Application Registry -> New** and confirm
-   **Configure an OIDC provider to verify ID tokens** is available. If it is
+Open the stable instance root once:
+
+[Open this ServiceNow instance]({SERVICENOW_INSTANCE_URL})
+
+Use the exact URL from preflight discovery `links.serviceNowInstance.url`.
+
+1. Open `All` → `System OAuth` → `Application Registry` → `New` and confirm
+   `Configure an OIDC provider to verify ID tokens` is available. If it is
    unavailable, enable the tenant-supported OIDC or Multi-Provider SSO
    capability before continuing.
-2. From the profile menu, select **Elevate role** and elevate to
+2. From the profile menu, select `Elevate role` and elevate to
    `security_admin`. If **New** is missing in the security configuration, the
    role is not elevated.
-3. Open **All -> System OAuth -> Application Registry -> New -> Configure an
-   OIDC provider to verify ID tokens**.
+3. Return to `All` → `System OAuth` → `Application Registry` → `New` →
+   `Configure an OIDC provider to verify ID tokens`.
 4. Reuse the exact valid ESS OIDC entity when the ServiceNow Admin confirms it
    matches the verified App A and settings below. Otherwise create or repair
    the missing or unhealthy entity:
@@ -40,17 +46,17 @@ requires one new complete OIDC handoff.
      value for this flow; the admin enters a tenant-approved placeholder
      locally and never returns or persists it;
    - entity Active.
-5. In **OAuth OIDC Provider Configuration**, set:
+5. In `OAuth OIDC Provider Configuration`, set:
    - metadata URL =
      `https://login.microsoftonline.com/<tenant-id>/.well-known/openid-configuration`;
    - cache lifespan = `120`;
    - Application = `Global`;
    - JTI verification = disabled.
-6. Set **User Claim** and **User Field**. Prefer `upn` mapped to the
+6. Set `User Claim` and `User Field`. Prefer `upn` mapped to the
    ServiceNow field containing the same UPN (commonly `user_name` or `email`).
    An evidence-based alternative is allowed only when claim and field values
    match exactly.
-7. Open **All -> User Administration -> Users** and confirm a real signed-in
+7. Open `All` → `User Administration` → `Users` and confirm a real signed-in
    test user has one matching Active record. Do not return the employee's
    identifier to the skill. Do not create a test user as part of this skill.
 

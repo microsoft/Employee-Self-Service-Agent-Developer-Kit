@@ -52,6 +52,23 @@ Show the exact field table from the output:
 - **Resource URI:** the verified App A Application client ID; never
   `api://<client-id>`, the app object ID, or the connector application ID.
 
+Use the ring-aware link returned by `inspect-admin-setup` as the primary
+destination:
+
+[Open connections for this environment]({POWER_AUTOMATE_CONNECTIONS_URL})
+
+Use `links.powerAutomateConnections.url` from `inspect-admin-setup`.
+
+If that page is unavailable, use the one alternate root:
+
+[Open Power Apps]({POWER_APPS_URL})
+
+Use `links.powerApps.url`; never substitute a production origin for a
+non-production ring.
+
+Then select the exact environment, open `Connections`, and choose
+`New connection`.
+
 Guide the Maker/Admin through Copilot Studio connection creation and Entra
 sign-in. While the completion question is pending, do not return an action
 result. If they are not finished, return `ACTION_RESULT = "waiting"`.

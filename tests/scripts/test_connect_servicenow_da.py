@@ -1134,6 +1134,83 @@ def test_normalize_instance_name_rejects_unsafe_values(value: str) -> None:
         snow.normalize_instance_name(value)
 
 
+@pytest.mark.parametrize(
+    ("ring", "power_automate", "power_apps", "copilot_studio"),
+    [
+        (
+            "prod",
+            "https://make.powerautomate.com",
+            "https://make.powerapps.com",
+            "https://copilotstudio.microsoft.com",
+        ),
+        (
+            "preprod",
+            "https://make.preprod.powerautomate.com",
+            "https://make.preprod.powerapps.com",
+            "https://copilotstudio.preprod.microsoft.com",
+        ),
+        (
+            "test",
+            "https://make.test.powerautomate.com",
+            "https://make.test.powerapps.com",
+            "https://copilotstudio.test.microsoft.com",
+        ),
+    ],
+)
+def test_maker_portal_links_are_ring_aware_and_identity_scoped(
+    ring: str,
+    power_automate: str,
+    power_apps: str,
+    copilot_studio: str,
+) -> None:
+    context = _context()
+    context["environment"]["ring"] = ring
+
+    links = snow.maker_portal_links(
+        context,
+        instance_name="dev123",
+    )
+
+    assert links["serviceNowInstance"] == {
+        "label": "Open this ServiceNow instance",
+        "url": "https://dev123.service-now.com/",
+    }
+    assert links["hrCorePlugin"] == {
+        "label": "Open HR Service Delivery Core",
+        "url": (
+            "https://dev123.service-now.com/now/app-manager/home/plugin/"
+            "id/com.sn_hr_core/details"
+        ),
+    }
+    assert links["entra"]["url"] == "https://entra.microsoft.com/"
+    assert links["powerAutomateConnections"]["url"] == (
+        f"{power_automate}/environments/{ENVIRONMENT_ID}/connections"
+    )
+    assert links["powerApps"]["url"] == f"{power_apps}/"
+    assert links["copilotStudioAgent"]["url"] == (
+        f"{copilot_studio}/environments/{ENVIRONMENT_ID}/copilots/"
+        f"{AGENT_ID}/details?agentBackend=cosmos"
+    )
+    template = "[Open Power Apps]({POWER_APPS_URL})"
+    rendered = template.replace(
+        "{POWER_APPS_URL}",
+        links["powerApps"]["url"],
+    )
+    assert rendered == f"[Open Power Apps]({power_apps}/)"
+    assert rendered.replace("https://", "").find("//") == -1
+
+
+def test_maker_portal_links_reject_unknown_ring() -> None:
+    context = _context()
+    context["environment"]["ring"] = "unknown"
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Unsupported Power Platform ring",
+    ):
+        snow.maker_portal_links(context)
+
+
 def test_plugin_requirements_are_scope_and_auth_dynamic() -> None:
     hrsd = snow.required_servicenow_prerequisites("hrsd")
     itsm = snow.required_servicenow_prerequisites("itsm")
@@ -1195,6 +1272,12 @@ def test_preflight_derives_instance_without_customer_progress_question(
     assert "fingerprint" not in with_client_id
     assert discovery["instanceName"] == "dev123"
     assert discovery["instanceInputRequired"] is False
+    assert discovery["links"]["serviceNowInstance"]["url"] == (
+        "https://dev123.service-now.com/"
+    )
+    assert discovery["links"]["powerAutomateConnections"]["url"].startswith(
+        "https://make.test.powerautomate.com/"
+    )
     assert with_client_id["entraClientId"] == APP_CLIENT_ID
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert "scenario" not in state["adminSetup"]["preflight"]
