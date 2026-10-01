@@ -21,13 +21,13 @@ from pathlib import Path
 
 
 def test_resolve_pointer_url_returns_stub_when_flag_off(monkeypatch):
-    """With the feature flag OFF (the default) the resolver MUST NOT build a
+    """With the pointer explicitly OFF the resolver MUST NOT build a
     URL, even when both ids are present. This is the safety property that
     keeps the placeholder URL from ever leaking to real makers before the
     Copilot Studio partner contract is locked."""
     import analytics_pointer
 
-    monkeypatch.delenv("ADK_ANALYTICS_POINTER", raising=False)
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "off")
 
     url, reason = analytics_pointer.resolve_pointer_url(
         env_id="env-guid", agent_id="bot-guid",
@@ -51,7 +51,10 @@ def test_resolve_pointer_url_returns_full_url_when_flag_on(monkeypatch):
     )
 
     assert reason == ""
-    assert url.startswith("https://copilotstudio.microsoft.com/")
+    assert url == (
+        "https://copilotstudio.microsoft.com/environments/"
+        "env-guid-42/copilots/bot-guid-99/analytics"
+    )
     assert "env-guid-42" in url
     assert "bot-guid-99" in url
 
@@ -90,12 +93,30 @@ def test_resolve_pointer_url_flag_off_beats_missing_ids(monkeypatch):
     is that the feature is off."""
     import analytics_pointer
 
-    monkeypatch.delenv("ADK_ANALYTICS_POINTER", raising=False)
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "off")
 
     url, reason = analytics_pointer.resolve_pointer_url(env_id="", agent_id="")
 
     assert url == ""
     assert reason == analytics_pointer.REASON_FLAG_OFF
+
+
+def test_resolve_pointer_url_uses_test_studio_origin(monkeypatch):
+    import analytics_pointer
+
+    monkeypatch.delenv("ADK_ANALYTICS_POINTER", raising=False)
+
+    url, reason = analytics_pointer.resolve_pointer_url(
+        env_id="env-guid",
+        agent_id="bot-guid",
+        studio_origin=analytics_pointer.STUDIO_ORIGIN_BY_RING["test"],
+    )
+
+    assert reason == ""
+    assert url == (
+        "https://copilotstudio.test.microsoft.com/environments/"
+        "env-guid/copilots/bot-guid/analytics"
+    )
 
 
 # --- read_association ----------------------------------------------------
@@ -215,7 +236,8 @@ def test_render_pointer_line_flag_off_mentions_flag():
     line = analytics_pointer.render_pointer_line(
         "", analytics_pointer.REASON_FLAG_OFF, reminder_framing=False,
     )
-    assert "not yet enabled" in line.lower() or "feature flag" in line.lower()
+    assert "analytics link" in line.lower()
+    assert "administrator" in line.lower()
 
 
 def test_render_pointer_line_missing_association_points_at_setup():
@@ -351,7 +373,7 @@ def test_cli_status_when_flag_off_and_no_config(monkeypatch, tmp_path: Path):
     the /analytics prompt branches on."""
     import analytics_pointer
 
-    monkeypatch.delenv("ADK_ANALYTICS_POINTER", raising=False)
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "off")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -374,6 +396,9 @@ def test_cli_show_prints_url_when_resolved(monkeypatch, tmp_path: Path):
     _write_config(cfg_path, {
         "environmentId": "env-guid-cli",
         "makerAad": "maker-cli",
+        "powerPlatformApiEndpoint": (
+            "https://example.environment.api.test.powerplatform.com"
+        ),
         "agent": {"botId": "bot-guid-cli"},
     })
 
@@ -385,3 +410,4 @@ def test_cli_show_prints_url_when_resolved(monkeypatch, tmp_path: Path):
     out = buf.getvalue()
     assert "env-guid-cli" in out
     assert "bot-guid-cli" in out
+    assert "https://copilotstudio.test.microsoft.com/" in out

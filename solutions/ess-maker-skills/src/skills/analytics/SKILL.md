@@ -37,20 +37,15 @@ message. If a branch has no Message block, stay silent and stop.
 
 ---
 
-## Case 1: feature flag OFF (`flag == "off"`)
+## Case 1: explicit opt-out (`flag == "off"`)
 
-The analytics pointer is gated behind a feature flag while the Copilot
-Studio direct-link contract is being finalized. Do not attempt to
-construct or guess a URL — the script would refuse anyway.
+The analytics link was explicitly disabled with
+`ADK_ANALYTICS_POINTER=off`. Do not substitute the Copilot Studio homepage.
 
 **Message:**
 
-Analytics pointer is not yet enabled in this build of the ADK. It is
-behind a feature flag while the Copilot Studio deep-link contract is
-being finalized.
-
-If you need your agent's analytics right now, open it manually from the
-Copilot Studio homepage: https://copilotstudio.microsoft.com/
+Your Copilot Studio analytics link isn't available in this workspace right
+now. Please contact your administrator for help accessing analytics.
 
 **End message.**
 
@@ -100,9 +95,7 @@ will fire on transient failures.
 **Message:**
 
 I couldn't validate the Copilot Studio analytics link right now. Try
-running `/analytics` again in a moment, or open Copilot Studio directly
-at https://copilotstudio.microsoft.com/ and find your agent from the
-homepage.
+running `/analytics` again in a moment.
 
 **End message.**
 

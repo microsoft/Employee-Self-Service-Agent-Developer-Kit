@@ -19,34 +19,17 @@ is no longer an entry point in this solution, so the pointer does not branch
 on an experience type or construct a CEA-specific destination.
 
 --------------------------------------------------------------------------
-CRITICAL CAVEAT — READ BEFORE TOUCHING resolve_pointer_url()
+DA DEEP-LINK CONTRACT
 --------------------------------------------------------------------------
 
-The supported Copilot Studio direct-link deep-link contract is NOT yet
-confirmed by the Copilot Studio partner team as of this session
-(2026-08-07). The PM spec explicitly forbids shipping against a
-reverse-engineered URL. Therefore this whole module ships behind a
-feature flag env var:
+The supported DA analytics URL is:
 
-    ADK_ANALYTICS_POINTER = "on" | "off"   (default: off)
+    https://copilotstudio.{ring}.microsoft.com/environments/{envId}/copilots/{agentId}/analytics
 
-When the flag is **off**, :func:`resolve_pointer_url` returns
-``("", "feature_flag_off")`` and NO URL is constructed. When the flag is
-**on**, the resolver uses the currently DOCUMENTED Copilot Studio path
-shape
-
-    https://copilotstudio.microsoft.com/environments/{envId}/bots/{agentId}/analytics
-
-which mirrors the ``/overview`` shape already validated against a live
-tenant in ``flightcheck/checks/local_files.py`` (see
-``_studio_agent_url``) and is the pattern Microsoft Learn documents as
-of this session. This is a **placeholder** pending partner contract
-confirmation on ADO PR 5465946; the whole URL construction is contained
-in :func:`resolve_pointer_url` so it can be swapped for the confirmed
-pattern (or a Copilot Studio-side redirect endpoint) in one place.
-
-Any real production rollout MUST be gated on the partner contract being
-locked. See the ADO PR for status.
+The ``ring`` segment is ``test``, ``preprod``, or empty for production. The
+resolver derives it from the configured Power Platform API endpoint. The
+``ADK_ANALYTICS_POINTER=off`` setting remains available as an explicit
+emergency opt-out, but the pointer is enabled by default.
 
 --------------------------------------------------------------------------
 STORAGE — Dataverse follow-up
@@ -92,6 +75,7 @@ import os
 import sys
 import time
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 # Mirror the sibling-import pattern the other scripts use so this works both
 # when run as ``python scripts/analytics_pointer.py`` from the solution root
@@ -104,11 +88,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 FEATURE_FLAG_ENV = "ADK_ANALYTICS_POINTER"
 STORE_ENV = "ADK_ANALYTICS_STORE"
 
-# Documented Copilot Studio path shape as of 2026-08-07. See module docstring
-# for the partner-contract caveat. Kept as a module constant so the swap point
-# is exactly one line.
-STUDIO_BASE = "https://copilotstudio.microsoft.com"
-STUDIO_ANALYTICS_PATH = "/environments/{env_id}/bots/{agent_id}/analytics"
+# Confirmed DA Copilot Studio origins by service ring.
+STUDIO_ORIGIN_BY_RING = {
+    "prod": "https://copilotstudio.microsoft.com",
+    "preprod": "https://copilotstudio.preprod.microsoft.com",
+    "test": "https://copilotstudio.test.microsoft.com",
+}
+STUDIO_ANALYTICS_PATH = "/environments/{env_id}/copilots/{agent_id}/analytics"
 
 # Unresolved-reason enum shared between resolver, telemetry, and the
 # maker-facing text. Any new reason MUST also be added to the telemetry
@@ -125,12 +111,12 @@ _DEFAULT_LOCAL_CONFIG = os.path.join(".local", "config.json")
 def _feature_flag_enabled() -> bool:
     """Return True iff the analytics pointer is ON for this process.
 
-    The flag defaults OFF because the deep-link URL shape isn't confirmed by
-    the Copilot Studio partner team yet (see module docstring). Any value in
-    the ``on / 1 / true / yes / enabled`` set turns it on.
+    The pointer defaults ON now that the DA deep-link contract is confirmed.
+    Set the environment variable to an explicit off value to suppress link
+    construction.
     """
     val = os.environ.get(FEATURE_FLAG_ENV, "").strip().lower()
-    return val in ("on", "1", "true", "yes", "enabled")
+    return val not in ("off", "0", "false", "no", "disabled")
 
 
 # --- .local/config.json reading ------------------------------------------
@@ -180,6 +166,36 @@ def _extract_agent_id(cfg: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_studio_origin(cfg: dict[str, Any]) -> str:
+    """Resolve the DA Copilot Studio origin for the configured service ring."""
+    agent = cfg.get("agent") or {}
+    if not isinstance(agent, dict):
+        agent = {}
+
+    explicit_ring = (
+        cfg.get("serviceRing")
+        or cfg.get("ring")
+        or agent.get("serviceRing")
+        or agent.get("ring")
+        or ""
+    )
+    ring = str(explicit_ring).strip().lower()
+    if ring in STUDIO_ORIGIN_BY_RING:
+        return STUDIO_ORIGIN_BY_RING[ring]
+
+    endpoint = str(
+        cfg.get("powerPlatformApiEndpoint")
+        or agent.get("powerPlatformApiEndpoint")
+        or ""
+    ).strip()
+    hostname = (urlparse(endpoint).hostname or "").lower()
+    if ".api.test.powerplatform.com" in hostname:
+        return STUDIO_ORIGIN_BY_RING["test"]
+    if ".api.preprod.powerplatform.com" in hostname:
+        return STUDIO_ORIGIN_BY_RING["preprod"]
+    return STUDIO_ORIGIN_BY_RING["prod"]
+
+
 def _extract_maker_aad(cfg: dict[str, Any]) -> str:
     """Extract the Maker AAD oid from local config, if setup captured one.
 
@@ -222,28 +238,24 @@ def read_association(
 
 # --- URL resolver --------------------------------------------------------
 
-def resolve_pointer_url(env_id: str, agent_id: str) -> tuple[str, str]:
+def resolve_pointer_url(
+    env_id: str,
+    agent_id: str,
+    *,
+    studio_origin: str = STUDIO_ORIGIN_BY_RING["prod"],
+) -> tuple[str, str]:
     """Resolve the Copilot Studio analytics deep link for one agent.
 
     Returns ``(url, unresolved_reason)``:
 
-    * ``("", "feature_flag_off")`` when :envvar:`ADK_ANALYTICS_POINTER` is not
-      enabled — this is the DEFAULT state until the partner contract is
-      locked. No URL is constructed.
+    * ``("", "feature_flag_off")`` when :envvar:`ADK_ANALYTICS_POINTER` is
+      explicitly disabled. No URL is constructed.
     * ``("", "missing_association")`` when either ``env_id`` or ``agent_id``
       is empty. The caller (/analytics or the install reminder) turns this
       into the FR7 repair message pointing at ``/setup``.
     * ``(url, "")`` when the flag is on AND both ids are present. The URL is
-      constructed from :data:`STUDIO_BASE` + :data:`STUDIO_ANALYTICS_PATH`.
-
-    **This function is a placeholder pending partner contract confirmation
-    on ADO PR 5465946.** The URL shape here matches the currently documented
-    Copilot Studio path (mirrors ``_studio_agent_url`` in
-    ``flightcheck/checks/local_files.py`` which was validated live for
-    ``/overview``). Do NOT rely on this for production without the partner
-    contract being locked. Any change to the confirmed shape belongs HERE,
-    in this one function — everything else in the module (telemetry,
-    reminder store, CLI) uses only the ``(url, reason)`` return contract.
+      constructed from the ring-specific origin and
+      :data:`STUDIO_ANALYTICS_PATH`.
 
     FR2 (click-time validation of the destination) is not implemented in this
     stub. When it is added, it should return
@@ -253,16 +265,19 @@ def resolve_pointer_url(env_id: str, agent_id: str) -> tuple[str, str]:
         return "", REASON_FLAG_OFF
     if not env_id or not agent_id:
         return "", REASON_MISSING_ASSOCIATION
-    url = STUDIO_BASE + STUDIO_ANALYTICS_PATH.format(env_id=env_id, agent_id=agent_id)
+    url = studio_origin.rstrip("/") + STUDIO_ANALYTICS_PATH.format(
+        env_id=env_id,
+        agent_id=agent_id,
+    )
     return url, ""
 
 
 # --- Maker-facing rendering ---------------------------------------------
 
 _FLAG_OFF_LINE = (
-    "Analytics pointer is not yet enabled in this build of the ADK. "
-    "This surface is behind a feature flag while the Copilot Studio direct-"
-    "link contract is being finalized. Track: ADO PR 5465946."
+    "Your Copilot Studio analytics link isn't available in this workspace "
+    "right now. Please contact your administrator for help accessing "
+    "analytics."
 )
 
 _MISSING_ASSOCIATION_LINE_PLAIN = (
@@ -538,7 +553,12 @@ def _cli_show(args: argparse.Namespace) -> int:
         )
         return 0
     _maker, env_id, agent_id = assoc
-    url, reason = resolve_pointer_url(env_id, agent_id)
+    cfg = _load_local_config(args.config)
+    url, reason = resolve_pointer_url(
+        env_id,
+        agent_id,
+        studio_origin=_extract_studio_origin(cfg),
+    )
     line = render_pointer_line(url, reason, reminder_framing=False)
     print(line)
     if url:
@@ -589,7 +609,12 @@ def _cli_status(args: argparse.Namespace) -> int:
         }
     else:
         maker, env_id, agent_id = assoc
-        url, reason = resolve_pointer_url(env_id, agent_id)
+        cfg = _load_local_config(args.config)
+        url, reason = resolve_pointer_url(
+            env_id,
+            agent_id,
+            studio_origin=_extract_studio_origin(cfg),
+        )
         completed = False
         try:
             completed = get_reminder_store().is_completed(maker, env_id, agent_id)

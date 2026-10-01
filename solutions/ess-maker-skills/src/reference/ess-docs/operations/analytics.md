@@ -12,7 +12,7 @@ command does not branch between DA and CEA analytics surfaces.
 
 ```
 Copilot Studio analytics for your agent:
-    https://copilotstudio.microsoft.com/environments/{envId}/bots/{agentId}/analytics
+    https://copilotstudio.{test|preprod|}.microsoft.com/environments/{envId}/copilots/{agentId}/analytics
 ```
 
 **When the association is missing** (no `.local/config.json`, or the
@@ -22,24 +22,18 @@ environment ID / agent ID isn't captured there yet):
 > can't build an analytics link yet. Run `/setup` to link an agent, then
 > run `/analytics` again.
 
-**When the feature flag is off** (the default for this MVP build):
+**When the link is explicitly disabled** with
+`ADK_ANALYTICS_POINTER=off`:
 
-> Analytics pointer is not yet enabled in this build of the ADK. It is
-> behind a feature flag while the Copilot Studio deep-link contract is
-> being finalized.
+> Your Copilot Studio analytics link isn't available in this workspace right
+> now. Please contact your administrator for help accessing analytics.
 
 ## Feature flag
 
-`ADK_ANALYTICS_POINTER=on` turns the resolver on. It is OFF by default.
-
-The flag exists because the direct-link URL contract for Copilot Studio
-analytics has not yet been confirmed by the Copilot Studio partner team.
-The PM spec (ADO PR 5465946) forbids shipping against a
-reverse-engineered URL, so the default-off state ensures nothing that
-depends on the unconfirmed contract can accidentally reach production.
-
-When the flag turns on for real, the `/analytics` slash command becomes
-active. There is no CEA-specific branch in the DA-GA solution.
+The resolver is ON by default. Set `ADK_ANALYTICS_POINTER=off` only to
+disable link construction. The host is selected from the configured service
+ring: `test`, `preprod`, or the empty segment for production. There is no
+CEA-specific branch in the DA-GA solution.
 
 ## Reminder state
 
@@ -58,9 +52,9 @@ new table before the ADK-side store can be wired.
 
 ## Follow-up items
 
-* **Partner contract for the deep-link URL.** ADO PR 5465946 tracks the
-  decision. Until it lands, the resolver stays behind the feature flag
-  and the URL shape must be treated as placeholder.
+* **Destination validation.** The resolver currently constructs the
+  confirmed DA analytics URL locally. Click-time destination validation
+  remains a future enhancement.
 * **Click-time destination validation (FR2).** The resolver reserves
   the `validation_failed` reason for a future check that pings the
   destination before showing it. Not implemented in the MVP.
