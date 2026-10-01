@@ -38,17 +38,14 @@ except ImportError:
 from http_errors import APIError, raise_api_error  # noqa: E402
 
 
-# Shared public client ID used across the ADK's MSAL flows. Delegated access
-# only (user_impersonation).
+# Shared public client ID used across the ADK's MSAL flows. Delegated access only.
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
-# Delegated scope for the Power Automate Flow Management API
+# Delegated scope requested by the Flow run-history inspector
 # (https://api.flow.microsoft.com). The double slash is required — the resource
-# URI ends in "/" and the scope name is appended, yielding a token whose `aud`
-# claim is `https://service.flow.microsoft.com/`. The PAC public client above is
-# broadly consented for Power Platform, so no separate app registration is
-# needed. Used by the flow run-history inspection tooling.
-FLOW_API_SCOPE = "https://service.flow.microsoft.com//user_impersonation"
+# URI https://service.flow.microsoft.com/ ends in "/" before the scope name.
+# The named delegated permission must be available to the public client above.
+FLOW_API_SCOPE = "https://service.flow.microsoft.com//Flows.Read.All"
 
 # Kit-internal state directory (token cache, component maps, config).
 # Renamed from "my/" -> ".local/" in PR #2 to separate kit-internal state
@@ -386,9 +383,9 @@ def get_flow_token(env_url):
     Management API (https://api.flow.microsoft.com) needs a different audience,
     so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using the same
     public client, tenant, and on-disk token cache. MSAL keys cache entries by
-    scope, so the Flow token coexists with any Dataverse token — a silent
-    acquisition succeeds without re-prompting once either has been obtained in
-    the same tenant.
+    scope, so the Flow token coexists with any Dataverse token. Silent
+    acquisition is attempted first; interactive sign-in is still needed if
+    the requested permission cannot be acquired silently.
 
     ``env_url`` is used only to discover the tenant to sign into; the Flow scope
     itself is tenant-global.

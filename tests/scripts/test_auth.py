@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import responses
@@ -270,10 +271,12 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
 
         def acquire_token_silent(self, scopes, account):
             assert self.instance == 0
+            assert scopes == ["https://example.crm.dynamics.com/user_impersonation"]
             return {"access_token": "stale-token"}
 
         def acquire_token_interactive(self, scopes, prompt):
             assert self.instance == 1
+            assert scopes == ["https://example.crm.dynamics.com/user_impersonation"]
             return {"access_token": "fresh-token"}
 
         def remove_account(self, account):
@@ -300,6 +303,119 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     assert (local / ".token_cache.bin").read_text(
         encoding="utf-8"
     ) == "refreshed"
+
+
+@pytest.fixture
+def flow_auth(tmp_path, monkeypatch, fake_tenant_id, isolate_token_cache):
+    import auth
+
+    monkeypatch.chdir(tmp_path)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / ".token_cache.bin").write_text("cached", encoding="utf-8")
+    cache = Mock(has_state_changed=True)
+    cache.serialize.return_value = "refreshed-flow-cache"
+    app = Mock()
+    app.get_accounts.return_value = [
+        {"home_account_id": "first-account"},
+        {"home_account_id": "second-account"},
+    ]
+    create_app = Mock(return_value=app)
+    discover = Mock(return_value=fake_tenant_id)
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", Mock(return_value=cache))
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", create_app)
+    monkeypatch.setattr(auth, "discover_tenant", discover)
+    return app, cache, create_app, discover
+
+
+@pytest.mark.parametrize(
+    "has_accounts,silent_result",
+    [
+        pytest.param(True, {"access_token": "cached-flow-token"}, id="silent-hit"),
+        pytest.param(True, None, id="silent-miss"),
+        pytest.param(True, {"error": "interaction_required"}, id="silent-error"),
+        pytest.param(False, None, id="no-account"),
+    ],
+)
+def test_get_flow_token_requests_named_scope(
+    flow_auth, dataverse_url, fake_tenant_id, tmp_path, has_accounts, silent_result
+) -> None:
+    import auth
+
+    app, cache, create_app, discover = flow_auth
+    if not has_accounts:
+        app.get_accounts.return_value = []
+    app.acquire_token_silent.return_value = silent_result
+    app.acquire_token_interactive.return_value = {"access_token": "interactive-flow-token"}
+
+    token = auth.get_flow_token(dataverse_url)
+
+    discover.assert_called_once_with(dataverse_url)
+    create_app.assert_called_once_with(
+        "417219b4-3a7d-42a2-bdb1-972bd8281a02",
+        authority=f"https://login.microsoftonline.com/{fake_tenant_id}",
+        token_cache=cache,
+    )
+    cache.deserialize.assert_called_once_with("cached")
+    if has_accounts:
+        app.acquire_token_silent.assert_called_once_with(
+            ["https://service.flow.microsoft.com//Flows.Read.All"],
+            account={"home_account_id": "first-account"},
+        )
+    else:
+        app.acquire_token_silent.assert_not_called()
+    if silent_result and "access_token" in silent_result:
+        assert token == "cached-flow-token"
+        app.acquire_token_interactive.assert_not_called()
+    else:
+        assert token == "interactive-flow-token"
+        app.acquire_token_interactive.assert_called_once_with(
+            ["https://service.flow.microsoft.com//Flows.Read.All"],
+            prompt="select_account",
+        )
+    assert (tmp_path / ".local" / ".token_cache.bin").read_text(
+        encoding="utf-8"
+    ) == "refreshed-flow-cache"
+
+
+def test_get_flow_token_failure_does_not_retry_legacy_scope(
+    flow_auth, dataverse_url, tmp_path, capsys
+) -> None:
+    import auth
+
+    app, cache, _, _ = flow_auth
+    app.acquire_token_silent.return_value = None
+    app.acquire_token_interactive.return_value = {
+        "error": "invalid_scope",
+        "error_description": "private tenant details",
+    }
+
+    with pytest.raises(SystemExit) as exc:
+        auth.get_flow_token(dataverse_url)
+
+    assert exc.value.code == 1
+    app.acquire_token_silent.assert_called_once_with(
+        ["https://service.flow.microsoft.com//Flows.Read.All"],
+        account={"home_account_id": "first-account"},
+    )
+    app.acquire_token_interactive.assert_called_once_with(
+        ["https://service.flow.microsoft.com//Flows.Read.All"],
+        prompt="select_account",
+    )
+    output = capsys.readouterr().out
+    assert "Flow authentication failed (invalid_scope)" in output
+    assert "Verify you have access" in output
+    assert "private tenant details" not in output
+    cache.serialize.assert_not_called()
+    assert (tmp_path / ".local" / ".token_cache.bin").read_text(
+        encoding="utf-8"
+    ) == "cached"
+
+
+def test_flow_admin_scope_remains_default() -> None:
+    from flightcheck.pp_admin_client import FLOW_SCOPE
+
+    assert FLOW_SCOPE == "https://service.flow.microsoft.com//.default"
 
 
 def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
