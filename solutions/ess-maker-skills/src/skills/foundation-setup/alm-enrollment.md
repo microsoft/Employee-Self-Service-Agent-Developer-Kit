@@ -2,16 +2,9 @@
 
 # Optional ALM Enrollment
 
-Use this shared path only for one exact native-agent target. Never enroll every unresolved inventory row, infer enrollment from a route 404, or use this path for solution-backed agents, successful native imports, or a Prod-to-Dev relationship that already proves the ALM family.
+Use this shared path only after selected-agent product reconciliation has established one exact supported native-agent identity and direct inspection returned `alm.isEnrolled: false`. Never enroll an unresolved inventory row, infer enrollment from an HTTP failure, or use this path for solution-backed agents, successful native imports, or a Prod-to-Dev relationship that already proves the ALM family.
 
-Enter this path when either condition is observed:
-
-- **Missing authoring route:** selected-agent product reconciliation established the exact native agent, and `inspect-agent` returned `routeStatus: not-established` with `alm.isEnrolled: false` from the direct Swagger-defined `MinimalBotCard` contract.
-- **Unresolved exact native candidate:** the maker selected one exact `realmNotEstablishedAgents` inventory identity whose native collection row returned the exact BotEntity; the native product-line probe returned `not-found` at `agent-lookup`; neither probe returned `found`, `authentication-required`, or `access-denied`; and the other probe returned `not-found` or `uncertain`. This condition permits the enrollment choice, then the bounded `ensure-alm` operation only after the maker confirms it. That operation must validate the exact fetched BotEntity identity before its one possible write. Do not describe the agent as verified, supported, Dev, Prod, or enrolled before that validation succeeds.
-
-An externally supplied URL whose identity probes did not return `found` does not qualify for the unresolved-candidate exception. Follow the stopped-result recovery in `product-line-reconciliation.md` without presenting the enrollment message or running `ensure-alm`.
-
-In either case, explain that setup cannot currently use an ALM authoring route for this exact agent. Do not say that the agent itself is unusable.
+Enter this path only when `inspect-agent` returned `routeStatus: not-established` with `alm.isEnrolled: false` from the direct Swagger-defined `MinimalBotCard` contract. Explain that setup cannot currently use an ALM authoring route for this exact agent. Do not say that the agent itself is unusable.
 
 Send this exact Message block:
 
@@ -52,8 +45,6 @@ Parse `DA_ALM_ENROLLMENT_ANNOTATIONS_JSON:` and its response body when present, 
 Continue only when the final result reports `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. The result proves only the persisted setting; it does not prove route readiness, attachment, publication, or deployment.
 
 For a rejected precondition or update, preserve the HTTP status, service error code, request ID, and redacted response evidence and stop without attachment. For an uncertain write, do not rerun `ensure-alm`. The operation performs one authoritative component read-back: continue only when its final result proves `persistedValue: true`; otherwise preserve the redacted transport exception chain and stop without another write or attachment.
-
-When this path began from an unresolved exact native candidate, rerun selected-agent product reconciliation after successful persisted read-back. Continue only if it now establishes a supported native identity. If identity remains unresolved, state that enrollment persisted but setup still could not establish the agent's supported product identity, and stop.
 
 Then run:
 
@@ -102,5 +93,3 @@ The explicit flag authorizes only non-mutating local attachment after the maker 
 On `connectionStatus: workspace-ready`, continue through the native FlightCheck maintenance and completion contract in `da-existing-dev.md`. Preserve any exact validation or component-fetch failure and stop without reinterpreting it as an ALM requirement.
 
 When the caller requested an ALM lifecycle operation such as package replacement, import, export, promotion, or realm-family management, skipping enrollment does not authorize that operation. Return to the caller without a write or attachment unless the maker separately selected the local-authoring continuation. The caller must preserve the lifecycle blocker and its own recovery choices.
-
-When this path began from an unresolved exact native candidate and product reconciliation did not establish a supported native identity, do not attach. State that enrollment was skipped and the agent was not changed, preserve the unresolved identity evidence, and use the stopped-result recovery from `product-line-reconciliation.md`. The blocker is unresolved product identity, not missing ALM enrollment.

@@ -151,18 +151,14 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
     assert "When both probes returned `not-found`" in reconciliation
     assert "Preserve a backend-hint mismatch as internal evidence" in reconciliation
     assert _ALM_ENROLLMENT.is_file()
-    assert "## Preview optional ALM enrollment" in reconciliation
-    assert "Do not apply this exception to an externally supplied agent URL." in (
-        reconciliation
-    )
+    assert "## Preview optional ALM enrollment" not in reconciliation
+    assert "Unresolved exact native candidate" not in enrollment
     assert "current request supplied one exact Copilot Studio agent URL" not in (
         reconciliation
     )
-    assert "alm-enrollment.md" in reconciliation
-    assert (
-        "An externally supplied URL whose identity probes did not return `found` "
-        "does not qualify"
-    ) in normalized_enrollment
+    assert "selected-agent product reconciliation has established one exact" in (
+        normalized_enrollment
+    )
     assert "Continue (Recommended)" in enrollment
     assert "Skip enrollment" in enrollment
     assert (
@@ -179,7 +175,6 @@ def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
         "cannot prepare a local authoring workspace without an ALM authoring route"
         not in normalized_enrollment
     )
-    assert "rerun selected-agent product reconciliation" in normalized_enrollment
     assert "For resolved `dev`, return to the caller's exact Dev continuation" in (
         normalized_enrollment
     )
