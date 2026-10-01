@@ -36,11 +36,16 @@ Open the stable portal root once:
 1. Open `Identity` → `Applications` → `App registrations`. Resolve the
    single-tenant app by persisted Application client ID first,
    then by PR #217's deterministic display name
-   `ESS Copilot - ServiceNow OIDC (<instance-name>)`. Automatically reuse one
-   exact valid app. If multiple exact matches exist, ask the Maker to select
-   only among those matches. Only when no valid match exists, open
-   **Identity -> Applications -> App registrations -> New registration** and
-   create it; no redirect URI is required.
+   `ESS Copilot - ServiceNow OIDC (<instance-name>)`.
+   - If one exact app exists and is healthy, reuse it.
+   - If one exact app exists but any required setting below is missing or
+     unhealthy, repair that same app; do not create a duplicate.
+   - If multiple exact matches exist, the Entra admin resolves the intended
+     app inside this same high-level handoff and returns the selected client ID
+     only with the final completion response. Do not add an intermediate
+     selection pause.
+   - Only when no exact app exists, select `New registration` and create it;
+     no redirect URI is required.
 2. In `Token configuration` → `Add optional claim` → `Access`, add `email`
    and `upn`.
 3. In `Expose an API`, set Application ID URI to

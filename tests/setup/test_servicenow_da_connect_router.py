@@ -116,6 +116,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-parameter-sharing --status enabled" in parameter
     assert "record-parameter-sharing --status not-exposed" in parameter
     assert 'ACTION_RESULT = "recorded"' in test
+    assert "List my open HR cases" in test
+    assert "--prompt-category list-my-open-hr-cases" in test
+    assert "--failure-category" in test
+    assert "never store response text, case data, URLs" in test
+    assert "--prompt " not in test
+    assert "--details" not in test
     assert "safely rolled-back update is still a failed action" in topics
     assert "committed" in topics
     assert "already-active" in topics
@@ -154,6 +160,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "c26b24aa-7874-4e06-ad55-7d06b1f79b63" in entra
     assert "ESS Copilot - ServiceNow OIDC" in entra
+    assert "repair that same app; do not create a duplicate" in entra
+    assert "Do not add an intermediate\n     selection pause" in entra
+    assert "Only when no exact app exists" in entra
     assert "Application Administrator" in entra
     assert "Cloud Application Administrator" in entra
     assert "Privileged Role Administrator" in entra
@@ -219,6 +228,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "configure-missing" not in preflight
     assert "automatically\n  reuse it" in credential
     assert "wrong Instance Name, Resource URI, or auth mode" in credential
+    assert "use its `Repair`, `Fix connection`, or sign-in action" in (
+        credential
+    )
+    assert "Only when no exact candidate exists" in credential
     assert (
         "[Open connections for this environment]"
         "({POWER_AUTOMATE_CONNECTIONS_URL})"

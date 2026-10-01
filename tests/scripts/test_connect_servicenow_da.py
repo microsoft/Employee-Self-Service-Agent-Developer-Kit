@@ -1978,18 +1978,55 @@ def test_record_test_attestation_persists_result(
 
     result = snow.record_test_attestation(
         context,
-        prompt="Show my HR cases",
+        prompt_category="list-my-open-hr-cases",
         result="pass",
-        details="Returned the case list.",
+        failure_category=None,
     )
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result["result"] == "pass"
-    assert state["evidence"]["test"]["prompt"] == "Show my HR cases"
+    assert state["evidence"]["test"]["promptCategory"] == (
+        "list-my-open-hr-cases"
+    )
+    assert "prompt" not in state["evidence"]["test"]
+    assert "details" not in state["evidence"]["test"]
     assert (
         state["evidence"]["test"]["binding"]["publishedComponentHash"]
         == snow._component_hash(components)
     )
+
+
+@pytest.mark.parametrize(
+    ("prompt_category", "result", "failure_category", "message"),
+    [
+        ("free-form-prompt", "pass", None, "privacy-safe"),
+        (
+            "list-my-open-hr-cases",
+            "pass",
+            "permission",
+            "cannot have a failure category",
+        ),
+        (
+            "list-my-open-hr-cases",
+            "fail",
+            None,
+            "requires a bounded failure category",
+        ),
+    ],
+)
+def test_record_test_attestation_rejects_unbounded_or_inconsistent_evidence(
+    prompt_category: str,
+    result: str,
+    failure_category: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(snow.ServiceNowConnectError, match=message):
+        snow.record_test_attestation(
+            _context(),
+            prompt_category=prompt_category,
+            result=result,
+            failure_category=failure_category,
+        )
 
 
 def test_legacy_state_migration_is_idempotent_and_preserves_source(

@@ -1,9 +1,15 @@
 {
-  "contractRevision": 3,
+  "contractRevision": 4,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
   "attestedRoleScope": "lifecycle",
+  "planRoles": [
+    "ESS Maker / Agent Developer",
+    "ServiceNow Admin / security_admin",
+    "Microsoft Entra Application Administrator or higher",
+    "Power Platform Maker / Admin"
+  ],
   "stateMigrationCommand": "python scripts/connect_servicenow_da.py migrate-state",
   "detect": {
     "checkpoint": "SN-DA-HRSD-PKG-001",

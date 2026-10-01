@@ -261,7 +261,9 @@ def _write_state(root: Path, components: dict) -> None:
                         "completedAt": "2026-09-28T00:00:00Z",
                     },
                     "test": {
+                        "promptCategory": "list-my-open-hr-cases",
                         "result": "pass",
+                        "failureCategory": None,
                         "binding": {
                             "publishedComponentHash": component_hash,
                         },
@@ -403,6 +405,96 @@ def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(
         if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
     )
     assert publish.status == Status.NOT_CONFIGURED.value
+
+
+@pytest.mark.parametrize(
+    "test_record",
+    [
+        {
+            "prompt": "Show case ABC-123 for Jane Doe",
+            "details": "Sensitive response",
+            "result": "pass",
+        },
+        {
+            "promptCategory": "unknown",
+            "result": "pass",
+            "failureCategory": None,
+        },
+        {
+            "promptCategory": "list-my-open-hr-cases",
+            "result": "pass",
+            "failureCategory": "permission",
+        },
+    ],
+)
+def test_test_checkpoint_rejects_legacy_or_unbounded_evidence(
+    monkeypatch,
+    tmp_path: Path,
+    test_record: dict,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    test_record["binding"] = {
+        "publishedComponentHash": snow._component_hash(components)
+    }
+    state["evidence"]["test"] = test_record
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        row
+        for row in run_servicenow_da_hrsd_checks(_runner(components))
+        if row.checkpoint_id == "SN-DA-HRSD-TEST-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "privacy-safe bounded evidence contract" in result.result
+
+
+def test_test_checkpoint_accepts_bounded_failure_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["evidence"]["test"] = {
+        "promptCategory": "list-my-open-hr-cases",
+        "result": "fail",
+        "failureCategory": "permission",
+        "binding": {
+            "publishedComponentHash": snow._component_hash(components)
+        },
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        row
+        for row in run_servicenow_da_hrsd_checks(_runner(components))
+        if row.checkpoint_id == "SN-DA-HRSD-TEST-001"
+    )
+
+    assert result.status == Status.FAILED.value
 
 
 def test_entra_phase_evaluation_uses_one_logical_read_set(

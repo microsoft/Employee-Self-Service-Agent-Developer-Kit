@@ -117,7 +117,13 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 3
+    assert contract["contractRevision"] == 4
+    assert contract["planRoles"] == [
+        "ESS Maker / Agent Developer",
+        "ServiceNow Admin / security_admin",
+        "Microsoft Entra Application Administrator or higher",
+        "Power Platform Maker / Admin",
+    ]
     assert contract["stateMigrationCommand"].endswith("migrate-state")
     assert [phase["id"] for phase in contract["phases"]] == [
         "preflight",
@@ -202,6 +208,9 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "manualAcknowledgementEvidence" not in phase
         for phase in workday["phases"]
     )
+    assert "planRoles" not in workday
+    assert "Append the contract's optional display-only `planRoles`" in runner
+    assert "they do not create a role gate" in runner
 
 
 def _matching_admin_evidence_acknowledges(

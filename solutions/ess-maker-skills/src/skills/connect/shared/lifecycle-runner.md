@@ -88,6 +88,9 @@ Build the plan from the contract, in phase order:
 - One line per phase using its `label` verbatim.
 - Collect the **union** of `requiredRole` across every `mutates: true` phase,
   de-duplicated, in the order phases appear.
+- Append the contract's optional display-only `planRoles`, de-duplicated.
+  These roles explain external admin ownership; they do not create a role gate
+  and must never be treated as authorization for an action.
 
 **Message:**
 

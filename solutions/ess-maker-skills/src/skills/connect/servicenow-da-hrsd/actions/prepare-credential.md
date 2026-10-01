@@ -31,14 +31,18 @@ Application client ID:
   Maker to choose between reuse and creating another connection.
 - If multiple exact healthy candidates match, ask the Maker to select only
   among those matches.
-- If no exact healthy candidate matches, show the missing/unhealthy evidence
-  and continue to the normal create or repair handoff below.
+- If an exact candidate exists but is unhealthy, open that existing
+  connection and use its `Repair`, `Fix connection`, or sign-in action to
+  reauthenticate it. Refetch inventory and require `Connected` plus the exact
+  auth mode, Instance Name, and Resource URI before recording it.
+- Only when no exact candidate exists, continue to the new-connection handoff
+  below.
 
 A Connected row with the wrong Instance Name, Resource URI, or auth mode is
 not reusable. Its existence also does not prove any Entra, plugin, OIDC, or
 user-mapping phase complete.
 
-For a new connection, run:
+When no exact candidate exists, run:
 
 ```text
 python scripts/connect_servicenow_da.py create

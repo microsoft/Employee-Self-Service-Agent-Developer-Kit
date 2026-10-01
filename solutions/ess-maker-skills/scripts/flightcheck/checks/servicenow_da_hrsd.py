@@ -1147,9 +1147,38 @@ def _test_result(
         and record["binding"].get("publishedComponentHash") == component_hash
         and published_hash == component_hash
     )
+    privacy_safe_shape = bool(
+        isinstance(record, dict)
+        and record.get("promptCategory") == "list-my-open-hr-cases"
+        and "prompt" not in record
+        and "details" not in record
+        and (
+            (
+                record.get("result") == "pass"
+                and record.get("failureCategory") is None
+            )
+            or (
+                record.get("result") == "fail"
+                and record.get("failureCategory")
+                in {
+                    "authentication",
+                    "permission",
+                    "empty-result",
+                    "connector",
+                    "unexpected",
+                }
+            )
+        )
+    )
     if not valid_binding:
         status = Status.NOT_CONFIGURED.value
         result = "No current Test pane evidence is bound to this publish."
+    elif not privacy_safe_shape:
+        status = Status.NOT_CONFIGURED.value
+        result = (
+            "Current Test pane evidence does not use the privacy-safe "
+            "bounded evidence contract."
+        )
     elif record.get("result") == "pass":
         status = Status.MANUAL.value
         result = "Maker recorded a passing HRSD Test pane result."

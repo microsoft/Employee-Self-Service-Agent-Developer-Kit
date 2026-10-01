@@ -2873,16 +2873,33 @@ def publish(
 def record_test_attestation(
     context: dict[str, Any],
     *,
-    prompt: str,
+    prompt_category: str,
     result: str,
-    details: str | None,
+    failure_category: str | None,
 ) -> dict[str, Any]:
-    prompt = prompt.strip()
-    if not prompt:
-        raise ServiceNowConnectError("A Test pane prompt is required.")
+    allowed_prompts = {"list-my-open-hr-cases"}
+    allowed_failures = {
+        "authentication",
+        "permission",
+        "empty-result",
+        "connector",
+        "unexpected",
+    }
+    if prompt_category not in allowed_prompts:
+        raise ServiceNowConnectError(
+            "Unsupported privacy-safe Test pane prompt category."
+        )
     if result not in {"pass", "fail"}:
         raise ServiceNowConnectError(
             "Test pane result must be pass or fail."
+        )
+    if result == "pass" and failure_category is not None:
+        raise ServiceNowConnectError(
+            "A passing Test pane result cannot have a failure category."
+        )
+    if result == "fail" and failure_category not in allowed_failures:
+        raise ServiceNowConnectError(
+            "A failing Test pane result requires a bounded failure category."
         )
     components = _agentbuilder_client(context).fetch_components(
         context["agent"]["id"]
@@ -2905,9 +2922,9 @@ def record_test_attestation(
         )
     attestation = {
         "kind": "maker-attestation",
-        "prompt": prompt,
+        "promptCategory": prompt_category,
         "result": result,
-        "details": details.strip() if details else None,
+        "failureCategory": failure_category,
         "recordedAt": _utc_now(),
         "binding": {
             "connectionId": credential["connectionId"],
@@ -3069,13 +3086,26 @@ def build_parser() -> argparse.ArgumentParser:
         "record-test",
         help="Record the maker's ServiceNow HRSD Test pane attestation.",
     )
-    test_parser.add_argument("--prompt", required=True)
+    test_parser.add_argument(
+        "--prompt-category",
+        choices=("list-my-open-hr-cases",),
+        required=True,
+    )
     test_parser.add_argument(
         "--result",
         choices=("pass", "fail"),
         required=True,
     )
-    test_parser.add_argument("--details")
+    test_parser.add_argument(
+        "--failure-category",
+        choices=(
+            "authentication",
+            "permission",
+            "empty-result",
+            "connector",
+            "unexpected",
+        ),
+    )
     subparsers.add_parser(
         "migrate-state",
         help="Migrate legacy Agent-ID ServiceNow state into lifecycle state.",
@@ -3158,9 +3188,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "record-test":
             result = record_test_attestation(
                 context,
-                prompt=args.prompt,
+                prompt_category=args.prompt_category,
                 result=args.result,
-                details=args.details,
+                failure_category=args.failure_category,
             )
         elif args.command == "migrate-state":
             result = migrate_state(context)
