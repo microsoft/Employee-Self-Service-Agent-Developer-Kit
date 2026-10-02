@@ -9,6 +9,11 @@ Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,
 agent, product, and connector names before displaying them.
 
+Read `src/skills/foundation-setup/permission-guidance.md` whenever setup opens
+Microsoft authorization, encounters denied access, names a Power Platform role,
+or hands an action to an administrator. That file owns the operation-specific
+role language and administrator handoff.
+
 ## Setup state sources
 
 - **Current setup state:** `.local/setup/config.json`
@@ -92,15 +97,41 @@ Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authen
 
 Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, `setup_alm_import.py`, and `reconcile_setup_agent.py` command in this invocation. Never infer a corp account.
 
-When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
+When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first read-only command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
-`reconcile_setup_agent.py` does not accept `--select-account`. When product-line reconciliation is the next authenticated operation after no cached account was returned or the maker selected the picker, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to every reconciliation probe with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py`.
+`reconcile_setup_agent.py` does not accept `--select-account`, and a command that may mutate remote state must not establish the selected identity. When reconciliation or a mutating operation would otherwise be the first authenticated command, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Do not use its environment rows to replace an already selected target. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to reconciliation or mutation with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py` or a mutating command.
+
+When the read-only account-establishment operation does not return an
+authenticated account, or when a returned account differs from an account the
+maker explicitly named, follow the corresponding recovery under **Microsoft
+authorization** in `permission-guidance.md` before retaining an account or
+using the read-only operation result.
 
 If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
 Present account confirmation once per setup invocation. Do not repeat it before later commands.
+
+## Confirm people and role availability for the selected path
+
+After the setup path, target environment, and Microsoft login are known,
+but before the first agent inventory, exact-agent inspection, or
+entitled-product listing, render the matching **Setup-path people and role
+walkthrough** from `permission-guidance.md`.
+
+This is an upfront planning checkpoint. It identifies the maker access required
+now and the administrator personas that may be needed later without claiming
+that every administrator is required. The maker's availability answer is not
+authorization evidence; every service operation still verifies its own access.
+
+When this file runs the first protected operation directly, complete the
+walkthrough here. When a child skill owns that operation, pass whether the
+walkthrough was completed and require the child to render it if it was not.
+Render it again when the effective setup path changes, including an
+existing-agent path entering creation or a fresh-agent collision entering
+existing-agent adoption, or after the maker changes the target environment or
+Microsoft login.
 
 ## Reconcile every selected agent
 
@@ -113,6 +144,12 @@ For a supplied Copilot Studio URL, retain its exact `agentBackend` query value a
 The account question is the confirmation for a selected account. When the maker chose the Microsoft account picker, show:
 
 > Microsoft sign-in will open. Select the account you use to access this environment. If the expected account is not shown, choose **Use another account**.
+
+Signing in does not grant environment, agent, or administrator access. Each
+requested operation verifies its own access. When authentication evidence
+explicitly identifies missing first-party application approval, follow
+**Microsoft authorization** in `permission-guidance.md`; do not use that route
+for a generic 401 or 403.
 
 If the terminal returns control while that command is waiting for the browser callback, show:
 
@@ -144,6 +181,10 @@ VS Code will ask you to approve commands that:
 - sign you in and inspect the selected environment and agent;
 - perform the setup actions you confirm and prepare the local workspace;
 - download required Microsoft components when needed.
+
+These approvals let VS Code run local commands. They do not grant Power
+Platform access, approve a Microsoft application, or assign administrator
+roles.
 
 To avoid repeated prompts, open the permissions menu below the chat input and
 select **Allow all** for this chat session. This applies to every tool used in

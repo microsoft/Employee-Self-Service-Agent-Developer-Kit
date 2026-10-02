@@ -79,10 +79,10 @@ Apply the first matching rule:
 6. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
 7. For any `found` custom or non-empty unknown observation, follow **Unsupported agent** below.
 8. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
-9. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
+9. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, render the exact-agent message under **Existing-agent discovery and access** in `permission-guidance.md`, then state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing or recommend **Environment Maker** as existing-agent access remediation.
 10. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection.
 
-Rules 1, 3, 5, 7, 8, 9, and 10 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
+Rules 1, 3, 5, 7, 8, and 10 use the same recovery choices and routes defined under **Unsupported agent**. Rule 9 instead presents **Use another account**, **Choose a different agent**, **Choose a different environment**, and **Go back**. **Use another account** retains the selected environment, agent, and ring, runs the parent account picker, rerenders **Existing-agent setup**, and then lets the session invoke both reconciliation probes again. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
 
 ## Use the compatible kit
 

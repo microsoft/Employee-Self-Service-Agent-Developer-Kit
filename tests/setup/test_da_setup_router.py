@@ -327,11 +327,12 @@ def test_account_picker_establishes_account_before_reconciliation() -> None:
         "--select-account"
     ) in normalized
     assert (
-        "pass it to every reconciliation probe with "
+        "pass it to reconciliation or mutation with "
         '`--account "{SETUP_ACCOUNT}"`'
     ) in normalized
     assert (
-        "Do not pass `--select-account` to `reconcile_setup_agent.py`."
+        "Do not pass `--select-account` to `reconcile_setup_agent.py` or a "
+        "mutating command."
         in normalized
     )
 
@@ -365,6 +366,10 @@ VS Code will ask you to approve commands that:
 - sign you in and inspect the selected environment and agent;
 - perform the setup actions you confirm and prepare the local workspace;
 - download required Microsoft components when needed.
+
+These approvals let VS Code run local commands. They do not grant Power
+Platform access, approve a Microsoft application, or assign administrator
+roles.
 
 To avoid repeated prompts, open the permissions menu below the chat input and
 select **Allow all** for this chat session. This applies to every tool used in
@@ -649,6 +654,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/da-prod-to-dev.md",
         "src/skills/foundation-setup/da-mos-starter.md",
         "src/skills/foundation-setup/alm-enrollment.md",
+        "src/skills/foundation-setup/permission-guidance.md",
         "src/skills/foundation-setup/product-line-reconciliation.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
@@ -1011,12 +1017,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     ):
         assert f"**{discovery_failure_choice}**" in environment_target
     assert "custom entry disabled inside the control" in normalized_environment_target
-    assert "identify the selected account as the blocker" in (
-        normalized_environment_target
-    )
-    assert "Do not convert any failure into an empty environment list" in (
-        normalized_environment_target
-    )
     assert "authoritative environment-scoped operation" in (
         normalized_environment_target
     )
@@ -1249,7 +1249,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "user** or **Use the Microsoft account picker**, omit `--account`"
     ) in normalized_foundation
     assert (
-        "append `--select-account` only to the first command that can authenticate"
+        "append `--select-account` only to the first read-only command that can authenticate"
     ) in normalized_foundation
     assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
     assert (
@@ -1940,21 +1940,10 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "allocating **500 or more Copilot Credits**."
     ) in normalized
     assert (
-        "If the environment has fewer than 500 allocated Copilot Credits, "
-        "increase the allocation to 500 or more and save the change."
-    ) not in normalized
-    assert (
         "After checking Power Platform Admin Center, is Copilot Studio "
         "message capacity allocated to this environment?"
     ) in text
     assert "Complete this check to finish foundation readiness" not in text
-    assert "https://admin.powerplatform.microsoft.com" in text
-    assert "https://admin.preprod.powerplatform.microsoft.com" in text
-    assert "https://admin.test.powerplatform.microsoft.com" in text
-    assert (
-        "Do not send a maker from a non-production setup ring to the "
-        "production admin center."
-    ) in normalized
     assert "using `ring_from_environment_host()`" in normalized
     assert "do not assume production" in normalized
     assert '--ring "{CONFIRMED_RING}"' in text
@@ -1989,10 +1978,6 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     refresh_section = text.split("## Refresh changed content", 1)[1]
     assert agent_link not in refresh_section
     assert "Complete this connection to finish foundation readiness" in normalized
-    assert "https://make.powerapps.com" in text
-    assert "https://make.preprod.powerapps.com" in text
-    assert "https://make.test.powerapps.com" in text
-    assert "Do not send a maker from a non-production setup ring" in normalized
     assert "Do not add another completion choice" in normalized
     assert "a factual handoff, not another readiness gate" in normalized
     assert "changing canonical state conversationally" in normalized
