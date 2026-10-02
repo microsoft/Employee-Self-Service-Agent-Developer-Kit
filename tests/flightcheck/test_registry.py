@@ -306,12 +306,12 @@ class TestTransitiveRequirements:
 
     def test_prerequisite_client_pruning_is_servicenow_opt_in(self):
         servicenow = registry.resolve("SN-DA-HRSD-TEST-001")
-        workday = registry.resolve("WD-CONN-012")
+        workday = registry.resolve("WD-RUN-001")
 
         assert servicenow.inherit_prereq_clients is False
         assert workday.inherit_prereq_clients is True
         assert registry.PP_ADMIN in registry.transitive_requirements(
-            "WD-CONN-012"
+            "WD-RUN-001"
         ).clients
 
     def test_ess_soln_uses_agentbuilder_without_dataverse(self):
