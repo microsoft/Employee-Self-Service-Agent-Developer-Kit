@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
-import re
 import tempfile
 import time
 from typing import Any, Callable, Iterator, Mapping
@@ -23,7 +22,6 @@ from workday_connect_model import (
     ADMINISTRATOR_REQUIRED_FIELDS,
     ADMINISTRATOR_SUBSTAGES,
     LEGACY_PHASE_ROWS,
-    LIFECYCLE_BLOCKER_CATEGORIES,
     LIFECYCLE_EVENT_TYPES,
     LIFECYCLE_JOURNAL_MAX_EVENTS,
     LIFECYCLE_OUTCOMES,
@@ -44,6 +42,18 @@ from workday_connect_model import (
     utc_now,
     validate_state,
     workday_saml_entity_id,
+)
+from workday_connect_migrations import (
+    UnsupportedStateSchemaError,
+    legacy_evidence,
+    legacy_phase_status,
+    normalize_package_evidence_ownership,
+    source_state_was_ready,
+    upgrade_or_migrate_state,
+)
+from workday_connect_state_policy import (
+    blocker_category as _blocker_category,
+    remediation_id as _remediation_id,
 )
 
 
@@ -97,89 +107,12 @@ _LIFECYCLE_TARGET_SCOPE_KEYS = {
     "entraTenantId",
     "workdayTenant",
 }
-_BLOCKER_CATEGORY_KEYWORDS = (
-    ("timeout", ("timeout", "timedout")),
-    (
-        "permissions",
-        (
-            "permission",
-            "access",
-            "authorization",
-            "unauthorized",
-            "consent",
-            "forbidden",
-            "role",
-        ),
-    ),
-    (
-        "auth",
-        ("auth", "credential", "signin", "sign-in", "token", "entra"),
-    ),
-    (
-        "connection",
-        ("connection", "network", "endpoint", "dns", "ssl", "http"),
-    ),
-    (
-        "validation",
-        ("validation", "contract", "evidence", "invalid"),
-    ),
-    ("state", ("state", "store", "schema", "migration", "planchanged")),
-    (
-        "platform",
-        ("platform", "preflight", "dataverse", "package", "solution"),
-    ),
-    ("runtime", ("runtime", "flow", "topic", "agent")),
-)
-_BLOCKER_CATEGORY_EXACT = {
-    "employee-authentication": "auth",
-    "workday-connection": "connection",
-    "runtime-flow": "runtime",
-    "employee-context": "validation",
-    "network": "connection",
-    "workday-access": "permissions",
-    "publish-or-agent": "runtime",
-    "unknown": "unknown",
-}
-_REMEDIATION_ID_RE = re.compile(r"^WD-E2E-\d{3}$")
-
-
 class WorkdayConnectStoreError(RuntimeError):
     """Raised when Workday connect state cannot be persisted safely."""
 
 
 class WorkdayConnectPlanChangedError(WorkdayConnectStoreError):
     """Raised when an approved plan no longer matches the current plan."""
-
-
-def _blocker_category(blocker: Mapping[str, Any] | None) -> str:
-    if not blocker:
-        return ""
-    raw = str(
-        blocker.get("category")
-        or blocker.get("failureCategory")
-        or blocker.get("errorType")
-        or "unknown"
-    ).strip().casefold()
-    if raw in LIFECYCLE_BLOCKER_CATEGORIES:
-        return raw
-    if raw in _BLOCKER_CATEGORY_EXACT:
-        return _BLOCKER_CATEGORY_EXACT[raw]
-    compact = "".join(character for character in raw if character.isalnum())
-    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
-        if any(
-            "".join(character for character in keyword if character.isalnum())
-            in compact
-            for keyword in keywords
-        ):
-            return category
-    return "unknown"
-
-
-def _remediation_id(blocker: Mapping[str, Any] | None) -> str:
-    if not blocker:
-        return ""
-    value = str(blocker.get("remediationId") or "").strip().upper()
-    return value if _REMEDIATION_ID_RE.fullmatch(value) else ""
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -541,46 +474,6 @@ def _file_lock(path: Path, timeout: float) -> Iterator[None]:
         stream.close()
 
 
-def _legacy_phase_status(
-    setup_status: Mapping[str, Any],
-    rows: tuple[str, ...],
-) -> str:
-    values = [
-        setup_status.get(row) for row in rows if isinstance(setup_status.get(row), dict)
-    ]
-    statuses = {str(value.get("state") or "pending") for value in values}
-    if values and len(values) == len(rows) and statuses == {"done"}:
-        return PhaseStatus.COMPLETE.value
-    if "blocked" in statuses:
-        return PhaseStatus.BLOCKED.value
-    if statuses & {"done", "in-progress"}:
-        return PhaseStatus.ACTIVE.value
-    return PhaseStatus.PENDING.value
-
-
-def _legacy_evidence(
-    setup_status: Mapping[str, Any],
-    rows: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    evidence = []
-    for row in rows:
-        value = setup_status.get(row)
-        if not isinstance(value, dict) or value.get("state") != "done":
-            continue
-        record = {
-            "source": "legacy-state",
-            "action": f"legacy:{row}",
-            "verifiedBy": value.get("verifiedBy"),
-        }
-        legacy_evidence = value.get("evidence")
-        if isinstance(legacy_evidence, dict):
-            for key in ("outcome", "provenance", "capturedAt"):
-                if legacy_evidence.get(key) is not None:
-                    record[key] = legacy_evidence[key]
-        evidence.append(record)
-    return evidence
-
-
 def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
     state = default_state()
     setup_status = document.get("setupStatus")
@@ -653,14 +546,14 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
 
     for phase, rows in LEGACY_PHASE_ROWS.items():
         phase_state = state["phases"][phase.value]
-        phase_state["status"] = _legacy_phase_status(setup_status, rows)
+        phase_state["status"] = legacy_phase_status(setup_status, rows)
         phase_state["completedActions"] = [
             f"legacy:{row}"
             for row in rows
             if isinstance(setup_status.get(row), dict)
             and setup_status[row].get("state") == "done"
         ]
-        phase_state["evidence"] = _legacy_evidence(setup_status, rows)
+        phase_state["evidence"] = legacy_evidence(setup_status, rows)
         if phase_state["status"] == PhaseStatus.COMPLETE.value:
             for action in PHASE_REQUIRED_ACTIONS[phase.value]:
                 if phase.value == "runtime" and action in {
@@ -1130,28 +1023,22 @@ def _block_validation_state(
 def _upgrade_or_migrate_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
-    source_version = document.get("schemaVersion")
-    if source_version == 8:
-        return upgrade_v8_state(document)
-    if source_version == 7:
-        return upgrade_v7_state(document)
-    if source_version == 6:
-        return upgrade_v6_state(document)
-    if source_version == 5:
-        return upgrade_v5_state(document)
-    if source_version == 4:
-        return upgrade_v4_state(document)
-    if source_version == 3:
-        return upgrade_v3_state(document)
-    if source_version == 2:
-        return upgrade_v2_state(document)
-    if "schemaVersion" in document:
-        raise WorkdayConnectStoreError(
-            "Unsupported Workday connect state schema version: "
-            f"{source_version!r}. Use the kit version that created this state "
-            "or restore a compatible backup."
+    try:
+        return upgrade_or_migrate_state(
+            document,
+            upgrades={
+                2: upgrade_v2_state,
+                3: upgrade_v3_state,
+                4: upgrade_v4_state,
+                5: upgrade_v5_state,
+                6: upgrade_v6_state,
+                7: upgrade_v7_state,
+                8: upgrade_v8_state,
+            },
+            migrate_legacy=migrate_legacy_state,
         )
-    return migrate_legacy_state(document)
+    except UnsupportedStateSchemaError as exc:
+        raise WorkdayConnectStoreError(str(exc)) from exc
 
 
 def _scope_invalidation_phase(changed_keys: set[str]) -> str:
@@ -1417,67 +1304,13 @@ def upgrade_v6_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_pre_v7_state(document, source_version=6)
 
 
-def _source_state_was_ready(document: Mapping[str, Any]) -> bool:
-    phases = document.get("phases")
-    return (
-        document.get("status") == "ready"
-        and isinstance(phases, Mapping)
-        and all(
-            isinstance(phases.get(definition.identifier.value), Mapping)
-            and phases[definition.identifier.value].get("status")
-            == PhaseStatus.COMPLETE.value
-            for definition in PHASE_DEFINITIONS
-        )
-    )
-
-
-def _normalize_package_evidence_ownership(
-    document: Mapping[str, Any],
-) -> dict[str, Any]:
-    migrated = copy.deepcopy(dict(document))
-    preflight = migrated["phases"]["preflight"]
-    connections = migrated["phases"]["connections"]
-    package_evidence = next(
-        (
-            copy.deepcopy(record)
-            for record in preflight.get("evidence") or []
-            if isinstance(record, Mapping)
-            and record.get("action") == "verify-package"
-        ),
-        None,
-    )
-    preflight["completedActions"] = [
-        action
-        for action in preflight.get("completedActions") or []
-        if action != "verify-package"
-    ]
-    preflight["evidence"] = [
-        record
-        for record in preflight.get("evidence") or []
-        if not (
-            isinstance(record, Mapping)
-            and record.get("action") == "verify-package"
-        )
-    ]
-    if package_evidence is not None:
-        if "verify-package" not in connections["completedActions"]:
-            connections["completedActions"].append("verify-package")
-        if not any(
-            isinstance(record, Mapping)
-            and record.get("action") == "verify-package"
-            for record in connections["evidence"]
-        ):
-            connections["evidence"].append(package_evidence)
-    return migrated
-
-
 def _upgrade_readiness_state(
     document: Mapping[str, Any],
     *,
     source_version: int,
 ) -> dict[str, Any]:
-    legacy_ready = _source_state_was_ready(document)
-    normalized = _normalize_package_evidence_ownership(document)
+    legacy_ready = source_state_was_ready(document)
+    normalized = normalize_package_evidence_ownership(document)
     state = _upgrade_structured_state(
         normalized,
         source_version=source_version,
@@ -2718,10 +2551,10 @@ class WorkdayConnectStore:
 
     def status(self) -> dict[str, Any]:
         from workday_connect_flightcheck import (
-            PHASE_REQUIRED_PROFILES,
             effective_validation_state,
             validation_input_fingerprint,
         )
+        from workday_connect_readiness_policy import PHASE_REQUIRED_PROFILES
 
         state = self.load()
         effective_state = effective_validation_state(

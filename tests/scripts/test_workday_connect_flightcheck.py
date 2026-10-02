@@ -496,6 +496,30 @@ def test_every_profile_checkpoint_has_explicit_phase_ownership():
     } <= set(_CHECKPOINT_PHASES)
 
 
+def test_connect_readiness_lookup_views_are_derived_from_policy():
+    from workday_connect_readiness_policy import (
+        CHECKPOINT_POLICIES,
+        MANUAL_EVIDENCE,
+        PHASE_ORDER,
+        PHASE_REQUIRED_PROFILES,
+        PROFILE_POLICIES,
+    )
+
+    assert PHASE_REQUIRED_PROFILES == {
+        phase_id: tuple(
+            profile_name
+            for profile_name, policy in PROFILE_POLICIES.items()
+            if policy.phase_id == phase_id
+        )
+        for phase_id in PHASE_ORDER
+    }
+    assert MANUAL_EVIDENCE == {
+        checkpoint_id: policy.manual_evidence
+        for checkpoint_id, policy in CHECKPOINT_POLICIES.items()
+        if policy.manual_evidence
+    }
+
+
 def test_run_profile_rejects_ready_contract_after_nonzero_exit(
     tmp_path,
     monkeypatch,

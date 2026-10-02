@@ -8,9 +8,12 @@ The only writable lifecycle state is:
 .local/connect/workday-da/config.json
 ```
 
-`scripts/workday_connect_store.py` owns locking, migration, validation, atomic
-writes, and phase transitions. Skills must use `scripts/workday_connect.py`;
-they must not edit this file directly or create a Markdown state mirror.
+`scripts/workday_connect_store.py` owns locking, migration backup and
+invocation, validation, atomic writes, and phase transitions.
+`scripts/workday_connect_migrations.py` owns the pure version-selection and
+legacy-normalization policy; it never reads or writes the state file. Skills
+must use `scripts/workday_connect.py`; they must not edit this file directly
+or create a Markdown state mirror.
 
 ## Schema version 9
 
