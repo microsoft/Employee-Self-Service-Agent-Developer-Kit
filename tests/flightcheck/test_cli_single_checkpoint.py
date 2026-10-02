@@ -47,6 +47,8 @@ def _args(
     invocation_source: str | None = None,
     quiet_auth: bool = False,
     ring: str | None = None,
+    compact_result: bool = False,
+    invocation_id: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -59,6 +61,8 @@ def _args(
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
         ring=ring,
+        compact_result=compact_result,
+        invocation_id=invocation_id,
     )
 
 
@@ -605,6 +609,72 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 0
 
+    def test_family_target_evaluates_category_once_and_keeps_all_members(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        target = "SN-DA-HRSD-ENTRA-*"
+        entra_ids = (
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+            "SN-DA-HRSD-ENTRA-CONSENT-001",
+        )
+        calls = 0
+        saved = {}
+
+        class _Spec:
+            category_label = "ServiceNow DA HRSD"
+            is_family = True
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [
+                    ("ServiceNow DA HRSD", self._run_category)
+                ]
+
+            @staticmethod
+            def _run_category(_runner):
+                nonlocal calls
+                calls += 1
+                return [
+                    *[
+                        _row(checkpoint_id, Status.PASSED.value)
+                        for checkpoint_id in entra_ids
+                    ],
+                    _row("SN-DA-HRSD-OIDC-001", Status.PASSED.value),
+                ]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, _output: saved.update(result=result),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args(target, tmp_path))
+
+        assert exc.value.code == 0
+        assert calls == 1
+        assert tuple(
+            result.checkpoint_id for result in saved["result"].results
+        ) == entra_ids
+
     def test_assigns_explicit_agent_slug_and_connect_config(
         self,
         tmp_path: Path,
@@ -925,6 +995,167 @@ class TestHermeticRun:
         output = capsys.readouterr().out
         assert "Single Checkpoint" not in output
         assert "Running checkpoint" not in output
+
+    def test_compact_result_is_pure_stdout_and_writes_no_report(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-001"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-hrsd"
+            profile = "hrsd"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [
+                ("Fake", lambda _runner: [_row(target, Status.MANUAL.value)])
+            ]
+
+        config_dir = tmp_path / ".local"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "activeAgent": "employee-self-service-hr",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "agents": [
+                        {
+                            "slug": "employee-self-service-hr",
+                            "botId": (
+                                "00000000-0000-4000-8000-000000002222"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "compact checkpoint must not write reports"
+            ),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert captured.out.count("\n") == 1
+        assert payload["kind"] == "checkpoint-result"
+        assert payload["target"] == target
+        assert payload["invocation"]["id"] == "invocation-123"
+        assert payload["results"][0]["status"] == Status.MANUAL.value
+        assert not (tmp_path / "out").exists()
+
+    def test_compact_result_emits_typed_error_when_no_rows(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = "FAKE-EMPTY"
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            provider = "servicenow-da-hrsd"
+            profile = "hrsd"
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+            ordered_fns = [("Fake", lambda _runner: [])]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    target,
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                    quiet_auth=True,
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload == {
+            "schemaVersion": "flightcheck.lifecycle-checkpoint.v1",
+            "kind": "checkpoint-error",
+            "target": target,
+            "error": {
+                "type": "checkpoint-execution",
+                "message": (
+                    "Checkpoint execution ended before a result contract "
+                    "was produced. Review stderr."
+                ),
+                "exitCode": 1,
+            },
+        }
+
+    def test_compact_result_never_returns_success_without_contract(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "_run_single_checkpoint",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(SystemExit(0)),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_compact_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    compact_result=True,
+                    invocation_id="invocation-123",
+                )
+            )
+
+        assert exc.value.code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["kind"] == "checkpoint-error"
+        assert payload["error"]["exitCode"] == 1
 
 
 class TestCheckpointTelemetry:

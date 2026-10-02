@@ -150,14 +150,144 @@ def test_connectivity_client_lists_environment_connections() -> None:
                 f"{ENVIRONMENT_ID}/connections"
             ),
             "params": {"api-version": "2024-10-01"},
+            "headers": client.headers,
+            "timeout": 120,
+        }
+    ]
+
+
+def test_connectivity_client_lists_connector_connections() -> None:
+    expected = {
+        "name": "connection-one",
+        "properties": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_service-now",
+            "displayName": "ServiceNow",
+            "statuses": [{"status": "Connected"}],
+            "environment": {
+                "name": ENVIRONMENT_ID,
+            },
+        },
+    }
+    session = FakeSession([FakeResponse({"value": [expected]})])
+    environment_host = (
+        f"https://{ENVIRONMENT_ID.replace('-', '')}."
+        "5.environment.api.test.powerplatform.com"
+    )
+    client = agentbuilder.ConnectivityClient(
+        "fake-token",
+        ring="test",
+        environment_host=environment_host,
+        session=session,
+    )
+
+    assert client.list_connector_connections(
+        ENVIRONMENT_ID,
+        "shared_service-now",
+    ) == [expected]
+    expected_calls = [
+        {
+            "method": "GET",
+            "url": (
+                f"{environment_host}/connectivity/connectors/"
+                "shared_service-now/connections"
+            ),
+            "params": {
+                "api-version": "1",
+                "$filter": f"environment eq '{ENVIRONMENT_ID}'",
+            },
             "headers": {
-                "Authorization": "Bearer fake-token",
+                "Authorization": "******",
                 "Accept": "application/json",
                 "x-ms-client-name": "CopilotStudio",
             },
             "timeout": 120,
         }
     ]
+    expected_calls[0]["headers"] = client.headers
+    assert session.calls == expected_calls
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "value": [
+                {
+                    "properties": {
+                        "apiId": (
+                            "/providers/Microsoft.PowerApps/apis/"
+                            "shared_workday"
+                        )
+                    }
+                }
+            ]
+        },
+        {
+            "value": [
+                {
+                    "properties": {
+                        "apiId": (
+                            "/providers/Microsoft.PowerApps/apis/"
+                            "shared_service-now"
+                        ),
+                        "environment": {
+                            "name": (
+                                "00000000-0000-4000-8000-000000009999"
+                            )
+                        },
+                    }
+                }
+            ]
+        },
+        {"value": [], "nextLink": "https://example.invalid/next"},
+    ],
+)
+def test_connector_connection_listing_fails_closed_on_mismatch(
+    payload: dict,
+) -> None:
+    session = FakeSession([FakeResponse(payload)])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token",
+        ring="test",
+        environment_host=HOST,
+        session=session,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError):
+        client.list_connector_connections(
+            ENVIRONMENT_ID,
+            "shared_service-now",
+        )
+
+
+def test_connector_error_preserves_safe_diagnostics() -> None:
+    response = FakeResponse(
+        {"error": {"code": "TooManyRequests"}},
+        status_code=429,
+        headers={
+            "Retry-After": "120",
+            "x-ms-request-id": "request-123",
+            "x-ms-correlation-id": "correlation-456",
+        },
+    )
+    client = agentbuilder.ConnectivityClient(
+        "fake-token",
+        ring="test",
+        environment_host=HOST,
+        session=FakeSession([response]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as exc_info:
+        client.list_connector_connections(
+            ENVIRONMENT_ID,
+            "shared_service-now",
+        )
+
+    error = exc_info.value
+    assert error.status_code == 429
+    assert error.retry_after == "120"
+    assert error.request_id == "request-123"
+    assert error.correlation_id == "correlation-456"
 
 
 def test_connectivity_client_rejects_invalid_collection_shape() -> None:
@@ -320,6 +450,39 @@ def test_client_uses_only_configured_environment_host() -> None:
         "Accept": "application/json",
         "Content-Type": "application/json",
         "x-ms-client-name": "CopilotStudio",
+    }
+
+
+def test_update_components_uses_native_change_set_contract() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "changeToken": "updated-token",
+                    "connectionReferenceChanges": [],
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+    change_set = {
+        "changeToken": "token",
+        "connectionReferenceChanges": [],
+    }
+
+    result = client.update_components(AGENT_ID, change_set)
+
+    assert result["changeToken"] == "updated-token"
+    assert session.calls[0]["method"] == "PUT"
+    assert session.calls[0]["json"] == change_set
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
     }
 
 
@@ -1086,6 +1249,48 @@ def test_publish_agent_uses_minimalbot_route_and_empty_json_body() -> None:
     assert call["json"] == {}
     assert call["allow_redirects"] is False
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
+
+
+def test_publish_agent_normalizes_uppercase_validation_pending() -> None:
+    session = FakeSession([FakeResponse({"ValidationPending": False})])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    result = client.publish_agent(AGENT_ID)
+
+    assert result["ValidationPending"] is False
+    assert result["validationPending"] is False
+
+
+def test_publish_agent_rejects_conflicting_validation_pending() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "ValidationPending": False,
+                    "validationPending": True,
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="conflicting ValidationPending",
+    ):
+        client.publish_agent(AGENT_ID)
 
 
 def test_publish_agent_preserves_validation_response_on_http_error() -> None:

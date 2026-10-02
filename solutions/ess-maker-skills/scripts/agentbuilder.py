@@ -15,7 +15,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import msal
 import requests
@@ -69,6 +69,8 @@ class AgentBuilderHTTPError(AgentBuilderError):
         *,
         error_code: str | None = None,
         request_id: str | None = None,
+        correlation_id: str | None = None,
+        retry_after: str | None = None,
         response: requests.Response | None = None,
     ) -> None:
         detail = f"{operation} failed with HTTP {status_code}"
@@ -78,10 +80,16 @@ class AgentBuilderHTTPError(AgentBuilderError):
             detail += "; the signed-in account is not authorized"
         if request_id:
             detail += f" [request {request_id}]"
+        if correlation_id:
+            detail += f" [correlation {correlation_id}]"
+        if retry_after:
+            detail += f" [retry-after {retry_after}]"
         super().__init__(detail)
         self.status_code = status_code
         self.error_code = error_code
         self.request_id = request_id
+        self.correlation_id = correlation_id
+        self.retry_after = retry_after
         self.response = response
 
 
@@ -534,8 +542,14 @@ def _acquire_token(
     token = result.get("access_token") if result else None
     if not token:
         error = result.get("error", "unknown_error") if result else "unknown_error"
+        description = (
+            str(result.get("error_description", "")).strip()
+            if result
+            else ""
+        )
+        detail = f": {description}" if description else ""
         raise AgentBuilderError(
-            f"AgentBuilder authentication failed ({error})."
+            f"AgentBuilder authentication failed ({error}){detail}"
         )
     if cache.has_state_changed:
         _persist_token_cache(cache, cache_path)
@@ -560,6 +574,7 @@ def authenticate(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
+    scopes: tuple[str, ...] | None = None,
 ) -> str:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
@@ -573,6 +588,7 @@ def authenticate(
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        scopes=scopes,
     )
 
 
@@ -683,11 +699,26 @@ def _response_error(response: requests.Response, operation: str) -> None:
         ),
         None,
     )
+    correlation_id = next(
+        (
+            response.headers.get(name)
+            for name in (
+                "x-ms-correlation-request-id",
+                "x-ms-correlation-id",
+                "correlation-id",
+            )
+            if response.headers.get(name)
+        ),
+        None,
+    )
+    retry_after = response.headers.get("Retry-After")
     raise AgentBuilderHTTPError(
         operation,
         response.status_code,
         error_code=error_code,
         request_id=request_id,
+        correlation_id=correlation_id,
+        retry_after=retry_after,
         response=response,
     )
 
@@ -701,12 +732,21 @@ class ConnectivityClient:
         *,
         ring: str,
         api_version: str = DEFAULT_API_VERSION,
+        environment_host: str | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.host = _ring_api_host(ring)
+        self.environment_host = (
+            validate_environment_host(environment_host, ring)
+            if environment_host
+            else None
+        )
         self.ring = ring
         self.api_version = api_version
         self.session = session or requests.Session()
+        self._single_attempt_session = (
+            self.session if session is not None else requests.Session()
+        )
         retry = Retry(
             total=3,
             backoff_factor=1,
@@ -749,6 +789,93 @@ class ConnectivityClient:
             raise AgentBuilderError(
                 "Connection listing returned an invalid shape."
             )
+        return values
+
+    def list_connector_connections(
+        self,
+        environment_id: str,
+        connector_name: str,
+    ) -> list[dict[str, Any]]:
+        """List one connector's connections with one logical HTTP attempt."""
+        if not self.environment_host:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing requires an environment host."
+            )
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        normalized_connector_name = connector_name.strip()
+        if not normalized_connector_name:
+            raise ValueError("connector_name must not be empty")
+        response = self._single_attempt_session.request(
+            "GET",
+            (
+                f"{self.environment_host}/connectivity/connectors/"
+                f"{quote(normalized_connector_name, safe='')}/connections"
+            ),
+            params={
+                "api-version": "1",
+                "$filter": (
+                    f"environment eq '{normalized_environment_id}'"
+                ),
+            },
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connector-scoped connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an invalid shape."
+            )
+        if body.get("nextLink") or body.get("@odata.nextLink"):
+            raise AgentBuilderError(
+                "Connector-scoped connection listing returned an unsupported "
+                "continuation page."
+            )
+        for value in values:
+            properties = value.get("properties")
+            properties = properties if isinstance(properties, dict) else {}
+            api_id = str(properties.get("apiId") or "")
+            if (
+                api_id
+                and api_id.rstrip("/").rsplit("/", 1)[-1].casefold()
+                != normalized_connector_name.casefold()
+            ):
+                raise AgentBuilderError(
+                    "Connector-scoped connection listing returned a different "
+                    "connector identity."
+                )
+            environment = properties.get("environment")
+            if environment:
+                if isinstance(environment, dict):
+                    raw_environment = str(
+                        environment.get("name")
+                        or environment.get("id")
+                        or ""
+                    )
+                else:
+                    raw_environment = str(environment)
+                raw_environment = raw_environment.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    returned_environment_id = str(uuid.UUID(raw_environment))
+                except ValueError as exc:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned an "
+                        "invalid environment identity."
+                    ) from exc
+                if returned_environment_id != normalized_environment_id:
+                    raise AgentBuilderError(
+                        "Connector-scoped connection listing returned a "
+                        "different environment identity."
+                    )
         return values
 
 
@@ -1001,6 +1128,20 @@ class AgentBuilderClient:
             raise AgentBuilderError(
                 "Native agent publish returned an invalid shape."
             )
+        upper = body.get("ValidationPending")
+        lower = body.get("validationPending")
+        if (
+            upper is not None
+            and lower is not None
+            and upper is not lower
+            and upper != lower
+        ):
+            raise AgentBuilderError(
+                "Native agent publish returned conflicting "
+                "ValidationPending values."
+            )
+        if lower is None and upper is not None:
+            body["validationPending"] = upper
         return body
 
     def get_realms(self, agent_id: str) -> dict[str, Any]:
@@ -1047,6 +1188,26 @@ class AgentBuilderClient:
         )
         if not isinstance(body, dict):
             raise AgentBuilderError("Component fetch returned an invalid shape.")
+        return body
+
+    def update_components(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply one caller-supplied MinimalBot component change set."""
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        body = self._json(
+            "PUT",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component update",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body=change_set,
+            timeout=180,
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Component update returned an invalid shape.")
         return body
 
     def update_bot_entity(

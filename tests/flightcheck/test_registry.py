@@ -20,6 +20,9 @@ from flightcheck.runner import Priority, Role
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -230,6 +233,86 @@ class TestTransitiveRequirements:
         assert [label for label, _ in connections.ordered_fns] == [
             "Native Agent"
         ]
+
+    def test_servicenow_entra_family_runs_one_shared_category(self):
+        assert registry.resolve("SN-DA-HRSD-ENTRA-*").key == (
+            "SN-DA-HRSD-ENTRA"
+        )
+        assert registry.resolve("SN-DA-HRSD-ENTRA-APP-001").key == (
+            "SN-DA-HRSD-ENTRA-APP-001"
+        )
+        plan = registry.transitive_requirements("SN-DA-HRSD-ENTRA-*")
+        assert plan.clients == frozenset(
+            {registry.AGENTBUILDER, registry.GRAPH}
+        )
+        assert plan.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+        expected = {
+            "SN-DA-HRSD-ENTRA-APP-001",
+            "SN-DA-HRSD-ENTRA-CLAIMS-001",
+            "SN-DA-HRSD-ENTRA-SCOPE-001",
+            "SN-DA-HRSD-ENTRA-PREAUTH-001",
+            "SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+            "SN-DA-HRSD-ENTRA-CONSENT-001",
+        }
+        emitted = expected | {
+            "SN-DA-HRSD-PLUGIN-001",
+            "SN-DA-HRSD-OIDC-001",
+        }
+        assert {
+            checkpoint_id
+            for checkpoint_id in emitted
+            if registry.matches("SN-DA-HRSD-ENTRA-*", checkpoint_id)
+        } == expected
+
+    def test_servicenow_hrsd_checkpoints_use_native_read_clients(self):
+        package = registry.transitive_requirements("SN-DA-HRSD-PKG-001")
+        assert package.clients == frozenset({registry.AGENTBUILDER})
+        assert package.requires_dataverse_endpoint is False
+        assert package.ordered_fns == [
+            ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+        ]
+
+        entra = registry.transitive_requirements(
+            "SN-DA-HRSD-ENTRA-CONSENT-001"
+        )
+        assert entra.clients == frozenset(
+            {registry.AGENTBUILDER, registry.GRAPH}
+        )
+        assert entra.requires_dataverse_endpoint is False
+
+        test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
+        assert test.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY}
+        )
+        assert test.requires_dataverse_endpoint is False
+        assert [label for label, _ in test.ordered_fns] == [
+            "ServiceNow DA HRSD"
+        ]
+        assert registry.resolve("SN-DA-HRSD-PARAMETER-SHARING-001") is None
+        assert registry.resolve("SN-DA-HRSD-TEST-001").prereqs == (
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+        )
+        assert registry.resolve("SN-DA-HRSD-PUBLISH-001").prereqs == (
+            "SN-DA-HRSD-TEST-001",
+        )
+
+        preflight = registry.transitive_requirements(
+            "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+        )
+        assert preflight.clients == frozenset({registry.AGENTBUILDER})
+
+    def test_prerequisite_client_pruning_is_servicenow_opt_in(self):
+        servicenow = registry.resolve("SN-DA-HRSD-TEST-001")
+        workday = registry.resolve("WD-RUN-001")
+
+        assert servicenow.inherit_prereq_clients is False
+        assert workday.inherit_prereq_clients is True
+        assert registry.PP_ADMIN in registry.transitive_requirements(
+            "WD-RUN-001"
+        ).clients
 
     def test_ess_soln_uses_agentbuilder_without_dataverse(self):
         spec = registry.resolve("ESS-SOLN-001")
