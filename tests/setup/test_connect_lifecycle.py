@@ -116,6 +116,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     )
 
     assert contract["provider"] == "servicenow-da-hrsd"
+    assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
     assert contract["contractRevision"] == 5
     assert contract["planRoles"] == [
@@ -181,6 +182,10 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     )
     assert "When `TARGET` is a registered family/wildcard" in runner
     assert "Do not invoke family members again" in runner
+    assert "--compact-result --invocation-id" in runner
+    assert "flightcheck.lifecycle-checkpoint.v1" in runner
+    assert "wrong-identity" in runner
+    assert "never fall back to an older result file" in runner
     assert "manualAcknowledgementEvidence" in runner
     assert 'source: "matching-action-evidence"' in runner
     assert "Otherwise use the normal acknowledgement question" in runner
@@ -200,6 +205,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         for phase in workday["phases"]
     )
     assert "planRoles" not in workday
+    assert "checkpointResultMode" not in workday
     assert "Append the contract's optional display-only `planRoles`" in runner
     assert "they do not create a role gate" in runner
 

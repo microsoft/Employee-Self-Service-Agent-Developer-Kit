@@ -36,6 +36,9 @@ _GRAPH_DELEGATED_SCOPE_IDS = {
     "profile": "14dad69e-099b-42c9-810b-d002981feec1",
     "User.Read": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
 }
+_ENTRA_PREFIX = "SN-DA-HRSD-ENTRA"
+
+
 def _result(
     checkpoint_id: str,
     status: str,
@@ -141,13 +144,34 @@ def _servicenow_connections(
     ]
 
 
+def _target_matches(target: str | None, checkpoint_id: str) -> bool:
+    if target is None:
+        return True
+    if target in {_ENTRA_PREFIX, f"{_ENTRA_PREFIX}-*"}:
+        return checkpoint_id.startswith(f"{_ENTRA_PREFIX}-")
+    return checkpoint_id == target
+
+
+def _target_rows(
+    target: str | None,
+    results: list[CheckResult],
+) -> list[CheckResult]:
+    return [
+        result
+        for result in results
+        if _target_matches(target, result.checkpoint_id)
+    ]
+
+
 def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
+    target = getattr(runner, "checkpoint_target", None)
     selected = _active_agent(runner)
     if selected is None:
         return _all_unavailable(
             Status.FAILED.value,
             "The selected agent could not be resolved.",
             "Select the exact editable ESS HR agent and rerun the checkpoint.",
+            target=target,
         )
     slug, agent = selected
     schema = str(
@@ -158,6 +182,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             Status.NOT_CONFIGURED.value,
             f"The selected agent '{slug}' is not the ESS DA HR agent.",
             "Select the Employee Self-Service HR agent.",
+            target=target,
         )
     agent_id = str(agent.get("botId") or agent.get("id") or "")
     if not agent_id:
@@ -165,6 +190,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             Status.FAILED.value,
             "The selected HR agent has no AgentBuilder ID.",
             "Refresh the local setup handoff for this agent.",
+            target=target,
         )
     client = getattr(runner, "agentbuilder", None)
     if client is None:
@@ -172,6 +198,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             Status.ERROR.value,
             "AgentBuilder authentication is unavailable.",
             "Sign in to the target environment and retry.",
+            target=target,
         )
     try:
         components = client.fetch_components(agent_id)
@@ -186,6 +213,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 Status.NOT_CONFIGURED.value,
                 f"The selected HR agent '{slug}' has no ServiceNow HRSD topics.",
                 "Install the ServiceNow HRSD extension for this exact HR agent.",
+                target=target,
             )
         summary = summarize_components(components)
     except Exception as exc:
@@ -193,6 +221,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             Status.ERROR.value,
             f"Unable to inspect the HR agent: {type(exc).__name__}: {exc}",
             "Verify AgentBuilder access to the selected environment and retry.",
+            target=target,
         )
 
     state = _load_state(slug)
@@ -200,64 +229,150 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     evidence = evidence if isinstance(evidence, dict) else {}
     admin_setup = state.get("adminSetup")
     admin_setup = admin_setup if isinstance(admin_setup, dict) else {}
-    component_hash = _hash(components)
-    try:
-        draft_semantic_hash = _draft_semantic_hash(components)
-        current_connection_binding_hash = (
-            _connection_binding_hash(
-                {
-                    "agent": {
-                        "id": agent.get("botId"),
-                        "workspace_slug": slug,
-                    },
-                    "environment": {
-                        "id": str(getattr(runner, "env_id", None) or "")
-                    },
-                },
-                state,
-                components,
-                require_agent_attestation=False,
+    if target == "SN-DA-HRSD-PKG-001":
+        return [_package_result(slug, summary)]
+    if target == "SN-DA-HRSD-ADMIN-PREFLIGHT-001":
+        return [_preflight_result(admin_setup)]
+    if target == "SN-DA-HRSD-PLUGIN-001":
+        return [_plugin_result(admin_setup)]
+    if target is not None and target.startswith(f"{_ENTRA_PREFIX}-"):
+        return _target_rows(
+            target,
+            _entra_results(getattr(runner, "graph", None), admin_setup),
+        )
+    if target in {_ENTRA_PREFIX, f"{_ENTRA_PREFIX}-*"}:
+        return _entra_results(getattr(runner, "graph", None), admin_setup)
+    if target == "SN-DA-HRSD-OIDC-001":
+        return [_oidc_result(admin_setup)]
+
+    component_hash = (
+        _hash(components)
+        if target
+        in {
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-TEST-001",
+            "SN-DA-HRSD-PUBLISH-001",
+            None,
+        }
+        else ""
+    )
+    if target == "SN-DA-HRSD-TOPICS-001":
+        return [_topics_result(summary, evidence, component_hash)]
+    if target == "SN-DA-HRSD-PUBLISH-001":
+        try:
+            draft_semantic_hash = _draft_semantic_hash(components)
+        except Exception as exc:
+            return _all_unavailable(
+                Status.ERROR.value,
+                f"Unable to inspect the HR agent draft identity: "
+                f"{type(exc).__name__}: {exc}",
+                "Verify the selected HR agent component state and retry.",
+                target=target,
             )
-            if isinstance(evidence.get("credential"), dict)
-            and evidence["credential"].get("connectionId")
-            else None
-        )
-    except Exception as exc:
-        return _all_unavailable(
-            Status.ERROR.value,
-            f"Unable to inspect the HR agent draft identity: "
-            f"{type(exc).__name__}: {exc}",
-            "Verify the selected HR agent component state and retry.",
-        )
+        return [
+            _publish_result(
+                evidence,
+                component_hash,
+                draft_semantic_hash,
+            )
+        ]
+
+    needs_inventory = target in {
+        "SN-DA-HRSD-CREDENTIAL-001",
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        "SN-DA-HRSD-TEST-001",
+        None,
+    }
     connections: list[dict[str, Any]] = []
     connectivity_error = ""
-    connectivity = getattr(runner, "connectivity", None)
-    environment_id = str(getattr(runner, "env_id", None) or "")
-    if connectivity is None:
-        connectivity_error = "Connection inventory authentication is unavailable."
-    else:
-        try:
-            connections = _servicenow_connections(
-                connectivity.list_connector_connections(
-                    environment_id,
-                    CONNECTOR_NAME,
-                )
+    if needs_inventory:
+        connectivity = getattr(runner, "connectivity", None)
+        environment_id = str(getattr(runner, "env_id", None) or "")
+        if connectivity is None:
+            connectivity_error = (
+                "Connection inventory authentication is unavailable."
             )
-        except Exception as exc:
-            connectivity_error = f"{type(exc).__name__}: {exc}"
+        else:
+            try:
+                connections = _servicenow_connections(
+                    connectivity.list_connector_connections(
+                        environment_id,
+                        CONNECTOR_NAME,
+                    )
+                )
+            except Exception as exc:
+                connectivity_error = f"{type(exc).__name__}: {exc}"
 
-    topics_result = _topics_result(summary, evidence, component_hash)
     credential_result = _credential_result(
         evidence,
         admin_setup,
         connections,
         connectivity_error,
     )
+    if target == "SN-DA-HRSD-CREDENTIAL-001":
+        return [credential_result]
+
+    needs_draft_identity = target in {
+        "SN-DA-HRSD-AGENT-CONNECTION-001",
+        "SN-DA-HRSD-TEST-001",
+        None,
+    }
+    draft_semantic_hash = ""
+    current_connection_binding_hash = None
+    if needs_draft_identity:
+        try:
+            draft_semantic_hash = _draft_semantic_hash(components)
+            if target in {"SN-DA-HRSD-TEST-001", None}:
+                current_connection_binding_hash = (
+                    _connection_binding_hash(
+                        {
+                            "agent": {
+                                "id": agent.get("botId"),
+                                "workspace_slug": slug,
+                            },
+                            "environment": {
+                                "id": str(
+                                    getattr(runner, "env_id", None) or ""
+                                )
+                            },
+                        },
+                        state,
+                        components,
+                        require_agent_attestation=False,
+                    )
+                    if isinstance(evidence.get("credential"), dict)
+                    and evidence["credential"].get("connectionId")
+                    else None
+                )
+        except Exception as exc:
+            return _all_unavailable(
+                Status.ERROR.value,
+                f"Unable to inspect the HR agent draft identity: "
+                f"{type(exc).__name__}: {exc}",
+                "Verify the selected HR agent component state and retry.",
+                target=target,
+            )
+
     agent_connection_result = _agent_connection_result(
         evidence,
         credential_result,
         draft_semantic_hash,
     )
+    if target == "SN-DA-HRSD-AGENT-CONNECTION-001":
+        return [agent_connection_result]
+
+    topics_result = _topics_result(summary, evidence, component_hash)
+    if target == "SN-DA-HRSD-TEST-001":
+        return [
+            _test_result(
+                evidence,
+                draft_semantic_hash,
+                current_connection_binding_hash,
+                topics_result,
+                credential_result,
+                agent_connection_result,
+            )
+        ]
     test_result = _test_result(
         evidence,
         draft_semantic_hash,
@@ -288,6 +403,8 @@ def _all_unavailable(
     status: str,
     result: str,
     remediation: str,
+    *,
+    target: str | None = None,
 ) -> list[CheckResult]:
     ids = (
         "PKG",
@@ -306,7 +423,9 @@ def _all_unavailable(
         "TEST",
         "PUBLISH",
     )
-    return [
+    return _target_rows(
+        target,
+        [
         _result(
             f"SN-DA-HRSD-{suffix}-001",
             status,
@@ -315,7 +434,8 @@ def _all_unavailable(
             remediation,
         )
         for suffix in ids
-    ]
+        ],
+    )
 
 
 def _package_result(slug: str, summary: dict[str, Any]) -> CheckResult:

@@ -24,8 +24,8 @@ family) it records:
   first to hydrate shared state.
 
 ``cli.py`` reads this registry to (a) implement ``--list-checkpoints``
-without any broad run, and (b) for ``--checkpoint <ID>``, initialise only
-the clients the target's transitive prerequisite closure declares, run the
+without any broad run, and (b) for ``--checkpoint <ID>``, initialise the
+effective clients declared by the target and its prerequisite policy, run the
 owning functions in canonical order, then filter results down to the
 target.
 
@@ -131,6 +131,10 @@ class CheckpointSpec:
     checkpoints whose exact IDs cannot be enumerated ahead of time
     (``WD-FLOW-001``, ``WD-FLOW-002``, ...). When ``is_family`` is True the
     key matches any emitted ID of the form ``"{key}-..."``.
+
+    ``inherit_prereq_clients`` defaults to the historical transitive union.
+    Providers that evaluate genuine prerequisites inside their target row may
+    opt out and initialize only the target's declared clients.
     """
 
     key: str
@@ -143,6 +147,9 @@ class CheckpointSpec:
     priority: str = Priority.HIGH.value
     roles: tuple = ()
     is_family: bool = False
+    inherit_prereq_clients: bool = True
+    provider: str = ""
+    profile: str = ""
     # listable=False registers a checkpoint so it can satisfy another
     # checkpoint's prerequisite resolution, while hiding it from
     # --list-checkpoints (it belongs to another scope's surface — e.g.
@@ -262,17 +269,23 @@ _SPECS: list[CheckpointSpec] = [
         requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ADMIN-PREFLIGHT-001",
         category_fn=run_servicenow_da_hrsd_checks,
         category_label="ServiceNow DA HRSD",
-        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        clients=frozenset({AGENTBUILDER}),
         requires_config=True,
         requires_dataverse_endpoint=False,
         prereqs=("SN-DA-HRSD-PKG-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-PLUGIN-001",
@@ -284,6 +297,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ADMIN-PREFLIGHT-001",),
         priority=Priority.HIGH.value,
         roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA",
@@ -296,6 +312,9 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
         is_family=True,
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-APP-001",
@@ -307,6 +326,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-PLUGIN-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-CLAIMS-001",
@@ -318,6 +340,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-APP-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-SCOPE-001",
@@ -329,6 +354,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-CLAIMS-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-PREAUTH-001",
@@ -340,6 +368,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-SCOPE-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-PERMISSIONS-001",
@@ -351,6 +382,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-PREAUTH-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-ENTRA-CONSENT-001",
@@ -362,6 +396,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-PERMISSIONS-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-OIDC-001",
@@ -373,6 +410,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-ENTRA-CONSENT-001",),
         priority=Priority.HIGH.value,
         roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-TOPICS-001",
@@ -384,6 +424,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-CREDENTIAL-001",
@@ -395,6 +438,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-OIDC-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-AGENT-CONNECTION-001",
@@ -406,6 +452,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-TEST-001",
@@ -420,6 +469,9 @@ _SPECS: list[CheckpointSpec] = [
         ),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="SN-DA-HRSD-PUBLISH-001",
@@ -431,6 +483,9 @@ _SPECS: list[CheckpointSpec] = [
         prereqs=("SN-DA-HRSD-TEST-001",),
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="PUB-001",
@@ -1119,11 +1174,16 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     target_spec = _resolve_or_raise(checkpoint_id)
     closure = _closure(checkpoint_id)
 
-    clients: frozenset = frozenset()
+    clients: frozenset = (
+        frozenset()
+        if target_spec.inherit_prereq_clients
+        else target_spec.clients
+    )
     requires_config = False
     requires_dataverse_endpoint = False
     for spec in closure:
-        clients = clients | spec.clients
+        if target_spec.inherit_prereq_clients:
+            clients = clients | spec.clients
         requires_config = requires_config or spec.requires_config
         requires_dataverse_endpoint = (
             requires_dataverse_endpoint or spec.requires_dataverse_endpoint

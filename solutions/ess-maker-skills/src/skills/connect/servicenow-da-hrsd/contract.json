@@ -3,6 +3,7 @@
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
+  "checkpointResultMode": "compact-stdout-v1",
   "attestedRoleScope": "lifecycle",
   "planRoles": [
     "ESS Maker / Agent Developer",

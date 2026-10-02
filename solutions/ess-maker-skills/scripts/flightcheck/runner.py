@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 
 FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v1"
+LIFECYCLE_CHECKPOINT_SCHEMA_VERSION = "flightcheck.lifecycle-checkpoint.v1"
 
 
 class Status(str, Enum):
@@ -195,7 +196,12 @@ def _default_severity(status: str, priority: str) -> str:
 class FlightCheckRunner:
     """Executes registered check functions and aggregates results."""
 
-    def __init__(self, scope: str = "full", target_matcher: Callable | None = None):
+    def __init__(
+        self,
+        scope: str = "full",
+        target_matcher: Callable | None = None,
+        checkpoint_target: str | None = None,
+    ):
         self.scope = scope
         self.results: list[CheckResult] = []
         self._check_fns: list[tuple[str, Callable]] = []
@@ -205,6 +211,7 @@ class FlightCheckRunner:
         # target checkpoint, or every member of a target family) before the
         # summary/verdict is built. None = normal full/scope run (no filter).
         self._target_matcher: Callable | None = target_matcher
+        self.checkpoint_target = checkpoint_target
         # Standalone-scope target selection (set by cli.py's
         # _resolve_target_selection in scope mode only). Pins the
         # ServiceNow connection SN-CONN-* should scope to; None ⇒ validate
@@ -534,6 +541,261 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
             for result in run_result.results
         ],
     }
+
+
+def _compact_target_matches(
+    target: str,
+    checkpoint_id: str,
+    *,
+    is_family: bool,
+) -> bool:
+    family = target.rstrip("*").rstrip("-")
+    if is_family:
+        return checkpoint_id.startswith(f"{family}-")
+    return checkpoint_id == target
+
+
+def compact_checkpoint_result_to_dict(
+    run_result: RunResult,
+    *,
+    target: str,
+    provider: str,
+    profile: str,
+    agent_slug: str,
+    agent_id: str,
+    environment_id: str,
+    invocation_id: str,
+    invocation_source: str,
+    exit_code: int,
+    target_is_family: bool = False,
+) -> dict[str, Any]:
+    """Return the bounded lifecycle checkpoint contract written to stdout."""
+    identity = {
+        "provider": provider,
+        "profile": profile,
+        "agentSlug": agent_slug,
+        "agentId": agent_id,
+        "environmentId": environment_id,
+    }
+    required_identity = {
+        key: value
+        for key, value in identity.items()
+        if not isinstance(value, str) or not value.strip()
+    }
+    if required_identity:
+        raise ValueError(
+            "Compact checkpoint identity is incomplete: "
+            + ", ".join(sorted(required_identity))
+        )
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError("Compact checkpoint target is required.")
+    if not isinstance(invocation_id, str) or not invocation_id.strip():
+        raise ValueError("Compact checkpoint invocation ID is required.")
+    if not run_result.results:
+        raise ValueError("Compact checkpoint result must contain result rows.")
+    if any(
+        not _compact_target_matches(
+            target,
+            result.checkpoint_id,
+            is_family=target_is_family,
+        )
+        for result in run_result.results
+    ):
+        raise ValueError(
+            "Compact checkpoint result contains a row outside the target."
+        )
+    return {
+        "schemaVersion": LIFECYCLE_CHECKPOINT_SCHEMA_VERSION,
+        "kind": "checkpoint-result",
+        "target": target,
+        "targetKind": "family" if target_is_family else "fixed",
+        "identity": identity,
+        "invocation": {
+            "id": invocation_id,
+            "source": invocation_source,
+            "started": run_result.started,
+        },
+        "overall": run_result.overall,
+        "exitCode": exit_code,
+        "results": [
+            check_result_contract_dict(result)
+            for result in run_result.results
+        ],
+    }
+
+
+def compact_checkpoint_error_to_dict(
+    *,
+    target: str,
+    error_type: str,
+    message: str,
+    exit_code: int,
+) -> dict[str, Any]:
+    """Return a bounded typed error when no result contract can be emitted."""
+    return {
+        "schemaVersion": LIFECYCLE_CHECKPOINT_SCHEMA_VERSION,
+        "kind": "checkpoint-error",
+        "target": target,
+        "error": {
+            "type": error_type,
+            "message": message,
+            "exitCode": exit_code,
+        },
+    }
+
+
+def parse_compact_checkpoint_result(
+    raw: str,
+    *,
+    expected_target: str,
+    expected_provider: str,
+    expected_profile: str,
+    expected_agent_slug: str,
+    expected_agent_id: str,
+    expected_environment_id: str,
+    expected_invocation_id: str,
+    expected_target_is_family: bool = False,
+) -> dict[str, Any]:
+    """Strictly validate one lifecycle checkpoint stdout contract."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Compact checkpoint stdout is empty.")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Compact checkpoint stdout is not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Compact checkpoint payload must be an object.")
+    expected_top = {
+        "schemaVersion",
+        "kind",
+        "target",
+        "targetKind",
+        "identity",
+        "invocation",
+        "overall",
+        "exitCode",
+        "results",
+    }
+    if set(payload) != expected_top:
+        raise ValueError("Compact checkpoint payload fields do not match v1.")
+    if payload.get("schemaVersion") != LIFECYCLE_CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError("Unsupported compact checkpoint schema version.")
+    if payload.get("kind") != "checkpoint-result":
+        raise ValueError("Compact checkpoint payload is not a result.")
+    if payload.get("target") != expected_target:
+        raise ValueError("Compact checkpoint target does not match.")
+    expected_target_kind = (
+        "family" if expected_target_is_family else "fixed"
+    )
+    if payload.get("targetKind") != expected_target_kind:
+        raise ValueError("Compact checkpoint target kind does not match.")
+
+    identity = payload.get("identity")
+    expected_identity = {
+        "provider": expected_provider,
+        "profile": expected_profile,
+        "agentSlug": expected_agent_slug,
+        "agentId": expected_agent_id,
+        "environmentId": expected_environment_id,
+    }
+    if not isinstance(identity, dict) or identity != expected_identity:
+        raise ValueError("Compact checkpoint identity does not match.")
+
+    invocation = payload.get("invocation")
+    if (
+        not isinstance(invocation, dict)
+        or set(invocation) != {"id", "source", "started"}
+        or invocation.get("id") != expected_invocation_id
+        or not isinstance(invocation.get("source"), str)
+        or not invocation["source"]
+        or not isinstance(invocation.get("started"), str)
+        or not invocation["started"]
+    ):
+        raise ValueError("Compact checkpoint invocation does not match.")
+
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise ValueError("Compact checkpoint result rows are empty.")
+    expected_result_fields = {
+        "checkpointId",
+        "category",
+        "status",
+        "severity",
+        "automationType",
+        "remediationId",
+        "description",
+        "result",
+        "remediation",
+        "docLink",
+        "docLabel",
+        "roles",
+        "evidence",
+    }
+    allowed_statuses = {status.value for status in Status}
+    for result in results:
+        if not isinstance(result, dict) or set(result) != expected_result_fields:
+            raise ValueError("Compact checkpoint result row fields are invalid.")
+        checkpoint_id = result.get("checkpointId")
+        if (
+            not isinstance(checkpoint_id, str)
+            or not _compact_target_matches(
+                expected_target,
+                checkpoint_id,
+                is_family=expected_target_is_family,
+            )
+        ):
+            raise ValueError("Compact checkpoint result row target is invalid.")
+        if result.get("status") not in allowed_statuses:
+            raise ValueError("Compact checkpoint result row status is invalid.")
+        for field_name in (
+            "category",
+            "severity",
+            "automationType",
+            "remediationId",
+            "description",
+            "result",
+            "remediation",
+            "docLink",
+            "docLabel",
+        ):
+            if not isinstance(result.get(field_name), str):
+                raise ValueError(
+                    f"Compact checkpoint row {field_name} must be a string."
+                )
+        if not isinstance(result.get("roles"), list) or not all(
+            isinstance(role, str) for role in result["roles"]
+        ):
+            raise ValueError("Compact checkpoint row roles are invalid.")
+        if not isinstance(result.get("evidence"), dict):
+            raise ValueError("Compact checkpoint row evidence is invalid.")
+
+    blocking = any(
+        result["status"]
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+        for result in results
+    )
+    warnings = any(
+        result["status"] == Status.WARNING.value for result in results
+    )
+    expected_exit = 1 if blocking else 0
+    expected_overall = (
+        "NOT_READY"
+        if blocking
+        else "READY_WITH_WARNINGS"
+        if warnings
+        else "READY"
+    )
+    if payload.get("exitCode") != expected_exit:
+        raise ValueError("Compact checkpoint exit semantics are inconsistent.")
+    if payload.get("overall") != expected_overall:
+        raise ValueError(
+            "Compact checkpoint overall semantics are inconsistent."
+        )
+    return payload
 
 
 def _generate_html_report(r: RunResult) -> str:

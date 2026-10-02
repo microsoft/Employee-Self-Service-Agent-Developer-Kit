@@ -136,6 +136,9 @@ def _registered_runner(
         )
         if target_test_only
         else None,
+        checkpoint_target=(
+            "SN-DA-HRSD-TEST-001" if target_test_only else None
+        ),
     )
     for name in ("config", "agentbuilder", "connectivity", "env_id"):
         setattr(runner, name, getattr(source, name))
@@ -934,6 +937,85 @@ def test_entra_phase_evaluation_uses_one_logical_read_set(
         "app_service_principal": 1,
         "graph_service_principal": 1,
         "permission_grants": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_rows", "inventory_reads", "graph_reads"),
+    [
+        ("SN-DA-HRSD-PKG-001", 1, 0, 0),
+        ("SN-DA-HRSD-ADMIN-PREFLIGHT-001", 1, 0, 0),
+        ("SN-DA-HRSD-PLUGIN-001", 1, 0, 0),
+        ("SN-DA-HRSD-ENTRA-*", 6, 0, 4),
+        ("SN-DA-HRSD-ENTRA-CLAIMS-001", 1, 0, 4),
+        ("SN-DA-HRSD-OIDC-001", 1, 0, 0),
+        ("SN-DA-HRSD-CREDENTIAL-001", 1, 1, 0),
+        ("SN-DA-HRSD-TOPICS-001", 1, 0, 0),
+        ("SN-DA-HRSD-AGENT-CONNECTION-001", 1, 1, 0),
+        ("SN-DA-HRSD-TEST-001", 1, 1, 0),
+        ("SN-DA-HRSD-PUBLISH-001", 1, 0, 0),
+    ],
+)
+def test_target_aware_evaluation_uses_only_required_clients(
+    monkeypatch,
+    tmp_path: Path,
+    target: str,
+    expected_rows: int,
+    inventory_reads: int,
+    graph_reads: int,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    counters = {"agentbuilder": 0, "connectivity": 0, "graph": 0}
+    runner = _runner(components)
+    runner.checkpoint_target = target
+
+    def fetch_components(_agent_id: str) -> dict:
+        counters["agentbuilder"] += 1
+        return components
+
+    def list_connector_connections(
+        environment_id: str,
+        connector: str,
+    ) -> list[dict]:
+        assert environment_id == ENVIRONMENT_ID
+        assert connector == snow.CONNECTOR_NAME
+        counters["connectivity"] += 1
+        return [_connection()]
+
+    graph = _graph_client()
+
+    class CountingGraph:
+        def get_all(self, *args, **kwargs):
+            counters["graph"] += 1
+            return graph.get_all(*args, **kwargs)
+
+        def get_service_principals(self, *args, **kwargs):
+            counters["graph"] += 1
+            return graph.get_service_principals(*args, **kwargs)
+
+    runner.agentbuilder = SimpleNamespace(fetch_components=fetch_components)
+    runner.connectivity = SimpleNamespace(
+        list_connector_connections=list_connector_connections,
+    )
+    runner.graph = CountingGraph()
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+
+    assert len(results) == expected_rows
+    assert all(
+        result.checkpoint_id == target
+        or (
+            target == "SN-DA-HRSD-ENTRA-*"
+            and result.checkpoint_id.startswith("SN-DA-HRSD-ENTRA-")
+        )
+        for result in results
+    )
+    assert counters == {
+        "agentbuilder": 1,
+        "connectivity": inventory_reads,
+        "graph": graph_reads,
     }
 
 

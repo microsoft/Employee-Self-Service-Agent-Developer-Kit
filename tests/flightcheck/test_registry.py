@@ -246,7 +246,7 @@ class TestTransitiveRequirements:
         )
         plan = registry.transitive_requirements("SN-DA-HRSD-ENTRA-*")
         assert plan.clients == frozenset(
-            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
+            {registry.AGENTBUILDER, registry.GRAPH}
         )
         assert plan.ordered_fns == [
             ("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
@@ -281,13 +281,13 @@ class TestTransitiveRequirements:
             "SN-DA-HRSD-ENTRA-CONSENT-001"
         )
         assert entra.clients == frozenset(
-            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
+            {registry.AGENTBUILDER, registry.GRAPH}
         )
         assert entra.requires_dataverse_endpoint is False
 
         test = registry.transitive_requirements("SN-DA-HRSD-TEST-001")
         assert test.clients == frozenset(
-            {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.GRAPH}
+            {registry.AGENTBUILDER, registry.CONNECTIVITY}
         )
         assert test.requires_dataverse_endpoint is False
         assert [label for label, _ in test.ordered_fns] == [
@@ -301,6 +301,21 @@ class TestTransitiveRequirements:
         assert registry.resolve("SN-DA-HRSD-PUBLISH-001").prereqs == (
             "SN-DA-HRSD-TEST-001",
         )
+
+        preflight = registry.transitive_requirements(
+            "SN-DA-HRSD-ADMIN-PREFLIGHT-001"
+        )
+        assert preflight.clients == frozenset({registry.AGENTBUILDER})
+
+    def test_prerequisite_client_pruning_is_servicenow_opt_in(self):
+        servicenow = registry.resolve("SN-DA-HRSD-TEST-001")
+        workday = registry.resolve("WD-CONN-012")
+
+        assert servicenow.inherit_prereq_clients is False
+        assert workday.inherit_prereq_clients is True
+        assert registry.PP_ADMIN in registry.transitive_requirements(
+            "WD-CONN-012"
+        ).clients
 
     def test_ess_soln_uses_agentbuilder_without_dataverse(self):
         spec = registry.resolve("ESS-SOLN-001")

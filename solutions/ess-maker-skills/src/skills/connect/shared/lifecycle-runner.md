@@ -332,6 +332,49 @@ For each checkpoint target the current phase lists, run:
 python scripts/flightcheck/cli.py --checkpoint {TARGET}
 ```
 
+If the contract sets `checkpointResultMode: "compact-stdout-v1"`, generate a
+new opaque `CHECKPOINT_INVOCATION_ID` for this command and instead run:
+
+```
+python scripts/flightcheck/cli.py --checkpoint {TARGET} --compact-result --invocation-id "{CHECKPOINT_INVOCATION_ID}" --quiet-auth
+```
+
+Capture stdout exactly. It must contain one JSON object and no surrounding
+text. Parse and validate it fail closed before rendering or writing lifecycle
+state:
+
+- `schemaVersion` is exactly `flightcheck.lifecycle-checkpoint.v1`;
+- `kind` is exactly `checkpoint-result` (a `checkpoint-error` object is a
+  failure, never an empty/default result);
+- `target` exactly equals `{TARGET}`;
+- `targetKind` is exactly `fixed` or `family` as declared by the registered
+  target;
+- `identity.provider`, `identity.profile`, `identity.agentSlug`,
+  `identity.agentId`, and `identity.environmentId` exactly match the accepted
+  contract and current provider state;
+- `invocation.id` exactly equals `CHECKPOINT_INVOCATION_ID`,
+  `invocation.source` is non-empty, and `invocation.started` is non-empty;
+- `results` is a non-empty array; an exact target emits only that checkpoint,
+  and a family target emits only members of that family;
+- every row contains the versioned checkpoint fields including
+  `checkpointId`, `status`, `description`, `result`, `remediation`, links,
+  roles, bounded evidence, severity, automation type, and remediation ID;
+- statuses are known FlightCheck statuses, `overall` agrees with the rows, and
+  `exitCode` is 1 exactly when a row is `Failed`, `Blocked`, or `Error`.
+
+Malformed, truncated, empty, extra-text, unsupported-version, wrong-target,
+wrong-identity, wrong-invocation, zero-row, or internally inconsistent output
+blocks the phase. Report the typed stderr/`checkpoint-error` condition; never
+invent a success-shaped default and never fall back to an older result file.
+This compact path writes no per-step `results.json`, history HTML, or latest
+HTML. Render the validated rows directly with the same U.0/U.0a content and
+status rules below. The contract must never contain tokens, raw prompts,
+configuration/component payloads, employee data, or other secrets; preserve
+only the bounded row evidence already approved for FlightCheck results.
+
+If `checkpointResultMode` is absent, use the command and persisted report path
+shown above and below unchanged.
+
 When `TARGET` is a registered family/wildcard, start exactly one CLI process,
 consume and render every matching emitted row, and persist each result under
 its actual checkpoint ID. Do not invoke family members again as separate
@@ -344,7 +387,8 @@ re-verifying completed phases in L.2.
 
 After each run, render the result using the exact U.0 and U.0a routines from
 `src/skills/setup/shared/checklist-updater.md` (read that file's U.0/U.0a
-sections and apply them verbatim against `workspace/flightcheck/results.json`
+sections and apply them verbatim against the validated compact rows, or against
+`workspace/flightcheck/results.json` for a provider using the legacy transport
 — do not re-implement or paraphrase that rendering logic here).
 
 Aggregate the phase's outcome using the phase's `completionStatuses`
