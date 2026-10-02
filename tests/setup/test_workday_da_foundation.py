@@ -78,7 +78,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "entra-handoff" in entra
     assert "workday-admin-packet" in tenant
     assert "--discovery-file" in entra
-    assert "--verification-file" in entra
+    assert "--verification-worksheet-file" in entra
     assert "--discovery-json" not in entra
     assert "--verification-json" not in entra
     assert "does not authenticate the maker" in " ".join(entra.split())
@@ -169,11 +169,47 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Do not add `recommended`" in tenant
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
+    assert "strict labeled worksheet" in tenant
+    assert "rejects missing, duplicate, or unknown labels" in normalized
+    assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant
     assert 'Enter a JSON array of {' not in tenant
     assert "Yes, all four required functional areas are present" in tenant
     assert "Domain | supported scenario" in tenant
     assert '"all good", "continue", or "proceed"' in tenant
+
+
+def test_administrator_worksheets_use_controller_parsing_contract() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
+        encoding="utf-8"
+    )
+    tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(
+        encoding="utf-8"
+    )
+    install = (_WORKDAY_DA / "install-extension.md").read_text(
+        encoding="utf-8"
+    )
+    matrix = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "reference"
+        / "ess-docs"
+        / "flightcheck"
+        / "validation-matrix.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+
+    assert "only exception" in normalized_skill
+    assert "controller's worksheet parser" in normalized_skill
+    assert "--verification-worksheet-file" in entra
+    assert "entra-verification.json" not in entra
+    assert "--response-worksheet-file" in tenant
+    assert "workday-admin-response.json" not in tenant
+    assert "environment and capacity evidence is inherited" not in matrix
+    assert "environment and capacity evidence" not in install
     assert "do not move to another field" in tenant
     assert "search workspace files" in tenant
     assert "CHECKPOINT_RESULT" not in tenant

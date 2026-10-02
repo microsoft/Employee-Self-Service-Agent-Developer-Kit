@@ -460,8 +460,11 @@ After the administrator confirms completion, use one
 ]
 ```
 
-Map the selected provider branch and submitted fields to the controller
-response object:
+The response is a strict labeled worksheet, not free-form evidence. Preserve
+the exact labels and answers unchanged. The controller rejects missing,
+duplicate, or unknown labels and maps only the listed successful choices into
+the structured response object described below. Never parse, rename, infer,
+or normalize an answer in the skill:
 
 - an applicable Microsoft Entra branch plus
   **Yes, all four values match exactly** ->
@@ -551,13 +554,13 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the response directly to
-`.local/connect/workday-da/workday-admin-response.json` using a structured
-file-write tool; never interpolate administrator-entered values into a
-generated shell command. Pass the response once:
+key. Write the exact labeled response directly to
+`.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
+interpolate administrator-entered values into a generated shell command. Pass
+the worksheet once:
 
 ```powershell
-python scripts/workday_connect.py record-workday-admin --response-file ".local\connect\workday-da\workday-admin-response.json"
+python scripts/workday_connect.py record-workday-admin --response-worksheet-file ".local\connect\workday-da\workday-admin-return-worksheet.txt"
 ```
 
 The controller reconciles the administrator evidence with automatic readiness

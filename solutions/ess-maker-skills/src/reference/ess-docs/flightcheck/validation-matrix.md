@@ -217,7 +217,7 @@ not coupled to a Connect lifecycle.
 
 | Profile                             | Coverage                                                                                                                     |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `workday-da:setup-readiness`        | Live readiness of the selected ESS HR declarative agent; environment and capacity evidence is inherited from completed setup |
+| `workday-da:setup-readiness`        | Live readiness of the selected ESS HR declarative agent and its materialized workspace content                                |
 | `workday-da:package-ready`          | Selected-agent Workday runtime package installation                                                                          |
 | `workday-da:dataverse-ready`        | Workday runtime package, Dataverse workflow inventory, and runtime connection-reference readiness                            |
 | `workday-da:external-prerequisites` | Entra, Workday tenant, permission, and network prerequisites                                                                 |

@@ -1417,34 +1417,23 @@ def upgrade_v6_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_pre_v7_state(document, source_version=6)
 
 
-def upgrade_v7_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    state = _upgrade_structured_state(document, source_version=7)
-    legacy_ready = state["status"] == "ready"
-    baseline_required = any(
-        state["phases"][phase_id]["status"] == PhaseStatus.COMPLETE.value
-        for phase_id in ("preflight", "workday-admin", "runtime")
+def _source_state_was_ready(document: Mapping[str, Any]) -> bool:
+    phases = document.get("phases")
+    return (
+        document.get("status") == "ready"
+        and isinstance(phases, Mapping)
+        and all(
+            isinstance(phases.get(definition.identifier.value), Mapping)
+            and phases[definition.identifier.value].get("status")
+            == PhaseStatus.COMPLETE.value
+            for definition in PHASE_DEFINITIONS
+        )
     )
-    migration = dict(state.get("migration") or {})
-    migration.update(
-        {
-            "source": "workday-connect-state-v7",
-            "migratedAt": utc_now(),
-            "flightcheckBaselineRequired": baseline_required,
-            "legacyReady": legacy_ready,
-        }
-    )
-    state["migration"] = migration
-    if baseline_required:
-        if legacy_ready:
-            employee_phase = state["phases"]["employee-validation"]
-            employee_phase["status"] = PhaseStatus.ACTIVE.value
-            employee_phase["updatedAt"] = utc_now()
-        state["status"] = "in-progress"
-    state["updatedAt"] = utc_now()
-    return validate_state(state)
 
 
-def upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_package_evidence_ownership(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
     migrated = copy.deepcopy(dict(document))
     preflight = migrated["phases"]["preflight"]
     connections = migrated["phases"]["connections"]
@@ -1479,7 +1468,50 @@ def upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
             for record in connections["evidence"]
         ):
             connections["evidence"].append(package_evidence)
-    return _upgrade_structured_state(migrated, source_version=8)
+    return migrated
+
+
+def _upgrade_readiness_state(
+    document: Mapping[str, Any],
+    *,
+    source_version: int,
+) -> dict[str, Any]:
+    legacy_ready = _source_state_was_ready(document)
+    normalized = _normalize_package_evidence_ownership(document)
+    state = _upgrade_structured_state(
+        normalized,
+        source_version=source_version,
+    )
+    baseline_required = any(
+        state["phases"][phase_id]["status"] == PhaseStatus.COMPLETE.value
+        for phase_id in ("preflight", "workday-admin", "runtime")
+    )
+    migration = dict(state.get("migration") or {})
+    migration.update(
+        {
+            "source": f"workday-connect-state-v{source_version}",
+            "migratedAt": utc_now(),
+            "flightcheckBaselineRequired": baseline_required,
+            "legacyReady": legacy_ready,
+        }
+    )
+    state["migration"] = migration
+    if baseline_required:
+        if legacy_ready:
+            employee_phase = state["phases"]["employee-validation"]
+            employee_phase["status"] = PhaseStatus.ACTIVE.value
+            employee_phase["updatedAt"] = utc_now()
+        state["status"] = "in-progress"
+    state["updatedAt"] = utc_now()
+    return validate_state(state)
+
+
+def upgrade_v7_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_readiness_state(document, source_version=7)
+
+
+def upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_readiness_state(document, source_version=8)
 
 
 class WorkdayConnectStore:
@@ -1502,6 +1534,9 @@ class WorkdayConnectStore:
         )
         self.employee_validation_lock_path = self.config_path.with_name(
             "employee-validation.lock"
+        )
+        self.operation_lock_path = self.config_path.with_name(
+            "operation.lock"
         )
         self.backup_path = self.config_path.with_name(
             f"config.pre-v{STATE_SCHEMA_VERSION}.json"
@@ -1569,6 +1604,19 @@ class WorkdayConnectStore:
             self.employee_validation_lock_path,
             self.lock_timeout,
         )
+        try:
+            lock.__enter__()
+        except WorkdayConnectStoreError as exc:
+            exc.profile_blocker_persisted = True
+            raise
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
+
+    @contextmanager
+    def operation_guard(self) -> Iterator[None]:
+        lock = _file_lock(self.operation_lock_path, self.lock_timeout)
         try:
             lock.__enter__()
         except WorkdayConnectStoreError as exc:

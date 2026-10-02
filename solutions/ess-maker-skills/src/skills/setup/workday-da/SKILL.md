@@ -29,9 +29,12 @@ it is not a customer-executed phase and must not be shown as an extra step.
   verified result matches the approved plan.
 - Never diagnose a permission problem from a guess. Show the API, CLI, or
   checked-in script evidence that produced the diagnosis.
-- Use structured `vscode_askQuestions` forms for customer evidence. Never
-  replace a multi-field form with one large free-text question or ask the
-  customer to edit a prose template.
+- Use structured `vscode_askQuestions` forms for choices and short customer
+  evidence. The Entra and Workday administrator handoffs are the only
+  exception: collect their exact labeled return worksheet in one response,
+  pass the untouched text to the controller's worksheet parser, and accept
+  only the resulting validated structured payload. Reject missing, duplicate,
+  or unknown labels; never infer an answer or treat the raw text as evidence.
 - Leave every option initially unset. Do not add `recommended`, `default`,
   “recommended” label text, or any equivalent preselection to approvals,
   factual observations, connection choices, or validation outcomes. Continue
@@ -74,7 +77,7 @@ Describe each action according to who actually performs it:
 
 | Phase                 | What the skill can do                                                                                                                                                                                                         | What remains a user or administrator action                                                                             |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Preflight             | Verify the selected agent, environment, account, capacity, and supported Workday package choice without installing it                                                                                                         | Complete Microsoft sign-in and choose an environment when no exact URL is known                                         |
+| Preflight             | Verify the selected agent, environment, account, and supported Workday package choice without installing it                                                                                                                   | Complete Microsoft sign-in and choose an environment when no exact URL is known                                         |
 | Microsoft Entra       | Generate one guided administrator handoff, validate the returned non-secret target and configuration evidence, and record it                                                                                                  | Identify the exact application, create or change it in the portal, and return the requested evidence                    |
 | Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence                                                                                                                              | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday                               |
 | Connections           | After approval, install or verify the Workday package, then record the reviewed physical-connection readiness evidence                                                                                                        | Approve package installation, create connector connections, and complete connector OAuth                                |
@@ -119,7 +122,7 @@ resumed setup must still make its remaining administrator dependencies clear.
 >
 > | Phase                 | Responsibility                                                                                                                                             | Who is needed                                                                                                        |
 > | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-> | Preflight             | Verify the ESS HR agent, environment, capacity, maker account, and supported package choice without changing the environment                               | Power Platform Environment Maker                                                                                     |
+> | Preflight             | Verify the ESS HR agent, environment, maker account, and supported package choice without changing the environment                                         | Power Platform Environment Maker                                                                                     |
 > | Microsoft Entra       | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID                                                        | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required          |
 > | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy           | Workday Administrator                                                                                                |
 > | Connections           | Install or verify the supported Workday package, then create the Workday OAuthUser and Dataverse connections and complete connector sign-in                | Power Platform Environment Maker with package installation access                                                    |

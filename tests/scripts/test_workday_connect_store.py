@@ -1411,10 +1411,30 @@ def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
 
     document = model.default_state()
     document["schemaVersion"] = 7
+    historical_v7_actions = {
+        "preflight": ("verify-target", "verify-package"),
+        "entra": (
+            "exact-application-discovered",
+            "administrator-configuration-verified",
+        ),
+        "workday-admin": ("administrator-response-validated",),
+        "connections": ("physical-connections-verified",),
+        "runtime": (
+            "connection-references-bound",
+            "runtime-flows-active",
+            "delegated-authorization-configured",
+            "runtime-template-configured",
+            "user-context-v2-configured",
+            "agent-parameter-sharing-verified",
+            "flow-attachment-confirmed",
+            "workday-topics-activated",
+        ),
+        "employee-validation": ("signed-in-scenario",),
+    }
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+        for action in historical_v7_actions[phase_id]:
             phase["completedActions"].append(action)
             phase["evidence"].append(
                 {"action": action, "outcome": "verified"}
@@ -1434,6 +1454,12 @@ def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
         == "active"
     )
     assert upgraded["migration"]["flightcheckBaselineRequired"] is True
+    assert upgraded["migration"]["legacyReady"] is True
+    assert upgraded["phases"]["runtime"]["status"] == "complete"
+    assert upgraded["phases"]["connections"]["completedActions"] == [
+        "physical-connections-verified",
+        "verify-package",
+    ]
     assert all(
         phase["validationProfiles"] == {}
         for phase in upgraded["phases"].values()
@@ -1633,6 +1659,79 @@ def test_v8_package_action_without_evidence_is_safely_reopened(
         "verify-target"
     ]
     assert upgraded["phases"]["connections"]["completedActions"] == []
+
+
+def test_v8_ready_state_requires_flightcheck_migration_baseline(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 8
+    historical_v8_actions = {
+        "preflight": ("verify-target", "verify-package"),
+        "entra": (
+            "exact-application-discovered",
+            "administrator-configuration-verified",
+        ),
+        "workday-admin": ("administrator-response-validated",),
+        "connections": ("physical-connections-verified",),
+        "runtime": (
+            "connection-references-bound",
+            "runtime-flows-active",
+            "delegated-authorization-configured",
+            "runtime-template-configured",
+            "user-context-v2-configured",
+            "agent-parameter-sharing-verified",
+            "flow-attachment-confirmed",
+            "workday-topics-activated",
+        ),
+        "employee-validation": ("signed-in-scenario",),
+    }
+    for phase_id, phase in document["phases"].items():
+        phase.pop("validationProfiles")
+        phase.pop("employeeTestAttempt", None)
+        for action in historical_v8_actions[phase_id]:
+            phase["completedActions"].append(action)
+            phase["evidence"].append(
+                {"action": action, "outcome": "verified"}
+            )
+        phase["status"] = "complete"
+    document["status"] = "ready"
+    path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    upgraded = WorkdayConnectStore(tmp_path).load()
+
+    assert upgraded["schemaVersion"] == 9
+    assert upgraded["status"] == "in-progress"
+    assert upgraded["migration"]["source"] == "workday-connect-state-v8"
+    assert upgraded["migration"]["legacyReady"] is True
+    assert upgraded["migration"]["flightcheckBaselineRequired"] is True
+    assert upgraded["phases"]["runtime"]["status"] == "complete"
+    assert upgraded["phases"]["employee-validation"]["status"] == "active"
+
+
+def test_operation_guard_rejects_overlapping_mutating_session(
+    tmp_path: Path,
+) -> None:
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    first = WorkdayConnectStore(tmp_path, lock_timeout=0.05)
+    second = WorkdayConnectStore(tmp_path, lock_timeout=0.05)
+
+    with first.operation_guard():
+        with pytest.raises(
+            WorkdayConnectStoreError,
+            match="Another /connect workday session",
+        ):
+            with second.operation_guard():
+                pass
 
 
 def test_profile_blocking_preserves_lifecycle_evidence_and_plans(

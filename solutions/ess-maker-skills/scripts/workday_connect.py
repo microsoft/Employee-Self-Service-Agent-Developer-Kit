@@ -29,6 +29,8 @@ from workday_connect_contracts import (
     WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
+    parse_entra_return_worksheet,
+    parse_workday_admin_return_worksheet,
     validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
     validate_employee_evidence,
@@ -81,6 +83,7 @@ def _add_json_input(
     name: str,
     *,
     allow_legacy_inline: bool = True,
+    allow_worksheet: bool = False,
 ) -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -93,13 +96,43 @@ def _add_json_input(
             f"--{name}-json",
             help=argparse.SUPPRESS,
         )
+    if allow_worksheet:
+        group.add_argument(
+            f"--{name}-worksheet-file",
+            type=Path,
+            help=(
+                "Path to the exact labeled administrator worksheet text."
+            ),
+        )
 
 
 def _json_input(
     args: argparse.Namespace,
     name: str,
     label: str,
+    *,
+    worksheet_parser: (
+        Callable[[Mapping[str, Any], str], dict[str, Any]] | None
+    ) = None,
+    worksheet_state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    worksheet_path = getattr(
+        args,
+        f"{name.replace('-', '_')}_worksheet_file",
+        None,
+    )
+    if worksheet_path is not None:
+        if worksheet_parser is None or worksheet_state is None:
+            raise WorkdayConnectStoreError(
+                f"{label} does not support worksheet input."
+            )
+        try:
+            worksheet = worksheet_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WorkdayConnectStoreError(
+                f"{label} worksheet could not be read: {worksheet_path}: {exc}"
+            ) from exc
+        return worksheet_parser(worksheet_state, worksheet)
     file_path = getattr(args, f"{name.replace('-', '_')}_file", None)
     if file_path is not None:
         try:
@@ -149,7 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
     entra_handoff = subparsers.add_parser("entra-handoff")
     _add_json_input(entra_handoff, "discovery")
     record_entra = subparsers.add_parser("record-entra")
-    _add_json_input(record_entra, "verification")
+    _add_json_input(
+        record_entra,
+        "verification",
+        allow_worksheet=True,
+    )
     administrator_stage = subparsers.add_parser("administrator-stage")
     administrator_stage.add_argument(
         "--phase",
@@ -176,7 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("workday-admin-packet")
     record_admin = subparsers.add_parser("record-workday-admin")
-    _add_json_input(record_admin, "response")
+    _add_json_input(
+        record_admin,
+        "response",
+        allow_worksheet=True,
+    )
 
     runtime_plan = subparsers.add_parser("runtime-plan")
     runtime_plan.add_argument("--workday-connection-id")
@@ -683,7 +724,13 @@ def _record_entra(
         state,
         _merge_entra_verification(
             state,
-            _json_input(args, "verification", "Entra verification"),
+            _json_input(
+                args,
+                "verification",
+                "Entra verification",
+                worksheet_parser=parse_entra_return_worksheet,
+                worksheet_state=state,
+            ),
         ),
     )
     if state["phases"]["entra"]["status"] == "complete":
@@ -815,7 +862,13 @@ def _record_workday_admin(
                 "partialEvidence"
             ]
         ),
-        **_json_input(args, "response", "Workday administrator response"),
+        **_json_input(
+            args,
+            "response",
+            "Workday administrator response",
+            worksheet_parser=parse_workday_admin_return_worksheet,
+            worksheet_state=state,
+        ),
     }
     result = validate_workday_admin_response(
         state,
@@ -1379,8 +1432,6 @@ def main() -> None:
         event_sink=emit_lifecycle_event,
     )
     try:
-        if args.command != "status":
-            _ensure_migration_baseline(store)
         if args.command == "status":
             store.record_lifecycle_event(
                 "invoked",
@@ -1389,7 +1440,13 @@ def main() -> None:
         handler = _COMMAND_HANDLERS.get(args.command)
         if handler is None:
             parser.error(f"Unsupported command: {args.command}")
-        _emit(args.command, handler(args, store))
+        if args.command == "status":
+            result = handler(args, store)
+        else:
+            with store.operation_guard():
+                _ensure_migration_baseline(store)
+                result = handler(args, store)
+        _emit(args.command, result)
     except (
         OSError,
         WorkdayConnectModelError,

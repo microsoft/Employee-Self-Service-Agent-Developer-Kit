@@ -703,11 +703,25 @@ def test_controller_records_invocation_only_at_status_boundary(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from contextlib import contextmanager
+
     import workday_connect
     from workday_connect_store import WorkdayConnectStore
 
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
     migration_checks = []
+    operation_guards = []
+
+    @contextmanager
+    def operation_guard(_store):
+        operation_guards.append("entered")
+        yield
+
+    monkeypatch.setattr(
+        WorkdayConnectStore,
+        "operation_guard",
+        operation_guard,
+    )
     monkeypatch.setattr(
         workday_connect,
         "_ensure_migration_baseline",
@@ -726,6 +740,7 @@ def test_controller_records_invocation_only_at_status_boundary(
     workday_connect.main()
     workday_connect.main()
     assert migration_checks == []
+    assert operation_guards == []
     monkeypatch.setattr(
         sys,
         "argv",
@@ -740,9 +755,32 @@ def test_controller_records_invocation_only_at_status_boundary(
     )
     workday_connect.main()
     assert migration_checks == ["checked"]
+    assert operation_guards == ["entered"]
 
     events = WorkdayConnectStore(tmp_path).load()["lifecycle"]["journal"]
     assert [event["event"] for event in events] == ["invoked"]
+
+
+def test_controller_parser_accepts_labeled_worksheet_files() -> None:
+    import workday_connect
+
+    entra = workday_connect.build_parser().parse_args(
+        [
+            "record-entra",
+            "--verification-worksheet-file",
+            "entra.txt",
+        ]
+    )
+    workday = workday_connect.build_parser().parse_args(
+        [
+            "record-workday-admin",
+            "--response-worksheet-file",
+            "workday.txt",
+        ]
+    )
+
+    assert entra.verification_worksheet_file == Path("entra.txt")
+    assert workday.response_worksheet_file == Path("workday.txt")
 
 
 def test_abandon_employee_test_is_idempotent_without_active_attempt(

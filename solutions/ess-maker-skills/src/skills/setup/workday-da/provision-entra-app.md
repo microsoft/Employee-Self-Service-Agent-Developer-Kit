@@ -261,14 +261,11 @@ Do not submit one question per worksheet field. Use one
 ]
 ```
 
-Map the pasted worksheet into one structured verification payload. Exact-value
-answers populate
-the corresponding identifiers and certificate fields. Affirmative outcome
-answers become `confirmed` administrator attestations. The combined
-permissions-and-consent answer populates both required checks. The combined
-preservation answer populates the scope, authorized-client, and permission
-preservation checks as `preserved` or `remediated`. A negative or uncertain
-answer remains invalid or outstanding and must not be converted to success.
+The response is a strict labeled worksheet, not free-form evidence. Preserve
+the exact labels and answers unchanged. The controller rejects missing,
+duplicate, or unknown labels, maps only the listed successful choices, and
+then validates the resulting structured verification payload. Never parse,
+rename, infer, or normalize an answer in the skill.
 
 After submission, validate the complete worksheet once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer and ask
@@ -317,12 +314,11 @@ On resume, use the Entra administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Write the administrator's structured response directly to
-`.local/connect/workday-da/entra-verification.json` using a structured
-file-write tool, then run:
+Write the administrator's exact labeled response directly to
+`.local/connect/workday-da/entra-return-worksheet.txt`, then run:
 
 ```powershell
-python scripts/workday_connect.py record-entra --verification-file ".local\connect\workday-da\entra-verification.json"
+python scripts/workday_connect.py record-entra --verification-worksheet-file ".local\connect\workday-da\entra-return-worksheet.txt"
 ```
 
 If an exact replay matches the persisted evidence, the controller returns

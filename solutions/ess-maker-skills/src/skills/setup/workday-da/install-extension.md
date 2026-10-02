@@ -54,8 +54,8 @@ Do not request installation approval during Preflight or expose package
 sequencing details in the customer-facing response.
 
 Before Preflight completes, the controller reuses the setup-complete
-environment and capacity evidence and runs automatic live readiness checks for
-the selected agent.
+environment selection and runs automatic live readiness checks for the
+selected agent.
 If that evaluation is not ready, show the controller's customer-safe blocker
 and keep Preflight open. Do not ask the maker to run a separate readiness
 command or expose internal validation identifiers.

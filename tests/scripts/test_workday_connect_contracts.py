@@ -16,6 +16,8 @@ from workday_connect_contracts import (  # noqa: E402
     WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
+    parse_entra_return_worksheet,
+    parse_workday_admin_return_worksheet,
     validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
     validate_employee_evidence,
@@ -154,6 +156,9 @@ def _entra_verification(*, reply_urls=None, reply_url=None):
 
 def _workday_state():
     state = _state()
+    state["identifiers"]["workdaySamlEntityId"] = (
+        "http://www.workday.com/contoso_impl"
+    )
     state["identifiers"]["signingCertificate"] = {
         "thumbprint": "AA11",
         "validFrom": "2026-01-01T00:00:00Z",
@@ -199,6 +204,50 @@ def _workday_response(**overrides):
     }
     response.update(overrides)
     return response
+
+
+def _entra_worksheet() -> str:
+    return """Directory name: Contoso
+Enterprise application: Workday exact
+Application ID: 44444444-4444-4444-4444-444444444444
+Selected Reply URL: https://www.workday.com/saml/acs
+NameID source: user.userPrincipalName
+SAML signing: Sign SAML response and assertion
+Certificate thumbprint (active certificate row): AA11
+Certificate expiration date (active certificate row): 2027-01-01
+SAML configuration: Yes, confirmed
+Signing certificate: Yes, confirmed
+Authorized connector: Yes, confirmed
+Permissions and consent: Yes, permissions and consent are confirmed
+Employee assignment: Yes, access is confirmed or assignment is not required
+Existing configuration: Preserved without changes
+"""
+
+
+def _workday_worksheet() -> str:
+    return """SAML row settings: Yes, all four values match exactly
+Certificate: The new certificate created from the Entra Base64 file
+Certificate expiration: Yes, the expiration date matches exactly
+OAuth client ID: safe-client-id
+API client: An existing approved client was verified
+Client grant type: SAML Bearer
+Workday owned scope: Yes
+OAuth token URL: https://example.workday.com/ccx/oauth2/contoso_impl/token
+REST base URL: https://example.workday.com/ccx/api
+SOAP base URL: https://example.workday.com/ccx/service
+Authentication policy: An existing active policy allows SAML
+Network readiness: Both Workday hosts are allowed
+Rollout: Entire workforce - All Employees access is configured
+Public worker reports: Yes, Get permission is verified
+Integration permissions: Yes, Get permission is verified
+Functional-area scopes: Yes, all four required functional areas are present
+Optional domains: No additional domains are required
+Additional domain mappings:
+Authorization: Verified without an authorization error
+Remediated domain:
+Remediation scenario:
+Authorization retest:
+"""
 
 
 def test_entra_handoff_selects_only_exact_service_provider_id():
@@ -293,6 +342,12 @@ def test_entra_handoff_can_request_explicit_creation():
         ADMINISTRATOR_REQUIRED_FIELDS["entra"]
     )
     assert len(handoff["responseForm"]["required"]) == 9
+    assert handoff["responseForm"]["collection"]["mode"] == (
+        "labeled-worksheet"
+    )
+    assert handoff["responseForm"]["collection"]["validator"] == (
+        "parse_entra_return_worksheet"
+    )
     assert "completed administrator worksheet" in handoff["responseForm"]["note"]
     assert "Basic SAML Configuration" in capture_by_field[
         "replyUrl"
@@ -309,6 +364,41 @@ def test_entra_handoff_can_request_explicit_creation():
     assert "API permissions" in capture_by_field[
         "entraChecks.graphDelegatedPermissions"
     ]["portalLocation"]
+
+
+def test_entra_labeled_worksheet_parses_to_validated_evidence() -> None:
+    parsed = parse_entra_return_worksheet(_state(), _entra_worksheet())
+
+    result = validate_entra_verification(_state(), parsed)
+
+    assert result["identifiers"]["entraAppId"] == (
+        "44444444-4444-4444-4444-444444444444"
+    )
+    assert result["evidence"]["checks"]["adminConsent"] == {
+        "outcome": "confirmed",
+        "provenance": "administrator-attestation",
+    }
+
+
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _entra_worksheet().replace(
+            "Directory name: Contoso\n",
+            "Directory name: Contoso\nDirectory name: Other\n",
+        ),
+        _entra_worksheet() + "Unknown field: value\n",
+        _entra_worksheet().replace(
+            "SAML configuration: Yes, confirmed",
+            "SAML configuration: I'm not sure",
+        ),
+    ],
+)
+def test_entra_labeled_worksheet_rejects_ambiguous_or_failed_evidence(
+    worksheet: str,
+) -> None:
+    with pytest.raises(WorkdayConnectContractError):
+        parse_entra_return_worksheet(_state(), worksheet)
 
 
 def test_entra_handoff_reuses_matching_tenant_foundation():
@@ -641,11 +731,80 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert any("REST and SOAP hosts" in action for action in packet["actions"])
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
+    assert packet["responseForm"]["collection"]["mode"] == (
+        "labeled-worksheet"
+    )
+    assert packet["responseForm"]["collection"]["validator"] == (
+        "parse_workday_admin_return_worksheet"
+    )
     assert packet["engagementQuestion"].startswith("Have you looped in")
     assert packet["completionQuestion"].startswith("Has the Workday")
     assert any(
         "OAuth client ID" in item for item in packet["informationToReturn"]
     )
+
+
+def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _workday_worksheet(),
+    )
+
+    result = validate_workday_admin_response(_workday_state(), parsed)
+
+    assert result["identifiers"]["oauthClientId"] == "safe-client-id"
+    assert result["evidence"]["rolloutType"] == "entire-workforce"
+    assert result["evidence"]["optionalDomains"] == []
+
+
+def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
+    worksheet = _workday_worksheet().replace(
+        "Optional domains: No additional domains are required\n"
+        "Additional domain mappings:\n",
+        "Optional domains: Yes, additional supported scenarios require domains\n"
+        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Absence | custom leave lookup\n",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["optionalDomains"] == [
+        {
+            "domain": "Worker Data",
+            "scenario": "custom worker lookup",
+        },
+        {
+            "domain": "Absence",
+            "scenario": "custom leave lookup",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _workday_worksheet().replace(
+            "Workday owned scope: Yes",
+            "Workday owned scope: No or not sure",
+        ),
+        _workday_worksheet().replace(
+            "OAuth client ID: safe-client-id\n",
+            "",
+        ),
+        _workday_worksheet() + "Unknown field: value\n",
+    ],
+)
+def test_workday_labeled_worksheet_rejects_incomplete_or_failed_evidence(
+    worksheet: str,
+) -> None:
+    with pytest.raises(WorkdayConnectContractError):
+        parse_workday_admin_return_worksheet(
+            _workday_state(),
+            worksheet,
+        )
 
 
 def test_workday_packet_rejects_identifier_aliasing():

@@ -60,6 +60,46 @@ ENTRA_PRESERVATION_OUTCOMES = {
     "preserved",
     "remediated",
 }
+ENTRA_WORKSHEET_LABELS = (
+    "Directory name",
+    "Enterprise application",
+    "Application ID",
+    "Selected Reply URL",
+    "NameID source",
+    "SAML signing",
+    "Certificate thumbprint (active certificate row)",
+    "Certificate expiration date (active certificate row)",
+    "SAML configuration",
+    "Signing certificate",
+    "Authorized connector",
+    "Permissions and consent",
+    "Employee assignment",
+    "Existing configuration",
+)
+WORKDAY_ADMIN_WORKSHEET_LABELS = (
+    "SAML row settings",
+    "Certificate",
+    "Certificate expiration",
+    "OAuth client ID",
+    "API client",
+    "Client grant type",
+    "Workday owned scope",
+    "OAuth token URL",
+    "REST base URL",
+    "SOAP base URL",
+    "Authentication policy",
+    "Network readiness",
+    "Rollout",
+    "Public worker reports",
+    "Integration permissions",
+    "Functional-area scopes",
+    "Optional domains",
+    "Additional domain mappings",
+    "Authorization",
+    "Remediated domain",
+    "Remediation scenario",
+    "Authorization retest",
+)
 _SECRET_VALUE_MARKERS = (
     "-----begin certificate-----",
     "-----begin private key-----",
@@ -232,6 +272,423 @@ def _reject_secret_like_value(value: Any, label: str) -> None:
     if isinstance(value, list):
         for index, item in enumerate(value):
             _reject_secret_like_value(item, f"{label}[{index}]")
+
+
+def _parse_labeled_worksheet(
+    worksheet: str,
+    *,
+    labels: tuple[str, ...],
+    label: str,
+    multiline_labels: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    if not isinstance(worksheet, str) or not worksheet.strip():
+        raise WorkdayConnectContractError(f"{label} is required.")
+    if len(worksheet) > 16384 or "\x00" in worksheet:
+        raise WorkdayConnectContractError(
+            f"{label} exceeds the safe evidence limit."
+        )
+    normalized = worksheet.casefold()
+    if any(marker in normalized for marker in _SECRET_VALUE_MARKERS):
+        raise WorkdayConnectContractError(
+            f"{label} appears to contain secret or certificate material."
+        )
+    values: dict[str, str] = {}
+    current_label: str | None = None
+    for line_number, raw_line in enumerate(worksheet.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        matched_label = next(
+            (
+                candidate
+                for candidate in labels
+                if line.startswith(candidate + ":")
+            ),
+            None,
+        )
+        if matched_label is not None:
+            if matched_label in values:
+                raise WorkdayConnectContractError(
+                    f"{label} contains duplicate label '{matched_label}'."
+                )
+            values[matched_label] = line[len(matched_label) + 1 :].strip()
+            current_label = matched_label
+            continue
+        if current_label in multiline_labels:
+            values[current_label] = "\n".join(
+                value
+                for value in (values[current_label], line)
+                if value
+            )
+            continue
+        raise WorkdayConnectContractError(
+            f"{label} line {line_number} does not use a recognized exact label."
+        )
+    missing = [candidate for candidate in labels if candidate not in values]
+    if missing:
+        raise WorkdayConnectContractError(
+            f"{label} is missing labels: " + ", ".join(missing) + "."
+        )
+    return values
+
+
+def _worksheet_choice(
+    values: Mapping[str, str],
+    label: str,
+    choices: Mapping[str, str],
+) -> str:
+    supplied = str(values.get(label) or "").strip()
+    normalized = supplied.casefold()
+    normalized_choices = {
+        option.casefold(): mapped for option, mapped in choices.items()
+    }
+    if normalized not in normalized_choices:
+        raise WorkdayConnectContractError(
+            f"{label} must use one of the worksheet's listed successful "
+            "answers."
+        )
+    return normalized_choices[normalized]
+
+
+def _administrator_attestation(
+    *,
+    observed_value: str | None = None,
+) -> dict[str, str]:
+    result = {
+        "outcome": "confirmed",
+        "provenance": "administrator-attestation",
+    }
+    if observed_value is not None:
+        result["observedValue"] = observed_value
+    return result
+
+
+def parse_entra_return_worksheet(
+    _state: Mapping[str, Any],
+    worksheet: str,
+) -> dict[str, Any]:
+    values = _parse_labeled_worksheet(
+        worksheet,
+        labels=ENTRA_WORKSHEET_LABELS,
+        label="Microsoft Entra administrator return worksheet",
+    )
+    confirmed = {
+        "Yes, confirmed": "confirmed",
+    }
+    permissions = _worksheet_choice(
+        values,
+        "Permissions and consent",
+        {
+            "Yes, permissions and consent are confirmed": "confirmed",
+        },
+    )
+    preservation = _worksheet_choice(
+        values,
+        "Existing configuration",
+        {
+            "Preserved without changes": "preserved",
+            "Remediated without replacing unrelated configuration": "remediated",
+        },
+    )
+    _worksheet_choice(values, "SAML configuration", confirmed)
+    _worksheet_choice(values, "Signing certificate", confirmed)
+    _worksheet_choice(values, "Authorized connector", confirmed)
+    _worksheet_choice(
+        values,
+        "Employee assignment",
+        {
+            "Yes, access is confirmed or assignment is not required": "confirmed",
+        },
+    )
+    name_id = _safe_nonsecret_text(
+        values["NameID source"],
+        "NameID source",
+    )
+    saml_signing = _worksheet_choice(
+        values,
+        "SAML signing",
+        {
+            "Sign SAML response and assertion": (
+                "Sign SAML response and assertion"
+            ),
+        },
+    )
+    checks = {
+        "samlMode": _administrator_attestation(),
+        "signingCertificate": _administrator_attestation(),
+        "connectorPreauthorized": _administrator_attestation(),
+        "graphDelegatedPermissions": _administrator_attestation(),
+        "adminConsent": _administrator_attestation(),
+        "userAssignment": _administrator_attestation(),
+        "nameId": _administrator_attestation(observed_value=name_id),
+        "samlSigningOption": _administrator_attestation(
+            observed_value=saml_signing,
+        ),
+        "existingScopesPreserved": _administrator_attestation(
+            observed_value=preservation,
+        ),
+        "authorizedClientsPreserved": _administrator_attestation(
+            observed_value=preservation,
+        ),
+        "permissionsPreserved": _administrator_attestation(
+            observed_value=preservation,
+        ),
+    }
+    if permissions != "confirmed":
+        raise WorkdayConnectContractError(
+            "Permissions and consent are incomplete."
+        )
+    return {
+        "selectedDirectory": {
+            "displayName": _safe_nonsecret_text(
+                values["Directory name"],
+                "Directory name",
+            ),
+        },
+        "application": {
+            "displayName": _safe_nonsecret_text(
+                values["Enterprise application"],
+                "Enterprise application",
+            ),
+            "appId": _safe_nonsecret_text(
+                values["Application ID"],
+                "Application ID",
+            ),
+        },
+        "replyUrl": _safe_nonsecret_text(
+            values["Selected Reply URL"],
+            "Selected Reply URL",
+        ),
+        "certificate": {
+            "thumbprint": _safe_nonsecret_text(
+                values["Certificate thumbprint (active certificate row)"],
+                "Certificate thumbprint",
+            ),
+            "validTo": _safe_nonsecret_text(
+                values["Certificate expiration date (active certificate row)"],
+                "Certificate expiration date",
+            ),
+        },
+        "checks": checks,
+    }
+
+
+def _optional_domain_mappings(value: str) -> list[dict[str, str]]:
+    if not value.strip():
+        return []
+    result = []
+    for line in value.splitlines():
+        parts = [part.strip() for part in line.split("|", 1)]
+        if len(parts) != 2 or not all(parts):
+            raise WorkdayConnectContractError(
+                "Additional domain mappings must use 'Domain | supported "
+                "scenario', one mapping per line."
+            )
+        result.append({"domain": parts[0], "scenario": parts[1]})
+    return result
+
+
+def parse_workday_admin_return_worksheet(
+    state: Mapping[str, Any],
+    worksheet: str,
+) -> dict[str, Any]:
+    values = _parse_labeled_worksheet(
+        worksheet,
+        labels=WORKDAY_ADMIN_WORKSHEET_LABELS,
+        label="Workday administrator return worksheet",
+        multiline_labels=frozenset({"Additional domain mappings"}),
+    )
+    _worksheet_choice(
+        values,
+        "SAML row settings",
+        {"Yes, all four values match exactly": "verified"},
+    )
+    _worksheet_choice(
+        values,
+        "Certificate",
+        {
+            "The new certificate created from the Entra Base64 file": "verified",
+        },
+    )
+    _worksheet_choice(
+        values,
+        "Certificate expiration",
+        {"Yes, the expiration date matches exactly": "verified"},
+    )
+    optional_domain_outcome = _worksheet_choice(
+        values,
+        "Optional domains",
+        {
+            "No additional domains are required": "none",
+            "Yes, additional supported scenarios require domains": "provided",
+        },
+    )
+    optional_domains = _optional_domain_mappings(
+        values["Additional domain mappings"]
+    )
+    if optional_domain_outcome == "none" and optional_domains:
+        raise WorkdayConnectContractError(
+            "Additional domain mappings must be blank when no additional "
+            "domains are required."
+        )
+    if optional_domain_outcome == "provided" and not optional_domains:
+        raise WorkdayConnectContractError(
+            "At least one additional domain mapping is required."
+        )
+    authorization = _worksheet_choice(
+        values,
+        "Authorization",
+        {
+            "Verified without an authorization error": "verified",
+            "Task not authorized was remediated and retested": (
+                "task-not-authorized-remediated"
+            ),
+        },
+    )
+    identifiers = state.get("identifiers") or {}
+    response: dict[str, Any] = {
+        "identityProviderOutcome": "verified-entra-issuer",
+        "enabledServiceProviderId": _required_text(
+            identifiers,
+            "workdaySamlEntityId",
+            "Verified Workday Service Provider ID",
+        ),
+        "certificateSelectionOutcome": (
+            "entra-signing-certificate-selected"
+        ),
+        "certificateValidityOutcome": (
+            "matches-verified-entra-certificate"
+        ),
+        "oauthClientId": _safe_nonsecret_text(
+            values["OAuth client ID"],
+            "OAuth client ID",
+        ),
+        "apiClientOutcome": _worksheet_choice(
+            values,
+            "API client",
+            {
+                "An existing approved client was verified": (
+                    "existing-client-verified"
+                ),
+                "A new client was registered": "new-client-registered",
+            },
+        ),
+        "clientGrantType": _worksheet_choice(
+            values,
+            "Client grant type",
+            {"SAML Bearer": "saml-bearer"},
+        ),
+        "includeWorkdayOwnedScope": _worksheet_choice(
+            values,
+            "Workday owned scope",
+            {"Yes": "yes"},
+        ),
+        "oauthTokenUrl": values["OAuth token URL"],
+        "restBaseUrl": values["REST base URL"],
+        "soapBaseUrl": values["SOAP base URL"],
+        "authenticationPolicyOutcome": _worksheet_choice(
+            values,
+            "Authentication policy",
+            {
+                "An existing active policy allows SAML": (
+                    "existing-active-policy"
+                ),
+                "A reviewed policy was activated": (
+                    "reviewed-policy-activated"
+                ),
+            },
+        ),
+        "networkReadinessOutcome": _worksheet_choice(
+            values,
+            "Network readiness",
+            {
+                "Both Workday hosts are allowed": "confirmed-hosts-allowed",
+                "No customer-managed firewall change is required": (
+                    "no-customer-firewall-change-required"
+                ),
+            },
+        ),
+        "identityProviderSsoServiceUrl": _required_text(
+            identifiers,
+            "entraLoginUrl",
+            "Verified Microsoft Entra Login URL",
+        ),
+        "signOnRedirectUrl": _required_text(
+            identifiers,
+            "replyUrl",
+            "Verified Microsoft Entra Reply URL",
+        ),
+        "rolloutType": _worksheet_choice(
+            values,
+            "Rollout",
+            {
+                "Entire workforce - All Employees access is configured": (
+                    "entire-workforce"
+                ),
+                (
+                    "Limited or test population - the intended Workday "
+                    "security group and test employee access are configured"
+                ): "limited-or-test",
+            },
+        ),
+        "publicWorkerReportsOutcome": _worksheet_choice(
+            values,
+            "Public worker reports",
+            {"Yes, Get permission is verified": "get-permission-verified"},
+        ),
+        "integrationPermissionsGetOutcome": _worksheet_choice(
+            values,
+            "Integration permissions",
+            {"Yes, Get permission is verified": "get-permission-verified"},
+        ),
+        "functionalAreaScopes": list(
+            WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES
+        ),
+        "optionalDomains": optional_domains,
+        "authorizationOutcome": authorization,
+    }
+    _worksheet_choice(
+        values,
+        "Functional-area scopes",
+        {
+            "Yes, all four required functional areas are present": "verified",
+        },
+    )
+    if authorization == "task-not-authorized-remediated":
+        response.update(
+            {
+                "authorizationRemediationDomain": _safe_nonsecret_text(
+                    values["Remediated domain"],
+                    "Remediated domain",
+                ),
+                "authorizationRemediationScenario": _safe_nonsecret_text(
+                    values["Remediation scenario"],
+                    "Remediation scenario",
+                ),
+                "authorizationRetestOutcome": _worksheet_choice(
+                    values,
+                    "Authorization retest",
+                    {
+                        "Verified after remediation": (
+                            "verified-after-remediation"
+                        ),
+                    },
+                ),
+            }
+        )
+    elif any(
+        values[label].strip()
+        for label in (
+            "Remediated domain",
+            "Remediation scenario",
+            "Authorization retest",
+        )
+    ):
+        raise WorkdayConnectContractError(
+            "Authorization remediation fields must be blank when no bounded "
+            "remediation was required."
+        )
+    return response
 
 
 def _certificate_thumbprint(value: Any, label: str) -> str:
@@ -634,6 +1091,13 @@ def build_entra_handoff(
         ],
         "responseForm": {
             "required": sorted(ADMINISTRATOR_REQUIRED_FIELDS["entra"]),
+            "collection": {
+                "mode": "labeled-worksheet",
+                "labels": list(ENTRA_WORKSHEET_LABELS),
+                "duplicateLabels": "reject",
+                "unknownLabels": "reject",
+                "validator": "parse_entra_return_worksheet",
+            },
             "note": (
                 "Collect the completed administrator worksheet in one "
                 "response and do not accept blank required lines. Do not ask "
@@ -1277,6 +1741,13 @@ def build_workday_admin_packet(
                 "optionalDomains",
                 "authorizationOutcome",
             ],
+            "collection": {
+                "mode": "labeled-worksheet",
+                "labels": list(WORKDAY_ADMIN_WORKSHEET_LABELS),
+                "duplicateLabels": "reject",
+                "unknownLabels": "reject",
+                "validator": "parse_workday_admin_return_worksheet",
+            },
             "note": (
                 "Return the completed worksheet in one response. Do not paste "
                 "passwords, client secrets, tokens, cookies, certificate "
