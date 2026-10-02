@@ -39,7 +39,8 @@ CEA-specific branch in the DA-GA solution.
 
 Optional local reminder state is one-time per DA environment/agent
 association. The reminder is evaluated only after a verified eligible DA
-deployment; redeploying the same association is silent. The permanent
+deployment receipt is present; redeploying the same association is silent.
+The permanent
 `/analytics` action remains available at any time.
 State is written by a `ReminderStore` selected via
 `ADK_ANALYTICS_STORE`:

@@ -64,9 +64,11 @@ Testability / CLI
 --------------------------------------------------------------------------
 
 The ``/analytics`` prompt drives this module through the CLI at the
-bottom of the file (``--record-invocation``, ``--show``, ``--dismiss``,
-``--status``) so the SKILL.md doesn't need to shell out to Python for
-individual functions.
+bottom of the file (``--record-invocation``, ``--show``,
+``--post-deploy``, ``--dismiss``, ``--status``) so the SKILL.md doesn't need
+to shell out to Python for individual functions. Verified evaluation
+deployments write a short-lived local receipt; ``--post-deploy`` consumes a
+matching receipt before it can mutate reminder state.
 The Python API (``resolve_pointer_url``, ``read_association``,
 ``render_pointer_line``, ``get_reminder_store``) is also usable by future
 post-setup reminder surfaces without duplicating the resolver logic.
@@ -80,7 +82,7 @@ import os
 import sys
 import time
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 # Mirror the sibling-import pattern the other scripts use so this works both
 # when run as ``python scripts/analytics_pointer.py`` from the solution root
@@ -111,6 +113,9 @@ REASON_VALIDATION_FAILED = "validation_failed"  # reserved for FR2 stub follow-u
 # .local/config.json path resolution: normally in cwd (the maker's workspace)
 # but tests can override via analytics_pointer.LOCAL_CONFIG_PATH_OVERRIDE.
 _DEFAULT_LOCAL_CONFIG = os.path.join(".local", "config.json")
+_DEFAULT_DEPLOYMENT_RECEIPT = os.path.join(
+    ".local", "analytics-deployment.json"
+)
 
 
 def _feature_flag_enabled() -> bool:
@@ -283,8 +288,8 @@ def resolve_pointer_url(
     if not env_id or not agent_id:
         return "", REASON_MISSING_ASSOCIATION
     url = studio_origin.rstrip("/") + STUDIO_ANALYTICS_PATH.format(
-        env_id=env_id,
-        agent_id=agent_id,
+        env_id=quote(str(env_id), safe=""),
+        agent_id=quote(str(agent_id), safe=""),
     )
     return url, ""
 
@@ -452,6 +457,103 @@ class LocalFileReminderStore:
         self._write(data)
 
 
+def write_verified_deployment_marker(
+    config: dict[str, Any] | None = None,
+    *,
+    path: str | os.PathLike[str] | None = None,
+) -> bool:
+    """Record a verified DA deployment for the post-deploy reminder.
+
+    The deployment helper writes this receipt only after remote state and
+    local synchronization have both been verified. The CLI consumes a
+    matching receipt before showing the one-time reminder.
+    """
+    cfg = config if isinstance(config, dict) else _load_local_config()
+    if not _is_da_config(cfg):
+        return False
+    assoc = read_association_from_config(cfg)
+    if assoc is None:
+        return False
+    maker, env_id, agent_id = assoc
+    receipt_path = str(path) if path else _DEFAULT_DEPLOYMENT_RECEIPT
+    payload = {
+        "maker_aad": maker,
+        "environment_id": env_id,
+        "agent_id": agent_id,
+        "recorded_at": int(time.time()),
+    }
+    try:
+        os.makedirs(os.path.dirname(receipt_path) or ".", exist_ok=True)
+        temp_path = receipt_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        os.replace(temp_path, receipt_path)
+    except OSError:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def read_association_from_config(
+    cfg: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    """Return the configured association without rereading the config file."""
+    env_id = _extract_env_id(cfg)
+    agent_id = _extract_agent_id(cfg)
+    maker_aad = _extract_maker_aad(cfg)
+    if not env_id or not agent_id:
+        return None
+    return maker_aad, env_id, agent_id
+
+
+def _consume_verified_deployment_marker(
+    association: tuple[str, str, str],
+    *,
+    path: str | os.PathLike[str] | None = None,
+) -> bool:
+    receipt_path = str(path) if path else _DEFAULT_DEPLOYMENT_RECEIPT
+    try:
+        with open(receipt_path, "r", encoding="utf-8") as handle:
+            receipt = json.load(handle)
+        if not isinstance(receipt, dict):
+            return False
+        expected = {
+            "maker_aad": association[0],
+            "environment_id": association[1],
+            "agent_id": association[2],
+        }
+        if any(receipt.get(key) != value for key, value in expected.items()):
+            return False
+        os.remove(receipt_path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _verified_deployment_marker_matches(
+    association: tuple[str, str, str],
+    *,
+    path: str | os.PathLike[str] | None = None,
+) -> bool:
+    receipt_path = str(path) if path else _DEFAULT_DEPLOYMENT_RECEIPT
+    try:
+        with open(receipt_path, "r", encoding="utf-8") as handle:
+            receipt = json.load(handle)
+        if not isinstance(receipt, dict):
+            return False
+        expected = {
+            "maker_aad": association[0],
+            "environment_id": association[1],
+            "agent_id": association[2],
+        }
+        return all(receipt.get(key) == value for key, value in expected.items())
+    except (OSError, ValueError):
+        return False
+
+
 def get_reminder_store() -> ReminderStore:
     """Return the configured :class:`ReminderStore` implementation.
 
@@ -514,9 +616,18 @@ def _cli_post_deploy(args: argparse.Namespace) -> int:
         return 0
 
     maker, env_id, agent_id = assoc
+    receipt_path = _DEFAULT_DEPLOYMENT_RECEIPT
+    if args.config:
+        receipt_path = os.path.join(
+            os.path.dirname(os.path.abspath(str(args.config))),
+            os.path.basename(_DEFAULT_DEPLOYMENT_RECEIPT),
+        )
+    if not _verified_deployment_marker_matches(assoc, path=receipt_path):
+        return 0
     try:
         store = get_reminder_store()
         if store.is_completed(maker, env_id, agent_id):
+            _consume_verified_deployment_marker(assoc, path=receipt_path)
             return 0
     except Exception:  # noqa: BLE001 — reminder state must not break deploy
         store = None
@@ -531,6 +642,8 @@ def _cli_post_deploy(args: argparse.Namespace) -> int:
         # resolved; a later eligible deployment can try again.
         return 0
 
+    if not _consume_verified_deployment_marker(assoc, path=receipt_path):
+        return 0
     print(render_pointer_line(url, reason, reminder_framing=True))
     if store is not None:
         try:

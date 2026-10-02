@@ -119,6 +119,20 @@ def test_resolve_pointer_url_uses_test_studio_origin(monkeypatch):
     )
 
 
+def test_resolve_pointer_url_quotes_path_segments(monkeypatch):
+    import analytics_pointer
+
+    monkeypatch.delenv("ADK_ANALYTICS_POINTER", raising=False)
+
+    url, reason = analytics_pointer.resolve_pointer_url(
+        env_id="env/with space",
+        agent_id="agent?unexpected",
+    )
+
+    assert reason == ""
+    assert "/env%2Fwith%20space/copilots/agent%3Funexpected/analytics" in url
+
+
 # --- read_association ----------------------------------------------------
 
 
@@ -413,6 +427,15 @@ def test_cli_show_prints_url_when_resolved(monkeypatch, tmp_path: Path):
     assert "https://copilotstudio.test.microsoft.com/" in out
 
 
+def _write_verified_deployment_marker(
+    analytics_pointer, cfg_path: Path, marker_path: Path,
+) -> None:
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert analytics_pointer.write_verified_deployment_marker(
+        cfg, path=marker_path,
+    )
+
+
 def test_cli_post_deploy_shows_reminder_once_for_da_association(
     monkeypatch, tmp_path: Path,
 ):
@@ -434,6 +457,8 @@ def test_cli_post_deploy_shows_reminder_once_for_da_association(
         ),
         "agent": {"botId": "bot-guid-post-deploy"},
     })
+    marker_path = cfg_path.parent / "analytics-deployment.json"
+    _write_verified_deployment_marker(analytics_pointer, cfg_path, marker_path)
 
     first = io.StringIO()
     with redirect_stdout(first):
@@ -450,6 +475,79 @@ def test_cli_post_deploy_shows_reminder_once_for_da_association(
             ["--config", str(cfg_path), "--post-deploy"],
         ) == 0
     assert second.getvalue() == ""
+
+
+def test_cli_post_deploy_keeps_receipt_when_url_unresolved(
+    monkeypatch, tmp_path: Path,
+):
+    import analytics_pointer
+
+    reminder_path = tmp_path / "reminder.json"
+    monkeypatch.setattr(
+        analytics_pointer,
+        "get_reminder_store",
+        lambda: analytics_pointer.LocalFileReminderStore(path=reminder_path),
+    )
+    cfg_path = tmp_path / ".local" / "config.json"
+    _write_config(cfg_path, {
+        "releaseLine": "da",
+        "environmentId": "env-guid-unresolved",
+        "agent": {"botId": "bot-guid-unresolved"},
+    })
+    marker_path = cfg_path.parent / "analytics-deployment.json"
+    _write_verified_deployment_marker(analytics_pointer, cfg_path, marker_path)
+
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "off")
+    with redirect_stdout(io.StringIO()):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert marker_path.exists()
+    assert not reminder_path.exists()
+
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "on")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert "https://copilotstudio.microsoft.com/" in buf.getvalue()
+    assert not marker_path.exists()
+
+
+def test_cli_post_deploy_does_not_emit_capability_telemetry(
+    monkeypatch, tmp_path: Path,
+):
+    import adk_telemetry
+    import analytics_pointer
+
+    emitted = []
+    monkeypatch.setattr(
+        adk_telemetry,
+        "emit_capability_use",
+        lambda capability, block=False: emitted.append((capability, block)),
+    )
+    cfg_path = tmp_path / ".local" / "config.json"
+    _write_config(cfg_path, {
+        "releaseLine": "da",
+        "environmentId": "env-guid-telemetry",
+        "agent": {"botId": "bot-guid-telemetry"},
+    })
+    marker_path = cfg_path.parent / "analytics-deployment.json"
+    _write_verified_deployment_marker(analytics_pointer, cfg_path, marker_path)
+    monkeypatch.setattr(
+        analytics_pointer,
+        "get_reminder_store",
+        lambda: analytics_pointer.LocalFileReminderStore(
+            path=tmp_path / "reminder.json",
+        ),
+    )
+
+    with redirect_stdout(io.StringIO()):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert emitted == []
 
 
 def test_cli_post_deploy_is_silent_for_non_da_association(
