@@ -160,6 +160,30 @@ def test_requires_manual_confirmation_when_allocation_service_fails():
     }
 
 
+@pytest.mark.parametrize("allocated", ["not-a-number", None, True, 1.5, -1])
+def test_requires_manual_confirmation_when_allocation_value_is_invalid(
+    allocated,
+):
+    r = _run(
+        _runner(
+            powerplatform=_FakePP(
+                [{"currencyType": "MCSMessages", "allocated": allocated}]
+            ),
+            payg=False,
+        )
+    )
+
+    assert r.status == "Manual"
+    assert "invalid allocation value" in r.result
+    assert r.evidence == {
+        "environmentId": "env-guid",
+        "outcome": "invalid-response",
+        "errorType": "InvalidAllocationValue",
+        "matchingAllocations": 1,
+        "invalidAllocationValues": 1,
+    }
+
+
 @pytest.mark.parametrize(
     ("ring", "expected_origin"),
     [

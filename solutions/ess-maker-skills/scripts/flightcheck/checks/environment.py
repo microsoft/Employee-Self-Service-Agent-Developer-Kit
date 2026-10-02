@@ -504,6 +504,8 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
             detail = "access was denied"
         elif outcome == "service-error":
             detail = "the service returned an error"
+        elif outcome == "invalid-response":
+            detail = "the service response contained an invalid allocation value"
         else:
             detail = "the required API capability was unavailable"
         return [_env_capacity(Status.MANUAL.value,

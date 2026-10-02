@@ -886,10 +886,31 @@ def _env_mcs_allocation_observation(
         if currency != _MCS_MESSAGES_CURRENCY.lower():
             continue
         matched += 1
+        raw_allocated = allocation.get("allocated")
         try:
-            total += int(allocation.get("allocated") or 0)
+            if (
+                raw_allocated is None
+                or isinstance(raw_allocated, bool)
+                or (
+                    isinstance(raw_allocated, float)
+                    and not raw_allocated.is_integer()
+                )
+            ):
+                raise ValueError
+            parsed_allocated = int(raw_allocated)
+            if parsed_allocated < 0:
+                raise ValueError
         except (TypeError, ValueError):
-            continue
+            evidence.update(
+                {
+                    "outcome": "invalid-response",
+                    "errorType": "InvalidAllocationValue",
+                    "matchingAllocations": matched,
+                    "invalidAllocationValues": 1,
+                }
+            )
+            return None, evidence
+        total += parsed_allocated
     evidence.update(
         {
             "outcome": "empty-results" if not allocations else "verified",
