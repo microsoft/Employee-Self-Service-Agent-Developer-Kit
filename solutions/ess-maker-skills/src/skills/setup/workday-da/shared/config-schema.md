@@ -11,11 +11,11 @@ The only writable lifecycle state is:
 writes, and phase transitions. Skills must use `scripts/workday_connect.py`;
 they must not edit this file directly or create a Markdown state mirror.
 
-## Schema version 6
+## Schema version 7
 
 ```json
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "provider": "workday",
   "status": "in-progress",
   "scope": {},
@@ -59,7 +59,27 @@ they must not edit this file directly or create a Markdown state mirror.
 - `phases` contains exactly the six controller phases.
 
 Each phase stores status, completed action keys, optional runtime approval,
-evidence, current blocker, and updated time.
+evidence, current blocker, and updated time. The Entra and Workday
+administrator phases also store:
+
+```json
+{
+  "administrator": {
+    "substage": "not-started",
+    "partialEvidence": {},
+    "invalidFields": [],
+    "updatedAt": null
+  }
+}
+```
+
+The bounded substages are `not-started`, `administrator-engaged`,
+`handoff-presented`, `awaiting-completion`, `completion-confirmed`,
+`collecting-evidence`, and `evidence-validated`. Each transition advances by
+at most one substage; exact replay is allowed. Only allow-listed, non-secret
+fields may enter
+`partialEvidence`. Invalid fields are removed from partial evidence and
+reopened without discarding valid sibling values.
 
 ## Identifier invariant
 
@@ -89,9 +109,11 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2, schema-v3, schema-v4, schema-v5, or legacy row-based state is backed up to
-`config.pre-v6.json` before one-time migration. When Entra and Workday
-administrator phases were already complete, migration captures their evidence
-as the reusable tenant foundation. A previously complete runtime phase is
-reopened when it lacks live Workday topic activation evidence. Legacy Markdown
-task files, when present, are historical snapshots and are never rewritten.
+Schema-v2 through schema-v6, or legacy row-based state, is backed up to
+`config.pre-v7.json` before one-time migration. Schema-v6 administrator
+evidence is preserved as safe partial evidence, while Entra and downstream
+phases reopen for the expanded directory, application-pairing, federation, and
+least-privilege checks. A previously complete runtime phase is reopened when
+it lacks live Workday runtime-template wiring or topic-activation evidence.
+Legacy Markdown task files, when present, are historical snapshots and are
+never rewritten.

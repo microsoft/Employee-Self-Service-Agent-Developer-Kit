@@ -456,7 +456,7 @@ def test_runtime_plan_rejects_connection_id_drift_after_verification():
         )
 
 
-def test_runtime_apply_verifies_all_mutations(monkeypatch):
+def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     records = _records()
     verified_hashes = []
     recorded_stages = []
@@ -517,9 +517,22 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    expected_flows = set(records["flows"])
+    for flow_name in expected_flows:
+        assert f'[INFO] Running {script} for flow "{flow_name}".' in messages
+        assert (
+            f'[INFO] {script} completed for flow "{flow_name}"; '
+            "Dataverse authorization was verified."
+        ) in messages
+    assert messages.count("Dataverse authorization was verified.") == len(
+        expected_flows
+    )
+    assert "[ERROR]" not in messages
 
 
-def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
+def test_runtime_records_verified_stages_before_later_failure(monkeypatch, capsys):
     records = _records()
     recorded_stages = []
 
@@ -572,6 +585,12 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch):
         value["statecode"] == 1 and value["statuscode"] == 2
         for value in records["flows"].values()
     )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for flow " in messages
+    assert f"[ERROR] {script} failed for flow " in messages
+    assert "explicit [FAIL] result" in messages
+    assert "Dataverse authorization was verified." not in messages
 
 
 def test_runtime_requires_completed_connection_phase():
@@ -738,7 +757,7 @@ def test_runtime_rejects_a_different_dataverse_identity():
         )
 
 
-def test_runtime_authorization_timeout_is_structured(monkeypatch):
+def test_runtime_authorization_timeout_is_structured(monkeypatch, capsys):
     plan = {
         "scope": {
             "dataverseUrl": "https://contoso.crm.dynamics.com",
@@ -763,3 +782,12 @@ def test_runtime_authorization_timeout_is_structured(monkeypatch):
             plan,
             runner=timed_out,
         )
+
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for workflow workflow-id." in messages
+    assert (
+        f"[ERROR] {script} failed for workflow workflow-id: "
+        "execution did not finish within 10 minutes."
+    ) in messages
+    assert "Dataverse authorization was verified." not in messages

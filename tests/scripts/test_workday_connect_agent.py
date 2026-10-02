@@ -30,6 +30,157 @@ def _state():
     return state
 
 
+def _complete_preflight(store) -> None:
+    for action in ("verify-target", "verify-package"):
+        store.complete_action(
+            "preflight",
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status("preflight", "complete")
+
+
+def _advance_administrator_to_completion(store, phase_id: str) -> None:
+    for substage in (
+        "administrator-engaged",
+        "handoff-presented",
+        "awaiting-completion",
+        "completion-confirmed",
+    ):
+        store.record_administrator_progress(phase_id, substage)
+
+
+def _entra_partial_evidence() -> dict:
+    checks = {
+        name: {
+            "outcome": "verified",
+            "provenance": "microsoft-graph",
+        }
+        for name in (
+            "samlMode",
+            "signingCertificate",
+            "connectorPreauthorized",
+            "graphDelegatedPermissions",
+            "adminConsent",
+            "userAssignment",
+        )
+    }
+    checks.update(
+        {
+            "nameId": {
+                "outcome": "verified",
+                "provenance": "microsoft-graph",
+                "observedValue": "user.userPrincipalName",
+            },
+            "samlSigningOption": {
+                "outcome": "confirmed",
+                "provenance": "administrator-attestation",
+                "observedValue": "Sign SAML response and assertion",
+            },
+            "existingScopesPreserved": {
+                "outcome": "verified",
+                "provenance": "microsoft-graph",
+                "observedValue": "preserved",
+            },
+            "authorizedClientsPreserved": {
+                "outcome": "verified",
+                "provenance": "microsoft-graph",
+                "observedValue": "preserved",
+            },
+            "permissionsPreserved": {
+                "outcome": "verified",
+                "provenance": "microsoft-graph",
+                "observedValue": "preserved",
+            },
+        }
+    )
+    app_id = "44444444-4444-4444-4444-444444444444"
+    return {
+        "selectedDirectoryId": (
+            "00000000-0000-0000-0000-000000000000"
+        ),
+        "selectedDirectoryDisplayName": "Contoso",
+        "applicationId": app_id,
+        "applicationDisplayName": "Workday",
+        "applicationObjectId": (
+            "55555555-5555-5555-5555-555555555555"
+        ),
+        "servicePrincipalId": (
+            "66666666-6666-6666-6666-666666666666"
+        ),
+        "applicationIdentifierUris": [
+            "http://www.workday.com/contoso_impl",
+            f"api://{app_id}",
+        ],
+        "applicationReplyUrls": [
+            "https://www.workday.com/saml/acs",
+        ],
+        "scopeGuid": "77777777-7777-7777-7777-777777777777",
+        "replyUrl": "https://www.workday.com/saml/acs",
+        "microsoftEntraIdentifier": (
+            "https://sts.windows.net/"
+            "00000000-0000-0000-0000-000000000000/"
+        ),
+        "loginUrl": (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2"
+        ),
+        "entraChecks": checks,
+        "nameIdSource": "user.userPrincipalName",
+        "samlSigningOption": "Sign SAML response and assertion",
+        "certificateThumbprint": "AA11",
+        "certificateValidFrom": "2026-01-01T00:00:00Z",
+        "certificateValidTo": "2027-01-01T00:00:00Z",
+        "scopePreservationOutcome": "preserved",
+        "authorizedClientPreservationOutcome": "preserved",
+        "permissionPreservationOutcome": "preserved",
+    }
+
+
+def _workday_partial_evidence() -> dict:
+    return {
+        "identityProviderOutcome": "verified-entra-issuer",
+        "enabledServiceProviderId": (
+            "http://www.workday.com/contoso_impl"
+        ),
+        "certificateSelectionOutcome": (
+            "entra-signing-certificate-selected"
+        ),
+        "certificateValidityOutcome": (
+            "matches-verified-entra-certificate"
+        ),
+        "oauthClientId": "safe-client-id",
+        "oauthTokenUrl": (
+            "https://example.workday.com/ccx/oauth2/"
+            "contoso_impl/token"
+        ),
+        "restBaseUrl": "https://example.workday.com/ccx/api",
+        "soapBaseUrl": "https://example.workday.com/ccx/service",
+        "authenticationPolicyOutcome": "existing-active-policy",
+        "networkReadinessOutcome": "confirmed-hosts-allowed",
+        "apiClientOutcome": "existing-client-verified",
+        "clientGrantType": "saml-bearer",
+        "includeWorkdayOwnedScope": "yes",
+        "identityProviderSsoServiceUrl": (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2"
+        ),
+        "signOnRedirectUrl": "https://www.workday.com/saml/acs",
+        "rolloutType": "limited-or-test",
+        "employeeSecurityGroup": "ESS Workday Pilot Employees",
+        "publicWorkerReportsOutcome": "get-permission-verified",
+        "integrationPermissionsGetOutcome": "get-permission-verified",
+        "functionalAreaScopes": [
+            "Core Payroll",
+            "Organizations and Roles",
+            "Staffing",
+            "Time Off and Leave",
+        ],
+        "optionalDomains": [],
+        "authorizationOutcome": "verified",
+    }
+
+
 def _write_workspace(root: Path) -> None:
     agent = root / "workspace" / "agents" / "ess-hr"
     topics = agent / "topics"
@@ -77,6 +228,80 @@ def _write_workspace(root: Path) -> None:
                 ],
             }
         ),
+        encoding="utf-8",
+    )
+
+
+def _write_runtime_wiring(root: Path, *, nested_call: bool = False) -> None:
+    agent = root / "workspace" / "agents" / "ess-hr"
+    component_map_path = agent / ".component-map.json"
+    component_map = json.loads(
+        component_map_path.read_text(encoding="utf-8")
+    )
+    runtime_schema = (
+        "contoso.topic.WorkdaySystemSetRuntimeTemplateConfigurations"
+    )
+    topics = agent / "topics"
+    topics.joinpath("conversation-start.mcs.yml").write_text(
+        (
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: OnConversationStart\n"
+            "  actions:\n"
+            "    - kind: BeginDialog\n"
+            f"      dialog: {runtime_schema}\n"
+            "    - kind: SendActivity\n"
+            "      activity: Welcome\n"
+        ),
+        encoding="utf-8",
+    )
+    topics.joinpath("runtime-template.mcs.yml").write_text(
+        "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n",
+        encoding="utf-8",
+    )
+    user_context_actions = (
+        "  actions:\n"
+        "    - kind: BeginDialog\n"
+        f"      dialog: {runtime_schema}\n"
+        if nested_call
+        else "  actions: []\n"
+    )
+    topics.joinpath("user-context-v2.mcs.yml").write_text(
+        "kind: AdaptiveDialog\nbeginDialog:\n  kind: OnRedirect\n"
+        + user_context_actions,
+        encoding="utf-8",
+    )
+    component_map.update(
+        {
+            "topics/conversation-start.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "conversation-start",
+                "schemaName": "contoso.topic.ConversationStart",
+                "displayName": "Conversation Start",
+            },
+            "topics/runtime-template.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "runtime-template",
+                "schemaName": runtime_schema,
+                "displayName": (
+                    "Workday [System] - 1: Set Runtime Template "
+                    "Configurations"
+                ),
+            },
+            "topics/user-context-v2.mcs.yml": {
+                "componentKind": "DialogComponent",
+                "componentId": "user-context-v2",
+                "schemaName": (
+                    "contoso.topic.WorkdaySystemGetUserContextV2"
+                ),
+                "displayName": (
+                    "Workday [System] - 1: Set User Context V2"
+                ),
+            },
+        }
+    )
+    component_map_path.write_text(
+        json.dumps(component_map),
         encoding="utf-8",
     )
 
@@ -171,6 +396,204 @@ def test_topic_activation_skips_checkpoints_and_allows_diagnostics(
         expectation["requireCleanDiagnostics"] is False
         for expectation in client.expectations
     )
+
+
+def test_runtime_template_wiring_is_verified_against_live_topics(
+    tmp_path: Path,
+) -> None:
+    from workday_connect_agent import verify_runtime_template_wiring
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    client = _VerifiedClient()
+
+    evidence = verify_runtime_template_wiring(
+        tmp_path,
+        _state(),
+        client_factory=lambda _config: client,
+        converter=lambda items: [
+            {
+                "key": item["key"],
+                "success": True,
+                "objectModel": {"$kind": "AdaptiveDialog", "key": item["key"]},
+            }
+            for item in items
+        ],
+    )
+
+    assert evidence["verifiedComponents"] == 3
+    assert evidence["runtimeTemplate"].endswith(
+        "WorkdaySystemSetRuntimeTemplateConfigurations"
+    )
+    assert {item["componentId"] for item in client.expectations} == {
+        "conversation-start",
+        "runtime-template",
+        "user-context-v2",
+    }
+    conversation_expectation = next(
+        item
+        for item in client.expectations
+        if item["componentId"] == "conversation-start"
+    )
+    assert conversation_expectation["state"] == "Active"
+    assert conversation_expectation["status"] == "Active"
+    assert conversation_expectation["requireCleanDiagnostics"] is True
+
+
+def test_runtime_template_wiring_rejects_obsolete_nested_call(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path, nested_call=True)
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="obsolete nested",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: _VerifiedClient(),
+        )
+
+
+def test_runtime_template_wiring_rejects_spoofed_component_schema(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    component_map_path = (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "ess-hr"
+        / ".component-map.json"
+    )
+    component_map = json.loads(
+        component_map_path.read_text(encoding="utf-8")
+    )
+    component_map["topics/runtime-template.mcs.yml"]["schemaName"] = (
+        "contoso.topic.UnrelatedDialog"
+    )
+    component_map_path.write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="does not match the reviewed",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: _VerifiedClient(),
+        )
+
+
+def test_runtime_template_wiring_rejects_recursive_yaml_alias(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    conversation_start = (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "ess-hr"
+        / "topics"
+        / "conversation-start.mcs.yml"
+    )
+    conversation_start.write_text(
+        (
+            "kind: AdaptiveDialog\n"
+            "beginDialog: &start\n"
+            "  kind: OnConversationStart\n"
+            "  actions:\n"
+            "    - kind: BeginDialog\n"
+            "      dialog: "
+            "contoso.topic.WorkdaySystemSetRuntimeTemplateConfigurations\n"
+            "  recursive: *start\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="recursive YAML alias",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: _VerifiedClient(),
+        )
+
+
+def test_runtime_template_wiring_requires_target_in_live_reread(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from minimalbot_evaluation import MinimalBotEvaluationError
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+
+    class MissingTargetClient(_VerifiedClient):
+        def verify_dialog_components(self, expectations):
+            assert any(
+                item["componentId"] == "runtime-template"
+                for item in expectations
+            )
+            raise MinimalBotEvaluationError(
+                "missing component ID: runtime-template"
+            )
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="did not retain",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: MissingTargetClient(),
+            converter=lambda items: [
+                {
+                    "key": item["key"],
+                    "success": True,
+                    "objectModel": {
+                        "$kind": "AdaptiveDialog",
+                        "key": item["key"],
+                    },
+                }
+                for item in items
+            ],
+        )
 
 
 def test_agent_binding_rejects_environment_drift(tmp_path: Path) -> None:
@@ -270,6 +693,353 @@ def test_controller_records_invocation_only_at_status_boundary(
 
     events = WorkdayConnectStore(tmp_path).load()["lifecycle"]["journal"]
     assert [event["event"] for event in events] == ["invoked"]
+
+
+def test_controller_persists_valid_partial_administrator_fields(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    for action in model.PHASE_REQUIRED_ACTIONS["preflight"]:
+        store.complete_action(
+            "preflight",
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status("preflight", "complete")
+    for substage in (
+        "administrator-engaged",
+        "handoff-presented",
+        "awaiting-completion",
+        "completion-confirmed",
+    ):
+        store.record_administrator_progress("entra", substage)
+    evidence_file = tmp_path / "partial.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "fields": {
+                    "selectedDirectoryId": "tenant-id",
+                    "loginUrl": (
+                        "https://login.microsoftonline.com/wrong/saml2"
+                    ),
+                },
+                "invalidFields": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = workday_connect._record_administrator_evidence(
+        SimpleNamespace(
+            phase="entra",
+            evidence_file=evidence_file,
+            evidence_json=None,
+        ),
+        store,
+    )
+
+    assert result["acceptedFields"] == ["selectedDirectoryId"]
+    assert result["invalidFields"] == ["loginUrl"]
+    assert "loginUrl" in result["fieldErrors"]
+    administrator = store.load()["phases"]["entra"]["administrator"]
+    assert administrator["partialEvidence"] == {
+        "selectedDirectoryId": "tenant-id",
+    }
+
+
+def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": (
+                "00000000-0000-0000-0000-000000000000"
+            ),
+            "workdayTenant": "contoso_impl",
+        },
+    )
+    _complete_preflight(store)
+    store.record_administrator_progress(
+        "entra",
+        "administrator-engaged",
+    )
+    creation = workday_connect._entra_handoff(
+        SimpleNamespace(
+            discovery_file=None,
+            discovery_json=json.dumps(
+                {
+                    "applications": [],
+                    "allowCreate": True,
+                }
+            ),
+        ),
+        store,
+    )
+
+    assert creation["packet"]["requiresRediscovery"] is True
+    assert creation["packet"] is not None
+    assert store.load()["phases"]["entra"]["administrator"]["substage"] == (
+        "administrator-engaged"
+    )
+
+    discovery = {
+        "applications": [
+            {
+                "displayName": "Workday",
+                "appId": "44444444-4444-4444-4444-444444444444",
+                "objectId": "55555555-5555-5555-5555-555555555555",
+                "servicePrincipalId": (
+                    "66666666-6666-6666-6666-666666666666"
+                ),
+                "identifierUris": [
+                    "http://www.workday.com/contoso_impl",
+                ],
+                "replyUrls": [],
+            }
+        ]
+    }
+    actionable = workday_connect._entra_handoff(
+        SimpleNamespace(
+            discovery_file=None,
+            discovery_json=json.dumps(discovery),
+        ),
+        store,
+    )
+    replay = workday_connect._entra_handoff(
+        SimpleNamespace(
+            discovery_file=None,
+            discovery_json=json.dumps(discovery),
+        ),
+        store,
+    )
+
+    assert actionable["alreadyPresented"] is False
+    assert actionable["packet"]["target"]["mode"] == "reuse"
+    assert replay["alreadyPresented"] is True
+    assert replay["packet"] == actionable["packet"]
+
+
+def test_controller_rejects_non_string_invalid_field_names(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _complete_preflight(store)
+    _advance_administrator_to_completion(store, "entra")
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="must contain field names",
+    ):
+        workday_connect._record_administrator_evidence(
+            SimpleNamespace(
+                phase="entra",
+                evidence_file=None,
+                evidence_json=json.dumps(
+                    {
+                        "fields": {},
+                        "invalidFields": [{}],
+                    }
+                ),
+            ),
+            store,
+        )
+
+
+def test_entra_finalization_uses_retained_partial_evidence_and_replays(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": (
+                "00000000-0000-0000-0000-000000000000"
+            ),
+            "workdayTenant": "contoso_impl",
+        },
+    )
+    _complete_preflight(store)
+    _advance_administrator_to_completion(store, "entra")
+    store.record_administrator_progress(
+        "entra",
+        "collecting-evidence",
+        valid_fields=_entra_partial_evidence(),
+    )
+    args = SimpleNamespace(
+        verification_file=None,
+        verification_json="{}",
+    )
+
+    result = workday_connect._record_entra(args, store)
+    replay = workday_connect._record_entra(args, store)
+    changed_verification = workday_connect._merge_entra_verification(
+        store.load(),
+        {},
+    )
+    changed_verification["application"].update(
+        {
+            "appId": "88888888-8888-8888-8888-888888888888",
+            "objectId": "99999999-9999-9999-9999-999999999999",
+            "servicePrincipalId": (
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            ),
+            "identifierUris": [
+                "http://www.workday.com/contoso_impl",
+                "api://88888888-8888-8888-8888-888888888888",
+            ],
+        }
+    )
+    drift = workday_connect._record_entra(
+        SimpleNamespace(
+            verification_file=None,
+            verification_json=json.dumps(changed_verification),
+        ),
+        store,
+    )
+
+    assert result["verified"] is True
+    assert replay["replayed"] is True
+    assert drift["driftDetected"] is True
+    state = store.load()
+    assert state["phases"]["entra"]["status"] == "pending"
+    assert state["identifiers"]["entraAppId"] == (
+        "88888888-8888-8888-8888-888888888888"
+    )
+
+
+def test_workday_finalization_uses_retained_partial_evidence_and_replays(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": (
+                "00000000-0000-0000-0000-000000000000"
+            ),
+            "workdayTenant": "contoso_impl",
+        },
+    )
+    _complete_preflight(store)
+    store.merge_section(
+        "identifiers",
+        {
+            "entraAppId": "44444444-4444-4444-4444-444444444444",
+            "entraAppObjectId": (
+                "55555555-5555-5555-5555-555555555555"
+            ),
+            "entraServicePrincipalId": (
+                "66666666-6666-6666-6666-666666666666"
+            ),
+            "entraAppIdUri": (
+                "api://44444444-4444-4444-4444-444444444444"
+            ),
+            "scopeGuid": "77777777-7777-7777-7777-777777777777",
+            "microsoftEntraIdentifier": (
+                "https://sts.windows.net/"
+                "00000000-0000-0000-0000-000000000000/"
+            ),
+            "entraLoginUrl": (
+                "https://login.microsoftonline.com/"
+                "00000000-0000-0000-0000-000000000000/saml2"
+            ),
+            "replyUrl": "https://www.workday.com/saml/acs",
+            "workdaySamlEntityId": (
+                "http://www.workday.com/contoso_impl"
+            ),
+            "signingCertificate": {
+                "thumbprint": "AA11",
+                "validFrom": "2026-01-01T00:00:00Z",
+                "validTo": "2027-01-01T00:00:00Z",
+            },
+        },
+    )
+    for action in model.PHASE_REQUIRED_ACTIONS["entra"]:
+        store.complete_action(
+            "entra",
+            action,
+            evidence={"outcome": "verified"},
+        )
+    store.set_phase_status("entra", "complete")
+    _advance_administrator_to_completion(store, "workday-admin")
+    partial = _workday_partial_evidence()
+    partial.pop("networkReadinessOutcome")
+    store.record_administrator_progress(
+        "workday-admin",
+        "collecting-evidence",
+        valid_fields=partial,
+    )
+    args = SimpleNamespace(
+        response_file=None,
+        response_json=json.dumps(
+            {
+                "networkReadinessOutcome": (
+                    "confirmed-hosts-allowed"
+                )
+            }
+        ),
+    )
+
+    result = workday_connect._record_workday_admin(args, store)
+    replay = workday_connect._record_workday_admin(
+        SimpleNamespace(
+            response_file=None,
+            response_json="{}",
+        ),
+        store,
+    )
+    drift = workday_connect._record_workday_admin(
+        SimpleNamespace(
+            response_file=None,
+            response_json=json.dumps(
+                {"oauthClientId": "rotated-client-id"}
+            ),
+        ),
+        store,
+    )
+
+    assert result["verified"] is True
+    assert replay["replayed"] is True
+    assert drift["driftDetected"] is True
+    state = store.load()
+    assert state["phases"]["workday-admin"]["status"] == "pending"
+    assert state["identifiers"]["oauthClientId"] == "rotated-client-id"
 
 
 def test_controller_surfaces_blocker_persistence_failure(
@@ -536,6 +1306,7 @@ def test_record_agent_binding_completes_only_from_verifier_output(
         "connection-references-bound",
         "runtime-flows-active",
         "delegated-authorization-configured",
+        "runtime-template-configured",
     ):
         store.complete_action(
             "runtime",
@@ -554,9 +1325,9 @@ def test_record_agent_binding_completes_only_from_verifier_output(
                 "WD-CONN-013": "Passed",
             },
             "workdayTopics": {
-                "expected": 21,
-                "verified": 21,
-                "active": 21,
+                "expected": 23,
+                "verified": 23,
+                "active": 23,
                 "blockingDiagnostics": [
                     {
                         "errorCode": "NotFound",
@@ -640,9 +1411,9 @@ def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics
             "makerUsername": "maker@example.com",
             "checkpoints": {},
             "workdayTopics": {
-                "expected": 21,
-                "verified": 21,
-                "active": 21,
+                "expected": 23,
+                "verified": 23,
+                "active": 23,
                 "blockingDiagnostics": [
                     {
                         "errorCode": "NotFound",

@@ -82,7 +82,7 @@ same order as the Workday connection form:
 | --- | --- |
 | **Display name (optional)** | Leave blank, or enter a maker-chosen recognizable connection name. |
 | **Authentication type** | `Microsoft Entra ID Integrated` |
-| **Microsoft Entra resource URL \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
+| **Microsoft Entra resource URL (Application ID URI) \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
 | **Workday OAuth token URL \*** | The exact saved Token Endpoint copied from **View API Client** in Workday. |
 | **Workday OAuth client ID \*** | The saved Workday OAuth client ID copied from **View API Client**, not the Microsoft Entra application ID. |
 | **SOAP base URL \*** | The saved SOAP service base ending at `/ccx/service`, without the tenant name. |
@@ -237,9 +237,11 @@ authorization script, and verifies connection-reference bindings, flow state,
 and authorization after each ordered stage. User Context V2 and selected-agent
 flow attachment are verified separately below. The controller records each
 verified stage immediately, so a later failure resumes from durable evidence
-rather than hiding earlier successful changes. Report permission issues only
-from an explicit forbidden response, `[FAIL]` marker, ambiguity result, or
-nonzero script exit.
+rather than hiding earlier successful changes. Runtime apply identifies
+`alm/Enable-CosmosDAFlowAuthorization.ps1` before each invocation and reports
+whether its authorization verification completed or failed for the reviewed
+flow. Report permission issues only from an explicit forbidden response,
+`[FAIL]` marker, ambiguity result, or nonzero script exit.
 
 Do not direct the maker to agent Connection Settings unless `runtime-apply`
 returns `applied.verified: true` and confirms all three verified stages:
@@ -249,8 +251,21 @@ is incomplete, keep Runtime active and show the controller's actual blocker.
 
 ## Agent binding after flow activation
 
-Only after runtime apply has activated the reviewed flows, wire the native
-agent's local `[Admin] - User Context - Setup` topic to
+Only after runtime apply has activated the reviewed flows, first initialize
+the Workday runtime templates from the native agent's Conversation Start by
+running the guarded action in
+`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
+This scoped action must complete and
+`record-runtime-template-wiring` must record
+`runtime-template-configured` before changing the Admin User Context topic.
+The guarded action runs this live verification command itself; do not invoke
+it a second time here:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+Then wire the native agent's local `[Admin] - User Context - Setup` topic to
 `Workday [System] - 1: Set User Context V2` using the existing guarded
 checkpoint, scoped dry-run, approval, and push pattern in
 `src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the

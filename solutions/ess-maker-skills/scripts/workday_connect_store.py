@@ -19,6 +19,9 @@ from typing import Any, Callable, Iterator, Mapping
 import uuid
 
 from workday_connect_model import (
+    ADMINISTRATOR_PARTIAL_FIELDS,
+    ADMINISTRATOR_PHASES,
+    ADMINISTRATOR_SUBSTAGES,
     LEGACY_PHASE_ROWS,
     LIFECYCLE_BLOCKER_CATEGORIES,
     LIFECYCLE_EVENT_TYPES,
@@ -33,6 +36,7 @@ from workday_connect_model import (
     PhaseStatus,
     WorkdayConnectModelError,
     default_lifecycle_state,
+    default_administrator_state,
     default_state,
     next_phase_summary,
     plan_hash,
@@ -60,6 +64,9 @@ _ENTRA_IDENTIFIER_KEYS = {
     "entraAppObjectId",
     "entraServicePrincipalId",
     "entraAppIdUri",
+    "microsoftEntraIdentifier",
+    "entraLoginUrl",
+    "replyUrl",
     "workdaySamlEntityId",
     "scopeGuid",
     "signingCertificate",
@@ -71,6 +78,9 @@ _FOUNDATION_ENTRA_IDENTIFIER_KEYS = (
     "entraAppObjectId",
     "entraServicePrincipalId",
     "entraAppIdUri",
+    "microsoftEntraIdentifier",
+    "entraLoginUrl",
+    "replyUrl",
     "workdaySamlEntityId",
     "scopeGuid",
     "signingCertificate",
@@ -653,7 +663,10 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
         phase_state["evidence"] = _legacy_evidence(setup_status, rows)
         if phase_state["status"] == PhaseStatus.COMPLETE.value:
             for action in PHASE_REQUIRED_ACTIONS[phase.value]:
-                if phase.value == "runtime" and action == "workday-topics-activated":
+                if phase.value == "runtime" and action in {
+                    "runtime-template-configured",
+                    "workday-topics-activated",
+                }:
                     continue
                 if action not in phase_state["completedActions"]:
                     phase_state["completedActions"].append(action)
@@ -667,11 +680,22 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
                 )
         if phase_state["status"] != PhaseStatus.PENDING.value:
             phase_state["updatedAt"] = utc_now()
+        if (
+            phase.value in ADMINISTRATOR_PHASES
+            and phase_state["status"] == PhaseStatus.COMPLETE.value
+        ):
+            phase_state["administrator"]["substage"] = (
+                "evidence-validated"
+            )
+            phase_state["administrator"]["updatedAt"] = utc_now()
 
     runtime = state["phases"]["runtime"]
-    if (
-        runtime["status"] == PhaseStatus.COMPLETE.value
-        and "workday-topics-activated" not in runtime["completedActions"]
+    if runtime["status"] == PhaseStatus.COMPLETE.value and not (
+        {
+            "runtime-template-configured",
+            "workday-topics-activated",
+        }
+        <= set(runtime["completedActions"])
     ):
         runtime["status"] = PhaseStatus.ACTIVE.value
         runtime["updatedAt"] = utc_now()
@@ -696,6 +720,11 @@ def migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _reset_phase(phase: dict[str, Any]) -> None:
+    administrator = (
+        default_administrator_state()
+        if "administrator" in phase
+        else None
+    )
     phase.update(
         {
             "status": PhaseStatus.PENDING.value,
@@ -707,6 +736,8 @@ def _reset_phase(phase: dict[str, Any]) -> None:
             "updatedAt": utc_now(),
         }
     )
+    if administrator is not None:
+        phase["administrator"] = administrator
 
 
 def _tenant_foundation_from_state(
@@ -743,6 +774,9 @@ def _tenant_foundation_from_state(
             phase_id: {
                 "completedActions": copy.deepcopy(phases[phase_id]["completedActions"]),
                 "evidence": copy.deepcopy(phases[phase_id]["evidence"]),
+                "administrator": copy.deepcopy(
+                    phases[phase_id].get("administrator")
+                ),
             }
             for phase_id in ("entra", "workday-admin")
         },
@@ -829,6 +863,8 @@ def _upgrade_or_migrate_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     source_version = document.get("schemaVersion")
+    if source_version == 6:
+        return upgrade_v6_state(document)
     if source_version == 5:
         return upgrade_v5_state(document)
     if source_version == 4:
@@ -892,12 +928,32 @@ def _upgrade_structured_state(
     state["schemaVersion"] = STATE_SCHEMA_VERSION
     if "lifecycle" not in state:
         state["lifecycle"] = default_lifecycle_state()
-    if "tenantFoundation" not in state:
-        state["tenantFoundation"] = _tenant_foundation_from_state(state)
+    existing_foundation = state.get("tenantFoundation")
+    captured_foundation = _tenant_foundation_from_state(state)
+    if captured_foundation is not None:
+        state["tenantFoundation"] = captured_foundation
+    elif (
+        isinstance(existing_foundation, Mapping)
+        and {
+            "scope",
+            "identifiers",
+            "endpoints",
+            "phases",
+            "capturedAt",
+        }
+        <= existing_foundation.keys()
+    ):
+        state["tenantFoundation"] = copy.deepcopy(dict(existing_foundation))
+    else:
+        state["tenantFoundation"] = None
     first_incomplete: str | None = None
     for definition in PHASE_DEFINITIONS:
         phase_id = definition.identifier.value
         phase = state["phases"][phase_id]
+        if phase_id in ADMINISTRATOR_PHASES:
+            phase.setdefault("administrator", default_administrator_state())
+        else:
+            phase.pop("administrator", None)
         phase.pop("scopeHash", None)
         phase.pop("manualHandoff", None)
         if phase["status"] == "waiting":
@@ -920,6 +976,10 @@ def _upgrade_structured_state(
             phase["status"] = PhaseStatus.ACTIVE.value
             phase["updatedAt"] = utc_now()
             first_incomplete = phase_id
+        elif phase_id in ADMINISTRATOR_PHASES:
+            phase["administrator"]["substage"] = "evidence-validated"
+            phase["administrator"]["invalidFields"] = []
+            phase["administrator"]["updatedAt"] = utc_now()
     state["status"] = (
         "ready"
         if all(
@@ -937,19 +997,147 @@ def _upgrade_structured_state(
 
 
 def upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    return _upgrade_structured_state(document, source_version=2)
+    return _upgrade_pre_v7_state(document, source_version=2)
 
 
 def upgrade_v3_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    return _upgrade_structured_state(document, source_version=3)
+    return _upgrade_pre_v7_state(document, source_version=3)
 
 
 def upgrade_v4_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    return _upgrade_structured_state(document, source_version=4)
+    return _upgrade_pre_v7_state(document, source_version=4)
 
 
 def upgrade_v5_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    return _upgrade_structured_state(document, source_version=5)
+    return _upgrade_pre_v7_state(document, source_version=5)
+
+
+def _legacy_administrator_partial_evidence(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> dict[str, Any]:
+    identifiers = state.get("identifiers") or {}
+    endpoints = state.get("endpoints") or {}
+    phases = state.get("phases") or {}
+    phase = phases.get(phase_id) or {}
+    evidence_by_action = {
+        str(record.get("action") or ""): record
+        for record in (phase.get("evidence") or [])
+        if isinstance(record, Mapping)
+    }
+    if phase_id == "entra":
+        administrator_evidence = evidence_by_action.get(
+            "administrator-configuration-verified"
+        ) or {}
+        checks = administrator_evidence.get("checks") or {}
+        certificate = identifiers.get("signingCertificate") or {}
+        candidates = {
+            "applicationId": identifiers.get("entraAppId"),
+            "replyUrl": identifiers.get("replyUrl"),
+            "microsoftEntraIdentifier": identifiers.get(
+                "microsoftEntraIdentifier"
+            ),
+            "loginUrl": identifiers.get("entraLoginUrl"),
+            "nameIdSource": (
+                (checks.get("nameId") or {}).get("observedValue")
+                if isinstance(checks, Mapping)
+                else None
+            ),
+            "samlSigningOption": (
+                (checks.get("samlSigningOption") or {}).get(
+                    "observedValue"
+                )
+                if isinstance(checks, Mapping)
+                else None
+            ),
+            "certificateThumbprint": (
+                certificate.get("thumbprint")
+                if isinstance(certificate, Mapping)
+                else None
+            ),
+            "certificateValidFrom": (
+                certificate.get("validFrom")
+                if isinstance(certificate, Mapping)
+                else None
+            ),
+            "certificateValidTo": (
+                certificate.get("validTo")
+                if isinstance(certificate, Mapping)
+                else None
+            ),
+        }
+    else:
+        administrator_evidence = evidence_by_action.get(
+            "administrator-response-validated"
+        ) or {}
+        candidates = {
+            "identityProviderOutcome": administrator_evidence.get(
+                "identityProviderOutcome"
+            ),
+            "enabledServiceProviderId": identifiers.get(
+                "workdaySamlEntityId"
+            ),
+            "certificateSelectionOutcome": administrator_evidence.get(
+                "certificateSelectionOutcome"
+            ),
+            "certificateValidityOutcome": administrator_evidence.get(
+                "certificateValidityOutcome"
+            ),
+            "oauthClientId": identifiers.get("oauthClientId"),
+            "oauthTokenUrl": endpoints.get("oauthTokenUrl"),
+            "restBaseUrl": endpoints.get("restBaseUrl"),
+            "soapBaseUrl": endpoints.get("soapBaseUrl"),
+            "authenticationPolicyOutcome": administrator_evidence.get(
+                "authenticationPolicyOutcome"
+            ),
+            "networkReadinessOutcome": administrator_evidence.get(
+                "networkReadinessOutcome"
+            ),
+        }
+    return {
+        key: copy.deepcopy(value)
+        for key, value in candidates.items()
+        if value not in (None, "", [], {})
+        and key in ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+    }
+
+
+def _upgrade_pre_v7_state(
+    document: Mapping[str, Any],
+    *,
+    source_version: int,
+) -> dict[str, Any]:
+    state = _upgrade_structured_state(
+        document,
+        source_version=source_version,
+    )
+    if state["phases"]["entra"]["status"] != PhaseStatus.COMPLETE.value:
+        return state
+    preserved = {
+        phase_id: _legacy_administrator_partial_evidence(
+            state,
+            phase_id,
+        )
+        for phase_id in ADMINISTRATOR_PHASES
+    }
+    _invalidate_from_phase(state, "entra")
+    for phase_id, fields in preserved.items():
+        if not fields:
+            continue
+        administrator = state["phases"][phase_id]["administrator"]
+        administrator["partialEvidence"] = fields
+        administrator["substage"] = "collecting-evidence"
+        administrator["updatedAt"] = utc_now()
+    if preserved["entra"]:
+        state["phases"]["entra"]["status"] = PhaseStatus.ACTIVE.value
+        state["phases"]["entra"]["updatedAt"] = utc_now()
+    state["status"] = "in-progress"
+    state["updatedAt"] = utc_now()
+    return validate_state(state)
+
+
+def upgrade_v6_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_pre_v7_state(document, source_version=6)
 
 
 class WorkdayConnectStore:
@@ -1085,6 +1273,8 @@ class WorkdayConnectStore:
         self,
         section: str,
         values: Mapping[str, Any],
+        *,
+        verified_phase: str | None = None,
     ) -> dict[str, Any]:
         if section not in {"scope", "identifiers", "endpoints", "operators"}:
             raise WorkdayConnectStoreError(
@@ -1093,6 +1283,10 @@ class WorkdayConnectStore:
         if not isinstance(values, Mapping):
             raise WorkdayConnectStoreError(
                 f"Workday state section '{section}' must be an object."
+            )
+        if verified_phase is not None and verified_phase not in PHASE_BY_ID:
+            raise WorkdayConnectStoreError(
+                f"Unknown verified Workday phase: {verified_phase}."
             )
 
         def mutation(state: dict[str, Any]) -> None:
@@ -1109,7 +1303,10 @@ class WorkdayConnectStore:
             ):
                 _rotate_lifecycle(state)
             if invalidation_phase:
-                _invalidate_from_phase(state, invalidation_phase)
+                if verified_phase == invalidation_phase:
+                    _invalidate_after_phase(state, invalidation_phase)
+                else:
+                    _invalidate_from_phase(state, invalidation_phase)
             state[section].update(dict(values))
             if section == "operators":
                 phases = {
@@ -1132,6 +1329,112 @@ class WorkdayConnectStore:
                             phase=phase_id,
                             outcome="success",
                         )
+
+        return self._mutate(mutation)
+
+    def record_administrator_progress(
+        self,
+        phase_id: str,
+        substage: str,
+        *,
+        valid_fields: Mapping[str, Any] | None = None,
+        invalid_fields: list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        if phase_id not in ADMINISTRATOR_PHASES:
+            raise WorkdayConnectStoreError(
+                "Administrator progress is supported only for Entra and "
+                "Workday administrator phases."
+            )
+        if substage not in ADMINISTRATOR_SUBSTAGES:
+            raise WorkdayConnectStoreError(
+                f"Unknown administrator substage: {substage}."
+            )
+        safe_fields = dict(valid_fields or {})
+        unsupported = sorted(
+            set(safe_fields) - ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+        )
+        if unsupported:
+            raise WorkdayConnectStoreError(
+                "Administrator evidence contains unsupported fields: "
+                + ", ".join(unsupported)
+            )
+        requested_invalid = list(invalid_fields or [])
+        if any(not isinstance(field, str) for field in requested_invalid):
+            raise WorkdayConnectStoreError(
+                "Administrator invalid fields must contain field names."
+            )
+        invalid_unsupported = sorted(
+            set(requested_invalid) - ADMINISTRATOR_PARTIAL_FIELDS[phase_id]
+        )
+        if invalid_unsupported:
+            raise WorkdayConnectStoreError(
+                "Administrator invalid fields contain unsupported names: "
+                + ", ".join(invalid_unsupported)
+            )
+
+        def mutation(state: dict[str, Any]) -> None:
+            definition = PHASE_BY_ID[phase_id]
+            prerequisite = definition.prerequisite
+            if (
+                prerequisite is not None
+                and state["phases"][prerequisite.value]["status"]
+                != PhaseStatus.COMPLETE.value
+            ):
+                raise WorkdayConnectStoreError(
+                    f"Complete '{prerequisite.value}' before recording "
+                    f"'{phase_id}' administrator progress."
+                )
+            phase = state["phases"][phase_id]
+            administrator = phase["administrator"]
+            current_index = ADMINISTRATOR_SUBSTAGES.index(
+                administrator["substage"]
+            )
+            requested_index = ADMINISTRATOR_SUBSTAGES.index(substage)
+            if requested_index not in {current_index, current_index + 1}:
+                raise WorkdayConnectStoreError(
+                    "Administrator substages cannot move backward or skip "
+                    "the supported sequence. Invalidate the affected phase "
+                    "before restarting its handoff."
+                )
+            if substage == "evidence-validated" and (
+                phase["status"] != PhaseStatus.COMPLETE.value
+            ):
+                raise WorkdayConnectStoreError(
+                    "Complete the administrator phase before marking its "
+                    "evidence validated."
+                )
+            administrator["partialEvidence"].update(
+                copy.deepcopy(safe_fields)
+            )
+            for field in requested_invalid:
+                administrator["partialEvidence"].pop(field, None)
+            administrator["invalidFields"] = list(
+                dict.fromkeys(requested_invalid)
+            )
+            administrator["substage"] = substage
+            administrator["updatedAt"] = utc_now()
+            if phase["status"] in {
+                PhaseStatus.PENDING.value,
+                PhaseStatus.BLOCKED.value,
+            }:
+                previous_status = phase["status"]
+                phase["status"] = PhaseStatus.ACTIVE.value
+                phase["blocker"] = None
+                phase["updatedAt"] = utc_now()
+                if previous_status == PhaseStatus.BLOCKED.value:
+                    _append_lifecycle_event(
+                        state,
+                        "phase-resumed",
+                        phase=phase_id,
+                        increment_retry=True,
+                        increment_resume=True,
+                    )
+                else:
+                    _append_lifecycle_event(
+                        state,
+                        "phase-started",
+                        phase=phase_id,
+                    )
 
         return self._mutate(mutation)
 
@@ -1184,6 +1487,22 @@ class WorkdayConnectStore:
                 list(snapshot.get("completedActions") or [])
             )
             phase["evidence"] = copy.deepcopy(list(snapshot.get("evidence") or []))
+            snapshot_administrator = snapshot.get("administrator")
+            if isinstance(snapshot_administrator, Mapping):
+                phase["administrator"] = copy.deepcopy(
+                    dict(snapshot_administrator)
+                )
+            else:
+                phase["administrator"] = default_administrator_state()
+                phase["administrator"]["partialEvidence"] = (
+                    _legacy_administrator_partial_evidence(
+                        state,
+                        "workday-admin",
+                    )
+                )
+            phase["administrator"]["substage"] = "evidence-validated"
+            phase["administrator"]["invalidFields"] = []
+            phase["administrator"]["updatedAt"] = utc_now()
             phase["evidence"].append(
                 {
                     "action": "tenant-foundation-reused",
@@ -1238,6 +1557,11 @@ class WorkdayConnectStore:
                         f"Phase '{phase_id}' is missing required verified "
                         "actions: " + ", ".join(missing) + "."
                     )
+                if phase_id in ADMINISTRATOR_PHASES:
+                    administrator = phase["administrator"]
+                    administrator["substage"] = "evidence-validated"
+                    administrator["invalidFields"] = []
+                    administrator["updatedAt"] = utc_now()
             previous_status = phase["status"]
             phase["status"] = status
             phase["blocker"] = dict(blocker) if blocker else None
@@ -1455,13 +1779,44 @@ class WorkdayConnectStore:
         next_phase = None
         for definition in PHASE_DEFINITIONS:
             phase = state["phases"][definition.identifier.value]
-            phases.append(
-                {
-                    "id": definition.identifier.value,
-                    "title": definition.title,
-                    "status": phase["status"],
+            phase_status = {
+                "id": definition.identifier.value,
+                "title": definition.title,
+                "status": phase["status"],
+            }
+            administrator = phase.get("administrator")
+            if isinstance(administrator, Mapping):
+                required_fields = set(
+                    ADMINISTRATOR_PARTIAL_FIELDS[
+                        definition.identifier.value
+                    ]
+                )
+                if (
+                    definition.identifier.value == "workday-admin"
+                    and administrator["partialEvidence"].get(
+                        "authorizationOutcome"
+                    )
+                    != "task-not-authorized-remediated"
+                ):
+                    required_fields -= {
+                        "authorizationRemediationDomain",
+                        "authorizationRemediationScenario",
+                        "authorizationRetestOutcome",
+                    }
+                phase_status["administrator"] = {
+                    "substage": administrator["substage"],
+                    "capturedFields": sorted(
+                        administrator["partialEvidence"]
+                    ),
+                    "invalidFields": list(
+                        administrator["invalidFields"]
+                    ),
+                    "outstandingFields": sorted(
+                        required_fields
+                        - administrator["partialEvidence"].keys()
+                    ),
                 }
-            )
+            phases.append(phase_status)
             if next_phase is None and phase["status"] != PhaseStatus.COMPLETE.value:
                 next_phase = definition.identifier.value
         return {
