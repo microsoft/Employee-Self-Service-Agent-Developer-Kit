@@ -118,6 +118,48 @@ def test_compact_checkpoint_round_trip_preserves_actionable_fields() -> None:
     assert row["evidence"] == {"kind": "bounded"}
 
 
+def test_compact_manual_excludes_guided_sentinel_and_recomputes_outcome() -> None:
+    result = _run_result(Status.MANUAL.value)
+    result.results.append(
+        CheckResult(
+            checkpoint_id="CHECKPOINT-CONTRACT-GUIDED",
+            category="FlightCheck Checkpoint",
+            priority=Priority.HIGH.value,
+            status=Status.WARNING.value,
+            description="Requested checkpoint requires guided evidence",
+            result="Guided verification remains.",
+            remediation="Reconcile the Manual row.",
+        )
+    )
+    result.overall = "READY_WITH_WARNINGS"
+    result.warnings = 1
+
+    payload = compact_checkpoint_result_to_dict(
+        result,
+        target=TARGET,
+        provider=PROVIDER,
+        profile=PROFILE,
+        agent_slug=AGENT_SLUG,
+        agent_id=AGENT_ID,
+        environment_id=ENVIRONMENT_ID,
+        invocation_id=INVOCATION_ID,
+        invocation_source="connect",
+        exit_code=0,
+    )
+    parsed = _parse(payload)
+
+    assert parsed["overall"] == "READY"
+    assert parsed["exitCode"] == 0
+    assert [row["checkpointId"] for row in parsed["results"]] == [TARGET]
+
+
+def test_compact_target_warning_keeps_ready_with_warnings() -> None:
+    parsed = _parse(_payload(Status.WARNING.value))
+
+    assert parsed["overall"] == "READY_WITH_WARNINGS"
+    assert parsed["exitCode"] == 0
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

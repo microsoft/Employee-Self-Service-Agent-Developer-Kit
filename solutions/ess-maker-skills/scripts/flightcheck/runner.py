@@ -669,6 +669,26 @@ def compact_checkpoint_result_to_dict(
         raise ValueError(
             "Compact checkpoint result contains a row outside the target."
         )
+    blocking = any(
+        result.status
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+        for result in target_results
+    )
+    warnings = any(
+        result.status == Status.WARNING.value for result in target_results
+    )
+    compact_exit_code = 1 if blocking else 0
+    compact_overall = (
+        "NOT_READY"
+        if blocking
+        else "READY_WITH_WARNINGS"
+        if warnings
+        else "READY"
+    )
     return {
         "schemaVersion": LIFECYCLE_CHECKPOINT_SCHEMA_VERSION,
         "kind": "checkpoint-result",
@@ -680,8 +700,8 @@ def compact_checkpoint_result_to_dict(
             "source": invocation_source,
             "started": run_result.started,
         },
-        "overall": run_result.overall,
-        "exitCode": exit_code,
+        "overall": compact_overall,
+        "exitCode": compact_exit_code,
         "results": [
             check_result_contract_dict(result)
             for result in target_results
