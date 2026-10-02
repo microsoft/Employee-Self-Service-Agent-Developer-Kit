@@ -10,9 +10,6 @@ import ast
 import json
 from pathlib import Path
 import sys
-import warnings
-
-from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 
 REPO_ROOT = Path(__file__).parents[3]
@@ -32,11 +29,15 @@ MCP_DEFAULTS_PATH = (
     / ".vscode"
     / "mcp.defaults.json"
 )
-sys.path.insert(0, str(SERVER_PATH.parent))
+# Sibling MCP servers share the top-level names ``client``/``server``, so the
+# modules are loaded through the shared isolated importer rather than by a plain
+# ``import`` off ``sys.path``. See tests/mcp/_mcp_modules.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", IncompleteFieldDefinitionWarning)
-    import server as agentconfig_server  # noqa: E402
+from _mcp_modules import load_landing_page_modules  # noqa: E402
+
+_LANDING_MODULES = load_landing_page_modules()
+agentconfig_server = _LANDING_MODULES["server"]
 
 
 def _tool_functions() -> dict[str, list[str]]:
