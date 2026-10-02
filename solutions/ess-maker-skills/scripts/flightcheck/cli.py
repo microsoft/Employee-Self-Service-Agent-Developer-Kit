@@ -1283,6 +1283,7 @@ def _run_single_checkpoint(args, *, compact_stream=None):
         client_name: {
             "required": True,
             "available": False,
+            "authenticatedAccountVerified": False,
             "reason": "authentication was not attempted",
         }
         for client_name in sorted(needed)
@@ -2194,7 +2195,7 @@ def _run_profile(args):
     ) -> None:
         state = client_availability[client_name]
         state["available"] = False
-        state.pop("authenticatedAccountVerified", None)
+        state["authenticatedAccountVerified"] = False
         state["reason"] = _safe_client_error_reason(error)
 
     def verified_account(
@@ -2330,6 +2331,12 @@ def _run_profile(args):
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
+    controller_binding = (
+        getattr(args, "invocation_source", None) == "connect"
+        and bool(getattr(args, "connect_config", None))
+        and bool(getattr(args, "environment_id", None))
+        and bool(getattr(args, "environment_url", None))
+    )
     if not env_id and registry.PP_ADMIN in needed and env_url:
         if pp_admin is not None:
             try:
@@ -2357,7 +2364,7 @@ def _run_profile(args):
         if pp_admin is None:
             resolved_env_id = None
         if not resolved_env_id:
-            if pp_admin is not None:
+            if pp_admin is not None and not controller_binding:
                 mark_unavailable(
                     registry.PP_ADMIN,
                     "Dataverse environment binding could not be resolved",

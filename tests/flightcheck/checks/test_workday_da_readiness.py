@@ -52,11 +52,13 @@ def _config() -> dict[str, Any]:
 
 def _flows(*, inactive: str = "", omit: str = "") -> list[dict[str, Any]]:
     return [
-        pp.flow(
-            flow_id=flow_id,
-            display_name=name,
-            state="Stopped" if name == inactive else "Started",
-        )
+        {
+            "workflowid": flow_id,
+            "name": name,
+            "statecode": 0 if name == inactive else 1,
+            "statuscode": 1 if name == inactive else 2,
+            "category": 5,
+        }
         for name, flow_id in FLOW_IDS.items()
         if name != omit
     ]
@@ -80,6 +82,8 @@ def _component_payload(
     missing: str = "",
     inactive: str = "",
     obsolete_user_context_call: bool = False,
+    misplaced_runtime_call: bool = False,
+    diagnostic_schema: str = "",
 ) -> dict[str, Any]:
     runtime_schema = (
         f"{SCHEMA}.topic.WorkdaySystemSetRuntimeTemplateConfigurations"
@@ -133,18 +137,81 @@ def _component_payload(
                 "$kind": "AdaptiveDialog",
                 "beginDialog": {
                     "$kind": "OnConversationStart",
-                    "actions": [{
-                        "$kind": "BeginDialog",
-                        "dialog": {
-                            "$kind": "DialogExpression",
-                            "literalValue": runtime_schema,
-                        },
-                    }],
+                    "actions": (
+                        [
+                            {
+                                "$kind": "BeginDialog",
+                                "dialog": {
+                                    "$kind": "DialogExpression",
+                                    "literalValue": runtime_schema,
+                                },
+                            },
+                            {
+                                "$kind": "SendActivity",
+                                "activity": "Welcome",
+                            },
+                            {
+                                "$kind": "BeginDialog",
+                                "dialog": {
+                                    "$kind": "DialogExpression",
+                                    "literalValue": (
+                                        f"{SCHEMA}.topic."
+                                        "System-UserContext-Validate"
+                                    ),
+                                },
+                            },
+                        ]
+                        if misplaced_runtime_call
+                        else [
+                            {
+                                "$kind": "BeginDialog",
+                                "dialog": {
+                                    "$kind": "DialogExpression",
+                                    "literalValue": (
+                                        f"{SCHEMA}.topic."
+                                        "System-UserContext-"
+                                        "Createglobalvariables"
+                                    ),
+                                },
+                            },
+                            {
+                                "$kind": "SendActivity",
+                                "activity": "Welcome",
+                            },
+                            {
+                                "$kind": "BeginDialog",
+                                "dialog": {
+                                    "$kind": "DialogExpression",
+                                    "literalValue": runtime_schema,
+                                },
+                            },
+                            {
+                                "$kind": "BeginDialog",
+                                "dialog": {
+                                    "$kind": "DialogExpression",
+                                    "literalValue": (
+                                        f"{SCHEMA}.topic."
+                                        "System-UserContext-Validate"
+                                    ),
+                                },
+                            },
+                        ]
+                    ),
                 },
             },
             status="Inactive" if conversation_schema == inactive else "Active",
         ),
     ])
+    for change in changes:
+        component = change["component"]
+        if component["schemaName"] == diagnostic_schema:
+            component["dialog"].setdefault("diagnostics", []).append({
+                "$kind": "InvalidReferenceError",
+                "errorCode": "NotFound",
+                "errorMessage": "CloudFlow not found",
+                "referenceType": "CloudFlow",
+                "referenceId": FLOW_IDS["ESS Workday Runtime"],
+            })
     return ab.dialog_components(changes)
 
 
@@ -175,7 +242,8 @@ def _runner(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_runtime_flow_catalog_passes_exact_active_inventory() -> None:
+def test_runtime_flow_catalog_passes_exact_active_inventory(monkeypatch) -> None:
+    monkeypatch.setattr(workday_da, "query_all", lambda *_a, **_k: _flows())
     row = workday_da._check_runtime_flow_catalog(_runner())[0]
 
     assert row.status == "Passed"
@@ -184,15 +252,19 @@ def test_runtime_flow_catalog_passes_exact_active_inventory() -> None:
     assert row.remediation == ""
 
 
-def test_runtime_flow_catalog_fails_missing_and_inactive_flows() -> None:
-    runner = _runner(
-        _all_flows=_flows(
+def test_runtime_flow_catalog_fails_missing_and_inactive_flows(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        workday_da,
+        "query_all",
+        lambda *_a, **_k: _flows(
             omit="ESS Workday Runtime References",
             inactive="ESS Workday Runtime",
-        )
+        ),
     )
 
-    row = workday_da._check_runtime_flow_catalog(runner)[0]
+    row = workday_da._check_runtime_flow_catalog(_runner())[0]
 
     assert row.status == "Failed"
     assert "missing: ESS Workday Runtime References" in row.result
@@ -200,23 +272,22 @@ def test_runtime_flow_catalog_fails_missing_and_inactive_flows() -> None:
     assert "activate each flow" in row.remediation
 
 
-def test_runtime_flow_catalog_errors_when_inventory_not_hydrated() -> None:
+def test_runtime_flow_catalog_errors_without_dataverse_access() -> None:
     row = workday_da._check_runtime_flow_catalog(
-        _runner(_all_flows=None)
+        _runner(env_url=None, dv_token=None)
     )[0]
 
     assert row.status == "Error"
-    assert "not hydrated" in row.result
-    assert "Power Automate inventory" in row.remediation
+    assert "Dataverse access is unavailable" in row.result
+    assert "Dataverse access" in row.remediation
 
 
-def test_runtime_flow_catalog_errors_on_missing_flow_id() -> None:
+def test_runtime_flow_catalog_errors_on_missing_flow_id(monkeypatch) -> None:
     flows = _flows()
-    flows[0]["name"] = ""
+    flows[0]["workflowid"] = ""
+    monkeypatch.setattr(workday_da, "query_all", lambda *_a, **_k: flows)
 
-    row = workday_da._check_runtime_flow_catalog(
-        _runner(_all_flows=flows)
-    )[0]
+    row = workday_da._check_runtime_flow_catalog(_runner())[0]
 
     assert row.status == "Error"
     assert "badly formed hexadecimal UUID" in row.result
@@ -248,6 +319,18 @@ def test_reviewed_topics_fail_missing_and_inactive_components() -> None:
     assert expected[0] in row.result
     assert expected[1] in row.result
     assert "Restore the Microsoft-shipped Workday topics" in row.remediation
+
+
+def test_reviewed_topics_record_dependency_diagnostics_without_failing() -> None:
+    expected = sorted(reviewed_workday_topic_schemas(SCHEMA))
+    runner = _runner(agentbuilder=_AgentBuilder(_component_payload(
+        diagnostic_schema=expected[0],
+    )))
+
+    row = workday_da._check_reviewed_workday_topics(runner)[0]
+
+    assert row.status == "Passed"
+    assert row.evidence["diagnosticTopics"] == [expected[0]]
 
 
 def test_reviewed_topics_skip_without_agentbuilder() -> None:
@@ -315,8 +398,20 @@ def test_runtime_template_wiring_passes_reviewed_chain() -> None:
     row = workday_da._check_runtime_template_wiring(_runner())[0]
 
     assert row.status == "Passed"
-    assert "exactly once as its first action" in row.result
+    assert "immediately before User Context Validate" in row.result
     assert row.remediation == ""
+
+
+def test_runtime_template_wiring_fails_wrong_conversation_start_position() -> None:
+    runner = _runner(agentbuilder=_AgentBuilder(_component_payload(
+        misplaced_runtime_call=True
+    )))
+
+    row = workday_da._check_runtime_template_wiring(runner)[0]
+
+    assert row.status == "Failed"
+    assert row.evidence["runtimePrecedesValidation"] is False
+    assert "immediately before User Context Validate" in row.result
 
 
 def test_runtime_template_wiring_fails_obsolete_nested_call() -> None:
@@ -343,6 +438,18 @@ def test_runtime_template_wiring_fails_inactive_conversation_start() -> None:
     assert conversation_schema in row.evidence["inactiveComponents"]
 
 
+def test_runtime_template_wiring_records_dependency_diagnostics() -> None:
+    conversation_schema = f"{SCHEMA}.topic.ConversationStart"
+    runner = _runner(agentbuilder=_AgentBuilder(_component_payload(
+        diagnostic_schema=conversation_schema,
+    )))
+
+    row = workday_da._check_runtime_template_wiring(runner)[0]
+
+    assert row.status == "Passed"
+    assert len(row.evidence["blockingDiagnostics"]) == 1
+
+
 def test_agent_flow_attachment_is_explicit_manual_contract() -> None:
     row = workday_da._check_agent_flow_attachment(_runner())[0]
 
@@ -362,7 +469,12 @@ def test_delegated_authorization_passes_exact_team_and_shares(
     runtime = workday_da._load_runtime_contract()
     by_name = {
         name.casefold(): [
-            pp.flow(flow_id=FLOW_IDS[name], display_name=name)
+            {
+                "workflowid": FLOW_IDS[name],
+                "name": name,
+                "statecode": 1,
+                "statuscode": 2,
+            }
         ]
         for name in runtime["flowNames"]
     }
@@ -373,7 +485,7 @@ def test_delegated_authorization_passes_exact_team_and_shares(
     )
     responses.add(**dv.query(
         base_url=ENV_URL,
-        entity_set="DelegatedAuthorizations",
+        entity_set="delegatedauthorizations",
         records=[dv.delegated_authorization(bot_id=BOT_ID)],
         select="delegatedauthorizationid,name,providertype,botid",
         filter_expr=f"botid eq '{BOT_ID}'",
@@ -405,7 +517,12 @@ def test_delegated_authorization_fails_missing_flow_share(
     runtime = workday_da._load_runtime_contract()
     by_name = {
         name.casefold(): [
-            pp.flow(flow_id=FLOW_IDS[name], display_name=name)
+            {
+                "workflowid": FLOW_IDS[name],
+                "name": name,
+                "statecode": 1,
+                "statuscode": 2,
+            }
         ]
         for name in runtime["flowNames"]
     }
@@ -416,7 +533,7 @@ def test_delegated_authorization_fails_missing_flow_share(
     )
     responses.add(**dv.query(
         base_url=ENV_URL,
-        entity_set="DelegatedAuthorizations",
+        entity_set="delegatedauthorizations",
         records=[dv.delegated_authorization(bot_id=BOT_ID)],
         select="delegatedauthorizationid,name,providertype,botid",
         filter_expr=f"botid eq '{BOT_ID}'",
@@ -451,7 +568,12 @@ def test_delegated_authorization_errors_on_invalid_team_guid(
     runtime = workday_da._load_runtime_contract()
     by_name = {
         name.casefold(): [
-            pp.flow(flow_id=FLOW_IDS[name], display_name=name)
+            {
+                "workflowid": FLOW_IDS[name],
+                "name": name,
+                "statecode": 1,
+                "statuscode": 2,
+            }
         ]
         for name in runtime["flowNames"]
     }
@@ -462,7 +584,7 @@ def test_delegated_authorization_errors_on_invalid_team_guid(
     )
     responses.add(**dv.query(
         base_url=ENV_URL,
-        entity_set="DelegatedAuthorizations",
+        entity_set="delegatedauthorizations",
         records=[dv.delegated_authorization(bot_id=BOT_ID)],
         select="delegatedauthorizationid,name,providertype,botid",
         filter_expr=f"botid eq '{BOT_ID}'",
@@ -486,7 +608,12 @@ def test_delegated_authorization_errors_on_malformed_principal(
     runtime = workday_da._load_runtime_contract()
     by_name = {
         name.casefold(): [
-            pp.flow(flow_id=FLOW_IDS[name], display_name=name)
+            {
+                "workflowid": FLOW_IDS[name],
+                "name": name,
+                "statecode": 1,
+                "statuscode": 2,
+            }
         ]
         for name in runtime["flowNames"]
     }
@@ -497,7 +624,7 @@ def test_delegated_authorization_errors_on_malformed_principal(
     )
     responses.add(**dv.query(
         base_url=ENV_URL,
-        entity_set="DelegatedAuthorizations",
+        entity_set="delegatedauthorizations",
         records=[dv.delegated_authorization(bot_id=BOT_ID)],
         select="delegatedauthorizationid,name,providertype,botid",
         filter_expr=f"botid eq '{BOT_ID}'",
@@ -575,6 +702,7 @@ def _runtime_runner(
         "runtime_evidence_end": "2026-06-01T00:01:00Z",
         "runtime_evidence_flow_ids": tuple(runs),
         "runtime_evidence_migration_baseline": False,
+        "_workday_runtime_flows": _flows(),
     }
     values.update(overrides)
     return _runner(**values)
