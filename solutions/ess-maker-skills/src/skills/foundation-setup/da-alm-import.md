@@ -57,7 +57,9 @@ Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
 When `kind` is `success`, use the returned environment, tenant, host, ring, API
 version, and agent identity only as internal command inputs. Do not display
 those identifiers. The successful native import verification is authoritative
-DA-GA evidence, so run the parent's selected-agent product-line reconciliation
+DA-GA evidence. Do not invoke `ensure-alm` after a successful import; the import
+and its direct verification already own the ALM-family contract. Run the
+parent's selected-agent product-line reconciliation
 with `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Mark **Verify access and
 agent identity** and **Establish an editable Dev agent** complete, then show:
 
@@ -115,11 +117,13 @@ Present these standard choices:
 - **Replace an existing agent with this package**
 - **Go back**
 
-Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. The native candidate result is authoritative identity evidence; run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or replacement. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
+Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agents and individually selectable `realmNotEstablishedAgents` candidates by their exact service-provided display names, and let the maker choose one exact agent. Every option in that agent list must contain only the service-provided display name; do not append a realm, enrollment state, ALM status, or preparation suffix. Never bulk-enroll unresolved rows. For a selected Dev candidate, the native result is authoritative identity evidence; run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or replacement. For a selected unresolved candidate, run both product-line probes and apply their result normally. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment.
+
+For **Choose an existing agent in this environment**, skipped enrollment with established supported native identity may continue through `da-existing-dev.md` using `--allow-unenrolled-authoring`; a resolved Dev route uses the normal attachment path. For **Replace an existing agent with this package**, skipped enrollment does not authorize replacement or local attachment. Return to the collision choices and preserve that replacement still requires ALM preparation.
 
 For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Clear package-import and replacement intent, but preserve the import receipt and collision evidence.
 
-Before replacement, validate the exact selected Dev agent:
+Before replacement, validate the exact selected Dev agent. Enrollment preparation, when required, must already have completed through its separate **Continue (Recommended)** confirmation; that confirmation never authorizes replacement.
 
 ```text
 python scripts/setup_existing_da.py validate-agent \

@@ -946,11 +946,11 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
-            listed = (
-                body["Entities"]
-                if "Entities" in body
-                else body.get("entities")
-            )
+            if "Entities" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the Entities collection."
+                )
+            listed = body["Entities"]
             if not isinstance(listed, list) or not all(
                 isinstance(item, dict) for item in listed
             ):
@@ -958,12 +958,12 @@ class AgentBuilderClient:
                     "Agent listing returned an invalid shape."
                 )
             agents.extend(listed)
-            next_continuation = (
-                body["ContinuationToken"]
-                if "ContinuationToken" in body
-                else body.get("continuationToken")
-            )
-            if next_continuation in (None, ""):
+            if "ContinuationToken" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the ContinuationToken."
+                )
+            next_continuation = body["ContinuationToken"]
+            if next_continuation == "":
                 return agents
             if not isinstance(next_continuation, str):
                 raise AgentBuilderError(
