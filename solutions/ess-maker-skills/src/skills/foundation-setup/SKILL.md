@@ -48,7 +48,7 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Send the complete **Message** block as its own chat message. Finish that message before opening the next question or interactive control; the next control begins with its own prompt, explanation, and choices. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. The already-complete active-agent entry surface defined under **Start** is the only exception: do not render a progress checklist until the maker chooses **Redo setup for this agent**. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Send the complete **Message** block as its own chat message. Finish that message before opening the next question or interactive control; the next control begins with its own prompt, explanation, and choices. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
 **Message:**
 
@@ -194,18 +194,38 @@ result.
 
 One workspace targets one Power Platform environment, can contain multiple ESS Dev agents from that environment, and has one active agent at a time. `.local/config.json` owns the active agent through `activeAgent` and the matching `agent` entry. Canonical setup state records readiness independently for every configured agent.
 
-When an occupied workspace needs a new environment, offer **Reset and use this workspace** alongside **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Ask exactly:
+When an occupied workspace needs a new environment, ask exactly:
 
-> This workspace is already connected to a different Power Platform environment. How would you like to continue?
+> This workspace is currently set up for **{current environment}**. How would you like to set up **{new environment}**?
 
-Use the host's interactive single-selection control and present these standard choices:
+Use the host's interactive single-selection control and present these choices:
 
-- **Reset and use this workspace**
+- **Use the new environment in this workspace (Recommended)** -- archive the current local setup and reuse this workspace.
+- **Work with both environments side by side** -- create a separate Git worktree for the new environment.
+- **Go back**
+
+For **Use the new environment in this workspace (Recommended)**, do not derive or create a fresh destination. Show:
+
+> Reusing this workspace will archive its local setup records, agent files, and FlightCheck results for **{current environment}**. It will not change or delete any agent in Copilot Studio. Continue?
+
+Present these choices:
+
+- **Archive and reuse this workspace (Recommended)**
+- **Go back**
+
+Do not preselect a choice. For **Go back**, make no changes and return to the conflicting-environment choice surface. Continue only when the maker selects **Archive and reuse this workspace (Recommended)**, then run the shared reset operation below.
+
+For **Work with both environments side by side**, derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Ask:
+
+> Where should setup create the workspace for **{new environment}**?
+
+Present these choices:
+
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
 - **Go back**
 
-For **Reset and use this workspace**, do not derive or create a fresh destination; continue through the existing reset confirmation below. For **Go back**, make no changes and return to the Setup choice surface that entered different-environment handling. When explicit fresh-install intent for another environment entered this path directly, render the active-agent choice surface for the occupied workspace. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
+For **Go back**, make no changes and return to the conflicting-environment choice surface. Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Continue only after the maker selects a destination, then run:
 
 ```text
 python scripts/prepare_fresh_workspace.py \
@@ -230,7 +250,7 @@ Do not preselect **Reset workspace**. For **Go back**, make no changes and retur
 python scripts/reset_local_workspace.py --confirm-reset
 ```
 
-Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
+This is also the shared reset operation used after **Archive and reuse this workspace (Recommended)**. Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
 
 For **Switch to another configured agent**, do not use the saved `agents` array as the picker inventory. Run `setup_existing_da.py list-agents` against the active agent's exact environment connection and build the picker from the current live result using the established existing-agent candidate rules. Use `.local/config.json` only to match the exact active `botId` and locally configured identities against that live inventory.
 
@@ -249,13 +269,11 @@ When the selected live identity is not locally configured, continue through the 
 
 The final handoff is the detailed completion report and the standard completion choice surface. After it, present these context-appropriate choices:
 
-- **Finish setup**
+- **Exit setup (Recommended)**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Install another product in this environment**
-- **Reset and use this workspace**
-- **Create and open a new workspace**
 
-Do not preselect a choice. The final handoff must explain that **Finish setup** acknowledges the displayed results and closes setup without running the checks again. **Finish setup** then renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
+Do not preselect a choice. The final handoff must explain that **Exit setup (Recommended)** acknowledges the displayed results and closes setup without running the checks again. **Exit setup (Recommended)** then renders a durable completion snapshot as the final chat message. Reuse the exact agent link, final readiness rows, statuses, evidence summaries, Overall verdict, and every applicable remediation, recheck, or unresolved local-cleanup block from the final handoff in this invocation. Do not rerun a check, read new state, or infer a value from an earlier turn. After the maker selects it, show:
 
 **Message:**
 
@@ -309,6 +327,13 @@ another shortcut only when its route explicitly supports the resolved product.
 Render no shortcut lines when product identity is unresolved or the active
 agent does not support them.
 
+Every exit from setup when the active canonical agent has `connect_ready` equal to `true` must end with the same post-setup option list used in the durable completion snapshot:
+
+- Run `/landing-page` to configure branding and the content employees see.
+- Run `/connect` to add or change an integration.
+  {SUPPORTED_INTEGRATION_SHORTCUTS}
+- Type `/menu` to see all available capabilities.
+
 **Install another product in this environment** begins `da-mos-starter.md` at
 its first product-installation decision surface with the recorded environment
 and ring. Every other selected follow-up begins at that follow-up's first
@@ -324,28 +349,41 @@ active-agent resume handling. Read canonical setup state and `.local/config.json
 only to compare the recorded workspace environment with the requested target.
 For the same environment, retain every configured agent and continue directly
 through `src/skills/foundation-setup/da-mos-starter.md`. For a different
-environment, follow **Create and open a new workspace**. This route uses the
-environment match as its workspace decision; existing-agent readiness remains
-unchanged.
+environment, follow the conflicting-environment flow under **Shared workspace
+choices**. This route uses the environment match as its workspace decision;
+existing-agent readiness remains unchanged.
 
 When the current request supplies no agent, environment, package, or fresh-agent intent, read canonical setup state and `.local/config.json`. A usable active local target must identify the agent display name, agent ID, environment ID, service ring or validated API endpoint, and local workspace folder. Treat these values only as routing input; they do not prove current access, realm, or readiness.
 
-For a usable local target, ask:
+For a usable local target whose canonical agent record has `connect_ready` equal to `true`, do not render the maker-facing progress checklist. Ask:
+
+> Setup is already complete for **{agent display name}**, and this workspace is ready to use. What would you like to do?
+
+Present these context-appropriate choices:
+
+- **Exit setup**
+- **Redo setup for this agent**
+- **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
+- **Install another product in this environment**
+
+For a usable local target whose canonical agent record is incomplete or blocked, render the maker-facing progress checklist and ask:
 
 > **{agent display name}** is the active agent in this workspace. What would you like to do?
 
-Present these standard context-appropriate choices:
+Present these context-appropriate choices:
 
-- **Continue with this agent**, or **Resume setup for this agent** when its canonical agent record is incomplete or blocked.
+- **Exit setup**
+- **Resume setup for this agent**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Install another product in this environment**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
-- **Cancel setup**
 
-Do not preselect a choice. Follow the corresponding shared workspace choice above.
+Do not preselect a choice. Follow the corresponding shared workspace choice above. For **Create and open a new workspace**, use the location-selection and worktree handoff defined under **Work with both environments side by side**, using the recorded environment as the target; this choice does not imply an environment change.
 
-For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection and selected-agent product-line reconciliation above, then run:
+For **Redo setup for this agent**, begin the existing setup route, render its progress checklist before the first setup operation, complete the one-time account selection and selected-agent product-line reconciliation above, then run the inspection command below. Do not create a separate redo workflow or state model.
+
+For **Resume setup for this agent**, continue the same existing setup route by completing the one-time account selection and selected-agent product-line reconciliation above, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -356,7 +394,34 @@ python scripts/setup_existing_da.py inspect-agent \
 
 Also pass the recorded validated `--host` and `--api-version` when available. Parse `DA_AGENT_ROUTE_JSON:` and follow the same realm routing used for a supplied URL. Do not ask for the agent or environment URL.
 
-For **Cancel setup**, make no changes and stop.
+For **Exit setup** when canonical `connect_ready` is `true`, make no changes and do not rerun checks. Show:
+
+**Message:**
+
+Setup remains complete for **{agent display name}**. No checks were rerun.
+
+Next steps:
+
+- Run `/landing-page` to configure branding and the content employees see.
+- Run `/connect` to add or change an integration.
+  {SUPPORTED_INTEGRATION_SHORTCUTS}
+- Type `/menu` to see all available capabilities.
+
+**End message.**
+
+Then end the request.
+
+For **Exit setup** when canonical setup is incomplete or blocked, make no changes and show:
+
+**Message:**
+
+Setup has not been completed for **{agent display name}**.
+
+Run `/setup` when you are ready to resume.
+
+**End message.**
+
+Then end the request. Do not advertise post-setup capabilities while canonical `connect_ready` is not `true`.
 
 Do not describe a supplied agent as editable, Dev, Test, or Prod until a
 server-backed inspection has identified its route realm.
@@ -449,6 +514,6 @@ Present these standard choices:
 - **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
 
 Do not run Dataverse foundation or onboarding playbooks. Never route from
-`/setup` into an integration or topic playbook. **Finish setup** advertises
-separate commands and ends the current request; a command selected afterward
-begins its own prompt flow.
+`/setup` into an integration or topic playbook. **Exit setup (Recommended)**
+advertises separate commands and ends the current request; a command selected
+afterward begins its own prompt flow.

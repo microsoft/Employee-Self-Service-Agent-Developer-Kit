@@ -12,7 +12,7 @@ Read `src/skills/foundation-setup/da-environment-target.md` and follow it, inclu
 
 ## Use the workspace environment
 
-Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow **Create and open a new workspace** in `SKILL.md` and stop this invocation after that handoff. Do not reset a same-environment workspace merely to install another product.
+Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow the conflicting-environment flow under **Shared workspace choices** in `SKILL.md`. Do not reset a same-environment workspace merely to install another product.
 
 Once the target environment is resolved, use this fixed opening as the first product-installation surface:
 

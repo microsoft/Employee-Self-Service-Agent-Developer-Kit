@@ -4,7 +4,7 @@
 
 Connect this ADK workspace to an existing editable DA Dev agent. Do not run the Dataverse setup path, request a Dataverse URL, create a preferred solution, or start Dataverse MCP.
 
-Use one Power Platform environment per ADK workspace. The workspace can contain multiple Dev agents from that environment and has one active agent. A target in another environment uses **Create and open a new workspace** from the parent skill.
+Use one Power Platform environment per ADK workspace. The workspace can contain multiple Dev agents from that environment and has one active agent. A target in another environment uses the parent skill's conflicting-environment flow.
 
 ## Connect from the agent URL
 
@@ -308,7 +308,7 @@ Use concise factual details:
 
 Before presenting the shared completion choices, say:
 
-> **Finish setup** acknowledges these results and closes setup. It does not run the checks again.
+> **Exit setup (Recommended)** acknowledges these results and closes setup. It does not run the checks again.
 
 Calculate Overall from canonical `connectReady`. When `connectReady` is true, render Overall as **✅ Foundation ready**. When it is false after materialization, render Overall as **⚠️ Foundation needs attention** and state that local authoring is ready while the setup-owned prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
 

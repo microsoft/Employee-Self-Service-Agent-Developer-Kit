@@ -655,9 +655,10 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert (
         "Never route from `/setup` into an integration or topic playbook" in normalized
     )
-    assert "**Finish setup** advertises separate commands and ends the current request" in (
-        normalized
-    )
+    assert (
+        "**Exit setup (Recommended)** advertises separate commands and ends "
+        "the current request"
+    ) in normalized
     assert "src/reference/native-alm-import.md" in import_text
     assert "DA_ALM_IMPORT_JSON:" in import_text
     assert "setup_existing_da.py validate-agent" in import_text
@@ -763,18 +764,60 @@ def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
     generic_question = "When the request does not identify an agent or environment"
     assert foundation.index(local_target) < foundation.index(generic_question)
     assert "read canonical setup state and `.local/config.json`" in normalized
-    assert "**{agent display name}** is the active agent in this workspace" in (
-        foundation
+    assert (
+        "Setup is already complete for **{agent display name}**, and this "
+        "workspace is ready to use."
+    ) in normalized
+    assert (
+        "do not render a progress checklist until the maker "
+        "chooses **Redo setup for this agent**"
+    ) in normalized
+    assert (
+        "**{agent display name}** is the active agent in this workspace" in foundation
     )
     for choice in (
-        "Continue with this agent",
+        "Exit setup",
+        "Redo setup for this agent",
         "Switch to another configured agent",
         "Install another product in this environment",
-        "Reset and use this workspace",
-        "Create and open a new workspace",
-        "Cancel setup",
     ):
         assert f"**{choice}**" in foundation
+    ready_agent_choices = foundation.split(
+        "Setup is already complete for **{agent display name}**", 1
+    )[1].split(
+        "For a usable local target whose canonical agent record is incomplete", 1
+    )[0]
+    assert ready_agent_choices.index("**Exit setup**") < ready_agent_choices.index(
+        "**Redo setup for this agent**"
+    )
+    assert "**Reset and use this workspace**" not in ready_agent_choices
+    assert "**Create and open a new workspace**" not in ready_agent_choices
+    assert "**Continue with this agent**" not in ready_agent_choices
+    assert "**Cancel setup**" not in ready_agent_choices
+    incomplete_agent_choices = foundation.split(
+        "**{agent display name}** is the active agent in this workspace", 1
+    )[1].split("Do not preselect a choice.", 1)[0]
+    assert "**Resume setup for this agent**" in incomplete_agent_choices
+    assert "**Reset and use this workspace**" in incomplete_agent_choices
+    assert "**Create and open a new workspace**" in incomplete_agent_choices
+    assert (
+        "For **Create and open a new workspace**, use the location-selection "
+        "and worktree handoff defined under **Work with both environments side "
+        "by side**"
+    ) in normalized
+    assert "Do not create a separate redo workflow or state model." in foundation
+    assert (
+        "Setup remains complete for **{agent display name}**. No checks were "
+        "rerun."
+    ) in normalized
+    assert (
+        "Setup has not been completed for **{agent display name}**."
+    ) in normalized
+    assert "Run `/setup` when you are ready to resume." in foundation
+    assert (
+        "Do not advertise post-setup capabilities while canonical "
+        "`connect_ready` is not `true`."
+    ) in normalized
     assert "Do not preselect a choice" in foundation
     assert '--environment-id "{RECORDED_ENVIRONMENT_ID}"' in foundation
     assert '--agent-id "{RECORDED_AGENT_ID}"' in foundation
@@ -1133,26 +1176,48 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "## Confirm the exact product and target" not in text
     assert "**Create agent**" not in text
     assert _PREPARE_FRESH_WORKSPACE.is_file()
-    assert "Create and open a new workspace" in foundation
-    assert "Create a new workspace without opening it" not in foundation
     assert (
-        "This workspace is already connected to a different Power Platform "
-        "environment. How would you like to continue?"
+        "This workspace is currently set up for **{current environment}**. "
+        "How would you like to set up **{new environment}**?"
     ) in normalized_foundation
+    conflict_choices = foundation[
+        foundation.index("When an occupied workspace needs a new environment") :
+        foundation.index(
+            "For **Use the new environment in this workspace (Recommended)**"
+        )
+    ]
+    assert "**Use the new environment in this workspace (Recommended)**" in (
+        conflict_choices
+    )
+    assert "**Work with both environments side by side**" in conflict_choices
+    assert "**Go back**" in conflict_choices
+    assert "**Use suggested location" not in conflict_choices
+    assert "**Choose another location**" not in conflict_choices
+    assert (
+        "**Archive and reuse this workspace (Recommended)**" in foundation
+    )
+    assert (
+        "Reusing this workspace will archive its local setup records, agent "
+        "files, and FlightCheck results for **{current environment}**."
+    ) in normalized_foundation
+    assert (
+        "Where should setup create the workspace for **{new environment}**?"
+        in foundation
+    )
     assert "Use suggested location -- {suggested absolute sibling-folder path}" in foundation
     assert "Choose another location" in foundation
     assert "Do not ask the maker to type a path unless" in normalized_foundation
     workspace_location = foundation[
-        foundation.index("When an occupied workspace needs a new environment") :
+        foundation.index("For **Work with both environments side by side**") :
         foundation.index("For **Reset and use this workspace**")
     ]
-    assert "**Reset and use this workspace**" in workspace_location
+    assert "**Use suggested location" in workspace_location
+    assert "**Choose another location**" in workspace_location
     assert "**Go back**" in workspace_location
     assert "**Cancel setup**" not in workspace_location
     assert "do not derive or create a fresh destination" in normalized_foundation
     assert (
-        "return to the Setup choice surface that entered different-environment "
-        "handling"
+        "return to the conflicting-environment choice surface"
     ) in normalized_foundation
     assert "scripts/prepare_fresh_workspace.py" in foundation
     assert "--open-vscode" in foundation
@@ -1420,18 +1485,21 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
     normalized = " ".join(text.split())
 
     for choice in (
-        "Continue with this agent",
+        "Exit setup",
+        "Redo setup for this agent",
         "Switch to another configured agent",
         "Install another product in this environment",
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Finish setup",
+        "Exit setup (Recommended)",
     ):
         assert f"**{choice}**" in text
     completion_choices = text.split(
         "The final handoff is the detailed completion report", 1
     )[1].split("## Start", 1)[0]
+    assert "- **Reset and use this workspace**" not in completion_choices
+    assert "- **Create and open a new workspace**" not in completion_choices
     assert "- **Continue customizing this agent**" not in completion_choices
     assert "- **Finish for now**" not in completion_choices
     assert "The {agent display name} agent is now active." in completion_choices
@@ -1449,6 +1517,14 @@ def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
     )
     assert "- Run `/connect` to add or change an integration." in completion_choices
     assert "{SUPPORTED_INTEGRATION_SHORTCUTS}" in completion_choices
+    assert (
+        text.count(
+            "- Run `/landing-page` to configure branding and the content employees see."
+        )
+        == 3
+    )
+    assert text.count("- Run `/connect` to add or change an integration.") == 3
+    assert text.count("- Type `/menu` to see all available capabilities.") == 3
     assert "{APPLICABLE_REMEDIATION_RECHECK_AND_LOCAL_CLEANUP_BLOCKS}" in completion_choices
     assert "body of every applicable block from the detailed handoff" in normalized
     assert "Omit each block's outer `**Message:**` and `**End message.**` markers" in text
@@ -1506,8 +1582,8 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "A sequence of setup operations that retains the same markers" in normalized
     assert "The final handoff is the detailed completion report" in normalized
     assert (
-        "**Finish setup** acknowledges the displayed results and closes setup "
-        "without running the checks again"
+        "**Exit setup (Recommended)** acknowledges the displayed results and "
+        "closes setup without running the checks again"
     ) in normalized
     assert "renders a durable completion snapshot as the final chat message" in normalized
     assert (
@@ -1891,7 +1967,10 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "The final readiness table remains available" in normalized
     assert "manual override is allowed only for a successful check that found zero" in normalized
     assert "Agent content is present in your local workspace." in text
-    assert "Finish setup** acknowledges these results and closes setup" in normalized
+    assert (
+        "Exit setup (Recommended)** acknowledges these results and closes setup"
+        in normalized
+    )
     assert "It does not run the checks again." in text
     assert "When it is false after materialization" in normalized
     assert (
