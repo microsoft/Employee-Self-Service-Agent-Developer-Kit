@@ -40,6 +40,7 @@ EXPECTED_PROFILES = {
     "workday-da:setup-readiness",
     "workday-da:dataverse-ready",
     "workday-da:external-prerequisites",
+    "workday-da:package-ready",
     "workday-da:post-runtime",
     "workday-da:post-connection",
     "workday-da:post-agent-wiring",
@@ -98,22 +99,25 @@ def test_validation_context_normalizes_nullable_identifiers() -> None:
     }
 
 
-def test_post_runtime_profile_does_not_require_dataverse_endpoint() -> None:
+def test_post_runtime_profile_uses_dataverse_and_run_history() -> None:
     requirements = registry.profile_requirements(
         "workday-da:post-runtime"
     )
 
-    assert requirements.requires_dataverse_endpoint is False
-    assert requirements.clients == frozenset({registry.PP_ADMIN})
+    assert requirements.requires_dataverse_endpoint is True
+    assert requirements.clients == frozenset({
+        registry.DATAVERSE,
+        registry.PP_ADMIN,
+    })
     assert requirements.pp_admin_flow_required is True
 
 
-def test_setup_readiness_requires_only_bap_pp_admin_audience() -> None:
+def test_setup_readiness_requires_only_agentbuilder_audience() -> None:
     requirements = registry.profile_requirements(
         "workday-da:setup-readiness"
     )
 
-    assert registry.PP_ADMIN in requirements.clients
+    assert requirements.clients == frozenset({registry.AGENTBUILDER})
     assert requirements.pp_admin_flow_required is False
 
 
@@ -262,17 +266,28 @@ def test_final_profile_exactly_matches_boundary_profile_union() -> None:
 
 def test_profile_membership_matches_lifecycle_boundaries() -> None:
     setup = registry.resolve_profile("workday-da:setup-readiness")
+    package = registry.resolve_profile("workday-da:package-ready")
+    external = registry.resolve_profile("workday-da:external-prerequisites")
     post_connection = registry.resolve_profile("workday-da:post-connection")
     post_wiring = registry.resolve_profile("workday-da:post-agent-wiring")
 
     assert setup is not None
     assert set(setup.checkpoint_ids) == {
-        "ENV-001",
-        "ENV-002",
-        "ENV-CAPACITY-001",
         "DA-AGENT-001",
         "DA-CONTENT-001",
+    }
+    assert external is not None
+    assert "WD-SEC-003" not in external.checkpoint_ids
+    assert package is not None
+    assert set(package.checkpoint_ids) == {
         "WD-DA-PKG-001",
+    }
+    dataverse = registry.resolve_profile("workday-da:dataverse-ready")
+    assert dataverse is not None
+    assert set(dataverse.checkpoint_ids) == {
+        "WD-DA-PKG-001",
+        "WD-DA-FLOW-001",
+        "DV-CONN-001",
     }
     assert post_connection is not None
     assert "WD-REST-002" not in post_connection.checkpoint_ids
@@ -291,47 +306,41 @@ def test_da_wiring_profile_uses_oob_contract_not_custom_topic_families() -> None
 
 def test_final_profile_contains_every_declared_family_contract() -> None:
     families = registry.profile_family_contract("workday-da:final")
-    assert families == {"DA-CONN": {"minimum": 1}}
+    assert families == {}
 
 
-def test_profile_wd_conn_013_resolves_to_real_workday_check() -> None:
-    # WD-CONN-013 (agent connection OBO parameter sharing) is a fully
-    # implemented, tested check in checks/workday.py, emitted by
-    # run_workday_checks. It must resolve to the real WD-CONN family /
-    # Workday category, NOT a placeholder stub.
+def test_profile_excludes_generic_agent_connection_sharing() -> None:
+    # WD-CONN-013 evaluates every connector exposed by the selected agent.
+    # An unrelated persona connector must not block Workday Connect runtime.
     profile = registry.resolve_profile("workday-da:post-connection")
 
     assert profile is not None
-    assert "WD-CONN-013" in profile.checkpoint_ids
-    spec = registry.resolve("WD-CONN-013")
-    assert spec is not None
-    assert spec.category_label == "Workday"
-    assert registry.profile_matches("workday-da:post-connection", "WD-CONN-013")
+    assert "WD-CONN-013" not in profile.checkpoint_ids
+    assert not registry.profile_matches(
+        "workday-da:post-connection", "WD-CONN-013"
+    )
 
 
-def test_profile_plan_runs_wd_conn_013_via_real_workday_category() -> None:
+def test_post_connection_profile_runs_real_workday_category() -> None:
     plan = registry.profile_requirements("workday-da:post-connection")
     labels = [label for label, _fn in plan.ordered_fns]
 
-    # No placeholder "Profile Stubs" category exists; WD-CONN-013 runs inside
-    # the real Workday category.
     assert "Profile Stubs" not in labels
     assert "Workday" in labels
 
 
-@pytest.mark.parametrize(
-    "target",
-    [
-        "WD-DA-FLOW-001",
-        "WD-DA-AUTH-001",
-        "WD-DA-RUN-001",
-    ],
-)
-def test_runtime_checkpoint_plan_hydrates_flow_inventory(target: str) -> None:
+@pytest.mark.parametrize("target", [
+    "WD-DA-FLOW-001",
+    "WD-DA-AUTH-001",
+    "WD-DA-RUN-001",
+])
+def test_runtime_checkpoint_plan_uses_dataverse_inventory(target: str) -> None:
     plan = registry.transitive_requirements(target)
     labels = [label for label, _fn in plan.ordered_fns]
 
-    assert labels.index("External Systems") < labels.index("Workday DA")
+    assert registry.DATAVERSE in plan.clients
+    assert "External Systems" not in labels
+    assert "Workday DA" in labels
 
 
 def test_profile_requirements_rejects_empty_profile(monkeypatch) -> None:

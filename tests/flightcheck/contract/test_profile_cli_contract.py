@@ -815,6 +815,7 @@ def test_native_preferred_account_mismatch_blocks_profile(
     assert exc.value.code == 1
     state = captured["result"].client_availability["agentbuilder"]
     assert state["available"] is False
+    assert state["authenticatedAccountVerified"] is False
     assert state["reason"] == "ValueError"
 
 
@@ -1086,7 +1087,79 @@ def test_profile_rejects_unproven_dataverse_environment_binding(
     assert exc.value.code == 1
     state = captured["result"].client_availability["pp_admin"]
     assert state["available"] is False
+    assert state["authenticatedAccountVerified"] is False
     assert state["reason"] == expected_reason
+
+
+def test_connect_profile_accepts_controller_verified_environment_binding(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(
+        json.dumps(_config()),
+        encoding="utf-8",
+    )
+    connect_config = tmp_path / "connect.json"
+    connect_config.write_text(json.dumps(_config()), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    profile = registry.ProfileSpec(
+        name="workday-da:test",
+        checkpoint_ids=("TEST-001",),
+        description="test",
+    )
+    plan = SimpleNamespace(
+        clients=frozenset({registry.PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        ordered_fns=[("Test", lambda _runner: [_passed()])],
+    )
+
+    class AdminWithoutEnvironmentMatch:
+        signed_in_username = "maker@example.com"
+
+        def __init__(self, _tenant_id):
+            pass
+
+        def authenticate(self, preferred_username=None):
+            return "token"
+
+        def find_environment_id_by_dataverse_url(self, _url):
+            return None
+
+    monkeypatch.setattr(registry, "resolve_profile", lambda _name: profile)
+    monkeypatch.setattr(registry, "profile_requirements", lambda _name: plan)
+    monkeypatch.setattr(
+        registry,
+        "profile_matches",
+        lambda _name, emitted: emitted == "TEST-001",
+    )
+    monkeypatch.setattr(registry, "profile_family_contract", lambda _name: {})
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: _config()["tenantId"])
+    monkeypatch.setattr(cli, "PPAdminClient", AdminWithoutEnvironmentMatch)
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_emit_run_telemetry", lambda *_a, **_k: None)
+    captured = {}
+    monkeypatch.setattr(
+        cli,
+        "save_results",
+        lambda result, _output: captured.setdefault("result", result),
+    )
+
+    args = _args(
+        invocation_source="connect",
+        connect_config=str(connect_config),
+        environment_id=_config()["environmentId"],
+        environment_url=_config()["dataverseEndpoint"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(args)
+
+    assert exc.value.code == 0
+    state = captured["result"].client_availability["pp_admin"]
+    assert state["available"] is True
+    assert state["authenticatedAccountVerified"] is True
 
 
 def test_profile_rejects_runtime_reachability_before_auth(monkeypatch) -> None:
