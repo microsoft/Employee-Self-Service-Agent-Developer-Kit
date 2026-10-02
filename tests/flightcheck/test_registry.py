@@ -141,9 +141,12 @@ class TestTransitiveRequirements:
         # Only the Workday owning function runs (no prereqs).
         assert [label for label, _ in plan.ordered_fns] == ["Workday"]
 
-    def test_obo_sharing_checkpoint_needs_only_dataverse(self):
+    def test_obo_sharing_checkpoint_needs_selected_agent_and_dataverse(self):
         plan = registry.transitive_requirements("WD-CONN-013")
-        assert plan.clients == frozenset({registry.DATAVERSE})
+        assert plan.clients == frozenset({
+            registry.DATAVERSE,
+            registry.AGENTBUILDER,
+        })
         assert registry.PP_ADMIN not in plan.clients
         assert plan.requires_dataverse_endpoint is True
         assert [label for label, _ in plan.ordered_fns] == ["Workday"]
@@ -445,11 +448,9 @@ class TestWorkdayExtensionCheckpoints:
         assert registry.resolve("WD-CONN-AUTH-001").key == "WD-CONN-AUTH-001"
         assert registry.resolve("WD-CONN-AUTH-001").is_family is False
 
-    def test_dv_conn_spec_declares_agentbuilder_and_pp_admin(self):
+    def test_dv_conn_spec_requires_only_agentbuilder(self):
         spec = registry.resolve("DV-CONN-001")
-        assert spec.clients == frozenset(
-            {registry.AGENTBUILDER, registry.PP_ADMIN}
-        )
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
         assert spec.requires_dataverse_endpoint is False
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
@@ -470,10 +471,9 @@ class TestWorkdayExtensionCheckpoints:
         # infra-owning role (see checks/workday_extension.py note).
         assert Role.POWER_PLATFORM_ADMIN.value in spec.roles
 
-    def test_dv_conn_plan_unions_clients(self):
+    def test_dv_conn_plan_requires_only_agentbuilder(self):
         plan = registry.transitive_requirements("DV-CONN-001")
-        assert registry.AGENTBUILDER in plan.clients
-        assert registry.PP_ADMIN in plan.clients
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
 
     def test_all_five_are_listable(self):
         keys = {spec.key for spec in registry.list_checkpoints()}

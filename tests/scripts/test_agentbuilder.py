@@ -371,6 +371,28 @@ def test_host_derivation_probes_primary_split_first() -> None:
     assert len(attempted) == 1
 
 
+@pytest.mark.parametrize(
+    ("ring", "host"),
+    [
+        (
+            "prod",
+            "https://000000000000400080000000000011."
+            "11.environment.api.powerplatform.com",
+        ),
+        (
+            "test",
+            "https://0000000000004000800000000000111."
+            "1.environment.api.test.powerplatform.com",
+        ),
+    ],
+)
+def test_environment_id_from_host_accepts_real_dns_splits(
+    ring: str,
+    host: str,
+) -> None:
+    assert agentbuilder.environment_id_from_host(host, ring) == ENVIRONMENT_ID
+
+
 def test_explicit_host_rejects_cross_ring_and_paths() -> None:
     with pytest.raises(ValueError, match="environment host"):
         agentbuilder.validate_environment_host(
@@ -1504,6 +1526,49 @@ def test_selected_tenant_authentication_reuses_one_cached_account(
     )
 
 
+def test_flightcheck_authentication_returns_identity_without_emitting_it(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": tenant_id}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    token = f"header.{payload}.signature"
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "access_token": token,
+                "id_token_claims": {
+                    "preferred_username": "maker@example.test",
+                },
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate_flightcheck(
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert result == (token, tenant_id, "maker@example.test")
+    assert "maker@example.test" not in capsys.readouterr().out
+
+
 def test_cached_account_names_are_distinct_and_sorted(
     tmp_path,
     monkeypatch,
@@ -1654,6 +1719,97 @@ def test_account_hint_prepopulates_interactive_selection(
     assert result == "test-token"
     assert observed["interactive"]["login_hint"] == "test.user@example.test"
     assert "prompt" not in observed["interactive"]
+
+
+def test_interactive_fallback_reports_interactive_account_not_stale_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cached = {"username": "cached@example.test"}
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return [cached]
+
+        def acquire_token_silent(self, _scopes, *, account):
+            assert account is cached
+            return {"error": "interaction_required"}
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "access_token": "interactive-token",
+                "id_token_claims": {
+                    "preferred_username": "interactive@example.test",
+                },
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    token, username = agentbuilder._acquire_token(
+        authority=(
+            "https://login.microsoftonline.com/"
+            "00000000-0000-4000-8000-000000009999"
+        ),
+        ring="prod",
+        cache_path=tmp_path / "token-cache.bin",
+        force_account_selection=False,
+        account_hint="cached@example.test",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert token == "interactive-token"
+    assert username == "interactive@example.test"
+
+
+def test_interactive_fallback_without_identity_does_not_use_stale_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cached = {"username": "cached@example.test"}
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return [cached]
+
+        def acquire_token_silent(self, _scopes, *, account):
+            assert account is cached
+            return {"error": "interaction_required"}
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {"access_token": "interactive-token"}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    token, username = agentbuilder._acquire_token(
+        authority=(
+            "https://login.microsoftonline.com/"
+            "00000000-0000-4000-8000-000000009999"
+        ),
+        ring="prod",
+        cache_path=tmp_path / "token-cache.bin",
+        force_account_selection=False,
+        account_hint="cached@example.test",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert token == "interactive-token"
+    assert username is None
 
 
 def test_account_hint_preserves_interactive_authentication_error(

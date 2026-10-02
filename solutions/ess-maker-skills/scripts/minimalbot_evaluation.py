@@ -112,6 +112,18 @@ _REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
     ),
 }
 
+
+def reviewed_workday_topic_schemas(agent_schema: str) -> frozenset[str]:
+    """Return the reviewed OOB Workday topic schemas for one agent."""
+    schema = str(agent_schema or "").strip()
+    suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(schema.casefold())
+    if suffixes is None:
+        return frozenset()
+    return frozenset(
+        f"{schema}.topic.{suffix}" for suffix in suffixes
+    )
+
+
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
 # mutating PUT (component insert) and POST (run) verbs, so retry safety matters:
@@ -341,15 +353,10 @@ def resolve_workday_dialogs(
             "The active agent component map must contain a JSON object."
         )
 
-    reviewed_suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(
-        schema.casefold()
-    )
+    reviewed = reviewed_workday_topic_schemas(schema)
     reviewed_schemas = (
-        {
-            f"{schema}.topic.{suffix}".casefold()
-            for suffix in reviewed_suffixes
-        }
-        if reviewed_suffixes is not None
+        {value.casefold() for value in reviewed}
+        if reviewed
         else None
     )
     schema_prefix = f"{schema}.topic.Workday".casefold()

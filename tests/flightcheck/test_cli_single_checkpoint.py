@@ -19,6 +19,8 @@ Contracts pinned:
   * plan producing a PASSED row               -> SystemExit code 0
   * plan producing a FAILED row               -> SystemExit code 1
   * plan producing an ERROR row                -> SystemExit code 1
+  * plan producing only SKIPPED/NOT_CONFIGURED -> SystemExit code 1
+  * plan producing a MANUAL row                -> READY_WITH_WARNINGS / 0
   * exact checkpoint producing no row          -> SystemExit code 1
 """
 
@@ -104,6 +106,21 @@ def test_run_exit_code_treats_blocked_as_not_ready(
     # previously omitted result.blocked.
     result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
     assert cli._run_exit_code(result) == expected
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["employee@example.com", "attempt label", "../attempt", "x" * 129],
+)
+def test_runtime_evidence_label_rejects_free_form_or_sensitive_text(
+    tmp_path: Path,
+    label: str,
+) -> None:
+    args = _args("WD-DA-RUN-001", tmp_path)
+    args.runtime_evidence_attempt_id = label
+
+    with pytest.raises(ValueError, match="opaque label"):
+        cli._runtime_evidence_values(args)
 
 
 @pytest.mark.parametrize(
@@ -379,6 +396,21 @@ class TestGates:
         overlay.write_text('["not", "an", "object"]', encoding="utf-8")
 
         with pytest.raises(ValueError, match="must contain a JSON object"):
+            cli._merge_connect_config({}, str(overlay))
+
+    @pytest.mark.parametrize("field", ["scope", "identifiers", "endpoints"])
+    def test_connect_config_rejects_non_object_versioned_sections(
+        self,
+        tmp_path: Path,
+        field: str,
+    ) -> None:
+        overlay = tmp_path / "invalid-section.json"
+        overlay.write_text(
+            json.dumps({"schemaVersion": 7, field: []}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=f"field '{field}'.*JSON object"):
             cli._merge_connect_config({}, str(overlay))
 
     def test_environment_checkpoints_accept_explicit_foundation_context(
@@ -692,6 +724,168 @@ class TestHermeticRun:
         assert captured["config"]["tenant"] == "acme"
         assert captured["config"]["_connectConfigPath"] == str(overlay)
 
+    def test_preferred_account_is_propagated_and_verified_for_graph(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+            }),
+            encoding="utf-8",
+        )
+        observed = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.PASSED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = "maker@example.com"
+
+            def __init__(self, tenant_id: str) -> None:
+                observed["tenant_id"] = tenant_id
+
+            def authenticate(self, preferred_username=None):
+                observed["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+        args = _args("FAKE-001", tmp_path)
+        args.preferred_username = "maker@example.com"
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(args)
+
+        assert exc.value.code == 0
+        assert observed == {
+            "tenant_id": "00000000-0000-0000-0000-000000001111",
+            "preferred_username": "maker@example.com",
+        }
+
+    def test_required_client_auth_failure_blocks_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+            }),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.SKIPPED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = None
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                raise RuntimeError("sign-in failed")
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 1
+
+    def test_runtime_evidence_arguments_reach_single_checkpoint_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        captured = {}
+
+        def _check(runner):
+            captured["label"] = runner.runtime_evidence_attempt_id
+            captured["start"] = runner.runtime_evidence_start
+            captured["end"] = runner.runtime_evidence_end
+            captured["flow_ids"] = runner.runtime_evidence_flow_ids
+            return [_row("WD-DA-RUN-001", Status.PASSED.value)]
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            ordered_fns = [("Fake", _check)]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+        args = _args("WD-DA-RUN-001", tmp_path)
+        args.runtime_evidence_attempt_id = "attempt-001"
+        args.runtime_evidence_start = "2026-01-01T00:00:00Z"
+        args.runtime_evidence_end = "2026-01-01T00:05:00Z"
+        args.runtime_evidence_flow_id = ["flow-1", "flow-2"]
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(args)
+
+        assert exc.value.code == 0
+        assert captured == {
+            "label": "attempt-001",
+            "start": "2026-01-01T00:00:00Z",
+            "end": "2026-01-01T00:05:00Z",
+            "flow_ids": ("flow-1", "flow-2"),
+        }
+
     def test_failed_row_exits_1(
         self,
         tmp_path: Path,
@@ -718,6 +912,54 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-ERR", tmp_path))
         assert exc.value.code == 1
+
+    @pytest.mark.parametrize(
+        "status",
+        [Status.SKIPPED.value, Status.NOT_CONFIGURED.value],
+    )
+    def test_unresolved_row_exits_1(
+        self,
+        status: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-001", status)],
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+        assert exc.value.code == 1
+
+    def test_manual_row_adds_guided_warning_and_exits_0(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-001", Status.MANUAL.value)],
+        )
+        captured = {}
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, _output: captured.setdefault("result", result),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 0
+        assert captured["result"].overall == "READY_WITH_WARNINGS"
+        assert any(
+            row.checkpoint_id == "CHECKPOINT-CONTRACT-GUIDED"
+            for row in captured["result"].results
+        )
 
     def test_exact_checkpoint_without_result_exits_1(
         self,

@@ -18,6 +18,7 @@ codified it has been removed.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest
@@ -47,7 +48,12 @@ class TestAuthenticationScope:
 
         def acquire_interactive(scopes, prompt):
             acquired_scopes.append((scopes, prompt))
-            return {"access_token": f"token-{len(acquired_scopes)}"}
+            return {
+                "access_token": f"token-{len(acquired_scopes)}",
+                "id_token_claims": {
+                    "preferred_username": "maker@example.com",
+                },
+            }
 
         app.acquire_token_interactive.side_effect = acquire_interactive
         monkeypatch.setattr(
@@ -87,7 +93,12 @@ class TestAuthenticationScope:
 
         def acquire_interactive(scopes, prompt):
             acquired_scopes.append((scopes, prompt))
-            return {"access_token": f"token-{len(acquired_scopes)}"}
+            return {
+                "access_token": f"token-{len(acquired_scopes)}",
+                "id_token_claims": {
+                    "preferred_username": "maker@example.com",
+                },
+            }
 
         app.acquire_token_interactive.side_effect = acquire_interactive
         monkeypatch.setattr(
@@ -110,6 +121,45 @@ class TestAuthenticationScope:
         ]
         assert client._flow_token == "token-2"
 
+    def test_auth_rejects_different_accounts_across_api_audiences(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from flightcheck import pp_admin_client
+
+        monkeypatch.chdir(tmp_path)
+        cache = Mock()
+        cache.has_state_changed = False
+        app = Mock()
+        app.get_accounts.return_value = []
+        usernames = iter(("maker@example.com", "admin@example.com"))
+
+        def acquire_interactive(_scopes, **_kwargs):
+            return {
+                "access_token": "token",
+                "id_token_claims": {
+                    "preferred_username": next(usernames),
+                },
+            }
+
+        app.acquire_token_interactive.side_effect = acquire_interactive
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "SerializableTokenCache",
+            lambda: cache,
+        )
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "PublicClientApplication",
+            lambda *args, **kwargs: app,
+        )
+
+        client = pp_admin_client.PPAdminClient("organizations")
+
+        with pytest.raises(RuntimeError, match="different or unverifiable"):
+            client.authenticate()
+
 
 @pytest.fixture
 def pp_client(fake_token: str):
@@ -122,6 +172,107 @@ def pp_client(fake_token: str):
     # exercise either need this set or `flow_headers` raises.
     client._flow_token = fake_token
     return client
+
+
+@responses.activate
+def test_flow_runs_since_follows_pages_until_window_is_covered(
+    pp_client,
+) -> None:
+    from flightcheck import pp_admin_client
+
+    flow_id = "00000000-0000-0000-0000-000000007101"
+    first_url = (
+        f"{pp_admin_client.FLOW_BASE}/providers/Microsoft.ProcessSimple/"
+        f"environments/{pp.MOCK_ENV_ID}/flows/{flow_id}/runs"
+    )
+    next_url = f"{first_url}?api-version=2016-11-01&$skiptoken=next"
+    responses.add(
+        "GET",
+        first_url,
+        match=[
+            responses.matchers.query_param_matcher({
+                "api-version": "2016-11-01",
+            })
+        ],
+        json={
+            "value": [{
+                "name": "newer",
+                "properties": {
+                    "startTime": "2026-06-01T00:10:00Z",
+                },
+            }],
+            "nextLink": next_url,
+        },
+        status=200,
+    )
+    responses.add(
+        "GET",
+        next_url,
+        json={
+            "value": [{
+                "name": "covered",
+                "properties": {
+                    "startTime": "2026-06-01T00:00:00Z",
+                },
+            }],
+        },
+        status=200,
+    )
+
+    runs = pp_client.get_flow_runs_since(
+        pp.MOCK_ENV_ID,
+        flow_id,
+        datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+    )
+
+    assert [run["name"] for run in runs] == ["newer", "covered"]
+
+
+@responses.activate
+def test_flow_runs_since_rejects_cross_origin_next_link(pp_client) -> None:
+    from flightcheck import pp_admin_client
+
+    flow_id = "00000000-0000-0000-0000-000000007101"
+    first_url = (
+        f"{pp_admin_client.FLOW_BASE}/providers/Microsoft.ProcessSimple/"
+        f"environments/{pp.MOCK_ENV_ID}/flows/{flow_id}/runs"
+    )
+    responses.add(
+        "GET",
+        first_url,
+        json={
+            "value": [{
+                "name": "newer",
+                "properties": {
+                    "startTime": "2026-06-01T00:10:00Z",
+                },
+            }],
+            "nextLink": "https://attacker.example/runs?page=2",
+        },
+        status=200,
+    )
+
+    with pytest.raises(ValueError, match="unexpected origin"):
+        pp_client.get_flow_runs_since(
+            pp.MOCK_ENV_ID,
+            flow_id,
+            datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+        )
+
+    assert len(responses.calls) == 1
+
+
+def test_flow_runs_since_honors_exhausted_deadline(pp_client) -> None:
+    flow_id = "00000000-0000-0000-0000-000000007101"
+
+    result = pp_client.get_flow_runs_since(
+        pp.MOCK_ENV_ID,
+        flow_id,
+        datetime(2026, 6, 1, 0, 1, tzinfo=timezone.utc),
+        max_elapsed_seconds=0,
+    )
+
+    assert result == {"_error": "run_history_deadline_exceeded"}
 
 
 class TestPermissionHandling:

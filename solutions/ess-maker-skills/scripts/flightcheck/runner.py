@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any, Callable
 
 
-FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v1"
+FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v2"
 LIFECYCLE_CHECKPOINT_SCHEMA_VERSION = "flightcheck.lifecycle-checkpoint.v1"
 
 
@@ -133,7 +133,10 @@ class RunResult:
     overall: str = ""  # READY / READY_WITH_WARNINGS / NOT_READY
     profile: str = ""
     profile_checkpoints: list[str] = field(default_factory=list)
+    profile_families: dict[str, dict[str, int]] = field(default_factory=dict)
+    requested_validation_context: dict[str, Any] = field(default_factory=dict)
     validation_context: dict[str, Any] = field(default_factory=dict)
+    client_availability: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 _VALIDATION_REALMS = frozenset({"dev", "test", "prod"})
@@ -151,6 +154,7 @@ class ValidationContext:
     realm: str
     environment_id: str = ""
     environment_url: str = ""
+    agent_slug: str = ""
     agent_schema_name: str = ""
     agent_id: str = ""
     tenant_id: str = ""
@@ -172,12 +176,15 @@ class ValidationContext:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "realm": self.realm.strip(),
-            "environmentId": self.environment_id.strip(),
-            "environmentUrl": self.environment_url.strip(),
-            "agentSchemaName": self.agent_schema_name.strip(),
-            "agentId": self.agent_id.strip(),
-            "tenantId": self.tenant_id.strip(),
+            "realm": str(self.realm or "").strip(),
+            "environmentId": str(self.environment_id or "").strip(),
+            "environmentUrl": str(self.environment_url or "").strip(),
+            "agentSlug": str(self.agent_slug or "").strip(),
+            "agentSchemaName": str(
+                self.agent_schema_name or ""
+            ).strip(),
+            "agentId": str(self.agent_id or "").strip(),
+            "tenantId": str(self.tenant_id or "").strip(),
         }
 
 
@@ -225,25 +232,44 @@ class FlightCheckRunner:
         """Register a check function. fn(runner) -> list[CheckResult]."""
         self._check_fns.append((category, fn))
 
+    def should_execute(self, checkpoint_id: str) -> bool:
+        """Return whether the current target/profile requests this checkpoint."""
+        return (
+            self._target_matcher is None
+            or self._target_matcher(checkpoint_id)
+        )
+
     def run(self) -> RunResult:
         """Execute all registered checks and build the run result."""
         start = time.time()
         started_iso = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        for category, fn in self._check_fns:
+        for category_index, (category, fn) in enumerate(
+            self._check_fns,
+            start=1,
+        ):
             try:
                 results = fn(self)
                 if results:
                     self.results.extend(results)
             except Exception as e:
                 self.results.append(CheckResult(
-                    checkpoint_id=f"{category[:3].upper()}-ERR",
+                    checkpoint_id=(
+                        f"EXEC-{category_index:03d}-"
+                        f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}"
+                        "-ERR"
+                    ),
                     category=category,
                     priority=Priority.HIGH.value,
                     status=Status.ERROR.value,
                     description=f"{category} validation",
                     result=f"Check failed with error: {e}",
                     remediation="Review permissions and retry. See terminal output for details.",
+                    remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+                    evidence={
+                        "executionError": True,
+                        "category": category,
+                    },
                     roles=[Role.ESS_MAKER.value],
                 ))
                 traceback.print_exc()
@@ -260,7 +286,7 @@ class FlightCheckRunner:
             self.results = [
                 r for r in self.results
                 if self._target_matcher(r.checkpoint_id)
-                or r.checkpoint_id.endswith("-ERR")
+                or r.evidence.get("executionError") is True
             ]
 
         # Build category summaries
@@ -344,7 +370,10 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "scope": run_result.scope,
         "profile": run_result.profile,
         "profile_checkpoints": run_result.profile_checkpoints,
+        "profile_families": run_result.profile_families,
+        "requested_validation_context": run_result.requested_validation_context,
         "validation_context": run_result.validation_context,
+        "client_availability": run_result.client_availability,
         "started": run_result.started,
         "duration_secs": run_result.duration_secs,
         "overall": run_result.overall,
@@ -523,7 +552,20 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
         "schemaVersion": FLIGHTCHECK_RESULT_SCHEMA_VERSION,
         "profile": run_result.profile,
         "profileCheckpoints": list(run_result.profile_checkpoints),
+        "profileFamilies": dict(run_result.profile_families),
+        "emittedCheckpoints": [
+            result.checkpoint_id for result in run_result.results
+        ],
+        "requestedValidationContext": dict(
+            run_result.requested_validation_context
+        ),
         "validationContext": dict(run_result.validation_context),
+        "clientAvailability": dict(run_result.client_availability),
+        "executionErrors": [
+            check_result_contract_dict(result)
+            for result in run_result.results
+            if result.evidence.get("executionError") is True
+        ],
         "overall": run_result.overall,
         "counts": {
             "total": run_result.total,
@@ -591,7 +633,30 @@ def compact_checkpoint_result_to_dict(
         raise ValueError("Compact checkpoint target is required.")
     if not isinstance(invocation_id, str) or not invocation_id.strip():
         raise ValueError("Compact checkpoint invocation ID is required.")
-    if not run_result.results:
+    contract_rows = [
+        result
+        for result in run_result.results
+        if result.checkpoint_id.startswith("CHECKPOINT-CLIENT-")
+        or result.checkpoint_id.startswith("CHECKPOINT-CONTRACT-")
+    ]
+    blocking_contract_rows = [
+        result
+        for result in contract_rows
+        if result.status
+        in {
+            Status.FAILED.value,
+            Status.BLOCKED.value,
+            Status.ERROR.value,
+        }
+    ]
+    if blocking_contract_rows:
+        raise ValueError(
+            "Compact checkpoint execution has a blocking client or contract row."
+        )
+    target_results = [
+        result for result in run_result.results if result not in contract_rows
+    ]
+    if not target_results:
         raise ValueError("Compact checkpoint result must contain result rows.")
     if any(
         not _compact_target_matches(
@@ -599,7 +664,7 @@ def compact_checkpoint_result_to_dict(
             result.checkpoint_id,
             is_family=target_is_family,
         )
-        for result in run_result.results
+        for result in target_results
     ):
         raise ValueError(
             "Compact checkpoint result contains a row outside the target."
@@ -619,7 +684,7 @@ def compact_checkpoint_result_to_dict(
         "exitCode": exit_code,
         "results": [
             check_result_contract_dict(result)
-            for result in run_result.results
+            for result in target_results
         ],
     }
 
