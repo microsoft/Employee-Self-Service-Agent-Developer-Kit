@@ -55,7 +55,7 @@ ensure there is exactly one:
 - kind: BeginDialog
   id: workdayRuntimeTemplateConfiguration
   displayName: Initialize Workday runtime template configurations
-  dialog: { WORKDAY_RUNTIME_TEMPLATE_DIALOG }
+  dialog: "{WORKDAY_RUNTIME_TEMPLATE_DIALOG}"
 ```
 
 Where `{WORKDAY_RUNTIME_TEMPLATE_DIALOG}` is the resolved schema name for

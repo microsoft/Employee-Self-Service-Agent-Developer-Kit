@@ -140,6 +140,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(tenant.split())
 
     assert "one administrator handoff" in tenant
     assert "Workday administrator return worksheet" in tenant
@@ -153,7 +154,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Another sign-in provider" in tenant
     assert "No enabled SAML row" in tenant
     assert "I'm not sure" in tenant
-    assert "Do not infer a match from the\n     provider choice alone" in tenant
+    assert "Do not infer a match from the provider choice alone" in normalized
     assert "certificateSelectionQuestion" in tenant
     assert "The new certificate created from the Entra Base64 file" in tenant
     assert "A different existing Workday certificate" in tenant

@@ -952,6 +952,47 @@ def test_approving_completed_runtime_invalidates_employee_validation(
     assert state["phases"]["employee-validation"]["completedActions"] == []
 
 
+def test_approving_changed_plan_clears_current_phase_evidence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in ("preflight", "entra", "workday-admin", "connections"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    original = {
+        "phase": "runtime",
+        "scope": {"botId": "bot-a"},
+        "actions": ["Apply runtime bindings"],
+    }
+    store.approve_plan("runtime", original)
+    store.complete_action(
+        "runtime",
+        "runtime-template-configured",
+        evidence={"outcome": "verified", "botId": "bot-a"},
+    )
+
+    changed = {
+        **original,
+        "scope": {"botId": "bot-b"},
+    }
+    state, approved_hash = store.approve_plan("runtime", changed)
+
+    runtime = state["phases"]["runtime"]
+    assert runtime["status"] == "active"
+    assert runtime["approvedPlan"] == changed
+    assert runtime["approvedPlanHash"] == approved_hash
+    assert runtime["completedActions"] == []
+    assert runtime["evidence"] == []
+    assert runtime["validationProfiles"] == {}
+
+
 def test_status_returns_progress_roadmap_and_next_phase_summary(
     tmp_path: Path,
 ) -> None:
@@ -1397,6 +1438,115 @@ def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
         phase["validationProfiles"] == {}
         for phase in upgraded["phases"].values()
     )
+
+
+def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    document = model.default_state()
+    document["schemaVersion"] = 7
+    for phase_id, phase in document["phases"].items():
+        phase.pop("validationProfiles")
+        phase.pop("employeeTestAttempt", None)
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            phase["completedActions"].append(action)
+            phase["evidence"].append(
+                {"action": action, "outcome": "verified"}
+            )
+        phase["status"] = "complete"
+    document["status"] = "ready"
+    path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    store = WorkdayConnectStore(tmp_path)
+    store.load()
+
+    assert store.prepare_migration_employee_test_attempt() is False
+    state = store.load()
+    employee = state["phases"]["employee-validation"]
+    assert employee["status"] == "active"
+    assert employee["completedActions"] == []
+    assert employee["evidence"] == []
+    assert employee["employeeTestAttempt"] is None
+    assert (
+        state["migration"]["flightcheckBaselineOutcome"]
+        == "employee-validation-required"
+    )
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="bounded employee test attempt",
+    ):
+        store.complete_flightcheck_migration()
+
+
+def test_v7_ready_migration_requires_final_readiness_after_preparing_attempt(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    document = model.default_state()
+    document["schemaVersion"] = 7
+    runtime_plan = {
+        "phase": "runtime",
+        "scope": {"environmentId": "environment-id"},
+        "actions": ["Configure runtime"],
+        "flows": [{"name": "REST", "workflowId": "flow-id"}],
+    }
+    runtime = document["phases"]["runtime"]
+    runtime["approvedPlan"] = runtime_plan
+    runtime["approvedPlanHash"] = model.plan_hash(runtime_plan)
+    for phase_id, phase in document["phases"].items():
+        phase.pop("validationProfiles")
+        phase.pop("employeeTestAttempt", None)
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            evidence = {"action": action, "outcome": "verified"}
+            if (
+                phase_id == "runtime"
+                and action == "flow-attachment-confirmed"
+            ):
+                evidence["flowNames"] = ["REST"]
+            if (
+                phase_id == "employee-validation"
+                and action == "signed-in-scenario"
+            ):
+                evidence["timestamp"] = "2026-09-28T12:00:00Z"
+            phase["completedActions"].append(action)
+            phase["evidence"].append(evidence)
+        phase["status"] = "complete"
+    document["status"] = "ready"
+    path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    store = WorkdayConnectStore(tmp_path)
+    store.load()
+
+    assert store.prepare_migration_employee_test_attempt() is True
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="final readiness profile",
+    ):
+        store.complete_flightcheck_migration()
+
+    state = store.load()
+    assert (
+        state["phases"]["employee-validation"]["employeeTestAttempt"][
+            "status"
+        ]
+        == "validating"
+    )
+    assert state["status"] == "in-progress"
+    assert state["migration"]["flightcheckBaselineRequired"] is True
 
 
 def test_v7_migration_repairs_malformed_backup(tmp_path: Path) -> None:

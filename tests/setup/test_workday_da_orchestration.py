@@ -44,6 +44,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
     entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
     tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
     briefing = skill.index("> Here's who may be needed")
     status = skill.index("python scripts/workday_connect.py status")
@@ -101,7 +102,11 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "runtime",
         "employee-validation",
     ):
-        assert f"| `{phase_id}` |" in skill
+        assert re.search(
+            rf"^\|\s*`{re.escape(phase_id)}`\s*\|",
+            skill,
+            re.MULTILINE,
+        )
     assert "Leave the selection unset" in skill
     assert "not proof that the signed-in account has a required role" in skill
     assert (
@@ -109,9 +114,17 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         in " ".join(skill.split())
     )
     assert "Do not include people from completed phases" in skill
-    assert "remediation-only roles that are\nnot currently required" in skill
-    assert "only\nwhen `nextPhaseId` is `workday-admin`" in skill
-    assert "healthy reused tenant foundation\ncontinues at Connections" in skill
+    assert (
+        "remediation-only roles that are not currently required"
+        in normalized_skill
+    )
+    assert (
+        "only when `nextPhaseId` is `workday-admin`" in normalized_skill
+    )
+    assert (
+        "healthy reused tenant foundation continues at Connections"
+        in normalized_skill
+    )
     assert "When `nextPhaseId` is `entra`, dispatch" in skill
     assert "presents the guided handoff" in skill
     assert "stop before dispatching the next\nphase" in skill

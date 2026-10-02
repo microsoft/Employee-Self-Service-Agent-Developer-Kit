@@ -434,6 +434,8 @@ def test_final_profile_routes_failure_to_checkpoint_owning_phase():
     [
         ("WD-ENTRA-SIGNOPT-001", "entra"),
         ("WD-API-CLIENT-001", "workday-admin"),
+        ("WD-DA-FLOW-001", "runtime"),
+        ("DV-CONN-001", "runtime"),
         ("WD-REST-002", "runtime"),
     ],
 )

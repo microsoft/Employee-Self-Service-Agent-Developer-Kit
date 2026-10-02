@@ -424,6 +424,15 @@ def _merge_keyed_lists(
 
     locally_positioned = added | moved
     locally_touched = locally_positioned | content_changed
+    deleted_remote_edits = (moved | content_changed) - remote_set
+    if deleted_remote_edits:
+        deleted_ids = ", ".join(
+            repr(item_id) for item_id in sorted(deleted_remote_edits)
+        )
+        raise _DialogMergeConflict(
+            f"{path} action(s) {deleted_ids} were deleted remotely while the "
+            "local edit moved or changed them"
+        )
     for item_id in desired_ids:
         if item_id in merged_by_id:
             continue

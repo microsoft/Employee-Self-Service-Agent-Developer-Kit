@@ -949,6 +949,35 @@ def test_minimalbot_dialog_update_preserves_unrelated_remote_actions(
     assert result["verifiedComponents"] == 1
 
 
+@pytest.mark.parametrize("local_change", ["move", "edit"])
+def test_dialog_merge_rejects_remote_deletion_of_locally_changed_action(
+    local_change,
+):
+    expected = [
+        {"id": "first", "value": "before"},
+        {"id": "second", "value": "unchanged"},
+    ]
+    if local_change == "move":
+        desired = [expected[1], expected[0]]
+    else:
+        desired = [
+            {"id": "first", "value": "after"},
+            expected[1],
+        ]
+    remote = [expected[1]]
+
+    with pytest.raises(
+        mbe._DialogMergeConflict,
+        match="deleted remotely",
+    ):
+        mbe._merge_keyed_lists(
+            expected,
+            desired,
+            remote,
+            path="dialog.actions",
+        )
+
+
 def test_minimalbot_dialog_retry_accepts_already_applied_remote_wiring(
     monkeypatch,
 ):

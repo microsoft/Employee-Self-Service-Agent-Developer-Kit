@@ -2469,7 +2469,7 @@ class WorkdayConnectStore:
                 phase["status"] = PhaseStatus.ACTIVE.value
                 phase["blocker"] = None
                 phase["validationProfiles"] = {}
-                phase["employeeTestAttempt"] = None
+                _clear_employee_validation_evidence(phase)
                 phase["updatedAt"] = utc_now()
                 state["status"] = "in-progress"
                 migration["flightcheckBaselineRequired"] = False
@@ -2509,6 +2509,24 @@ class WorkdayConnectStore:
         def mutation(state: dict[str, Any]) -> None:
             phase = state["phases"]["employee-validation"]
             attempt = phase.get("employeeTestAttempt")
+            migration = dict(state.get("migration") or {})
+            if migration.get("legacyReady") is True and (
+                migration.get("flightcheckBaselineOutcome") != "accepted"
+            ):
+                final_profile = (phase.get("validationProfiles") or {}).get(
+                    "workday-da:final"
+                )
+                if (
+                    not isinstance(attempt, dict)
+                    or attempt.get("status") != "validating"
+                    or not isinstance(final_profile, Mapping)
+                    or final_profile.get("accepted") is not True
+                ):
+                    raise WorkdayConnectStoreError(
+                        "Complete a bounded employee test attempt and the final "
+                        "readiness profile before accepting the migrated Ready "
+                        "state."
+                    )
             if isinstance(attempt, dict) and attempt.get("status") == "validating":
                 attempt["status"] = "succeeded"
                 attempt["completedAt"] = attempt["completedAt"] or utc_now()
@@ -2525,7 +2543,6 @@ class WorkdayConnectStore:
                     invalidate_downstream=False,
                 )
             self._refresh_validation_profile_fingerprints(state)
-            migration = dict(state.get("migration") or {})
             migration["flightcheckBaselineRequired"] = False
             migration["flightcheckBaselineOutcome"] = "accepted"
             migration["flightcheckBaselineAt"] = utc_now()
@@ -2602,11 +2619,14 @@ class WorkdayConnectStore:
                 )
             phase = state["phases"][phase_id]
             previous_status = phase["status"]
+            plan_changed = phase.get("approvedPlanHash") != approved_hash
             if (
                 phase["status"] == PhaseStatus.COMPLETE.value
-                or phase.get("approvedPlanHash") != approved_hash
+                or plan_changed
             ):
                 _invalidate_after_phase(state, phase_id)
+            if plan_changed:
+                _reset_phase(phase)
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
             phase["status"] = PhaseStatus.ACTIVE.value

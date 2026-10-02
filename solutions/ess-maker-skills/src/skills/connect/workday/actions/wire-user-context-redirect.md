@@ -64,7 +64,7 @@ beginDialog:
     - kind: BeginDialog
       id: bfT9Kx
       displayName: Redirect to Workday System Get User Context
-      dialog: { USER_CONTEXT_DIALOG }
+      dialog: "{USER_CONTEXT_DIALOG}"
 ```
 
 ---
