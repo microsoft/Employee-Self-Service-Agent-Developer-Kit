@@ -57,6 +57,20 @@ Use the exact URL from `links.serviceNowInstance.url`.
 Only when `instanceInputRequired` is `true`, use one standalone
 `vscode_askQuestions` free-form question for the public ServiceNow HTTPS
 instance URL. Never ask for credentials, tokens, secrets, or a portal URL.
+Use this visible payload after rendering `{CURRENT_PROGRESS}` and the bounded
+discovery summary:
+
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "ServiceNow instance",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: identify the public ServiceNow instance so later phases can verify and repair only their own missing or unhealthy resources.\n\nOwner: the skill performs read-only discovery; provide only the public instance URL.\n\nCurrent discovery:\n{DISCOVERY_SUMMARY}\n\nLocal state absence does not prove a remote app, plugin, OIDC provider, user mapping, or connection is absent. This question does not request credentials, tokens, secrets, or a portal/module URL.\n\nWhat is the public ServiceNow HTTPS instance URL? Example: `https://instance.service-now.com`",
+    "allowFreeformInput": true
+  }
+]
+```
+
 While that question is pending, do not return an action result. If the Maker
 is not ready to provide the URL, return `ACTION_RESULT = "waiting"`. After the
 answer, persist the normalized instance and refresh discovery:

@@ -70,13 +70,41 @@ Ask one completion question for the whole Entra registration step. While the
 question is pending, do not return an action result. If the admin is not done,
 return `ACTION_RESULT = "waiting"`.
 
+Use this exact visible handoff payload. Render `{CURRENT_PROGRESS}` and the
+confirmed `{instance-name}`. The question body must contain all six operations
+and must be shown in the question tool; never shorten it to only “what is the
+client ID?”:
+
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "Entra User Login app",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: configure one single-tenant App A so the ServiceNow connector can request delegated user tokens accepted by ServiceNow.\n\nOwner: Application Administrator, Cloud Application Administrator, Privileged Role Administrator, or Global Administrator. Tenant-wide consent requires an authorized admin.\n\nOpen Microsoft Entra admin center: https://entra.microsoft.com/\n\nComplete or re-verify all six operations:\n1. In App registrations, resolve the exact existing `ESS Copilot - ServiceNow OIDC ({instance-name})` app by client ID/name, repair it if unhealthy, resolve duplicates, or create it only if none exists. No redirect URI is required.\n2. In Token configuration, add Access optional claims `email` and `upn`.\n3. In Expose an API, set `api://<application-client-id>` and add enabled delegated scope `user_impersonation`.\n4. In Authorized client applications, add ServiceNow connector app `c26b24aa-7874-4e06-ad55-7d06b1f79b63` and select `user_impersonation`.\n5. In API permissions, add Microsoft Graph delegated permissions `openid`, `profile`, and `User.Read`.\n6. Grant tenant-wide admin consent.\n\nReturn only the non-secret Application (client) ID GUID and confirmation that all six operations are complete. Never return a secret, certificate, password, token, or PFX.\n\nWhat is the completed or reused Application (client) ID?",
+    "allowFreeformInput": true
+  }
+]
+```
+
 The completed/reused answer must contain the Application (client) ID in GUID
 form. If the Maker answers only with an ambiguous phrase such as "same as
 old", "reuse it", or "done" and does not include a GUID, do not treat that as
 verified completion and do not tell them to restart `/connect`. In the same
-turn and as a clarification of this one completion pause, ask:
-**What is the existing Application (client) ID?** Accept only the non-secret
-GUID. If the Maker cannot provide it yet, return
+turn and as a clarification of this one completion pause, use
+`vscode_askQuestions` with this bounded supported payload:
+
+<!-- visible-handoff-question:v1-clarify-client-id -->
+```json
+[
+  {
+    "header": "Existing Entra app ID",
+    "question": "You selected reuse/completion, but the answer did not include the required Application (client) ID. Provide only the existing app's non-secret client ID GUID so the six verified Entra settings can be checked. Do not provide a secret, object ID, `api://` URI, token, certificate, password, or PFX.\n\nWhat is the existing Application (client) ID?",
+    "allowFreeformInput": true
+  }
+]
+```
+
+Accept only the non-secret GUID. If the Maker cannot provide it yet, return
 `ACTION_RESULT = "waiting"`. This clarification is not another checklist gate
 and does not infer Entra configuration from the physical connection.
 

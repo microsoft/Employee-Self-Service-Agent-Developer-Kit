@@ -14,11 +14,12 @@ Open `Topics` and use the inventory below; do not invent a tab-specific URL.
 - Otherwise show the inactive topic names and use the `vscode_askQuestions`
   tool:
 
+  <!-- visible-handoff-question:v1 -->
   ```json
   [
     {
       "header": "ServiceNow topics",
-      "question": "Enable all inactive ServiceNow HRSD topics?",
+      "question": "{CURRENT_PROGRESS}\n\nPurpose: prepare the ServiceNow HRSD topics for this exact HR agent.\n\nOwner: ESS Maker / Agent Developer.\n\nOpen Employee Self-Service (HR): {COPILOT_STUDIO_AGENT_URL}\n\nCurrent topic inventory:\n{TOPIC_INVENTORY}\n\nInactive HRSD topics:\n{INACTIVE_TOPIC_NAMES}\n\nEnable all inactive ServiceNow HRSD topics, or explicitly keep their current states? Only ServiceNow HRSD topics in this inventory are in scope; unrelated topics remain unchanged.",
       "options": [
         { "label": "Enable all topics" },
         { "label": "Keep current states" },

@@ -145,7 +145,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Local state absence is not evidence" in preflight
     assert "com.sn_hr_core" in plugins
     assert "Is HR Service Delivery Core installed and Active?" in plugins
-    assert "Choices: **Yes**, **No**, **Not sure**" in plugins
+    assert '"label": "Yes"' in plugins
+    assert '"label": "No"' in plugins
+    assert '"label": "Not sure"' in plugins
     assert "[Open HR Service Delivery Core]({HR_CORE_PLUGIN_URL})" in plugins
     assert "OIDC capability belongs to the later ServiceNow OIDC phase" in (
         plugins

@@ -66,12 +66,27 @@ certificate.
 
 ## Completion signal and evidence
 
-Ask exactly one completion question for the whole ServiceNow OIDC step:
+Ask exactly one completion question for the whole ServiceNow OIDC step. Render
+`{CURRENT_PROGRESS}`, `{SERVICENOW_INSTANCE_URL}`, the verified App A client
+ID, and tenant ID in this exact visible handoff payload. The question itself
+must contain all seven operations:
 
-**Have you completed or re-verified the ServiceNow OIDC provider, claim
-mapping, and matching Active user checks in this runbook?**
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "ServiceNow OIDC",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: make ServiceNow trust App A's delegated user token and resolve the signed-in employee to one matching Active ServiceNow user.\n\nOwner: ServiceNow `admin` or `security_admin`, elevated to `security_admin`.\n\nOpen this ServiceNow instance: {SERVICENOW_INSTANCE_URL}\n\nComplete or re-verify all seven operations:\n1. Elevate to `security_admin`; if **New** is missing, the role is not elevated.\n2. Open All -> System OAuth -> Application Registry -> New.\n3. Select `Configure an OIDC provider to verify ID tokens`. If unavailable after elevation, stop and confirm tenant OIDC / Multi-Provider SSO capability; do not guess a plugin or record completion.\n4. Create or reuse `Microsoft Entra ID - ESS Copilot` with the verified App A client ID and Active state. If a client-secret field is required, enter a tenant-approved non-empty placeholder locally and never return it.\n5. Set metadata URL `https://login.microsoftonline.com/{tenant-id}/.well-known/openid-configuration`, cache lifespan `120`, Application `Global`, and JTI verification disabled.\n6. Set the verified User Claim/User Field mapping: prefer `upn` to the matching UPN field (commonly `user_name`), or `email` to `email`; custom values must match exactly.\n7. Confirm one real signed-in test user has one matching Active User record. Do not return that employee identifier or create a test user.\n\nDo not use a Graph Connector app-only setup, object ID, `api://` URI, connector app ID, secret, or certificate.\n\nHave you completed or re-verified the ServiceNow OIDC provider, claim mapping, and matching Active user checks?",
+    "options": [
+      { "label": "Completed", "recommended": true },
+      { "label": "Not yet" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-Offer only **Completed** and **Not yet**. Do not ask for or collect the claim
+Do not ask for or collect the claim
 name, ServiceNow field name, employee identifier, mapping value, or other
 identity data. While the question is pending, do not return an action result.
 If the Maker selects **Not yet**, return `ACTION_RESULT = "waiting"` and do

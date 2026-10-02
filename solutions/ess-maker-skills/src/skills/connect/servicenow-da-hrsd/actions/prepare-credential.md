@@ -91,6 +91,24 @@ must return once with the non-secret connection display name and connection
 ID after the row is Connected. Do not add separate pauses for create, sign-in,
 or selection.
 
+Use this exact visible handoff payload whenever maker input is required
+(multiple exact candidates, repair, or new connection). Render
+`{CURRENT_PROGRESS}`, `{INSTANCE_NAME}`, `{APP_CLIENT_ID}`,
+`{POWER_AUTOMATE_CONNECTIONS_URL}`, `{POWER_APPS_URL}`, and the exact candidate
+summary. The question body must include both reuse/repair/new behavior and the
+required field values:
+
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "ServiceNow connection",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: reuse, repair, or create one exact healthy Connected Microsoft Entra ID User Login ServiceNow connection.\n\nOwner: Power Platform Maker/Admin who can create the connection and complete Entra sign-in.\n\nExpected values:\n- Authentication Type: Microsoft Entra ID User Login (`entraIDUserLogin`)\n- Instance Name: `{INSTANCE_NAME}` (name only, not the full URL)\n- Resource URI: `{APP_CLIENT_ID}` (the Application client ID, never `api://`, object ID, or connector app ID)\n\nCurrent exact candidates: {CONNECTION_CANDIDATE_SUMMARY}\n\nWhat to do:\n1. Reuse one exact Connected candidate automatically; if multiple exact healthy candidates exist, select only among those matches.\n2. If an exact candidate is unhealthy, open it and use Repair, Fix connection, or sign-in; then require Connected plus the exact auth mode, Instance Name, and Resource URI.\n3. Only if no exact candidate exists, open {POWER_AUTOMATE_CONNECTIONS_URL}; fallback {POWER_APPS_URL}; select the exact environment -> Connections -> New connection, enter the expected values, and complete Entra sign-in.\n4. If sign-in reports `Invalid redirect_uri`, URL-decode that exact URI, update the ServiceNow OIDC Application Registry redirect URL, and retry without adding another normal-flow pause.\n\nThis connection is not shareable and proves only the current maker's physical connection. Do not return secrets.\n\nAfter the row is Connected, provide the non-secret connection display name and connection ID. If it is not ready, answer `Not yet`.",
+    "allowFreeformInput": true
+  }
+]
+```
+
 After that single return, run `inspect-admin-setup` again, match the returned
 display name and connection ID, then run:
 

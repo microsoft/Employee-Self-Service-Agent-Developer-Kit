@@ -32,11 +32,27 @@ OIDC capability belongs to the later ServiceNow OIDC phase.
 
 ## Completion signal and evidence
 
-Use `vscode_askQuestions` with exactly this question:
+Use `vscode_askQuestions` with this exact visible handoff payload. Render
+`{CURRENT_PROGRESS}` and `{HR_CORE_PLUGIN_URL}` first. The question body, not
+a preceding message, is the authoritative user-visible copy:
 
-> Is HR Service Delivery Core installed and Active?
+<!-- visible-handoff-question:v1 -->
+```json
+[
+  {
+    "header": "HR Service Delivery Core",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: confirm this HRSD instance has its HR data foundation.\n\nOwner: ServiceNow Admin.\n\nOpen HR Service Delivery Core: {HR_CORE_PLUGIN_URL}\n\nConfirm **HR Service Delivery Core** is installed and Active.\n\nRequired identifiers:\n- Plugin ID: `com.sn_hr_core`\n- Scope: `sn_hr_core`\n\nThis requirement is HRSD-only; it does not prove OIDC readiness.\n\nIs HR Service Delivery Core installed and Active?",
+    "options": [
+      { "label": "Yes", "recommended": true },
+      { "label": "No" },
+      { "label": "Not sure" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-Choices: **Yes**, **No**, **Not sure**. Leave the selection unset.
+Leave the selection unset.
 
 - **Yes:** record the phase handoff with `reused` when it was already valid,
   or `completed` when the admin installed/activated it.

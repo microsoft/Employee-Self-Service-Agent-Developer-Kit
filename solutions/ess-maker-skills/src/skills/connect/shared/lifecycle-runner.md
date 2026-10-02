@@ -92,27 +92,19 @@ Build the plan from the contract, in phase order:
   These roles explain external admin ownership; they do not create a role gate
   and must never be treated as authorization for an action.
 
-**Message:**
+Do not rely on a separate ordinary assistant message to make the plan visible.
+Some host execution paths display the question tool but omit preceding
+assistant commentary. The `question` field itself must contain the complete
+numbered plan, roles, progress promise, and final confirmation prompt.
 
-Here's what I'll do to connect this agent to {displayName}:
+Use the `vscode_askQuestions` tool with this rendered payload:
 
-{numbered list of phase labels, in contract order}
-
-This needs someone with the following access: {comma-separated required
-roles, or omit this sentence entirely if no phase mutates}.
-
-I'll check as I go and stop to tell you if something needs attention. Ready
-to start?
-
-**End message.**
-
-Use the `vscode_askQuestions` tool:
-
+<!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Start connection",
-    "question": "Ready to start?",
+    "question": "Here's what I'll do to connect this agent to {displayName}:\n\n{numbered list of every phase label, in contract order}\n\nAccess needed: {comma-separated required and display-only plan roles}.\n\nI'll check as I go and stop to explain anything that needs attention.\n\nReady to start?",
     "options": [
       { "label": "Yes, let's go", "recommended": true },
       { "label": "Not now" }
@@ -121,6 +113,12 @@ Use the `vscode_askQuestions` tool:
   }
 ]
 ```
+
+Before calling the question tool, render every placeholder and verify that the
+question contains every contract phase exactly once and all plan roles. If the
+rendered question is incomplete, stop instead of asking or accepting an
+answer. A separate plan message may also be shown, but it never substitutes
+for the complete question body.
 
 **If "Not now":** Stop here. On a first run, do not write the state file. On a
 contract-revision re-attestation, preserve the existing state unchanged. The
@@ -301,6 +299,28 @@ asking one completion question. It must not persist or ask separate questions
 for checklist items inside that phase. On resume, accept the one phase return,
 run the phase's complete verification set, and only then advance.
 
+For every interactive provider action, the question tool body is the durable
+visible handoff. Read the action document's
+`<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
+and use that supported `header`/`question`/`options`/`allowFreeformInput`
+shape exactly. `{CURRENT_PROGRESS}` must be replaced with every plan or
+checkpoint result produced in this invocation but not yet shown inside a
+prior question body. Include checkpoint status, description, result, and
+remediation when non-empty.
+
+`{CURRENT_PROGRESS}` is bounded FlightCheck/lifecycle display content only.
+Never insert tokens, raw prompts or responses, employee/case data, full config
+or component payloads, or secret-bearing tool output into a question.
+
+Do not call the question tool if the payload is missing, malformed, truncated,
+still contains placeholders, omits the action owner/instructions/completion
+evidence, or references "above" content that is not in the question itself.
+Stop and report the visible-handoff contract error instead of accepting
+confirmation without current instructions. Ordinary assistant messages remain
+useful, but are never the only copy of content required to answer a question.
+A completed phase on quiet resume does not redisplay its runbook; this rule
+applies only when the action genuinely needs a new interactive pause.
+
 - **`"applied"`** — the mutation or verified no-op completed successfully.
   Set `phases.{id}.actionApplied = true`. If the phase has
   `rollbackPushGlobFromAction: true`, require the action to return
@@ -425,7 +445,11 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
   Persist the acknowledgement with
   `source: "matching-action-evidence"`, the evidence path, kind, and evidence
   timestamp plus the compared binding values.
-  Otherwise use the normal acknowledgement question. Never reuse this shortcut
+  Otherwise use the normal acknowledgement question. Its `question` field must
+  include the complete just-rendered Manual/Warning row: status, description,
+  result, remediation/manual steps, and final acknowledgement prompt. Do not
+  rely on the preceding U.0/U.0a assistant message as the only visible copy.
+  Never reuse this shortcut
   for an older action, unrelated phase evidence, `Warning`, or mismatched
   status/kind/timestamp. A persisted matching-evidence acknowledgement may be
   reused on resume only while the checkpoint remains `Manual` and the current
