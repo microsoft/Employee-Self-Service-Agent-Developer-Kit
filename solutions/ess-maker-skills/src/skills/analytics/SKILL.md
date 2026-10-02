@@ -108,12 +108,12 @@ Stop here.
 
 If the maker explicitly asks to "stop showing the analytics reminder"
 or similar, run `python scripts/analytics_pointer.py --dismiss` in the
-terminal. That marks the reminder complete for the current local DA workspace
-association. Then:
+terminal. That marks the one-time post-deployment reminder complete for the
+current local DA workspace association. Then:
 
 **Message:**
 
-Got it — I won't show the analytics reminder after future installs.
+Got it — I won't show the post-deployment analytics reminder again.
 You can still run `/analytics` any time to jump to the dashboard.
 
 **End message.**

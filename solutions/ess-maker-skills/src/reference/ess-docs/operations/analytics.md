@@ -37,7 +37,10 @@ CEA-specific branch in the DA-GA solution.
 
 ## Reminder state
 
-Optional local reminder state is one-time per DA workspace association.
+Optional local reminder state is one-time per DA environment/agent
+association. The reminder is evaluated only after a verified eligible DA
+deployment; redeploying the same association is silent. The permanent
+`/analytics` action remains available at any time.
 State is written by a `ReminderStore` selected via
 `ADK_ANALYTICS_STORE`:
 
@@ -67,6 +70,6 @@ new table before the ADK-side store can be wired.
 
 Each `/analytics` skill invocation emits one `adk.capability.use` event with
 `adk_capability=analytics`. This feeds the Capability Usage by Type
-dashboard. Rendering the URL from `/push` does not emit this event because it
-is not an `/analytics` invocation. No separate pointer shown/clicked/
-dismissed events are emitted.
+dashboard. Rendering the one-time post-deployment reminder does not emit this event
+because it is not an `/analytics` invocation. No separate pointer
+shown/clicked/dismissed events are emitted.

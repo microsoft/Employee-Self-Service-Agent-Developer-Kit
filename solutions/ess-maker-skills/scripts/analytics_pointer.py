@@ -13,6 +13,10 @@ The pointer has two surfaces:
   and either prints a validated deep link to the agent's Copilot Studio
   analytics page or emits the FR7 repair/relink message when the
   association is missing.
+* **Post-deployment reminder** — one-time handoff after the first eligible
+  DA deployment for the current environment and agent association. It is
+  keyed by the same association as the permanent action and is silent after
+  completion.
 
 The current Maker Kit supports the DA workspace flow only. CEA installation
 is no longer an entry point in this solution, so the pointer does not branch
@@ -46,7 +50,7 @@ as a follow-up. When the ESS Dataverse solution is next updated, add:
       adk_makeraad        (String / lookup on systemuser, primary key part)
       adk_envid           (String, primary key part)
       adk_agentid         (String, primary key part)
-      adk_reason          (Choice: post_deploy_install / manual_dismiss)
+      adk_reason          (Choice: post_deploy / manual_dismiss)
       adk_completedon     (DateTime)
 
 and add a ``DataverseReminderStore`` implementation in this module that
@@ -213,6 +217,18 @@ def _extract_maker_aad(cfg: dict[str, Any]) -> str:
         if val:
             return str(val)
     return ""
+
+
+def _is_da_config(cfg: dict[str, Any]) -> bool:
+    """Return whether the configured workspace is a native DA workspace."""
+    agent = cfg.get("agent") or {}
+    return (
+        str(cfg.get("releaseLine") or "").strip().casefold() == "da"
+        or (
+            isinstance(agent, dict)
+            and str(agent.get("releaseLine") or "").strip().casefold() == "da"
+        )
+    )
 
 
 def read_association(
@@ -487,6 +503,43 @@ def _cli_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cli_post_deploy(args: argparse.Namespace) -> int:
+    """Show and complete the one-time reminder after an eligible DA deploy."""
+    cfg = _load_local_config(args.config)
+    if not _is_da_config(cfg):
+        return 0
+
+    assoc = read_association(path=args.config)
+    if assoc is None:
+        return 0
+
+    maker, env_id, agent_id = assoc
+    try:
+        store = get_reminder_store()
+        if store.is_completed(maker, env_id, agent_id):
+            return 0
+    except Exception:  # noqa: BLE001 — reminder state must not break deploy
+        store = None
+
+    url, reason = resolve_pointer_url(
+        env_id,
+        agent_id,
+        studio_origin=_extract_studio_origin(cfg),
+    )
+    if not url:
+        # Do not consume the one-time reminder when the link cannot be
+        # resolved; a later eligible deployment can try again.
+        return 0
+
+    print(render_pointer_line(url, reason, reminder_framing=True))
+    if store is not None:
+        try:
+            store.mark_completed(maker, env_id, agent_id, "post_deploy")
+        except Exception:  # noqa: BLE001 — reminder state must not break deploy
+            pass
+    return 0
+
+
 def _cli_dismiss(args: argparse.Namespace) -> int:
     """Mark the pointer reminder as completed for the current association.
 
@@ -572,6 +625,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show the analytics pointer line (default).",
     )
     group.add_argument(
+        "--post-deploy",
+        dest="verb",
+        action="store_const",
+        const="post_deploy",
+        help="Show the one-time DA post-deployment analytics reminder.",
+    )
+    group.add_argument(
         "--dismiss",
         dest="verb",
         action="store_const",
@@ -591,6 +651,7 @@ def _build_parser() -> argparse.ArgumentParser:
 _VERB_DISPATCH = {
     "record_invocation": _cli_record_invocation,
     "show": _cli_show,
+    "post_deploy": _cli_post_deploy,
     "dismiss": _cli_dismiss,
     "status": _cli_status,
 }

@@ -413,6 +413,73 @@ def test_cli_show_prints_url_when_resolved(monkeypatch, tmp_path: Path):
     assert "https://copilotstudio.test.microsoft.com/" in out
 
 
+def test_cli_post_deploy_shows_reminder_once_for_da_association(
+    monkeypatch, tmp_path: Path,
+):
+    import analytics_pointer
+
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "on")
+    reminder_path = tmp_path / "reminder.json"
+    monkeypatch.setattr(
+        analytics_pointer,
+        "get_reminder_store",
+        lambda: analytics_pointer.LocalFileReminderStore(path=reminder_path),
+    )
+    cfg_path = tmp_path / ".local" / "config.json"
+    _write_config(cfg_path, {
+        "releaseLine": "da",
+        "environmentId": "env-guid-post-deploy",
+        "powerPlatformApiEndpoint": (
+            "https://example.environment.api.test.powerplatform.com"
+        ),
+        "agent": {"botId": "bot-guid-post-deploy"},
+    })
+
+    first = io.StringIO()
+    with redirect_stdout(first):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert "Tip:" in first.getvalue()
+    assert "https://copilotstudio.test.microsoft.com/" in first.getvalue()
+    assert "/analytics" in first.getvalue()
+
+    second = io.StringIO()
+    with redirect_stdout(second):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert second.getvalue() == ""
+
+
+def test_cli_post_deploy_is_silent_for_non_da_association(
+    monkeypatch, tmp_path: Path,
+):
+    import analytics_pointer
+
+    monkeypatch.setenv("ADK_ANALYTICS_POINTER", "on")
+    reminder_path = tmp_path / "reminder.json"
+    monkeypatch.setattr(
+        analytics_pointer,
+        "get_reminder_store",
+        lambda: analytics_pointer.LocalFileReminderStore(path=reminder_path),
+    )
+    cfg_path = tmp_path / ".local" / "config.json"
+    _write_config(cfg_path, {
+        "releaseLine": "legacy",
+        "environmentId": "env-guid-legacy",
+        "agent": {"botId": "bot-guid-legacy"},
+    })
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert analytics_pointer.main(
+            ["--config", str(cfg_path), "--post-deploy"],
+        ) == 0
+    assert buf.getvalue() == ""
+    assert not reminder_path.exists()
+
+
 def test_cli_record_invocation_emits_analytics_capability(monkeypatch):
     import analytics_pointer
     import adk_telemetry
