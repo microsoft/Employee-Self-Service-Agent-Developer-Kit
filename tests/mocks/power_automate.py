@@ -54,6 +54,7 @@ MOCK_ENV_URL = "https://orgmocktenant.crm.dynamics.com"
 MOCK_ENV_ID = "00000000-0000-0000-0000-000000001111"
 MOCK_WORKFLOW_ID = "00000000-0000-0000-0000-000000001111"
 MOCK_WORKDAY_PROBE_FLOW_NAME = "flightcheck-wd-run-001-probe"
+MOCK_SERVICENOW_PROBE_FLOW_NAME = "flightcheck-sn-run-001-probe"
 MOCK_CALLBACK_URL = (
     "https://mockenv.00.environment.api.powerplatform.com/powerautomate/"
     "automations/direct/cu/04/workflows/00000000000000000000000000000000/"
@@ -277,3 +278,37 @@ def invoke_workday_connector_probe(
         },
         "status": status,
     }
+
+
+def invoke_servicenow_connector_probe(
+    *,
+    callback_url: str = MOCK_CALLBACK_URL,
+    action_status: str | None = "Succeeded",
+    status_code: int | None = 200,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock POST <SAS callback URL> for the SN-RUN-001 connector-bound probe.
+
+    Cited consumers:
+      - flightcheck/live_egress_probe.py:build_connector_probe_clientdata
+      - flightcheck/checks/servicenow.py:_check_servicenow_active_run_health
+
+    The transient probe's Response body carries the same vendor-neutral keys
+    the connector interpreter reads (connectorActionStatus /
+    connectorStatusCode / connectorErrorCode), so this delegates to the
+    shared connector-probe invoke body. Tests vary the action-level fields
+    for deterministic negative branches. The exact ServiceNow error shapes
+    (HTTP status vs connector code granularity) are a documented assumption
+    pending the SN-RUN-001 AC13 live capture; the green body mirrors the
+    Workday-validated {actionStatus:Succeeded, statusCode:200} shape.
+    """
+    return invoke_workday_connector_probe(
+        callback_url=callback_url,
+        action_status=action_status,
+        status_code=status_code,
+        error_code=error_code,
+        error_message=error_message,
+        status=status,
+    )

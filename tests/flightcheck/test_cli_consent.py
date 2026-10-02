@@ -49,9 +49,11 @@ def _args(**kw) -> SimpleNamespace:
 
 _INFRA_CHECKS = [("Infrastructure", cli.run_infrastructure_checks)]
 _WD_CHECKS = [("Workday", cli.run_workday_checks)]
+_SN_CHECKS = [("ServiceNow", cli.run_servicenow_checks)]
 _NON_INFRA_CHECKS = [("Local", lambda runner: [])]
 
 _WD = {"Workday": {"baseUrl": "https://wd.example.com"}}
+_SN = {"ServiceNow": {"baseUrl": "https://sn.example.com"}}
 
 
 def _force_tty(monkeypatch, *, interactive: bool) -> None:
@@ -372,6 +374,125 @@ class TestWorkdayScopeSurfacesConsent:
         assert runner.runtime_reachability is True
         out = capsys.readouterr().out
         assert "Workday" in out
+
+
+# ───────────────────────────────────────────────────────────────────────
+# ServiceNow scope (SN-RUN-001 active probe): consent is surfaced even when
+# INFRA-003 is not in scope, mirroring the Workday active probe. A
+# ServiceNow-only run asks first and NO -> passive run-history fallback.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestServiceNowScopeSurfacesConsent:
+    def test_interactive_yes_enables_the_probe_on_servicenow_scope(
+        self, monkeypatch
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: True)
+        runner = _runner(_SN)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="servicenow"), runner, _SN_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert runner.runtime_reachability_declined is False
+
+    def test_interactive_no_declines_and_falls_back_on_servicenow_scope(
+        self, monkeypatch, capsys
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: False)
+        runner = _runner(_SN)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="servicenow"), runner, _SN_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        # ServiceNow-only decline auto-falls-back to passive run history, so the
+        # INFRA-003 manual IP-allowlist block must NOT be printed (SN-RUN-001
+        # needs no manual step on a decline).
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
+
+    def test_forced_off_servicenow_scope_declines_without_manual_ip_block(
+        self, capsys
+    ):
+        runner = _runner(_SN)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=False, scope="servicenow"), runner, _SN_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
+
+    def test_adk_servicenow_scope_defers_to_skill_no_prompt(self, monkeypatch):
+        _force_tty(monkeypatch, interactive=True)
+
+        def _boom(label):  # noqa: ANN001
+            raise AssertionError("ADK path must not prompt; the skill asks the user")
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _boom)
+        runner = _runner(_SN)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="servicenow", invocation_source="adk"),
+            runner,
+            _SN_CHECKS,
+        )
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is False
+
+    def test_consent_names_servicenow_even_when_absent_from_config_connections(
+        self, monkeypatch
+    ):
+        # The ServiceNow active probe selects its connection from the BAP
+        # connection list, independent of the config.connections map that
+        # _endpoint_systems_for_offer reads. If the ServiceNow connection is not
+        # recorded in config.connections, the consent copy must still name
+        # ServiceNow, because the probe will contact it. Here config.connections
+        # names only Workday, yet the ServiceNow active probe is in scope.
+        _force_tty(monkeypatch, interactive=True)
+        seen = {}
+
+        def _capture(label):  # noqa: ANN001
+            seen["label"] = label
+            return True
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _capture)
+        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="servicenow"), runner, _SN_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert "ServiceNow" in seen["label"]
+
+    def test_forced_on_notice_names_servicenow_when_not_in_config_connections(
+        self, capsys
+    ):
+        # Explicit-flag path: passing the flag IS consent, and the forced-on
+        # notice must still name ServiceNow so the tenant mutation is never a
+        # surprise.
+        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=True, scope="servicenow"), runner, _SN_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        out = capsys.readouterr().out
+        assert "ServiceNow" in out
 
 
 # ───────────────────────────────────────────────────────────────────────
