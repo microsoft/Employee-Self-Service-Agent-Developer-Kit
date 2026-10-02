@@ -60,8 +60,9 @@ Testability / CLI
 --------------------------------------------------------------------------
 
 The ``/analytics`` prompt drives this module through the CLI at the
-bottom of the file (``--show``, ``--dismiss``, ``--status``) so the
-SKILL.md doesn't need to shell out to Python for individual functions.
+bottom of the file (``--record-invocation``, ``--show``, ``--dismiss``,
+``--status``) so the SKILL.md doesn't need to shell out to Python for
+individual functions.
 The Python API (``resolve_pointer_url``, ``read_association``,
 ``render_pointer_line``, ``get_reminder_store``) is also usable by future
 post-setup reminder surfaces without duplicating the resolver logic.
@@ -452,105 +453,27 @@ def get_reminder_store() -> ReminderStore:
     return LocalFileReminderStore()
 
 
-# --- Telemetry helpers ---------------------------------------------------
-# These are thin wrappers over adk_telemetry so the /analytics command and
-# the install reminder call a stable local API instead of importing
-# adk_telemetry directly (keeps future refactors — e.g. batching multiple
-# analytics events into one — local to this module). All emits are best-
-# effort and never propagate exceptions to the caller.
+# --- CLI ----------------------------------------------------------------
 
-
-def _telemetry():
-    """Import adk_telemetry lazily so a broken telemetry install doesn't
-    break the /analytics command itself."""
+def _cli_record_invocation(args: argparse.Namespace) -> int:
+    """Record one capability-use event for an actual /analytics invocation."""
     try:
         import adk_telemetry  # type: ignore
-        return adk_telemetry
-    except Exception:  # noqa: BLE001 — telemetry must never break a skill
-        return None
 
-
-def _emit(fn_name: str, **kwargs: Any) -> None:
-    t = _telemetry()
-    if t is None:
-        return
-    try:
-        fn = getattr(t, fn_name, None)
-        if fn is None:
-            return
-        fn(**kwargs)
-    except Exception:  # noqa: BLE001
+        adk_telemetry.emit_capability_use("analytics", block=False)
+    except Exception:  # noqa: BLE001 — telemetry must never break the skill
         pass
-
-
-def record_pointer_shown(
-    *, env_id: str, agent_id: str, outcome: str, unresolved_reason: str = ""
-) -> None:
-    """Emit ``adk.analytics.pointer.shown``.
-
-    ``outcome`` is ``"resolved"`` when a URL was shown, ``"unresolved"``
-    otherwise. ``unresolved_reason`` is one of the ``REASON_*`` enum values
-    when outcome is ``unresolved`` (empty when resolved).
-    """
-    _emit(
-        "emit_analytics_pointer_shown",
-        env_id=env_id,
-        agent_id=agent_id,
-        outcome=outcome,
-        unresolved_reason=unresolved_reason,
-    )
-
-
-def record_pointer_clicked(*, env_id: str, agent_id: str) -> None:
-    _emit(
-        "emit_analytics_pointer_clicked",
-        env_id=env_id,
-        agent_id=agent_id,
-    )
-
-
-def record_pointer_dismissed(*, env_id: str, agent_id: str) -> None:
-    _emit(
-        "emit_analytics_pointer_dismissed",
-        env_id=env_id,
-        agent_id=agent_id,
-    )
-
-
-def record_resolution_failed(
-    *, env_id: str, agent_id: str, unresolved_reason: str
-) -> None:
-    _emit(
-        "emit_analytics_pointer_resolution_failed",
-        env_id=env_id,
-        agent_id=agent_id,
-        unresolved_reason=unresolved_reason,
-    )
-
-
-def record_repair_attempted(*, env_id: str, agent_id: str) -> None:
-    _emit(
-        "emit_analytics_pointer_repair_attempted",
-        env_id=env_id,
-        agent_id=agent_id,
-    )
-
-
-# --- CLI ----------------------------------------------------------------
+    return 0
 
 def _cli_show(args: argparse.Namespace) -> int:
     """Resolve the pointer for the current workspace and print the maker
-    line. Also emits the ``.shown`` telemetry event. This is what the
-    /analytics prompt shells out to.
+    line. This is what the /analytics prompt and deployment flow shell out
+    to.
     """
     assoc = read_association(path=args.config)
     if assoc is None:
         line = render_pointer_line("", REASON_MISSING_ASSOCIATION, reminder_framing=False)
         print(line)
-        record_pointer_shown(
-            env_id="", agent_id="", outcome="unresolved",
-            unresolved_reason=REASON_MISSING_ASSOCIATION,
-        )
         return 0
     _maker, env_id, agent_id = assoc
     cfg = _load_local_config(args.config)
@@ -561,15 +484,6 @@ def _cli_show(args: argparse.Namespace) -> int:
     )
     line = render_pointer_line(url, reason, reminder_framing=False)
     print(line)
-    if url:
-        record_pointer_shown(
-            env_id=env_id, agent_id=agent_id, outcome="resolved",
-        )
-    else:
-        record_pointer_shown(
-            env_id=env_id, agent_id=agent_id, outcome="unresolved",
-            unresolved_reason=reason,
-        )
     return 0
 
 
@@ -589,7 +503,6 @@ def _cli_dismiss(args: argparse.Namespace) -> int:
         get_reminder_store().mark_completed(maker, env_id, agent_id, "manual_dismiss")
     except Exception:  # noqa: BLE001 — never crash the skill
         pass
-    record_pointer_dismissed(env_id=env_id, agent_id=agent_id)
     return 0
 
 
@@ -645,6 +558,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # `analytics_pointer.py --show` and (as a shorthand) no-verb-at-all work.
     group = p.add_mutually_exclusive_group()
     group.add_argument(
+        "--record-invocation",
+        dest="verb",
+        action="store_const",
+        const="record_invocation",
+        help="Record one /analytics capability-use event.",
+    )
+    group.add_argument(
         "--show",
         dest="verb",
         action="store_const",
@@ -669,6 +589,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 _VERB_DISPATCH = {
+    "record_invocation": _cli_record_invocation,
     "show": _cli_show,
     "dismiss": _cli_dismiss,
     "status": _cli_status,

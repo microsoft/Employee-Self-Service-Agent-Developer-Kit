@@ -9,15 +9,17 @@ you are calling or files you are reading.
 
 The behavior is intentionally a thin wrapper over the
 `scripts/analytics_pointer.py` CLI: this skill file only decides which
-Message block to show; the pointer resolution, URL construction, feature
-flag check, and telemetry emission all happen inside the script. That
-keeps the "what URL do we point at?" decision in exactly one place — see
-the analytics_pointer.py module docstring for the partner-contract
-caveat that governs it.
+message block to show; the pointer resolution and URL construction happen
+inside the script. The skill records one `adk.capability.use` event for the
+`analytics` capability when it starts.
 
 ---
 
 ## Start
+
+First run `python scripts/analytics_pointer.py --record-invocation` to emit
+one capability-usage event for this `/analytics` invocation. This is
+best-effort and must not block the skill.
 
 Run `python scripts/analytics_pointer.py --status` in the terminal and
 capture its stdout as JSON. The JSON has the shape:
@@ -76,9 +78,8 @@ Stop here.
 Show the link exactly as returned by the script — do NOT shorten it,
 wrap it in a tracker, or reformat the URL. Then run
 `python scripts/analytics_pointer.py --show` in the terminal. That
-command prints the same maker-facing line the pointer would print, AND
-emits the `adk.analytics.pointer.shown` telemetry event with
-`outcome=resolved`. Show the script's stdout verbatim to the maker —
+command prints the same maker-facing line the pointer would print. Show the
+script's stdout verbatim to the maker —
 that is the ONLY output the maker sees.
 
 Do not add any additional Message block after the script output in this

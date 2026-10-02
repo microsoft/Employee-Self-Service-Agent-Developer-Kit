@@ -411,3 +411,18 @@ def test_cli_show_prints_url_when_resolved(monkeypatch, tmp_path: Path):
     assert "env-guid-cli" in out
     assert "bot-guid-cli" in out
     assert "https://copilotstudio.test.microsoft.com/" in out
+
+
+def test_cli_record_invocation_emits_analytics_capability(monkeypatch):
+    import analytics_pointer
+    import adk_telemetry
+
+    emitted = []
+    monkeypatch.setattr(
+        adk_telemetry,
+        "emit_capability_use",
+        lambda capability, block=False: emitted.append((capability, block)),
+    )
+
+    assert analytics_pointer.main(["--record-invocation"]) == 0
+    assert emitted == [("analytics", False)]

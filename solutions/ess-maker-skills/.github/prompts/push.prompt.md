@@ -36,6 +36,18 @@ interactive evaluation push waiting for unattended stdin.
 If evaluation scope is ambiguous, ask rather than pushing all components.
 Return after this branch; do not also execute the general push below.
 
+After the shared deployment flow reports a verified successful deployment,
+show the maker the current DA agent's Copilot Studio analytics link by running:
+
+```
+python scripts/analytics_pointer.py --show
+```
+
+Show that command's stdout verbatim. Run it only after deployment verification;
+do not show an analytics link after a preview, cancellation, or failed
+deployment. If the resolver reports that the link is unavailable, preserve
+that message and do not substitute the Copilot Studio home page.
+
 ## General component push
 
 For a general component push, show:

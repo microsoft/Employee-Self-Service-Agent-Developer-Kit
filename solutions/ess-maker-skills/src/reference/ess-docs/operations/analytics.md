@@ -65,17 +65,8 @@ new table before the ADK-side store can be wired.
 
 ## Telemetry
 
-The pointer emits five events, all in the `adk.analytics.pointer.*`
-family (see `scripts/adk_telemetry.py`):
-
-| Event | When it fires |
-|---|---|
-| `adk.analytics.pointer.shown` | Any time the pointer line is rendered — carries `outcome` (`resolved` / `unresolved`) and, when unresolved, an `unresolved_reason`. |
-| `adk.analytics.pointer.clicked` | Reserved for a future click-tracking wrapper. |
-| `adk.analytics.pointer.dismissed` | Maker explicitly ran `/analytics --dismiss`. |
-| `adk.analytics.pointer.resolution_failed` | Resolver returned unresolved (also included on the `.shown` event; this exists for FR2 destination-validation retries). |
-| `adk.analytics.pointer.repair_attempted` | Maker followed the FR7 repair path and re-ran `/setup`. |
-
-All events carry `env_id` and `agent_id` (opaque GUIDs already emitted
-on `adk.agent.deploy`) alongside the common dimensions. No new PII is
-introduced by this surface.
+Each `/analytics` skill invocation emits one `adk.capability.use` event with
+`adk_capability=analytics`. This feeds the Capability Usage by Type
+dashboard. Rendering the URL from `/push` does not emit this event because it
+is not an `/analytics` invocation. No separate pointer shown/clicked/
+dismissed events are emitted.
