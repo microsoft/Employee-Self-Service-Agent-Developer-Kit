@@ -30,6 +30,7 @@ _SHARED_CFG = '{"name":"oauth","values":{}}'
 G1 = "9f1b2c3d-4e5f-6789-abcd-1234567890ab"
 G2 = "aab52569-483a-f111-8e38-0022480875be"
 G3 = "11111111-2222-3333-4444-555555555555"
+BOT_ID = "00000000-0000-0000-0000-000000001111"
 
 
 def _agent_ref(guid: str, *, connector: str = "shared_workdaysoap",
@@ -192,6 +193,37 @@ def test_no_dataverse_token_is_skipped():
     r = _check_workday_connection_obo_sharing(_runner(dv_token=None))[0]
     assert r.status == "Skipped"
     assert "Dataverse token not available" in r.result
+
+
+def test_component_fetch_failure_is_checkpoint_scoped() -> None:
+    from agentbuilder import AgentBuilderHTTPError
+
+    class FailingAgentBuilder:
+        def fetch_components(self, _bot_id: str):
+            raise AgentBuilderHTTPError(
+                "Component fetch",
+                503,
+                error_code="ServiceUnavailable",
+                request_id="sensitive-request-id",
+            )
+
+    runner = _runner(config={
+        "activeAgent": "ess-hr",
+        "agents": [{
+            "slug": "ess-hr",
+            "schemaName": SCHEMA,
+            "botId": BOT_ID,
+        }],
+    })
+    runner.agent_slug = "ess-hr"
+    runner.agentbuilder = FailingAgentBuilder()
+
+    r = _run(runner)
+
+    assert r.status == "Error"
+    assert "Unable to read selected-agent connection references" in r.result
+    assert "sensitive-request-id" not in r.result
+    assert "Refresh AgentBuilder authentication" in r.remediation
 
 
 def test_query_error_is_error(monkeypatch):

@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
+import requests
+
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
 # the public internet via WS-Security; treat every response as untrusted, even
 # the success path. defusedxml.ElementTree.ParseError is a subclass of stdlib
@@ -37,6 +39,7 @@ from xml.sax.saxutils import escape as xml_escape
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
+from agentbuilder import AgentBuilderError
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
 from ..agent_scope import resolve_agent_directory
@@ -1691,6 +1694,23 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
             remediation=(
                 "Refresh the selected agent components and rerun this "
                 "checkpoint."
+            ),
+        )]
+    except (AgentBuilderError, requests.RequestException):
+        return [CheckResult(
+            roles=roles,
+            checkpoint_id=cp_id,
+            category="Workday",
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=desc,
+            result=(
+                "Unable to read selected-agent connection references from "
+                "AgentBuilder."
+            ),
+            remediation=(
+                "Refresh AgentBuilder authentication, confirm access to the "
+                "selected agent, and rerun this checkpoint."
             ),
         )]
     if selected_refs is None:
