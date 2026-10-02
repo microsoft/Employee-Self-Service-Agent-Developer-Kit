@@ -19,6 +19,7 @@ import requests
 import yaml
 
 import push
+import analytics_pointer
 from auth import load_config
 from evaluation_method_policy import EvaluationMethodError, validate_evaluation_folder
 from evaluation_promotion import (
@@ -630,6 +631,7 @@ def deploy_evaluation_set(
                 cleanup_workspace_set(context["workspace"], agent, source.name)
             except OSError as exc:
                 _append_cleanup_warning(result, str(exc))
+        analytics_pointer.write_verified_deployment_marker(config)
         return _close_deployment_stack(stack, result)
     except _INPUT_ERRORS as exc:
         return _close_deployment_stack(stack, {
