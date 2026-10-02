@@ -783,6 +783,58 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+def test_controller_public_command_and_result_contract_is_stable(
+    capsys,
+) -> None:
+    import argparse
+
+    import workday_connect
+
+    parser = workday_connect.build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+    assert tuple(subparsers.choices) == (
+        "status",
+        "set-workday-tenant",
+        "entra-handoff",
+        "record-entra",
+        "administrator-stage",
+        "record-administrator-evidence",
+        "workday-admin-packet",
+        "record-workday-admin",
+        "runtime-plan",
+        "runtime-apply",
+        "runtime-approve",
+        "record-connections",
+        "record-topic-activation",
+        "record-runtime-template-wiring",
+        "record-agent-binding",
+        "record-validation",
+        "begin-employee-test",
+        "abandon-employee-test",
+        "record-validation-failure",
+        "preflight",
+        "prepare-connections",
+        "prepare-connections-approve",
+    )
+
+    workday_connect._emit("status", {"status": "in-progress"})
+    output = capsys.readouterr().out
+    payload = json.loads(
+        output.split(workday_connect.RESULT_MARKER, maxsplit=1)[1]
+    )
+
+    assert payload == {
+        "contractVersion": 4,
+        "operation": "status",
+        "status": "in-progress",
+    }
+
+
 def test_abandon_employee_test_is_idempotent_without_active_attempt(
     tmp_path: Path,
 ) -> None:
