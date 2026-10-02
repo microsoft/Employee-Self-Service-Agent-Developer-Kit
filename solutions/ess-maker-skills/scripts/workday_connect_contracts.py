@@ -18,19 +18,17 @@ from workday_connect_model import (
     PhaseStatus,
     workday_saml_entity_id,
 )
-from workday_connect_contract_common import (
+from workday_connect_evidence_contracts import (
     WorkdayConnectContractError,
-    required_text as _required_text,
-)
-from workday_connect_employee_contracts import (
     EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES,
     EMPLOYEE_VALIDATION_FAILURE_SURFACES,
     EMPLOYEE_VALIDATION_REMEDIATIONS,
     EMPLOYEE_VALIDATION_RESULT_IDS,
+    required_text as _required_text,
+    validate_agent_binding_evidence,
     validate_employee_evidence,
     validate_employee_failure_evidence,
 )
-from workday_connect_runtime_contracts import validate_agent_binding_evidence
 
 
 __all__ = [
@@ -2168,6 +2166,144 @@ def _date_only(value: str, label: str) -> str:
         ) from exc
 
 
+def _validated_workday_endpoints(
+    response: Mapping[str, Any],
+    tenant: str,
+) -> dict[str, str]:
+    endpoints = {
+        "oauthTokenUrl": _https_url(
+            response.get("oauthTokenUrl"),
+            "Workday OAuth token URL",
+        ),
+        "restBaseUrl": _https_url(
+            response.get("restBaseUrl"),
+            "Workday REST base URL",
+        ),
+        "soapBaseUrl": _https_url(
+            response.get("soapBaseUrl"),
+            "Workday SOAP base URL",
+        ),
+    }
+    for key, path_prefix, label in (
+        (
+            "oauthTokenUrl",
+            f"/ccx/oauth2/{tenant}/token",
+            "Workday OAuth token URL",
+        ),
+        ("restBaseUrl", "/ccx/api", "Workday REST base URL"),
+        ("soapBaseUrl", "/ccx/service", "Workday SOAP base URL"),
+    ):
+        _require_endpoint_path(endpoints[key], path_prefix, label)
+    endpoint_hosts = {
+        str(urlparse(value).hostname or "").casefold()
+        for value in endpoints.values()
+    }
+    if len(endpoint_hosts) != 1:
+        raise WorkdayConnectContractError(
+            "Workday OAuth, REST, and SOAP endpoints must use the same "
+            "verified Workday service hostname."
+        )
+    return endpoints
+
+
+def _validated_workday_certificate_evidence(
+    state: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> tuple[str, str, dict[str, str]]:
+    signing_certificate = (state.get("identifiers") or {}).get(
+        "signingCertificate"
+    )
+    if not isinstance(signing_certificate, Mapping):
+        raise WorkdayConnectContractError(
+            "Verified Entra signing certificate metadata is required before "
+            "recording Workday administrator evidence."
+        )
+    entra_valid_from_value = str(
+        signing_certificate.get("validFrom") or ""
+    ).strip()
+    entra_valid_from = (
+        _date_only(
+            entra_valid_from_value,
+            "Entra signing certificate Valid From",
+        )
+        if entra_valid_from_value
+        else None
+    )
+    entra_valid_to = _date_only(
+        _required_text(
+            signing_certificate,
+            "validTo",
+            "Entra signing certificate Valid To",
+        ),
+        "Entra signing certificate Valid To",
+    )
+    selection_outcome = str(
+        response.get("certificateSelectionOutcome") or ""
+    ).strip()
+    if selection_outcome != "entra-signing-certificate-selected":
+        raise WorkdayConnectContractError(
+            "certificateSelectionOutcome must confirm that the Workday row "
+            "uses the certificate created from the verified Entra signing "
+            "certificate."
+        )
+    validity_outcome = str(
+        response.get("certificateValidityOutcome") or ""
+    ).strip()
+    if validity_outcome != "matches-verified-entra-certificate":
+        raise WorkdayConnectContractError(
+            "certificateValidityOutcome must confirm that the Workday "
+            "certificate expiration matches the verified Entra certificate."
+        )
+    supplied_valid_from = str(
+        response.get("certificateValidFrom") or ""
+    ).strip()
+    supplied_valid_to = str(response.get("certificateValidTo") or "").strip()
+    if entra_valid_from and supplied_valid_from and (
+        _date_only(
+            supplied_valid_from,
+            "Workday certificate Valid From",
+        )
+        != entra_valid_from
+    ):
+        raise WorkdayConnectContractError(
+            "The supplied Workday certificate Valid From date conflicts "
+            "with the verified certificate-date confirmation."
+        )
+    workday_valid_from = (
+        entra_valid_from
+        or (
+            _date_only(
+                supplied_valid_from,
+                "Workday certificate Valid From",
+            )
+            if supplied_valid_from
+            else None
+        )
+    )
+    if supplied_valid_to and (
+        _date_only(
+            supplied_valid_to,
+            "Workday certificate Valid To",
+        )
+        != entra_valid_to
+    ):
+        raise WorkdayConnectContractError(
+            "The supplied Workday certificate Valid To date conflicts "
+            "with the verified certificate-date confirmation."
+        )
+    evidence = {
+        "certificateSelectionOutcome": selection_outcome,
+        "certificateValidityOutcome": validity_outcome,
+        "certificateValidTo": entra_valid_to,
+    }
+    if workday_valid_from:
+        evidence["certificateValidFrom"] = workday_valid_from
+    certificate_name = str(response.get("certificateName") or "").strip()
+    if certificate_name:
+        evidence["certificateName"] = certificate_name
+    return selection_outcome, validity_outcome, evidence
+
+
 def validate_workday_admin_response(
     state: Mapping[str, Any],
     response: Mapping[str, Any],
@@ -2256,42 +2392,7 @@ def validate_workday_admin_response(
             "The enabled Workday Service Provider ID does not match the "
             "selected Workday tenant."
         )
-    oauth_token_url = _https_url(
-        response.get("oauthTokenUrl"),
-        "Workday OAuth token URL",
-    )
-    _require_endpoint_path(
-        oauth_token_url,
-        f"/ccx/oauth2/{tenant}/token",
-        "Workday OAuth token URL",
-    )
-    rest_base_url = _https_url(
-        response.get("restBaseUrl"),
-        "Workday REST base URL",
-    )
-    _require_endpoint_path(
-        rest_base_url,
-        "/ccx/api",
-        "Workday REST base URL",
-    )
-    soap_base_url = _https_url(
-        response.get("soapBaseUrl"),
-        "Workday SOAP base URL",
-    )
-    _require_endpoint_path(
-        soap_base_url,
-        "/ccx/service",
-        "Workday SOAP base URL",
-    )
-    endpoint_hosts = {
-        str(urlparse(value).hostname or "").casefold()
-        for value in (oauth_token_url, rest_base_url, soap_base_url)
-    }
-    if len(endpoint_hosts) != 1:
-        raise WorkdayConnectContractError(
-            "Workday OAuth, REST, and SOAP endpoints must use the same "
-            "verified Workday service hostname."
-        )
+    endpoints = _validated_workday_endpoints(response, tenant)
     required = {
         "oauthClientId",
         "authenticationPolicyOutcome",
@@ -2351,86 +2452,11 @@ def validate_workday_admin_response(
                 f"{field} does not match the verified Entra value."
             )
         values[field] = observed
-    signing_certificate = (state.get("identifiers") or {}).get("signingCertificate")
-    if not isinstance(signing_certificate, Mapping):
-        raise WorkdayConnectContractError(
-            "Verified Entra signing certificate metadata is required before "
-            "recording Workday administrator evidence."
-        )
-    entra_valid_from_value = str(
-        signing_certificate.get("validFrom") or ""
-    ).strip()
-    entra_valid_from = (
-        _date_only(
-            entra_valid_from_value,
-            "Entra signing certificate Valid From",
-        )
-        if entra_valid_from_value
-        else None
-    )
-    entra_valid_to = _date_only(
-        _required_text(
-            signing_certificate,
-            "validTo",
-            "Entra signing certificate Valid To",
-        ),
-        "Entra signing certificate Valid To",
-    )
-    certificate_selection_outcome = str(
-        response.get("certificateSelectionOutcome") or ""
-    ).strip()
-    if certificate_selection_outcome != "entra-signing-certificate-selected":
-        raise WorkdayConnectContractError(
-            "certificateSelectionOutcome must confirm that the Workday row "
-            "uses the certificate created from the verified Entra signing "
-            "certificate."
-        )
-    certificate_validity_outcome = str(
-        response.get("certificateValidityOutcome") or ""
-    ).strip()
-    if certificate_validity_outcome != "matches-verified-entra-certificate":
-        raise WorkdayConnectContractError(
-            "certificateValidityOutcome must confirm that the Workday "
-            "certificate expiration matches the verified Entra certificate."
-        )
-    workday_valid_to = entra_valid_to
-    supplied_valid_from = str(
-        response.get("certificateValidFrom") or ""
-    ).strip()
-    supplied_valid_to = str(response.get("certificateValidTo") or "").strip()
-    if entra_valid_from and supplied_valid_from and (
-        _date_only(
-            supplied_valid_from,
-            "Workday certificate Valid From",
-        )
-        != entra_valid_from
-    ):
-        raise WorkdayConnectContractError(
-            "The supplied Workday certificate Valid From date conflicts "
-            "with the verified certificate-date confirmation."
-        )
-    workday_valid_from = (
-        entra_valid_from
-        or (
-            _date_only(
-                supplied_valid_from,
-                "Workday certificate Valid From",
-            )
-            if supplied_valid_from
-            else None
-        )
-    )
-    if supplied_valid_to and (
-        _date_only(
-            supplied_valid_to,
-            "Workday certificate Valid To",
-        )
-        != entra_valid_to
-    ):
-        raise WorkdayConnectContractError(
-            "The supplied Workday certificate Valid To date conflicts "
-            "with the verified certificate-date confirmation."
-        )
+    (
+        certificate_selection_outcome,
+        certificate_validity_outcome,
+        certificate_evidence,
+    ) = _validated_workday_certificate_evidence(state, response)
     least_privilege_required = {
         "rolloutType",
         "publicWorkerReportsOutcome",
@@ -2524,26 +2550,12 @@ def validate_workday_admin_response(
                 "authorizationRetestOutcome must confirm verification after "
                 "the bounded authorization remediation."
             )
-    certificate_name = str(response.get("certificateName") or "").strip()
-    certificate_evidence = {
-        "certificateSelectionOutcome": certificate_selection_outcome,
-        "certificateValidityOutcome": certificate_validity_outcome,
-        "certificateValidTo": workday_valid_to,
-    }
-    if workday_valid_from:
-        certificate_evidence["certificateValidFrom"] = workday_valid_from
-    if certificate_name:
-        certificate_evidence["certificateName"] = certificate_name
     result = {
         "identifiers": {
             "workdaySamlEntityId": expected_entity_id,
             "oauthClientId": values["oauthClientId"],
         },
-        "endpoints": {
-            "oauthTokenUrl": oauth_token_url,
-            "restBaseUrl": rest_base_url,
-            "soapBaseUrl": soap_base_url,
-        },
+        "endpoints": endpoints,
         "evidence": {
             "activeIdentityProviderIssuer": active_identity_provider_issuer,
             "identityProviderOutcome": identity_provider_outcome,
@@ -2578,9 +2590,7 @@ def validate_workday_admin_response(
             "certificateSelectionOutcome": certificate_selection_outcome,
             "certificateValidityOutcome": certificate_validity_outcome,
             "oauthClientId": values["oauthClientId"],
-            "oauthTokenUrl": oauth_token_url,
-            "restBaseUrl": rest_base_url,
-            "soapBaseUrl": soap_base_url,
+            **endpoints,
             "authenticationPolicyOutcome": values[
                 "authenticationPolicyOutcome"
             ],
