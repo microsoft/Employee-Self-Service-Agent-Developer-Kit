@@ -2227,34 +2227,6 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
-    def complete_employee_test_attempt(
-        self,
-        *,
-        succeeded: bool,
-    ) -> dict[str, Any]:
-        def mutation(state: dict[str, Any]) -> None:
-            phase = state["phases"]["employee-validation"]
-            attempt = phase.get("employeeTestAttempt")
-            allowed_statuses = (
-                {"validating"}
-                if succeeded
-                else {"active", "validating"}
-            )
-            if (
-                not isinstance(attempt, dict)
-                or attempt.get("status") not in allowed_statuses
-            ):
-                raise WorkdayConnectStoreError(
-                    "Start a bounded employee test attempt before recording "
-                    "its outcome."
-                )
-            attempt["status"] = "succeeded" if succeeded else "failed"
-            attempt["completedAt"] = attempt["completedAt"] or utc_now()
-            attempt["outcome"] = "success" if succeeded else "failure"
-            phase["updatedAt"] = utc_now()
-
-        return self._mutate(mutation)
-
     def finalize_employee_validation_success(self) -> dict[str, Any]:
         def mutation(state: dict[str, Any]) -> None:
             phase = state["phases"]["employee-validation"]
