@@ -27,9 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 7' in schema
+    assert '"schemaVersion": 9' in schema
     assert '"substage": "not-started"' in schema
-    assert "config.pre-v7.json" in schema
+    assert "config.pre-v9.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
@@ -70,7 +70,10 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
             "http://www.workday.com/{workdayTenant}" in text
         )
         assert "api://" in text
-    assert "Never select by display name alone" in entra
+    assert (
+        "Never select an application by display name alone"
+        in " ".join(entra.split())
+    )
     assert "Never alias" in schema or "must never be aliases" in schema
     assert "entra-handoff" in entra
     assert "workday-admin-packet" in tenant
@@ -78,11 +81,59 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "--verification-file" in entra
     assert "--discovery-json" not in entra
     assert "--verification-json" not in entra
-    assert "exits with code 0" in entra
-    assert "partial stdout after\na nonzero exit" in entra
+    assert "does not authenticate the maker" in " ".join(entra.split())
+    assert "guided handoff to the Entra administrator" in " ".join(
+        entra.split()
+    )
+    assert "Enter the Workday tenant name, or paste a Workday" in entra
+    assert "controller safely extracts the tenant name" in entra
+    assert "Do not ask the maker to paste the full signed-in URL" not in entra
     assert "legacy `src/skills/setup/workday/` procedure" in entra
     assert 'broad "everything is done" confirmation' in entra
-    assert '"all good", "continue", or\n"proceed"' in entra
+    assert (
+        '"all good", "continue", or "proceed"' in " ".join(entra.split())
+    )
+    assert "captureInstructions" in entra
+    assert "Microsoft Entra administrator return\nworksheet" in entra
+    assert (
+        "before the administrator starts the numbered tasks"
+        in " ".join(entra.split())
+    )
+    assert "renders an array of questions as a sequential wizard" in entra
+    assert "containing exactly one free-form question" in entra
+    assert "Do not replay the full worksheet" in entra
+    assert '"header": "Entra return worksheet"' in entra
+    assert "every line is required" in entra
+    assert "Certificate expiration date (active certificate row):" in entra
+    assert "Certificate valid from" not in entra
+    assert "Do not\nsay only \"paste a revised worksheet\"" in entra
+    for removed_header in (
+        "Directory tenant ID",
+        "Enterprise app Object ID",
+        "App registration Object ID",
+        "Application ID URIs",
+        "Reply URLs",
+        "Microsoft Entra Identifier",
+        "Login URL",
+        "Scope ID",
+    ):
+        assert f'"header": "{removed_header}"' not in entra
+    assert (
+        "Do not ask for a field after completion unless the shareable"
+        in entra
+    )
+
+
+def test_preflight_explains_silent_auth_and_current_phase() -> None:
+    skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    preflight = (_WORKDAY_DA / "install-extension.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "### Current phase: {title}" in skill
+    assert "A browser opens only when there is no valid cached session" in preflight
+    assert "silent reuse does not mean the checks were skipped" in preflight
+    assert "Preflight checks completed" in preflight
 
 
 def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
@@ -91,8 +142,10 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     )
 
     assert "one administrator handoff" in tenant
-    assert "one response form" in tenant
-    assert "repeated confirmations" in tenant
+    assert "Workday administrator return worksheet" in tenant
+    assert "one copyable worksheet" in tenant
+    assert "share this whole section" in tenant
+    assert "Information to return to the maker" in tenant
     assert "identityProviderQuestion" in tenant
     assert "Microsoft Entra ID" in tenant
     assert "Okta" in tenant
@@ -106,17 +159,19 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "A different existing Workday certificate" in tenant
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
-    assert "display name is optional support context" in tenant
-    assert (
-        "exactly one response form using one structured\n"
-        "`vscode_askQuestions` call"
-    ) in tenant
+    assert '"header": "Certificate name"' not in tenant
+    assert "containing exactly one free-form question" in tenant
+    assert '"header": "Workday administrator return worksheet"' in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
-    assert "multiline text\nbox" in tenant
     assert "Do not add `recommended`" in tenant
-    assert "free-text request for several numbered answers" in tenant
+    assert "one mini-worksheet containing only the missing or invalid" in tenant
+    assert "Do not reopen a sequence of individual questions" in tenant
+    assert "Enter a JSON string array" not in tenant
+    assert 'Enter a JSON array of {' not in tenant
+    assert "Yes, all four required functional areas are present" in tenant
+    assert "Domain | supported scenario" in tenant
     assert '"all good", "continue", or "proceed"' in tenant
     assert "do not move to another field" in tenant
     assert "search workspace files" in tenant

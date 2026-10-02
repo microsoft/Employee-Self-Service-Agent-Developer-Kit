@@ -7,9 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path, PurePosixPath
-import subprocess
-import sys
-import tempfile
 from typing import Any, Callable, Mapping
 
 import yaml
@@ -269,6 +266,9 @@ def verify_runtime_template_wiring(
         f"{agent_schema}.topic.WorkdaySystemGetUserContextV2",
     )
     target_schema = runtime_template["schemaName"]
+    validation_schema = (
+        f"{agent_schema}.topic.System-UserContext-Validate"
+    )
     conversation_document = _topic_document(conversation_start)
     begin_dialog = conversation_document.get("beginDialog")
     actions = (
@@ -282,14 +282,33 @@ def verify_runtime_template_wiring(
             "templates."
         )
     all_targets = _begin_dialog_targets(conversation_document)
-    if all_targets.count(target_schema) != 1 or (
-        not isinstance(actions[0], Mapping)
-        or actions[0].get("kind") != "BeginDialog"
-        or str(actions[0].get("dialog") or "").strip() != target_schema
+    top_level_targets = [
+        str(action.get("dialog") or "").strip()
+        if (
+            isinstance(action, Mapping)
+            and action.get("kind") == "BeginDialog"
+        )
+        else ""
+        for action in actions
+    ]
+    validation_positions = [
+        index
+        for index, target in enumerate(top_level_targets)
+        if target == validation_schema
+    ]
+    runtime_precedes_validation = (
+        len(validation_positions) == 1
+        and validation_positions[0] > 0
+        and top_level_targets[validation_positions[0] - 1] == target_schema
+    )
+    if (
+        all_targets.count(target_schema) != 1
+        or not runtime_precedes_validation
     ):
         raise WorkdayConnectAgentError(
             "Conversation Start must call the Workday runtime template "
-            "configuration topic exactly once as its first action."
+            "configuration topic exactly once immediately before User "
+            "Context Validate."
         )
     user_context_document = _topic_document(user_context)
     if target_schema in _begin_dialog_targets(user_context_document):
@@ -367,118 +386,28 @@ def verify_runtime_template_wiring(
         ),
         "conversationStart": conversation_start["schemaName"],
         "runtimeTemplate": target_schema,
+        "userContextValidate": validation_schema,
         "userContext": user_context["schemaName"],
         "verifiedComponents": verification["verifiedComponents"],
         "blockingDiagnostics": verification["blockingDiagnostics"],
     }
 
 
-def run_flightcheck_checkpoint(
-    workspace_root: Path,
-    state: Mapping[str, Any],
-    checkpoint_id: str,
-    *,
-    preferred_username: str,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> str:
-    """Run one checkpoint and require an explicit Passed result row."""
-    scope = state.get("scope") or {}
-    agent = scope.get("agent") or {}
-    command = [
-        sys.executable,
-        str(workspace_root / "scripts" / "flightcheck" / "cli.py"),
-        "--checkpoint",
-        checkpoint_id,
-        "--connect-config",
-        str(workspace_root / ".local" / "connect" / "workday-da" / "config.json"),
-        "--agent-slug",
-        _required_text(agent, "slug", "Active agent slug"),
-        "--environment-id",
-        _required_text(scope, "environmentId", "Environment ID"),
-        "--environment-url",
-        _required_text(scope, "dataverseUrl", "Dataverse URL"),
-        "--preferred-username",
-        preferred_username,
-        "--quiet-auth",
-        "--no-open",
-        "--no-telemetry",
-    ]
-    with tempfile.TemporaryDirectory(prefix="workday-checkpoint-") as output:
-        command.extend(["--output", output])
-        try:
-            completed = runner(
-                command,
-                cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=300,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise WorkdayConnectAgentError(
-                f"FlightCheck {checkpoint_id} did not finish within five minutes."
-            ) from exc
-        results_path = Path(output) / "results.json"
-        try:
-            report = json.loads(results_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            detail = (completed.stderr or completed.stdout or "").strip()[:500]
-            raise WorkdayConnectAgentError(
-                f"FlightCheck {checkpoint_id} produced no readable result"
-                + (f": {detail}" if detail else ".")
-            ) from exc
-    results = report.get("results")
-    if not isinstance(results, list):
-        raise WorkdayConnectAgentError(
-            f"FlightCheck {checkpoint_id} returned an invalid result document."
-        )
-    matching = [
-        result
-        for result in results
-        if isinstance(result, dict) and result.get("checkpoint_id") == checkpoint_id
-    ]
-    statuses = {str(result.get("status") or "") for result in matching}
-    if completed.returncode != 0 or not matching or statuses != {"Passed"}:
-        details = "; ".join(
-            str(result.get("result") or result.get("status") or "")
-            for result in matching
-        )
-        raise WorkdayConnectAgentError(
-            f"FlightCheck {checkpoint_id} did not pass"
-            + (f": {details}" if details else ".")
-        )
-    return "Passed"
-
-
 def verify_agent_binding(
     workspace_root: Path,
     state: Mapping[str, Any],
     *,
-    checkpoint_verifier: Callable[..., str] = run_flightcheck_checkpoint,
     client_factory: Callable[
         [dict[str, Any]], MinimalBotEvaluationClient
     ] = MinimalBotEvaluationClient.from_config,
 ) -> dict[str, Any]:
     """Verify Workday binding without using topic diagnostics as runtime proof."""
     context = _agent_verification_context(workspace_root, state)
-    checkpoints = {
-        checkpoint_id: checkpoint_verifier(
-            workspace_root,
-            state,
-            checkpoint_id,
-            preferred_username=context["makerUsername"],
-        )
-        for checkpoint_id in ("WD-REST-002", "WD-CONN-013")
-    }
-    evidence = _verify_workday_topics(
+    return _verify_workday_topics(
         context,
         client_factory=client_factory,
         require_clean_diagnostics=False,
     )
-    evidence["checkpoints"] = checkpoints
-    return evidence
 
 
 def _agent_verification_context(
@@ -592,7 +521,6 @@ def _verify_workday_topics(
         "environmentId": context["environmentId"],
         "botId": context["botId"],
         "makerUsername": str(client.signed_in_username or context["makerUsername"]),
-        "checkpoints": {},
         "workdayTopics": {
             "expected": len(topics),
             "verified": verification["verifiedComponents"],

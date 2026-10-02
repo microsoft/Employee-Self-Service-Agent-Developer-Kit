@@ -23,7 +23,7 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 7
+    assert state["schemaVersion"] == 9
     assert state["lifecycle"]["correlationId"]
     assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
@@ -54,6 +54,55 @@ def test_workday_saml_entity_id_rejects_invalid_tenant(tenant: str) -> None:
 
     with pytest.raises(model.WorkdayConnectModelError):
         model.workday_saml_entity_id(tenant)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("microsoft_dpt6", "microsoft_dpt6"),
+        (
+            "https://wd2-impl-services1.workday.com/ccx/oauth2/"
+            "microsoft_dpt6/token",
+            "microsoft_dpt6",
+        ),
+        (
+            "https://impl.workday.com/microsoft_dpt6/login-saml.htmld",
+            "microsoft_dpt6",
+        ),
+        (
+            "https://impl.workday.com/wday/authgwy/microsoft_dpt6/login.htmld",
+            "microsoft_dpt6",
+        ),
+        (
+            "https://wd5.myworkday.com/microsoft_dpt6/d/home.htmld",
+            "microsoft_dpt6",
+        ),
+    ],
+)
+def test_normalize_workday_tenant_input_accepts_known_shapes(
+    value: str,
+    expected: str,
+) -> None:
+    import workday_connect_model as model
+
+    assert model.normalize_workday_tenant_input(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/ccx/oauth2/microsoft_dpt6/token",
+        "https://impl.workday.com/unrecognized/path",
+        "api://microsoft_dpt6",
+    ],
+)
+def test_normalize_workday_tenant_input_rejects_unknown_shapes(
+    value: str,
+) -> None:
+    import workday_connect_model as model
+
+    with pytest.raises(model.WorkdayConnectModelError):
+        model.normalize_workday_tenant_input(value)
 
 
 def test_plan_hash_is_stable_and_ignores_embedded_hash() -> None:
@@ -90,8 +139,8 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "| # | Phase | Status |\n"
         "|---:|---|---|\n"
         "| 1 | Preflight | Complete |\n"
-        "| 2 | Microsoft Entra | In progress |\n"
-        "| 3 | Workday administrator | Pending |\n"
+        "| 2 | Microsoft Entra | Current |\n"
+        "| 3 | Workday administrator | Next |\n"
         "| 4 | Connections | Pending |\n"
         "| 5 | Runtime configuration | Pending |\n"
         "| 6 | Employee validation | Pending |"
@@ -100,25 +149,44 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "id": "entra",
         "title": "Microsoft Entra",
         "whatHappens": [
-            (
-                "Find the exact Workday enterprise application in the selected "
-                "Microsoft Entra tenant."
-            ),
+            "Give the Microsoft Entra administrator one complete guided handoff.",
             (
                 "Guide an Entra administrator through the required SAML, "
                 "permission, consent, assignment, and employee sign-in settings."
             ),
-            "Verify the application and signing-certificate configuration.",
+            (
+                "Validate and record the administrator's returned non-secret "
+                "application and signing-certificate evidence."
+            ),
         ],
     }
 
 
-def test_pending_current_phase_is_marked_next() -> None:
+def test_pending_current_phase_and_following_phase_are_distinct() -> None:
     import workday_connect_model as model
 
     state = model.default_state()
 
-    assert "| 1 | Preflight | Next |" in model.progress_text(state)
+    progress = model.progress_text(state)
+    assert "| 1 | Preflight | Current |" in progress
+    assert "| 2 | Microsoft Entra | Next |" in progress
+
+
+def test_blocked_current_phase_is_marked_as_needing_attention() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["phases"]["preflight"].update(
+        {
+            "status": "blocked",
+            "blockerCode": "AUTH_REQUIRED",
+            "blockerDetail": "Sign in again.",
+        }
+    )
+
+    progress = model.progress_text(state)
+    assert "| 1 | Preflight | Current - needs attention |" in progress
+    assert "| 2 | Microsoft Entra | Next |" in progress
 
 
 def test_blocked_phase_requires_complete_blocker_evidence() -> None:

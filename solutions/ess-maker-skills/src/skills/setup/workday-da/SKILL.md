@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Connect Workday to the ESS HR agent
 
 Guide the customer through one resumable Workday connection lifecycle. Use
@@ -16,10 +17,11 @@ it is not a customer-executed phase and must not be shown as an extra step.
   environment during preflight.
 - Never ask for a Workday password, client secret, access token, refresh token,
   cookie, certificate private key, or certificate body in chat.
-- Explain an authentication prompt before launching it. Azure CLI/Graph, PAC,
-  Dataverse, connector OAuth, and Agent Builder are separate credential stores;
-  a prompt for a different store is expected, but a valid store must not be
-  prompted twice for the same account and session.
+- Explain an authentication prompt before launching it. PAC, Dataverse,
+  connector OAuth, and Agent Builder are separate credential stores; a prompt
+  for a different store is expected, but a valid store must not be prompted
+  twice for the same account and session. The guided Microsoft Entra phase
+  must not authenticate the maker to Graph.
 - Preview the exact target and actions before approval. After approval, verify
   the plan hash immediately before every mutation. If discovery or scope
   changes, discard the approval and show the new plan.
@@ -70,14 +72,14 @@ validated customer-facing result.
 
 Describe each action according to who actually performs it:
 
-| Phase | What the skill can do | What remains a user or administrator action |
-| --- | --- | --- |
-| Preflight | Verify the selected agent, environment, account, and supported Workday package; install the package when needed | Complete Microsoft sign-in and choose an environment when no exact URL is known |
-| Microsoft Entra | Discover exact applications, validate roles, generate one administrator handoff, reread Graph, and record verified evidence | Create or change the Entra application in the portal |
-| Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday |
-| Connections | Record the reviewed physical-connection readiness evidence | Create connector connections and complete connector OAuth |
-| Runtime | After approval, bind the Workday connections, activate the package flows, configure required runtime permissions, connect employee context routing, enable every Workday topic included with the agent, and verify the result | Connect flows to the agent and enable parameter sharing in Copilot Studio when those settings require maker interaction |
-| Employee validation | Record safe validation evidence and retain the current blocker | Publish the agent, sign in as an employee, and run the real employee scenario |
+| Phase                 | What the skill can do                                                                                                                                                                                                         | What remains a user or administrator action                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Preflight             | Verify the selected agent, environment, account, capacity, and supported Workday package choice without installing it                                                                                                         | Complete Microsoft sign-in and choose an environment when no exact URL is known                                         |
+| Microsoft Entra       | Generate one guided administrator handoff, validate the returned non-secret target and configuration evidence, and record it                                                                                                  | Identify the exact application, create or change it in the portal, and return the requested evidence                    |
+| Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence                                                                                                                              | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday                               |
+| Connections           | After approval, install or verify the Workday package, then record the reviewed physical-connection readiness evidence                                                                                                        | Approve package installation, create connector connections, and complete connector OAuth                                |
+| Runtime               | After approval, bind the Workday connections, activate the package flows, configure required runtime permissions, connect employee context routing, enable every Workday topic included with the agent, and verify the result | Connect flows to the agent and enable parameter sharing in Copilot Studio when those settings require maker interaction |
+| Employee validation   | Record safe validation evidence and retain the current blocker                                                                                                                                                                | Publish the agent, sign in as an employee, and run the real employee scenario                                           |
 
 Never say "I changed," "I configured," "I enabled," or "I updated" for a
 manual action. Say what the administrator or maker must do, then say what the
@@ -93,14 +95,15 @@ deployment work.
 
 - A different Power Platform environment, ESS HR agent, or maker account must
   not by itself require the Entra or Workday administrators to repeat setup.
-- When the Entra tenant, Workday tenant, and exact Entra application still
-  match stored foundation evidence, reread the Entra configuration. If it is
-  healthy, reuse the stored Workday administrator evidence and continue at
-  Connections.
-- Involve an administrator only when foundation evidence is absent, the
-  tenant/application identity changed, the Entra reread finds drift, the
-  signing certificate changed or is unhealthy, or a later connection/runtime
-  test proves the stored Workday configuration no longer works.
+- Do not silently trust stored Entra evidence or perform a maker-authenticated
+  Graph reread. Use the guided Entra administrator handoff to confirm the
+  selected directory, exact application pairing, and required settings. After
+  the structured response validates against the recorded tenant foundation,
+  reuse the stored Workday administrator evidence and continue at Connections.
+- Ask the administrator to repeat only missing, changed, or unhealthy settings.
+  A different environment, agent, or maker account may require current
+  confirmation, but it must not make the administrator repeat healthy tenant
+  configuration.
 - Never reuse foundation evidence across a different Entra tenant, Workday
   tenant, SAML Service Provider ID, Entra application, or signing certificate.
 - Preserve the full administrator guide even on the reuse path, but show only
@@ -114,14 +117,14 @@ resumed setup must still make its remaining administrator dependencies clear.
 
 > Here's who may be needed to connect Workday to your ESS HR agent:
 >
-> | Phase | Responsibility | Who is needed |
-> | --- | --- | --- |
-> | Preflight | Verify the ESS HR agent and environment, and install or verify the supported Workday package | Power Platform Environment Maker with package installation access |
-> | Microsoft Entra | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required |
-> | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy | Workday Administrator |
-> | Connections | Create the Workday OAuthUser and Dataverse connections and complete connector sign-in | Power Platform Environment Maker |
-> | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization |
-> | Employee validation | Publish the agent and validate a real signed-in employee scenario | Environment Maker and Workday test employee; Workday Administrator or network administrator if remediation is needed |
+> | Phase                 | Responsibility                                                                                                                                             | Who is needed                                                                                                        |
+> | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+> | Preflight             | Verify the ESS HR agent, environment, capacity, maker account, and supported package choice without changing the environment                               | Power Platform Environment Maker                                                                                     |
+> | Microsoft Entra       | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID                                                        | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required          |
+> | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy           | Workday Administrator                                                                                                |
+> | Connections           | Install or verify the supported Workday package, then create the Workday OAuthUser and Dataverse connections and complete connector sign-in                | Power Platform Environment Maker with package installation access                                                    |
+> | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization                    |
+> | Employee validation   | Publish the agent and validate a real signed-in employee scenario                                                                                          | Environment Maker and Workday test employee; Workday Administrator or network administrator if remediation is needed |
 >
 > I'll automate checks and supported changes where reliable APIs are available.
 > For Workday or portal-only settings, I'll provide the responsible
@@ -134,6 +137,11 @@ Run:
 python scripts/workday_connect.py status
 ```
 
+The controller runs automatic readiness checks at the relevant phase
+boundaries. Present only the resulting customer-safe readiness
+or remediation state; do not expose internal profile/checkpoint identifiers or
+ask the customer to run a second validation workflow.
+
 After the readiness briefing:
 
 1. Render the returned `progressText` as Markdown. It is the visible six-row
@@ -141,7 +149,7 @@ After the readiness briefing:
 2. Render the returned `nextPhaseSummary` in this form:
 
    ```markdown
-   ### Next phase: {title}
+   ### Current phase: {title}
 
    What happens in this phase:
 
@@ -150,33 +158,54 @@ After the readiness briefing:
    - {whatHappens item 3}
    ```
 
-3. Show the current blocker afterward when one is present.
+3. Show each non-empty customer-safe `readiness.summary` returned for a phase.
+   This confirms which automatic readiness checks passed without exposing
+   profile or checkpoint identifiers.
+4. Show the current blocker afterward when one is present. Use its `summary`
+   and `nextAction`; do not render any other blocker fields.
 
 Do not render internal action IDs, hashes, or the full JSON state. Do not
-replace the phase explanation with only `Next phase: {title}`.
+replace the phase explanation with only `Current phase: {title}`.
 
 If controller status is `ready`, skip the availability question and show the
 completion message below.
 
-For a non-ready lifecycle, determine the next phase's required participants
+For a non-ready lifecycle, determine the current phase's required participants
 from `nextPhaseId`:
 
-| `nextPhaseId` | People required before this phase begins |
-| --- | --- |
-| `preflight` | Power Platform Environment Maker with package installation access |
-| `entra` | Run discovery and tenant-foundation reuse checks first; require an Application Administrator or Cloud Application Administrator only when an Entra portal action remains, plus a consent-capable administrator only when the handoff requires consent |
-| `workday-admin` | Workday Administrator |
-| `connections` | Power Platform Environment Maker |
-| `runtime` | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization |
-| `employee-validation` | Environment Maker and Workday test employee |
+| `nextPhaseId`         | People required for the current phase                                                                                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preflight`           | Power Platform Environment Maker                                                                                                                                                                            |
+| `entra`               | Application Administrator or Cloud Application Administrator to identify or confirm the exact application and return the guided evidence; a consent-capable administrator when the handoff requires consent |
+| `workday-admin`       | Workday Administrator                                                                                                                                                                                       |
+| `connections`         | Power Platform Environment Maker with package installation access                                                                                                                                           |
+| `runtime`             | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization                                                                                                       |
+| `employee-validation` | Environment Maker and Workday test employee                                                                                                                                                                 |
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
-form below. That phase performs read-only discovery and tenant-foundation
-reconciliation first, then asks about administrator availability only when a
-portal action remains.
+form below. That phase asks whether the maker has looped in the administrator,
+presents the guided handoff, and validates the returned non-secret evidence.
+It must not authenticate the maker to Graph or perform live Entra API checks.
 
-For every other returned `nextPhaseId`, show only its row and use this exact
+When `nextPhaseId` is `workday-admin`, show only its row and use this exact
 `vscode_askQuestions` form before dispatching that phase:
+
+```json
+[
+  {
+    "header": "Workday administrator",
+    "question": "Have you looped in the Workday administrator to complete the next phase?",
+    "options": [
+      { "label": "Yes, the Workday administrator is engaged" },
+      { "label": "No, I still need to engage the Workday administrator" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+For every other returned `nextPhaseId` except `entra`, show only its row and
+use this exact `vscode_askQuestions` form before dispatching that phase:
 
 ```json
 [
@@ -194,22 +223,23 @@ For every other returned `nextPhaseId`, show only its row and use this exact
 
 Leave the selection unset. This is an availability self-attestation for
 planning, not proof that the signed-in account has a required role. The
-phase-specific permission checks and verified evidence remain authoritative.
+phase-specific live checks or structured administrator evidence remain
+authoritative.
 Do not include people from completed phases or remediation-only roles that are
 not currently required. In particular, require the Workday Administrator only
 when `nextPhaseId` is `workday-admin`; a healthy reused tenant foundation
 continues at Connections without that role.
 
-If the maker selects **No, someone is unavailable**, stop before dispatching
-the next phase. Explain that no phase progress or target configuration was
-changed and ask them to return when the required person can participate. Do
-not request the person's name, credentials, or other identifying information,
-and do not offer to bypass the role requirement.
+If the maker selects either negative option, stop before dispatching the next
+phase. Explain that no phase progress or target configuration was changed and
+ask them to return when the required person can participate. Do not request
+the person's name, credentials, or other identifying information, and do not
+offer to bypass the role requirement.
 
-If the maker selects **Yes, required people are available**, dispatch the next
-phase below. Within the same invocation, do not repeat the question while
-`nextPhaseId` remains unchanged. After a phase completes and `status` returns
-a different `nextPhaseId`, evaluate and ask for that new phase.
+If the maker selects either affirmative option, dispatch the next phase below.
+Within the same invocation, do not repeat the question while `nextPhaseId`
+remains unchanged. After a phase completes and `status` returns a different
+`nextPhaseId`, evaluate and ask for that new phase.
 
 Dispatch from `nextPhaseId`:
 

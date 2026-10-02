@@ -31,12 +31,11 @@ def _state():
 
 
 def _complete_preflight(store) -> None:
-    for action in ("verify-target", "verify-package"):
-        store.complete_action(
-            "preflight",
-            action,
-            evidence={"outcome": "verified"},
-        )
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
     store.set_phase_status("preflight", "complete")
 
 
@@ -249,9 +248,13 @@ def _write_runtime_wiring(root: Path, *, nested_call: bool = False) -> None:
             "  kind: OnConversationStart\n"
             "  actions:\n"
             "    - kind: BeginDialog\n"
-            f"      dialog: {runtime_schema}\n"
+            "      dialog: contoso.topic.System-UserContext-Createglobalvariables\n"
             "    - kind: SendActivity\n"
             "      activity: Welcome\n"
+            "    - kind: BeginDialog\n"
+            f"      dialog: {runtime_schema}\n"
+            "    - kind: BeginDialog\n"
+            "      dialog: contoso.topic.System-UserContext-Validate\n"
         ),
         encoding="utf-8",
     )
@@ -330,23 +333,13 @@ def test_agent_binding_is_built_from_live_checks_and_components(
 
     _write_workspace(tmp_path)
     client = _VerifiedClient()
-    calls = []
-
-    def checkpoint(_root, _state, checkpoint_id, *, preferred_username):
-        calls.append((checkpoint_id, preferred_username))
-        return "Passed"
 
     evidence = verify_agent_binding(
         tmp_path,
         _state(),
-        checkpoint_verifier=checkpoint,
         client_factory=lambda _config: client,
     )
 
-    assert calls == [
-        ("WD-REST-002", "maker@example.com"),
-        ("WD-CONN-013", "maker@example.com"),
-    ]
     assert evidence["workdayTopics"] == {
         "expected": 2,
         "verified": 2,
@@ -389,7 +382,6 @@ def test_topic_activation_skips_checkpoints_and_allows_diagnostics(
         client_factory=lambda _config: client,
     )
 
-    assert evidence["checkpoints"] == {}
     assert evidence["workdayTopics"]["active"] == 2
     assert evidence["workdayTopics"]["blockingDiagnostics"]
     assert all(
@@ -438,6 +430,56 @@ def test_runtime_template_wiring_is_verified_against_live_topics(
     assert conversation_expectation["state"] == "Active"
     assert conversation_expectation["status"] == "Active"
     assert conversation_expectation["requireCleanDiagnostics"] is True
+
+
+def test_runtime_template_wiring_rejects_wrong_conversation_start_position(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from workday_connect_agent import (
+        WorkdayConnectAgentError,
+        verify_runtime_template_wiring,
+    )
+
+    _write_workspace(tmp_path)
+    _write_runtime_wiring(tmp_path)
+    conversation_start = (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "ess-hr"
+        / "topics"
+        / "conversation-start.mcs.yml"
+    )
+    text = conversation_start.read_text(encoding="utf-8")
+    text = text.replace(
+        (
+            "    - kind: SendActivity\n"
+            "      activity: Welcome\n"
+            "    - kind: BeginDialog\n"
+            "      dialog: contoso.topic."
+            "WorkdaySystemSetRuntimeTemplateConfigurations\n"
+        ),
+        (
+            "    - kind: BeginDialog\n"
+            "      dialog: contoso.topic."
+            "WorkdaySystemSetRuntimeTemplateConfigurations\n"
+            "    - kind: SendActivity\n"
+            "      activity: Welcome\n"
+        ),
+    )
+    conversation_start.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        WorkdayConnectAgentError,
+        match="immediately before User Context Validate",
+    ):
+        verify_runtime_template_wiring(
+            tmp_path,
+            _state(),
+            client_factory=lambda _config: _VerifiedClient(),
+        )
 
 
 def test_runtime_template_wiring_rejects_obsolete_nested_call(
@@ -612,7 +654,6 @@ def test_agent_binding_rejects_environment_drift(tmp_path: Path) -> None:
         verify_agent_binding(
             tmp_path,
             state,
-            checkpoint_verifier=lambda *_args, **_kwargs: "Passed",
             client_factory=lambda _config: _VerifiedClient(),
         )
 
@@ -628,12 +669,11 @@ def test_controller_persists_phase_blocker(
 
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
-    for action in ("verify-target", "verify-package"):
-        store.complete_action(
-            "preflight",
-            action,
-            evidence={"outcome": "verified"},
-        )
+    store.complete_action(
+        "preflight",
+        "verify-target",
+        evidence={"outcome": "verified"},
+    )
     store.set_phase_status("preflight", "complete")
     monkeypatch.setattr(
         sys,
@@ -654,7 +694,9 @@ def test_controller_persists_phase_blocker(
     assert exc.value.code == 1
     status = WorkdayConnectStore(tmp_path).status()
     assert status["nextPhaseId"] == "entra"
-    assert status["blocker"]["operation"] == "set-workday-tenant"
+    assert "operation" not in status["blocker"]
+    assert status["blocker"]["summary"]
+    assert status["blocker"]["nextAction"]
 
 
 def test_controller_records_invocation_only_at_status_boundary(
@@ -665,6 +707,12 @@ def test_controller_records_invocation_only_at_status_boundary(
     from workday_connect_store import WorkdayConnectStore
 
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    migration_checks = []
+    monkeypatch.setattr(
+        workday_connect,
+        "_ensure_migration_baseline",
+        lambda _store: migration_checks.append("checked"),
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -677,6 +725,7 @@ def test_controller_records_invocation_only_at_status_boundary(
     )
     workday_connect.main()
     workday_connect.main()
+    assert migration_checks == []
     monkeypatch.setattr(
         sys,
         "argv",
@@ -690,9 +739,28 @@ def test_controller_records_invocation_only_at_status_boundary(
         ],
     )
     workday_connect.main()
+    assert migration_checks == ["checked"]
 
     events = WorkdayConnectStore(tmp_path).load()["lifecycle"]["journal"]
     assert [event["event"] for event in events] == ["invoked"]
+
+
+def test_abandon_employee_test_is_idempotent_without_active_attempt(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+
+    result = workday_connect._abandon_employee_test(
+        SimpleNamespace(),
+        store,
+    )
+
+    assert result["abandoned"] is False
+    assert result["status"]["blocker"] is None
 
 
 def test_controller_persists_valid_partial_administrator_fields(
@@ -786,6 +854,7 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
             discovery_file=None,
             discovery_json=json.dumps(
                 {
+                    "directoryDisplayName": "Contoso",
                     "applications": [],
                     "allowCreate": True,
                 }
@@ -801,6 +870,7 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
     )
 
     discovery = {
+        "directoryDisplayName": "Contoso",
         "applications": [
             {
                 "displayName": "Workday",
@@ -823,6 +893,11 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
         ),
         store,
     )
+    assert actionable["alreadyPresented"] is False
+    assert store.load()["phases"]["entra"]["administrator"]["substage"] == (
+        "administrator-engaged"
+    )
+    store.record_administrator_progress("entra", "handoff-presented")
     replay = workday_connect._entra_handoff(
         SimpleNamespace(
             discovery_file=None,
@@ -831,7 +906,6 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
         store,
     )
 
-    assert actionable["alreadyPresented"] is False
     assert actionable["packet"]["target"]["mode"] == "reuse"
     assert replay["alreadyPresented"] is True
     assert replay["packet"] == actionable["packet"]
@@ -940,10 +1014,17 @@ def test_entra_finalization_uses_retained_partial_evidence_and_replays(
 
 def test_workday_finalization_uses_retained_partial_evidence_and_replays(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
+
+    monkeypatch.setattr(
+        workday_connect,
+        "_run_profile_gate",
+        lambda *_args, **_kwargs: {"checkpointStatuses": {}},
+    )
 
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
@@ -1152,6 +1233,11 @@ def test_record_connections_uses_live_verification(
                 evidence={"outcome": "verified"},
             )
         store.set_phase_status(phase_id, "complete")
+    store.complete_action(
+        "connections",
+        "verify-package",
+        evidence={"outcome": "verified"},
+    )
     monkeypatch.setattr(
         workday_connect,
         "verify_physical_connections",
@@ -1187,8 +1273,11 @@ def test_record_connections_uses_live_verification(
     connections = store.load()["phases"]["connections"]
     assert result["verified"] is True
     assert connections["status"] == "complete"
-    assert connections["completedActions"] == ["physical-connections-verified"]
-    assert connections["evidence"][0]["connectionIds"] == {
+    assert connections["completedActions"] == [
+        "verify-package",
+        "physical-connections-verified",
+    ]
+    assert connections["evidence"][1]["connectionIds"] == {
         "workday": "workday-id",
         "dataverse": "dataverse-id",
     }
@@ -1199,6 +1288,7 @@ def test_record_connections_previews_before_target_confirmation(
     monkeypatch,
 ) -> None:
     import workday_connect
+    import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
 
     store = WorkdayConnectStore(tmp_path)
@@ -1221,6 +1311,19 @@ def test_record_connections_previews_before_target_confirmation(
             "soapBaseUrl": "https://example.workday.com/ccx/service",
             "restBaseUrl": "https://example.workday.com/ccx/api",
         },
+    )
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    store.complete_action(
+        "connections",
+        "verify-package",
+        evidence={"outcome": "verified"},
     )
     monkeypatch.setattr(
         workday_connect,
@@ -1265,7 +1368,7 @@ def test_record_connections_previews_before_target_confirmation(
         "restBaseUrl": "https://example.workday.com/ccx/api",
         "tenantName": "contoso",
     }
-    assert store.load()["phases"]["connections"]["status"] == "pending"
+    assert store.load()["phases"]["connections"]["status"] == "active"
 
 
 def test_record_agent_binding_completes_only_from_verifier_output(
@@ -1320,10 +1423,6 @@ def test_record_agent_binding_completes_only_from_verifier_output(
             "environmentId": "environment-id",
             "botId": "bot-id",
             "makerUsername": "maker@example.com",
-            "checkpoints": {
-                "WD-REST-002": "Passed",
-                "WD-CONN-013": "Passed",
-            },
             "workdayTopics": {
                 "expected": 23,
                 "verified": 23,
@@ -1337,6 +1436,23 @@ def test_record_agent_binding_completes_only_from_verifier_output(
                 ],
             },
         },
+    )
+    observed_profiles = []
+
+    def run_profile_gate(_store, profile_name):
+        observed_profiles.append(profile_name)
+        return {
+            "checkpointStatuses": (
+                {"WD-CONN-013": "Passed"}
+                if profile_name == "workday-da:post-connection"
+                else {"WD-REST-002": "Passed"}
+            )
+        }
+
+    monkeypatch.setattr(
+        workday_connect,
+        "_run_profile_gate",
+        run_profile_gate,
     )
     attachment_file = tmp_path / "attachment.json"
     attachment_file.write_text(
@@ -1363,6 +1479,11 @@ def test_record_agent_binding_completes_only_from_verifier_output(
 
     runtime = store.load()["phases"]["runtime"]
     assert result["verified"] is True
+    assert observed_profiles == [
+        "workday-da:dataverse-ready",
+        "workday-da:post-connection",
+        "workday-da:post-agent-wiring",
+    ]
     assert runtime["status"] == "complete"
     assert "workday-topics-activated" in runtime["completedActions"]
     topic_evidence = next(
@@ -1409,7 +1530,6 @@ def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics
             "environmentId": "environment-id",
             "botId": "bot-id",
             "makerUsername": "maker@example.com",
-            "checkpoints": {},
             "workdayTopics": {
                 "expected": 23,
                 "verified": 23,
@@ -1475,19 +1595,40 @@ def test_record_validation_failure_blocks_employee_phase(
         "connections",
         "runtime",
     ):
+        if phase_id == "runtime":
+            store.approve_plan(
+                "runtime",
+                {
+                    "phase": "runtime",
+                    "scope": {"environmentId": "environment-id"},
+                    "actions": ["Configure runtime"],
+                    "flows": [
+                        {"name": "REST", "workflowId": "flow-id"}
+                    ],
+                },
+            )
         for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            evidence = {"outcome": "verified"}
+            if (
+                phase_id == "runtime"
+                and action == "flow-attachment-confirmed"
+            ):
+                evidence["flowNames"] = ["REST"]
             store.complete_action(
                 phase_id,
                 action,
-                evidence={"outcome": "verified"},
+                evidence=evidence,
             )
         store.set_phase_status(phase_id, "complete")
+    attempt = store.begin_employee_test_attempt()["phases"][
+        "employee-validation"
+    ]["employeeTestAttempt"]
     evidence_file = tmp_path / "employee-failure.json"
     evidence_file.write_text(
         json.dumps(
             {
                 "remediationId": "WD-E2E-006",
-                "timestamp": "2026-09-25T00:00:00Z",
+                "timestamp": attempt["startedAt"],
             }
         ),
         encoding="utf-8",
@@ -1505,7 +1646,7 @@ def test_record_validation_failure_blocks_employee_phase(
     assert phase["blocker"]["remediationId"] == "WD-E2E-006"
     assert phase["blocker"]["errorType"] == "workday-access"
     assert phase["blocker"]["failureSurface"] == "workday-response"
-    assert phase["blocker"]["capturedAt"] == "2026-09-25T00:00:00Z"
+    assert phase["blocker"]["capturedAt"] == attempt["startedAt"]
 
 
 def test_invalid_validation_retry_preserves_stable_failure_evidence(
@@ -1580,3 +1721,82 @@ def test_invalid_validation_retry_preserves_stable_failure_evidence(
     assert blocker["failureSurface"] == "workday-response"
     assert blocker["capturedAt"] == "2026-09-25T00:00:00Z"
     assert blocker["operation"] == "record-validation"
+
+
+def test_employee_success_runs_runtime_and_final_readiness(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+    ):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    runtime_plan = {
+        "phase": "runtime",
+        "scope": {"environmentId": "environment-id"},
+        "actions": ["Configure runtime"],
+        "flows": [{"name": "REST", "workflowId": "flow-id"}],
+    }
+    store.approve_plan("runtime", runtime_plan)
+    for action in model.PHASE_REQUIRED_ACTIONS["runtime"]:
+        evidence = {"outcome": "verified"}
+        if action == "flow-attachment-confirmed":
+            evidence["flowNames"] = ["REST"]
+        store.complete_action(
+            "runtime",
+            action,
+            evidence=evidence,
+        )
+    store.set_phase_status("runtime", "complete")
+    attempt = store.begin_employee_test_attempt()["phases"][
+        "employee-validation"
+    ]["employeeTestAttempt"]
+    observed = []
+    monkeypatch.setattr(
+        workday_connect,
+        "_run_final_readiness",
+        lambda _store: observed.append("workday-da:final") or {},
+    )
+    evidence_file = tmp_path / "employee.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "scenarioName": "Check vacation balance",
+                "testUserCategory": "non-maker employee",
+                "timestamp": attempt["startedAt"],
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = workday_connect._record_validation(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+
+    state = store.load()
+    assert result["verified"] is True
+    assert observed == ["workday-da:final"]
+    assert state["status"] == "ready"
+    assert (
+        state["phases"]["employee-validation"]["employeeTestAttempt"][
+            "status"
+        ]
+        == "succeeded"
+    )

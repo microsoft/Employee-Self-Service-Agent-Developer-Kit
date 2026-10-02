@@ -51,14 +51,34 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     dispatch = skill.index("Dispatch from `nextPhaseId`")
 
     assert briefing < status < attestation < dispatch
-    form_match = re.search(
-        r"use this exact\s+`vscode_askQuestions` form before dispatching "
-        r"that phase:\s+```json\s+(.*?)\s+```",
-        skill,
-        re.DOTALL,
-    )
-    assert form_match is not None
-    assert json.loads(form_match.group(1)) == [
+    forms = [
+        json.loads(form)
+        for form in re.findall(
+            r"`vscode_askQuestions` form before dispatching that phase:"
+            r"\s+```json\s+(.*?)\s+```",
+            skill,
+            re.DOTALL,
+        )
+    ]
+    assert [
+        {
+            "header": "Workday administrator",
+            "question": (
+                "Have you looped in the Workday administrator to complete "
+                "the next phase?"
+            ),
+            "options": [
+                {"label": "Yes, the Workday administrator is engaged"},
+                {
+                    "label": (
+                        "No, I still need to engage the Workday administrator"
+                    )
+                },
+            ],
+            "allowFreeformInput": False,
+        }
+    ] in forms
+    assert [
         {
             "header": "Required access",
             "question": (
@@ -71,7 +91,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
             ],
             "allowFreeformInput": False,
         }
-    ]
+    ] in forms
     assert "If controller status is `ready`, skip the availability question" in skill
     for phase_id in (
         "preflight",
@@ -84,48 +104,54 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         assert f"| `{phase_id}` |" in skill
     assert "Leave the selection unset" in skill
     assert "not proof that the signed-in account has a required role" in skill
-    assert "phase-specific permission checks and verified evidence remain" in skill
+    assert (
+        "phase-specific live checks or structured administrator evidence remain"
+        in " ".join(skill.split())
+    )
     assert "Do not include people from completed phases" in skill
     assert "remediation-only roles that are\nnot currently required" in skill
     assert "only\nwhen `nextPhaseId` is `workday-admin`" in skill
     assert "healthy reused tenant foundation\ncontinues at Connections" in skill
     assert "When `nextPhaseId` is `entra`, dispatch" in skill
-    assert "tenant-foundation\nreconciliation first" in skill
-    assert "stop before dispatching\nthe next phase" in skill
-    assert "no phase progress or target configuration was\nchanged" in skill
+    assert "presents the guided handoff" in skill
+    assert "stop before dispatching the next\nphase" in skill
+    assert "no phase progress or target configuration was changed" in skill
     assert "do not offer to bypass the role requirement" in " ".join(skill.split())
-    assert "do not repeat the question while\n`nextPhaseId` remains unchanged" in skill
     assert (
-        "Before showing any administrator portal action that remains after discovery"
-        in entra
+        "do not repeat the question while `nextPhaseId` remains unchanged"
+        in " ".join(skill.split())
     )
-    assert "tenant-foundation reconciliation" in entra
+    assert "Show the exact required Entra role" in entra
+    assert "Do not silently reuse Entra configuration" in entra
+    assert "must not authenticate the maker to Graph" in skill
+    assert "reread Graph" not in skill
+    assert "read-only discovery" not in skill
     assert '"header": "Microsoft Entra administrator"' in entra
-    assert "availability answer is not authorization evidence" in entra
+    assert "engagement answer is not configuration evidence" in entra
+    assert "Have you looped in the Microsoft Entra administrator" in entra
+    assert "Information to return to the maker" in entra
+    assert "Has the Microsoft Entra administrator completed" in entra
     assert (
-        "Do not add another availability confirmation in this phase"
+        "Do not add a second engagement question here"
         in " ".join(tenant.split())
     )
-    assert (
-        "phase-boundary self-attestation already covers it"
-        in " ".join(tenant.split())
-    )
+    assert "Have you looped in the Workday administrator" in tenant
 
 
-def test_entra_waiting_boundary_follows_required_rediscovery() -> None:
+def test_entra_waiting_boundary_follows_guided_handoff() -> None:
     entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
         encoding="utf-8"
     )
 
-    rediscovery = entra.index("If `requiresRediscovery` is `true`")
+    handoff = entra.index("Render one standalone section titled")
     waiting = entra.index(
         "administrator-stage --phase entra --substage awaiting-completion"
     )
 
-    assert rediscovery < waiting
-    assert "Only after rediscovery returns `requiresRediscovery: false`" in (
-        entra
-    )
+    assert handoff < waiting
+    assert "requiresRediscovery" not in entra
+    assert "does not authenticate the maker\nto Microsoft Graph" in entra
+    assert "guided handoff to\nthe Entra administrator" in entra
 
 
 def test_every_controller_command_is_documented() -> None:
@@ -179,7 +205,10 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
 
     assert '"recommended": true' not in form_text
     assert "(Recommended)" not in form_text
-    assert "Leave every field and option initially unset" in form_text
+    assert (
+        "Leave every field and option initially unset" in form_text
+        or "Leave every worksheet answer blank" in form_text
+    )
     assert "do not mark the passing outcome as recommended" in form_text
 
 
@@ -237,6 +266,12 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
     assert "migrates existing three-field failure files" in normalized
     assert "legacy free-form remediation text is discarded" in normalized
     assert "cannot publish the agent, impersonate an employee" in normalized
+    assert "workday_connect.py begin-employee-test" in text
+    assert text.index("begin-employee-test") < text.index(
+        '"header": "Employee test result"'
+    )
+    assert "start a bounded test attempt" in normalized
+    assert "final readiness" in text
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
@@ -255,10 +290,18 @@ def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     ) == payload
 
 
+def test_employee_validation_documents_attempt_abandonment() -> None:
+    text = (_WORKDAY_DA / "verify-connection.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "abandon-employee-test" in text
+
+
 @pytest.mark.parametrize(
     "command,option",
     [
-        ("preflight-approve", "--plan-json"),
+        ("prepare-connections-approve", "--plan-json"),
         ("record-agent-binding", "--attachment-json"),
         ("record-validation-failure", "--evidence-json"),
     ],
@@ -336,17 +379,21 @@ def test_customer_messages_exclude_internal_implementation_terms() -> None:
     assert "Never show or narrate them" in skill
 
 
-def test_preflight_is_one_identity_aware_operation() -> None:
+def test_preflight_is_read_only_and_package_install_starts_connections() -> None:
     text = (_WORKDAY_DA / "install-extension.md").read_text(encoding="utf-8")
+    connections = (_WORKDAY_DA / "configure-power-platform.md").read_text(
+        encoding="utf-8"
+    )
 
     assert "workday_connect.py preflight" in text
-    assert "pins and verifies the resulting PAC account" in text
     assert "verifies the exact Dataverse URL directly" in text
-    assert "requiresApproval: true" in text
-    assert "preflight-approve --plan-file" in text
-    assert "--install-plan-hash" in text
-    assert "installs it only after exact-plan approval" in text
-    assert "manual-install instruction" in text
+    assert "It never installs the package" in text
+    assert "preflight-approve" not in text
+    assert "--install-plan-hash" not in text
+    assert "workday_connect.py prepare-connections" in connections
+    assert "prepare-connections-approve --plan-file" in connections
+    assert "--install-plan-hash" in connections
+    assert "installs through PAC, and rereads Dataverse" in connections
 
 
 def test_connections_are_proven_before_runtime_apply() -> None:
@@ -421,10 +468,9 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "--attachment-file" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
     assert "--checkpoint WD-CONN-013" not in text
-    assert "Do not run `WD-CONN-013` separately" in text
+    assert "run separate readiness commands" in text
     assert "confirmation twice" in text
     assert "Do not substitute an unscoped" in normalized
-    assert "--connect-config" in text
     assert "one Dataverse token" in normalized
     assert "delegated" in text
     assert "User Context V2" in text
@@ -445,14 +491,17 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     completion = text.index(
         "Has the Workday administrator completed every applicable task"
     )
-    form = text.index('"header": "Issuer"')
+    return_information = text.index("Information to return to the maker")
+    form = text.index('"header": "SAML row settings"')
 
     assert packet < provider_question < unsupported_stop
     assert unsupported_stop < existing_handoff < greenfield_handoff
-    assert greenfield_handoff < completion < form
+    assert greenfield_handoff < return_information < completion < form
     assert "This question selects a safe handoff branch" in text
     assert "Do not show the completion question\n  or response form" in text
     assert "Only after **Yes**\nmay the skill collect evidence" in text
+    assert "share this whole section" in text
+    assert "--substage handoff-presented" in text
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text
     assert '"header": "Identity provider"' not in text
@@ -514,10 +563,37 @@ def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
         configure.index("wire-user-context-redirect.md")
     )
     assert "Conversation Start" in action
-    assert "exactly once as its first action" in action
+    assert "immediately before User Context Validate" in action
     assert "remove only that exact obsolete nested" in action
     assert "record-runtime-template-wiring" in action
     assert "runtime-template-configured" in action
+    assert "continue without\nasking for a separate publish confirmation" in action
+    assert "Publish this scoped Workday conversation-start change" not in action
+    assert "vscode_askQuestions" not in action
+    assert "re-reads the current live topics" in action
+    assert "Do not ask the maker to choose an overwrite strategy" in action
+
+
+def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
+    action = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "actions"
+        / "wire-user-context-redirect.md"
+    ).read_text(encoding="utf-8")
+
+    assert "continue without\nasking for a separate publish confirmation" in action
+    assert "Publish this scoped User Context topic change" not in action
+    assert "vscode_askQuestions" not in action
+    assert "re-reads the current live topic" in action
+    assert "exact\nredirect is already live" in action
+    assert "compatible empty scaffold" in action
+    assert "Do not ask the maker to choose an overwrite\nstrategy" in action
 
 
 def test_readiness_requires_real_employee_runtime_evidence() -> None:
@@ -570,7 +646,11 @@ def test_capability_claims_match_controller_surface() -> None:
     assert "Claim an automated change only after" in normalized["skill"]
     assert "does not create or modify the Entra application" in (normalized["entra"])
     assert "record-entra" in normalized["entra"]
-    assert "foundationReuse.eligible" in entra
+    assert "Do not silently reuse Entra configuration" in entra
+    assert "does not authenticate the maker to Microsoft Graph" in normalized["entra"]
+    assert "Role-aware execution will trigger those live API checks later" in (
+        normalized["entra"]
+    )
     assert "Expose an API" in entra
     assert "Sign SAML response and assertion" in entra
     assert "administrator-attestation" in entra
@@ -583,7 +663,12 @@ def test_capability_claims_match_controller_surface() -> None:
         "does not create physical connector connections"
         in (normalized["power_platform"])
     )
-    assert "reruns `WD-REST-002` and `WD-CONN-013`" in (normalized["power_platform"])
+    assert (
+        "existing Dataverse readiness coverage"
+        in normalized["power_platform"]
+    )
+    assert "WD-REST-002" not in power_platform
+    assert "WD-CONN-013" not in power_platform
     assert (
         "do not treat them alone as proof of a broken package"
         in (normalized["power_platform"])
