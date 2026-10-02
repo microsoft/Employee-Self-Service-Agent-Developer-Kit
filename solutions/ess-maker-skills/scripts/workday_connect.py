@@ -34,8 +34,9 @@ from workday_connect_contracts import (
     validate_entra_verification,
     validate_workday_admin_response,
 )
-from workday_connect_contract_common import WorkdayConnectContractError
-from workday_connect_employee_contracts import (
+from workday_connect_evidence_contracts import (
+    WorkdayConnectContractError,
+    validate_agent_binding_evidence,
     validate_employee_evidence,
     validate_employee_failure_evidence,
 )
@@ -58,7 +59,6 @@ from workday_connect_runtime import (
     run_runtime_operation,
     verify_physical_connections,
 )
-from workday_connect_runtime_contracts import validate_agent_binding_evidence
 from workday_connect_store import (
     WorkdayConnectPlanChangedError,
     WorkdayConnectStore,
