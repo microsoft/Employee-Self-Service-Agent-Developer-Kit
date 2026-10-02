@@ -1767,6 +1767,7 @@ def test_wired_capabilities_are_in_canonical_list():
         # emit_capability_use(...) from the Python entry points
         "setup", "evaluation_validate",
         "backup_template_configs", "restore_template_configs",
+        "analytics",
         "push",
         # emit_flightcheck_*() event family
         "flightcheck",
