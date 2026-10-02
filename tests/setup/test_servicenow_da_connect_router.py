@@ -109,6 +109,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     credential = (actions / "prepare-credential.md").read_text(
         encoding="utf-8"
     )
+    credential_normalized = " ".join(credential.split())
     assert "record-agent-connection" in agent
     assert "ACTION_RESULT = \"cancelled\"" in agent
     assert not (actions / "configure-parameter-sharing.md").exists()
@@ -235,12 +236,25 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "record-reuse-decision" not in preflight
     assert "reuse-discovered" not in preflight
     assert "configure-missing" not in preflight
-    assert "automatically\n  reuse it" in credential
+    assert "automatically reuse one exact healthy Connected" in (
+        " ".join(credential.split())
+    )
     assert "wrong Instance Name, Resource URI, or auth mode" in credential
     assert "use its `Repair`, `Fix connection`, or sign-in action" in (
         credential
     )
     assert "Only when no exact candidate exists" in credential
+    assert '"label": "Completed"' in credential
+    assert '"label": "Not yet"' in credential
+    assert "Do not ask the Maker for a connection display name" in (
+        credential_normalized
+    )
+    assert "This is the only question for that path" in credential_normalized
+    assert "must never run for the multiple-healthy-candidate path" in (
+        credential_normalized
+    )
+    assert "resolve-credential" in credential
+    assert "--selection-key" in credential
     assert (
         "[Open connections for this environment]"
         "({POWER_AUTOMATE_CONNECTIONS_URL})"

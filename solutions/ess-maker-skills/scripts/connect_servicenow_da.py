@@ -1772,6 +1772,99 @@ def _discovered_instance_name(
     return next(iter(names)) if len(names) == 1 else None
 
 
+def _credential_selection_key(connection_id: str) -> str:
+    normalized = uuid.UUID(connection_id).hex
+    return f"connection-{hashlib.sha256(normalized.encode()).hexdigest()[:12]}"
+
+
+def _connection_matches_expected_credential(
+    connection: dict[str, Any],
+    *,
+    expected_instance: str | None,
+    expected_client_id: str | None,
+) -> bool:
+    if connection.get("authMode") != AUTH_MODE:
+        return False
+    values = connection.get("parameterValues")
+    values = values if isinstance(values, dict) else {}
+    instance_name = values.get("token:InstanceName") or values.get("instance")
+    resource_uri = values.get("token:ResourceUri")
+    if not expected_instance or not expected_client_id:
+        return False
+    try:
+        return (
+            normalize_instance_name(str(instance_name)) == expected_instance
+            and normalize_client_id(str(resource_uri)) == expected_client_id
+        )
+    except ServiceNowConnectError:
+        return False
+
+
+def _credential_resolution(
+    setup: dict[str, Any],
+    connections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    preflight = setup.get("preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    expected_instance = preflight.get("instanceName")
+    app_record = setup.get("phaseHandoffs", {}).get("entra-registration")
+    app_evidence = (
+        app_record.get("evidence")
+        if isinstance(app_record, dict)
+        else {}
+    )
+    app_evidence = app_evidence if isinstance(app_evidence, dict) else {}
+    expected_client_id = app_evidence.get("clientId")
+    exact = [
+        connection
+        for connection in connections
+        if _connection_matches_expected_credential(
+            connection,
+            expected_instance=expected_instance,
+            expected_client_id=expected_client_id,
+        )
+    ]
+    healthy = [
+        connection
+        for connection in exact
+        if connection.get("status") == "Connected"
+    ]
+    unhealthy = [
+        connection
+        for connection in exact
+        if connection.get("status") != "Connected"
+    ]
+    healthy = sorted(
+        healthy,
+        key=lambda connection: (
+            str(connection.get("displayName") or ""),
+            str(connection.get("connectionId") or ""),
+        ),
+    )
+    return {
+        "expected": {
+            "authMode": AUTH_MODE,
+            "instanceName": expected_instance,
+            "resourceUri": expected_client_id,
+        },
+        "healthyExactCount": len(healthy),
+        "unhealthyExactCount": len(unhealthy),
+        "healthyExactCandidates": [
+            {
+                "selectionKey": _credential_selection_key(
+                    str(connection["connectionId"])
+                ),
+                "label": (
+                    f"{connection.get('displayName') or 'ServiceNow connection'} "
+                    f"(Connected, option {index})"
+                ),
+            }
+            for index, connection in enumerate(healthy, start=1)
+            if connection.get("connectionId")
+        ],
+    }
+
+
 def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
     state = _load_lifecycle_state(context)
     setup = _admin_setup(state)
@@ -1821,6 +1914,10 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
             setup["authMode"],
         ),
         "connectionCandidates": user_login_connections,
+        "credentialResolution": _credential_resolution(
+            setup,
+            connections,
+        ),
         "entraClientId": client_id,
         "links": maker_portal_links(
             context,
@@ -1837,6 +1934,98 @@ def inspect_admin_setup(context: dict[str, Any]) -> dict[str, Any]:
     _normalize_preflight_handoff(state, setup)
     _write_lifecycle_state(context, state)
     return discovery
+
+
+def resolve_credential_completion(
+    context: dict[str, Any],
+    *,
+    selection_key: str | None = None,
+) -> dict[str, Any]:
+    state = _load_lifecycle_state(context)
+    setup = _admin_setup(state)
+    connections = [
+        connection_summary(record)
+        for record in _connectivity_client(context).list_connections()
+    ]
+    resolution = _credential_resolution(setup, connections)
+    healthy = [
+        connection
+        for connection in connections
+        if _connection_matches_expected_credential(
+            connection,
+            expected_instance=resolution["expected"]["instanceName"],
+            expected_client_id=resolution["expected"]["resourceUri"],
+        )
+        and connection.get("status") == "Connected"
+        and connection.get("connectionId")
+    ]
+    healthy = sorted(
+        healthy,
+        key=lambda connection: (
+            str(connection.get("displayName") or ""),
+            str(connection.get("connectionId") or ""),
+        ),
+    )
+    if selection_key is not None:
+        selected = next(
+            (
+                connection
+                for connection in healthy
+                if _credential_selection_key(
+                    str(connection["connectionId"])
+                )
+                == selection_key
+            ),
+            None,
+        )
+        if selected is None:
+            raise ServiceNowConnectError(
+                "The selected ServiceNow connection is no longer an exact "
+                "healthy candidate. Refresh and select again."
+            )
+        evidence = record_credential_selection(
+            context,
+            str(selected["connectionId"]),
+        )
+        return {
+            "status": "selected",
+            "selection": {
+                "label": selected.get("displayName"),
+            },
+            "evidence": evidence,
+        }
+    if len(healthy) == 1:
+        evidence = record_credential_selection(
+            context,
+            str(healthy[0]["connectionId"]),
+        )
+        return {
+            "status": "selected",
+            "selection": {
+                "label": healthy[0].get("displayName"),
+            },
+            "evidence": evidence,
+        }
+    if len(healthy) > 1:
+        return {
+            "status": "choice-required",
+            "candidates": resolution["healthyExactCandidates"],
+            "message": (
+                "Multiple exact healthy ServiceNow connections are available. "
+                "Select one candidate by label."
+            ),
+        }
+    return {
+        "status": "not-ready",
+        "expected": resolution["expected"],
+        "unhealthyExactCount": resolution["unhealthyExactCount"],
+        "remediation": (
+            "No exact healthy Connected Microsoft Entra ID User Login "
+            "ServiceNow connection is currently visible. Finish creation or "
+            "repair in the same environment, then choose Completed so the "
+            "read-only inventory can verify it again."
+        ),
+    }
 
 
 def record_admin_phase(
@@ -3397,6 +3586,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a selected healthy ServiceNow credential.",
     )
     credential_parser.add_argument("--connection-id", required=True)
+    resolve_credential_parser = subparsers.add_parser(
+        "resolve-credential",
+        help=(
+            "Freshly verify exact healthy ServiceNow credentials and "
+            "automatically select one when unambiguous."
+        ),
+    )
+    resolve_credential_parser.add_argument("--selection-key")
 
     agent_connection_parser = subparsers.add_parser(
         "record-agent-connection",
@@ -3532,6 +3729,11 @@ def main(argv: list[str] | None = None) -> int:
             result = record_credential_selection(
                 context,
                 args.connection_id,
+            )
+        elif args.command == "resolve-credential":
+            result = resolve_credential_completion(
+                context,
+                selection_key=args.selection_key,
             )
         elif args.command == "record-agent-connection":
             result = record_agent_connection_attestation(

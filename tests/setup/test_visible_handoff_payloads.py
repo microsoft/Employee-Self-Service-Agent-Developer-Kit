@@ -123,20 +123,6 @@ def _validate_payload(
             ),
         ),
         (
-            _ACTIONS / "prepare-credential.md",
-            (
-                "Purpose:",
-                "Owner:",
-                "Expected values:",
-                "{POWER_AUTOMATE_CONNECTIONS_URL}",
-                "1. Reuse one exact Connected candidate",
-                "2. If an exact candidate is unhealthy",
-                "3. Only if no exact candidate exists",
-                "4. If sign-in reports `Invalid redirect_uri`",
-                "connection display name and connection ID",
-            ),
-        ),
-        (
             _ACTIONS / "prepare-topics.md",
             (
                 "Purpose:",
@@ -267,6 +253,58 @@ def test_entra_has_complete_runbook_and_visible_guid_clarification() -> None:
     ).read_text(encoding="utf-8")
     assert "do not tell them to restart `/connect`" in source
     assert "does not infer Entra configuration from the physical connection" in source
+
+
+def test_credential_has_completed_question_and_bounded_candidate_selector() -> None:
+    payloads = _payloads(_ACTIONS / "prepare-credential.md")
+    assert len(payloads) == 2
+    completion = _validate_payload(
+        payloads[0],
+        required_phrases=(
+            "Purpose:",
+            "Owner:",
+            "Expected values:",
+            "{POWER_AUTOMATE_CONNECTIONS_URL}",
+            "1. If an exact candidate is unhealthy",
+            "2. Only if no exact candidate exists",
+            "3. If sign-in reports `Invalid redirect_uri`",
+            "system will freshly discover the connection",
+        ),
+    )
+    selector = _validate_payload(
+        payloads[1],
+        required_phrases=(
+            "Fresh read-only inventory found multiple healthy exact",
+            "Choose the connection to bind",
+            "No new connection will be created",
+        ),
+    )
+    assert [option["label"] for option in completion["options"]] == [
+        "Completed",
+        "Not yet",
+    ]
+    assert not any(
+        option.get("recommended") for option in completion["options"]
+    )
+    assert completion["allowFreeformInput"] is False
+    assert selector["allowFreeformInput"] is False
+    assert "{CANDIDATE_LABEL_1}" in json.dumps(selector)
+    source = (_ACTIONS / "prepare-credential.md").read_text(encoding="utf-8")
+    source_normalized = " ".join(source.split())
+    assert "Do not ask the Maker for a connection display name" in source_normalized
+    assert "never ask them to copy the key or connection ID" in source_normalized
+    assert "This is the only question for that path" in source_normalized
+    assert "do not show the **Completed / Not yet**" in source_normalized
+    assert (
+        "payload only when an exact connection needs repair or no exact "
+        "connection exists"
+    ) in source_normalized
+    assert "must never run for the multiple-healthy-candidate path" in (
+        source_normalized
+    )
+    assert "build the supported selector options directly from" in (
+        source_normalized
+    )
 
 
 @pytest.mark.parametrize(

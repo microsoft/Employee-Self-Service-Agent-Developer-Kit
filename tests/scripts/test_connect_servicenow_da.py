@@ -198,6 +198,47 @@ def _components(connection_id: str | None = None) -> dict:
     }
 
 
+def _connection_record(
+    connection_id: str = CONNECTION_ID,
+    *,
+    display_name: str = "ServiceNow",
+    status: str = "Connected",
+    auth_mode: str = snow.AUTH_MODE,
+    instance_name: str = "dev123",
+    resource_uri: str = APP_CLIENT_ID,
+) -> dict:
+    return {
+        "name": connection_id.replace("-", ""),
+        "properties": {
+            "displayName": display_name,
+            "apiId": snow.CONNECTOR_ID,
+            "statuses": [{"target": "token", "status": status}],
+            "connectionParametersSet": {
+                "name": auth_mode,
+                "values": {
+                    "token:InstanceName": {"value": instance_name},
+                    "token:ResourceUri": {"value": resource_uri},
+                },
+            },
+        },
+    }
+
+
+def _seed_admin_credential_requirements(root: Path) -> None:
+    state = snow._state_base(_context(), _components())
+    setup = snow._admin_setup(state)
+    setup["preflight"]["instanceName"] = "dev123"
+    setup["phaseHandoffs"]["entra-registration"] = {
+        "status": "completed",
+        "evidence": {
+            "kind": "structured-admin-attestation",
+            "recordedAt": "2026-10-01T00:00:00Z",
+            "clientId": APP_CLIENT_ID,
+        },
+    }
+    snow._write_json_atomic(_lifecycle_path(root), state)
+
+
 def _write_foundation_context(
     root: Path,
     *,
@@ -1540,6 +1581,9 @@ def test_preflight_derives_instance_without_customer_progress_question(
     assert "fingerprint" not in with_client_id
     assert discovery["instanceName"] == "dev123"
     assert discovery["instanceInputRequired"] is False
+    assert discovery["credentialResolution"]["healthyExactCount"] == 0
+    assert with_client_id["credentialResolution"]["healthyExactCount"] == 1
+    assert with_client_id["credentialResolution"]["unhealthyExactCount"] == 0
     assert discovery["links"]["serviceNowInstance"]["url"] == (
         "https://dev123.service-now.com/"
     )
@@ -1587,6 +1631,225 @@ def test_preflight_requests_only_missing_instance_url(
     assert refreshed["instanceInputRequired"] is False
     assert "scenario" not in recorded
     assert "--scenario" not in snow.build_parser().format_help()
+
+
+def test_resolve_credential_automatically_records_unique_healthy_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    record = _connection_record(display_name="Existing ServiceNow")
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+        def get_connection(self, connection_id: str) -> dict:
+            assert connection_id == CONNECTION_ID.replace("-", "")
+            return record
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {
+                "fetch_components": lambda self, _agent_id: _components(
+                    CONNECTION_ID
+                )
+            },
+        )(),
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["status"] == "selected"
+    assert result["selection"] == {"label": "Existing ServiceNow"}
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["credential"]["connectionId"] == (
+        CONNECTION_ID.replace("-", "")
+    )
+    assert state["adminSetup"]["phaseHandoffs"]["credential"]["status"] == (
+        "completed"
+    )
+
+
+def test_resolve_credential_requires_bounded_choice_for_multiple_exact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first_id = "00000000-0000-4000-8000-000000003331"
+    second_id = "00000000-0000-4000-8000-000000003332"
+    records = [
+        _connection_record(first_id, display_name="ServiceNow A"),
+        _connection_record(second_id, display_name="ServiceNow B"),
+    ]
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return records
+
+        def get_connection(self, connection_id: str) -> dict:
+            return next(
+                record
+                for record in records
+                if record["name"] == connection_id
+            )
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {
+                "fetch_components": lambda self, _agent_id: _components(
+                    first_id
+                )
+            },
+        )(),
+    )
+
+    choice = snow.resolve_credential_completion(_context())
+
+    assert choice["status"] == "choice-required"
+    assert [candidate["label"] for candidate in choice["candidates"]] == [
+        "ServiceNow A (Connected, option 1)",
+        "ServiceNow B (Connected, option 2)",
+    ]
+    serialized = json.dumps(choice)
+    assert first_id not in serialized
+    assert first_id.replace("-", "") not in serialized
+    assert second_id not in serialized
+    pending_state = json.loads(
+        _lifecycle_path(tmp_path).read_text(encoding="utf-8")
+    )
+    assert "credential" not in pending_state["evidence"]
+
+    selected = snow.resolve_credential_completion(
+        _context(),
+        selection_key=choice["candidates"][1]["selectionKey"],
+    )
+
+    assert selected["status"] == "selected"
+    assert selected["selection"] == {"label": "ServiceNow B"}
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["credential"]["connectionId"] == (
+        second_id.replace("-", "")
+    )
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _connection_record(status="Disconnected"),
+        _connection_record(auth_mode="oauth2"),
+        _connection_record(instance_name="dev456"),
+        _connection_record(
+            resource_uri="00000000-0000-4000-8000-000000009999"
+        ),
+    ],
+)
+def test_resolve_credential_rejects_nonhealthy_or_nonexact_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    record: dict,
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    result = snow.resolve_credential_completion(_context())
+
+    assert result["status"] == "not-ready"
+    assert "No exact healthy Connected" in result["remediation"]
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert "credential" not in state["evidence"]
+
+
+def test_resolve_credential_read_failure_is_explicit_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            raise snow.ServiceNowConnectError(
+                "Connection inventory is unavailable."
+            )
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(snow, "load_context", lambda: _context())
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["connect_servicenow_da.py", "resolve-credential"],
+    )
+
+    assert snow.main() == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "error",
+        "message": "Connection inventory is unavailable.",
+    }
+
+
+def test_resolve_credential_rejects_stale_selection_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    record = _connection_record()
+
+    class FakeConnectivity:
+        def list_connections(self) -> list[dict]:
+            return [record]
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_connectivity_client",
+        lambda _context: FakeConnectivity(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="no longer an exact healthy candidate",
+    ):
+        snow.resolve_credential_completion(
+            _context(),
+            selection_key="connection-stale",
+        )
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert "credential" not in state["evidence"]
 
 
 def test_phase_local_reuse_does_not_require_global_preflight_choice(
