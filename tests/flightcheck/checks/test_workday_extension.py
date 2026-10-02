@@ -335,9 +335,9 @@ class TestDataverseConnection:
         assert r.status == Status.SKIPPED.value
         assert "not available" in r.result
 
-    def test_malformed_changeset_degrades_to_warning(self):
+    def test_malformed_changeset_degrades_to_error(self):
         # A 200 payload whose connectionReferenceChanges is present but not a
-        # list is a shape we do not understand: fail loudly (dispatcher WARNING)
+        # list is a shape we do not understand: fail loudly (dispatcher ERROR)
         # rather than reporting a confident "reference not found" FAILED.
         runner = _Runner(
             config={"agent": {"botId": ab.MOCK_AGENT_ID}},
@@ -347,7 +347,8 @@ class TestDataverseConnection:
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
-        assert r.status == Status.WARNING.value
+        assert r.status == Status.ERROR.value
+        assert r.evidence["executionError"] is True
         assert "Unable to run DV-CONN-001" in r.result
         assert "DV-CONN-001" in r.remediation
 
@@ -831,8 +832,8 @@ class TestDispatcher:
             "WD-NET-001",
         ]
 
-    def test_emitter_failure_degrades_to_warning(self, monkeypatch):
-        # A raising emitter must degrade to a WARNING for its own checkpoint
+    def test_emitter_failure_degrades_to_error(self, monkeypatch):
+        # A raising emitter must degrade to an ERROR for its own checkpoint
         # without aborting the remaining four.
         def _boom(_runner):
             raise RuntimeError("kaboom")
@@ -842,19 +843,20 @@ class TestDispatcher:
         by_id = _by_id(results)
 
         assert len(results) == 5
-        assert by_id["WD-REST-001"].status == Status.WARNING.value
+        assert by_id["WD-REST-001"].status == Status.ERROR.value
+        assert by_id["WD-REST-001"].evidence["executionError"] is True
         assert "Unable to run WD-REST-001" in by_id["WD-REST-001"].result
         assert by_id["WD-REST-001"].roles == [Role.ESS_MAKER.value]
         # The other four still emitted normally.
         assert by_id["WD-NET-001"].status == Status.MANUAL.value
 
-    def test_config_reading_emitters_warn_on_boom_config(self):
+    def test_config_reading_emitters_error_on_boom_config(self):
         # A config whose .get raises breaks the three config-reading emitters;
-        # each degrades to WARNING and the run still returns all five rows.
+        # each degrades to ERROR and the run still returns all five rows.
         results = wx.run_workday_extension_checks(_Runner(config=_BoomConfig()))
         by_id = _by_id(results)
 
         assert len(results) == 5
         for cp in ("WD-REST-001", "WD-REST-002", "WD-NET-001"):
-            assert by_id[cp].status == Status.WARNING.value
+            assert by_id[cp].status == Status.ERROR.value
             assert f"Unable to run {cp}" in by_id[cp].result
