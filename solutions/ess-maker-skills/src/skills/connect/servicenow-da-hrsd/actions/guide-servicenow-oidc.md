@@ -66,23 +66,29 @@ certificate.
 
 ## Completion signal and evidence
 
-Ask one completion question for the whole ServiceNow OIDC step. The completed
-response is only the non-secret `<claim>, <field>`, for example
-`upn, user_name`. If the work is incomplete, the Maker selects **Not yet**.
-While the question is pending, do not return an action result. If the Maker
-selects **Not yet**, return `ACTION_RESULT = "waiting"`.
+Ask exactly one completion question for the whole ServiceNow OIDC step:
 
-After verification or completion, record one bundled phase handoff. Use
-`reused` for a valid existing mapping and `completed` when configuration or
-repair was required:
+**Have you completed or re-verified the ServiceNow OIDC provider, claim
+mapping, and matching Active user checks in this runbook?**
+
+Offer only **Completed** and **Not yet**. Do not ask for or collect the claim
+name, ServiceNow field name, employee identifier, mapping value, or other
+identity data. While the question is pending, do not return an action result.
+If the Maker selects **Not yet**, return `ACTION_RESULT = "waiting"` and do
+not record phase completion.
+
+After **Completed**, record one bounded bundled phase handoff:
 
 ```text
-python scripts/connect_servicenow_da.py record-admin-phase --phase servicenow-oidc --status <completed|reused> --claim <claim> --user-field <field>
+python scripts/connect_servicenow_da.py record-admin-phase --phase servicenow-oidc --status completed
 ```
 
 Return `ACTION_RESULT = "recorded"` after the phase handoff is persisted. The
-phase's `Manual` result is structured attestation because no supported
-read-only ServiceNow security-object API is used.
+phase remains `Manual`, not a fake live `Passed`: this bounded structured
+attestation proves only that the Maker completed or re-verified the entire
+runbook in the current invocation. It does not prove an unseen admin action or
+expose mapping data because no supported read-only ServiceNow security-object
+API is used.
 
 Source contract: PR #217 S4.3/S4.4 is authoritative. Microsoft Learn's current
 ServiceNow connector User Login/OIDC setup is a secondary reference only.

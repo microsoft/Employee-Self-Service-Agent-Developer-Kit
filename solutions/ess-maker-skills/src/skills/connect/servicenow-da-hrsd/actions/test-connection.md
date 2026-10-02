@@ -4,6 +4,10 @@ Ask the maker to run one privacy-safe HRSD request in the Copilot Studio Test
 pane: **List my open HR cases**. The prompt must not contain a person's name,
 email, employee ID, case number, case title, or other personal data.
 
+Before opening Test, save the current authored draft. The Test evidence binds
+the server-saved draft semantic identity and selected ServiceNow connection;
+unsaved editor-buffer changes are not covered.
+
 [Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
 Use `links.copilotStudioAgent.url` from the provider inspection result.

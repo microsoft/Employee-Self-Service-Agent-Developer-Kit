@@ -293,6 +293,14 @@ class TestTransitiveRequirements:
         assert [label for label, _ in test.ordered_fns] == [
             "ServiceNow DA HRSD"
         ]
+        assert registry.resolve("SN-DA-HRSD-PARAMETER-SHARING-001") is None
+        assert registry.resolve("SN-DA-HRSD-TEST-001").prereqs == (
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+        )
+        assert registry.resolve("SN-DA-HRSD-PUBLISH-001").prereqs == (
+            "SN-DA-HRSD-TEST-001",
+        )
 
     def test_ess_soln_uses_agentbuilder_without_dataverse(self):
         spec = registry.resolve("ESS-SOLN-001")

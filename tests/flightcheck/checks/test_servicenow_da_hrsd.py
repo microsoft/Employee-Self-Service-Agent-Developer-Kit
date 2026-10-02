@@ -215,62 +215,84 @@ def _write_state(root: Path, components: dict) -> None:
     handoffs["servicenow-oidc"]["evidence"].update(
         {
             "oidcCapabilityConfirmed": True,
-            "claim": "upn",
-            "userField": "user_name",
+            "runbookCompleted": True,
+            "mappingDetailsCollected": False,
+        }
+    )
+    draft_semantic_hash = snow._draft_semantic_hash(components)
+    agent_connection = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "makerAttested": True,
+        "physicalStatus": "Connected",
+        "connectionId": CONNECTION_ID,
+        "recordedAt": "2026-09-29T00:00:00Z",
+        "binding": {
+            "draftSemanticHash": draft_semantic_hash,
+            "connectionId": CONNECTION_ID,
+        },
+    }
+    state = {
+        "schemaVersion": 6,
+        "provider": snow.PROVIDER_KEY,
+        "profile": snow.PROFILE_KEY,
+        "agentSlug": AGENT_SLUG,
+        "agentId": AGENT_ID,
+        "environmentId": ENVIRONMENT_ID,
+        "draftSemanticHash": draft_semantic_hash,
+        "adminSetup": {
+            "schemaVersion": 4,
+            "scope": "hrsd",
+            "authMode": "entraIDUserLogin",
+            "preflight": {
+                "instanceName": "dev123",
+                "discovery": discovery,
+            },
+            "phaseHandoffs": handoffs,
+        },
+        "evidence": {
+            "credential": {"connectionId": CONNECTION_ID},
+            "agentConnection": agent_connection,
+        },
+    }
+    connection_binding_hash = snow._connection_binding_hash(
+        {
+            "agent": {
+                "id": AGENT_ID,
+                "workspace_slug": AGENT_SLUG,
+            },
+            "environment": {"id": ENVIRONMENT_ID},
+        },
+        state,
+        components,
+    )
+    state["connectionBindingHash"] = connection_binding_hash
+    state["evidence"].update(
+        {
+            "publish": {
+                "status": "completed",
+                "componentHash": component_hash,
+                "publishedComponentHash": component_hash,
+                "testedDraftSemanticHash": draft_semantic_hash,
+                "publishedSemanticHash": draft_semantic_hash,
+                "connectionBindingHash": connection_binding_hash,
+                "completedAt": "2026-09-28T00:00:00Z",
+            },
+            "test": {
+                "kind": "maker-attestation",
+                "status": "completed",
+                "promptCategory": "list-my-open-hr-cases",
+                "result": "pass",
+                "failureCategory": None,
+                "binding": {
+                    "draftSemanticHash": draft_semantic_hash,
+                    "connectionBindingHash": connection_binding_hash,
+                },
+            },
         }
     )
     path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 5,
-                "provider": snow.PROVIDER_KEY,
-                "agentSlug": AGENT_SLUG,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-                "adminSetup": {
-                    "schemaVersion": 3,
-                    "scope": "hrsd",
-                    "authMode": "entraIDUserLogin",
-                    "preflight": {
-                        "instanceName": "dev123",
-                        "discovery": discovery,
-                    },
-                    "phaseHandoffs": handoffs,
-                },
-                "evidence": {
-                    "credential": {"connectionId": CONNECTION_ID},
-                    "agentConnection": {
-                        "makerAttested": True,
-                        "connectionId": CONNECTION_ID,
-                        "binding": {
-                            "componentHash": component_hash,
-                            "connectionId": CONNECTION_ID,
-                        },
-                    },
-                    "parameterSharing": {
-                        "makerAttested": True,
-                        "status": "not-exposed",
-                        "binding": {
-                            "componentHash": component_hash,
-                            "connectionId": CONNECTION_ID,
-                        },
-                    },
-                    "publish": {
-                        "status": "completed",
-                        "componentHash": component_hash,
-                        "completedAt": "2026-09-28T00:00:00Z",
-                    },
-                    "test": {
-                        "promptCategory": "list-my-open-hr-cases",
-                        "result": "pass",
-                        "failureCategory": None,
-                        "binding": {
-                            "publishedComponentHash": component_hash,
-                        },
-                    },
-                },
-            }
-        ),
+        json.dumps(state),
         encoding="utf-8",
     )
 
@@ -293,10 +315,7 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
         statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
         == Status.MANUAL.value
     )
-    assert (
-        statuses["SN-DA-HRSD-PARAMETER-SHARING-001"]
-        == Status.MANUAL.value
-    )
+    assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
 
@@ -363,7 +382,41 @@ def test_oidc_checkpoint_requires_capability_owned_by_oidc_phase(
     assert "OIDC capability confirmation is missing" in result.result
 
 
-def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(
+def test_oidc_checkpoint_rejects_legacy_mapping_details(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    evidence = state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
+        "evidence"
+    ]
+    evidence["claim"] = "upn"
+    evidence["userField"] = "user_name"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        row
+        for row in run_servicenow_da_hrsd_checks(_runner(components))
+        if row.checkpoint_id == "SN-DA-HRSD-OIDC-001"
+    )
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "privacy-minimized" in result.result
+
+
+def test_publish_checkpoint_ignores_metadata_only_drift_and_reopens_on_semantic_drift(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -380,11 +433,15 @@ def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     current_hash = snow._component_hash(components)
+    semantic_hash = snow._draft_semantic_hash(components)
     state["evidence"]["publish"] = {
         "status": "completed",
         "requestedComponentHash": "pre-publish-hash",
         "publishedComponentHash": current_hash,
         "componentHash": current_hash,
+        "testedDraftSemanticHash": semantic_hash,
+        "publishedSemanticHash": semantic_hash,
+        "connectionBindingHash": state["connectionBindingHash"],
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -398,13 +455,77 @@ def test_publish_checkpoint_uses_post_publish_hash_and_reopens_on_drift(
     assert publish.status == Status.PASSED.value
 
     components["changeToken"] = "later-edit"
-    drifted = run_servicenow_da_hrsd_checks(_runner(components))
+    metadata_only = run_servicenow_da_hrsd_checks(_runner(components))
     publish = next(
         row
-        for row in drifted
+        for row in metadata_only
         if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
     )
     assert publish.status == Status.NOT_CONFIGURED.value
+
+    state["evidence"]["publish"]["publishedComponentHash"] = snow._component_hash(
+        components
+    )
+    state["evidence"]["publish"]["componentHash"] = snow._component_hash(
+        components
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    metadata_only = run_servicenow_da_hrsd_checks(_runner(components))
+    publish = next(
+        row
+        for row in metadata_only
+        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
+    )
+    assert publish.status == Status.PASSED.value
+
+    components["botComponentChanges"][0]["component"]["displayName"] = (
+        "Edited ServiceNow topic"
+    )
+    semantic_drift = run_servicenow_da_hrsd_checks(_runner(components))
+    publish = next(
+        row
+        for row in semantic_drift
+        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
+    )
+    assert publish.status == Status.NOT_CONFIGURED.value
+
+
+def test_publish_checkpoint_surfaces_current_semantic_drift_as_failed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / snow.PROVIDER_KEY
+        / "agents"
+        / AGENT_SLUG
+        / "lifecycle.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["evidence"]["publish"] = {
+        "kind": "maker-attestation",
+        "status": "needs_remediation",
+        "publishedComponentHash": snow._component_hash(components),
+        "componentHash": snow._component_hash(components),
+        "testedDraftSemanticHash": "pre-publish-semantic-hash",
+        "publishedSemanticHash": snow._draft_semantic_hash(components),
+        "remediation": "Run Test again before any later publish.",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = next(
+        row
+        for row in run_servicenow_da_hrsd_checks(_runner(components))
+        if row.checkpoint_id == "SN-DA-HRSD-PUBLISH-001"
+    )
+
+    assert result.status == Status.FAILED.value
+    assert "needs remediation" in result.result
 
 
 @pytest.mark.parametrize(
@@ -444,8 +565,9 @@ def test_test_checkpoint_rejects_legacy_or_unbounded_evidence(
         / "lifecycle.json"
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_binding = state["evidence"]["test"]["binding"]
     test_record["binding"] = {
-        "publishedComponentHash": snow._component_hash(components)
+        **current_binding,
     }
     state["evidence"]["test"] = test_record
     state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -477,13 +599,14 @@ def test_test_checkpoint_accepts_bounded_failure_evidence(
         / "lifecycle.json"
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
+    current_binding = state["evidence"]["test"]["binding"]
     state["evidence"]["test"] = {
+        "kind": "maker-attestation",
+        "status": "failed",
         "promptCategory": "list-my-open-hr-cases",
         "result": "fail",
         "failureCategory": "permission",
-        "binding": {
-            "publishedComponentHash": snow._component_hash(components)
-        },
+        "binding": current_binding,
     }
     state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -847,7 +970,9 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
 ) -> None:
     components = _components()
     _write_state(tmp_path, components)
-    components["changeToken"] = "new-token"
+    components["botComponentChanges"][0]["component"]["displayName"] = (
+        "Edited ServiceNow topic"
+    )
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
@@ -857,10 +982,7 @@ def test_hrsd_checks_reopen_stale_maker_evidence(
         statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
         == Status.NOT_CONFIGURED.value
     )
-    assert (
-        statuses["SN-DA-HRSD-PARAMETER-SHARING-001"]
-        == Status.NOT_CONFIGURED.value
-    )
+    assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.NOT_CONFIGURED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.NOT_CONFIGURED.value
 
@@ -977,7 +1099,9 @@ def test_agent_connection_reports_component_revision_stale(
 ) -> None:
     components = _components()
     _write_state(tmp_path, components)
-    components["changeToken"] = "new-token"
+    components["botComponentChanges"][0]["component"]["displayName"] = (
+        "Edited ServiceNow topic"
+    )
     monkeypatch.chdir(tmp_path)
 
     results = run_servicenow_da_hrsd_checks(_runner(components))
@@ -988,7 +1112,7 @@ def test_agent_connection_reports_component_revision_stale(
     )
 
     assert result.status == Status.NOT_CONFIGURED.value
-    assert "stale for this component revision" in result.result
+    assert "stale for this saved draft" in result.result
 
 
 def test_hrsd_package_absence_is_not_configured(

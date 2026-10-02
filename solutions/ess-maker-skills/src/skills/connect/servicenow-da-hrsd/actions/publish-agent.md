@@ -3,6 +3,16 @@
 Run `python scripts/connect_servicenow_da.py inspect` and show the exact active
 agent and current component revision.
 
+Publishing is allowed only when the exact current saved draft and selected
+ServiceNow connection still match the passing privacy-safe Test evidence. If
+either changed, stop and return to the Test phase before asking for publish
+confirmation.
+
+If `inspect` reports `progress.publish.status = done`, the current full
+component receipt and fresh Test evidence already establish the semantic
+identity bridge. Return `ACTION_RESULT = "recorded"` without another publish
+question or remote mutation.
+
 [Open Employee Self-Service (HR) in Copilot Studio]({COPILOT_STUDIO_AGENT_URL})
 
 Use `links.copilotStudioAgent.url` from `inspect`.

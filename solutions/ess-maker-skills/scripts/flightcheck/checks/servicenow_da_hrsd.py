@@ -16,6 +16,8 @@ from connect_servicenow_da import (
     HR_SCHEMA_NAME,
     PROVIDER_KEY,
     SERVICENOW_CONNECTOR_APP_ID,
+    _connection_binding_hash,
+    _draft_semantic_hash,
     normalize_client_id,
     normalize_instance_name,
     required_servicenow_prerequisites,
@@ -199,6 +201,34 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     admin_setup = state.get("adminSetup")
     admin_setup = admin_setup if isinstance(admin_setup, dict) else {}
     component_hash = _hash(components)
+    try:
+        draft_semantic_hash = _draft_semantic_hash(components)
+        current_connection_binding_hash = (
+            _connection_binding_hash(
+                {
+                    "agent": {
+                        "id": agent.get("botId"),
+                        "workspace_slug": slug,
+                    },
+                    "environment": {
+                        "id": str(getattr(runner, "env_id", None) or "")
+                    },
+                },
+                state,
+                components,
+                require_agent_attestation=False,
+            )
+            if isinstance(evidence.get("credential"), dict)
+            and evidence["credential"].get("connectionId")
+            else None
+        )
+    except Exception as exc:
+        return _all_unavailable(
+            Status.ERROR.value,
+            f"Unable to inspect the HR agent draft identity: "
+            f"{type(exc).__name__}: {exc}",
+            "Verify the selected HR agent component state and retry.",
+        )
     connections: list[dict[str, Any]] = []
     connectivity_error = ""
     connectivity = getattr(runner, "connectivity", None)
@@ -234,11 +264,18 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
             admin_setup,
             connections,
             connectivity_error,
-            component_hash,
+            draft_semantic_hash,
         ),
-        _parameter_result(evidence, component_hash),
-        _publish_result(evidence, component_hash),
-        _test_result(evidence, component_hash),
+        _test_result(
+            evidence,
+            draft_semantic_hash,
+            current_connection_binding_hash,
+        ),
+        _publish_result(
+            evidence,
+            component_hash,
+            draft_semantic_hash,
+        ),
     ]
 
 
@@ -261,9 +298,8 @@ def _all_unavailable(
         "TOPICS",
         "CREDENTIAL",
         "AGENT-CONNECTION",
-        "PARAMETER-SHARING",
-        "PUBLISH",
         "TEST",
+        "PUBLISH",
     )
     return [
         _result(
@@ -785,15 +821,25 @@ def _oidc_result(admin_setup: dict[str, Any]) -> CheckResult:
     elif mapping.get("oidcCapabilityConfirmed") is not True:
         status = Status.NOT_CONFIGURED.value
         result = "The ServiceNow OIDC capability confirmation is missing."
-    elif not mapping.get("claim") or not mapping.get("userField"):
+    elif mapping.get("runbookCompleted") is not True:
         status = Status.NOT_CONFIGURED.value
-        result = "The OIDC claim-to-user-field mapping is incomplete."
+        result = "The complete ServiceNow OIDC runbook attestation is missing."
+    elif (
+        mapping.get("mappingDetailsCollected") is not False
+        or "claim" in mapping
+        or "userField" in mapping
+    ):
+        status = Status.NOT_CONFIGURED.value
+        result = (
+            "The OIDC handoff does not use the bounded privacy-minimized "
+            "completion evidence contract."
+        )
     else:
         status = Status.MANUAL.value
         result = (
             "The ServiceNow admin confirmed OIDC capability, security_admin "
-            f"elevation, provider metadata, {mapping['claim']} -> "
-            f"{mapping['userField']} mapping, and a matching Active user."
+            "elevation, provider metadata, claim mapping, and a matching "
+            "Active user without returning mapping or employee identity data."
         )
     return _result(
         "SN-DA-HRSD-OIDC-001",
@@ -801,8 +847,8 @@ def _oidc_result(admin_setup: dict[str, Any]) -> CheckResult:
         "ServiceNow OIDC provider and active-user mapping",
         result,
         (
-            "Complete the full guided ServiceNow OIDC step, then record only "
-            "the non-secret claim and user-field identifiers."
+            "Complete or re-verify the full guided ServiceNow OIDC runbook, "
+            "then record the bounded completion attestation."
             if status != Status.MANUAL.value
             else ""
         ),
@@ -964,13 +1010,13 @@ def _credential_result(
 
 def _binding_evaluation(
     record: dict[str, Any],
-    component_hash: str,
+    draft_semantic_hash: str,
     connection_id: str | None = None,
 ) -> str:
     binding = record.get("binding")
     if not isinstance(binding, dict):
         return "binding-missing"
-    if binding.get("componentHash") != component_hash:
+    if binding.get("draftSemanticHash") != draft_semantic_hash:
         return "revision-stale"
 
     nested_connection_id = str(binding.get("connectionId") or "")
@@ -991,23 +1037,12 @@ def _binding_evaluation(
     return "valid"
 
 
-def _binding_current(
-    record: dict[str, Any],
-    component_hash: str,
-    connection_id: str | None = None,
-) -> bool:
-    return (
-        _binding_evaluation(record, component_hash, connection_id)
-        == "valid"
-    )
-
-
 def _agent_connection_result(
     evidence: dict[str, Any],
     admin_setup: dict[str, Any],
     connections: list[dict[str, Any]],
     error: str,
-    component_hash: str,
+    draft_semantic_hash: str,
 ) -> CheckResult:
     credential_check = _credential_result(
         evidence,
@@ -1027,7 +1062,7 @@ def _agent_connection_result(
     else:
         binding_evaluation = _binding_evaluation(
             record,
-            component_hash,
+            draft_semantic_hash,
             str((evidence.get("credential") or {}).get("connectionId") or ""),
         )
     if (
@@ -1040,7 +1075,7 @@ def _agent_connection_result(
         if binding_evaluation == "revision-stale":
             result = (
                 "The prior Agent Connect attestation is stale for this "
-                "component revision."
+                "saved draft."
             )
         elif binding_evaluation == "connection-conflict":
             result = (
@@ -1071,36 +1106,10 @@ def _agent_connection_result(
     )
 
 
-def _parameter_result(
-    evidence: dict[str, Any],
-    component_hash: str,
-) -> CheckResult:
-    record = evidence.get("parameterSharing")
-    connection_id = str(
-        (evidence.get("credential") or {}).get("connectionId") or ""
-    )
-    valid = (
-        isinstance(record, dict)
-        and record.get("status") in {"enabled", "not-exposed"}
-        and record.get("makerAttested") is True
-        and _binding_current(record, component_hash, connection_id)
-    )
-    return _result(
-        "SN-DA-HRSD-PARAMETER-SHARING-001",
-        Status.MANUAL.value if valid else Status.NOT_CONFIGURED.value,
-        "ServiceNow parameter-sharing behavior",
-        (
-            f"Maker observed parameter sharing as {record.get('status')}."
-            if valid
-            else "Current parameter-sharing evidence is absent or stale."
-        ),
-        "Open Connection parameters and confirm the current control state.",
-    )
-
-
 def _publish_result(
     evidence: dict[str, Any],
     component_hash: str,
+    draft_semantic_hash: str,
 ) -> CheckResult:
     record = evidence.get("publish")
     published_hash = (
@@ -1108,9 +1117,26 @@ def _publish_result(
         if isinstance(record, dict)
         else None
     )
+    semantic_bridge_current = bool(
+        isinstance(record, dict)
+        and record.get("testedDraftSemanticHash") == draft_semantic_hash
+        and record.get("publishedSemanticHash") == draft_semantic_hash
+    )
     if not isinstance(record, dict) or published_hash != component_hash:
         status = Status.NOT_CONFIGURED.value
-        result = "The current component revision has no publish receipt."
+        result = (
+            "The current tested draft identity has no matching publish "
+            "receipt."
+        )
+    elif record.get("status") == "needs_remediation":
+        status = Status.FAILED.value
+        result = "Publish needs remediation; automatic unpublish is unavailable."
+    elif not semantic_bridge_current:
+        status = Status.NOT_CONFIGURED.value
+        result = (
+            "The current tested draft identity has no matching publish "
+            "receipt."
+        )
     elif record.get("status") == "completed":
         status = Status.PASSED.value
         result = "The current component revision has a definitive publish receipt."
@@ -1131,21 +1157,18 @@ def _publish_result(
 
 def _test_result(
     evidence: dict[str, Any],
-    component_hash: str,
+    draft_semantic_hash: str,
+    connection_binding_hash: str | None,
 ) -> CheckResult:
     record = evidence.get("test")
-    publish = evidence.get("publish")
-    published_hash = (
-        publish.get("publishedComponentHash") or publish.get("componentHash")
-        if isinstance(publish, dict)
-        else None
-    )
     valid_binding = (
         isinstance(record, dict)
         and isinstance(record.get("binding"), dict)
-        and isinstance(publish, dict)
-        and record["binding"].get("publishedComponentHash") == component_hash
-        and published_hash == component_hash
+        and record["binding"].get("draftSemanticHash")
+        == draft_semantic_hash
+        and connection_binding_hash is not None
+        and record["binding"].get("connectionBindingHash")
+        == connection_binding_hash
     )
     privacy_safe_shape = bool(
         isinstance(record, dict)
@@ -1172,7 +1195,10 @@ def _test_result(
     )
     if not valid_binding:
         status = Status.NOT_CONFIGURED.value
-        result = "No current Test pane evidence is bound to this publish."
+        result = (
+            "No current Test pane evidence is bound to this saved draft and "
+            "selected connection."
+        )
     elif not privacy_safe_shape:
         status = Status.NOT_CONFIGURED.value
         result = (

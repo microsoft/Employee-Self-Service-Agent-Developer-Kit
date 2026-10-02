@@ -92,9 +92,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         / "actions"
     )
     agent = (actions / "connect-agent.md").read_text(encoding="utf-8")
-    parameter = (actions / "configure-parameter-sharing.md").read_text(
-        encoding="utf-8"
-    )
     test = (actions / "test-connection.md").read_text(encoding="utf-8")
     topics = (actions / "prepare-topics.md").read_text(encoding="utf-8")
     publish = (actions / "publish-agent.md").read_text(encoding="utf-8")
@@ -113,8 +110,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "record-agent-connection" in agent
     assert "ACTION_RESULT = \"cancelled\"" in agent
-    assert "record-parameter-sharing --status enabled" in parameter
-    assert "record-parameter-sharing --status not-exposed" in parameter
+    assert not (actions / "configure-parameter-sharing.md").exists()
     assert 'ACTION_RESULT = "recorded"' in test
     assert "List my open HR cases" in test
     assert "--prompt-category list-my-open-hr-cases" in test
@@ -122,6 +118,8 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "never store response text, case data, URLs" in test
     assert "--prompt " not in test
     assert "--details" not in test
+    assert "save the current authored draft" in test
+    assert "selected ServiceNow connection" in test
     assert "safely rolled-back update is still a failed action" in topics
     assert "committed" in topics
     assert "already-active" in topics
@@ -185,7 +183,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "upn" in oidc
     assert "Configure an OIDC provider to verify ID tokens" in oidc
     assert "multi-provider sso" in " ".join(oidc.split()).casefold()
-    assert "for example\n`upn, user_name`" in oidc
+    assert "Do not ask for or collect the claim" in oidc
+    assert "--claim" not in oidc
+    assert "--user-field" not in oidc
     assert "[this ServiceNow instance]({SERVICENOW_INSTANCE_URL})" in oidc
     elevate = oidc.index("select `Elevate role`")
     application_registry = oidc.index(
@@ -209,7 +209,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "alternative: `email` → `email`" in oidc
     assert "verified custom claim" in oidc
     assert "selects **Not yet**" in oidc
-    assert oidc.count("Ask one completion question") == 1
+    assert oidc.count("Ask exactly one completion question") == 1
     assert "PR #217 S4.3/S4.4 is authoritative" in oidc
     assert "enable the tenant-supported" not in oidc
     assert "plugin must be enabled" not in oidc.casefold()
@@ -240,12 +240,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "inspect-publish" in publish
     assert "reconcile-publish-receipt" in publish
     assert "It never publishes or mutates the remote agent" in publish
+    assert "progress.publish.status = done" in publish
+    assert "without another publish\nquestion or remote mutation" in publish
     assert 'ACTION_RESULT = "recorded"' in publish
     agent_link = (
         "[Open Employee Self-Service (HR) in Copilot Studio]"
         "({COPILOT_STUDIO_AGENT_URL})"
     )
-    for action in (topics, agent, parameter, publish, test):
+    for action in (topics, agent, publish, test):
         assert action.count(agent_link) == 1
         assert "tab-specific URL" in action
     assert "ask exactly one question" in plugins
@@ -274,7 +276,6 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         + credential
         + topics
         + agent
-        + parameter
         + publish
         + test
     )

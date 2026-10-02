@@ -65,6 +65,60 @@ def _phase_contract(phase_id: str) -> dict:
     )
 
 
+def _seed_passing_test(
+    root: Path,
+    components: dict,
+    *,
+    publish: dict | None = None,
+) -> dict:
+    state = snow._state_base(_context(), components)
+    normalized_connection_id = CONNECTION_ID.replace("-", "")
+    state["evidence"]["credential"] = {
+        "connectionId": normalized_connection_id,
+    }
+    state["evidence"]["agentConnection"] = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "connectionId": normalized_connection_id,
+        "physicalStatus": "Connected",
+        "makerAttested": True,
+        "recordedAt": "2026-10-01T00:00:00Z",
+        "binding": {
+            "draftSemanticHash": snow._draft_semantic_hash(components),
+        },
+    }
+    connection_binding_hash = snow._connection_binding_hash(
+        _context(),
+        state,
+        components,
+    )
+    state["connectionBindingHash"] = connection_binding_hash
+    state["evidence"]["test"] = {
+        "kind": "maker-attestation",
+        "status": "completed",
+        "promptCategory": "list-my-open-hr-cases",
+        "result": "pass",
+        "failureCategory": None,
+        "recordedAt": "2026-10-01T00:01:00Z",
+        "binding": {
+            "provider": snow.PROVIDER_KEY,
+            "profile": snow.PROFILE_KEY,
+            "agentSlug": AGENT_SLUG,
+            "agentId": AGENT_ID,
+            "environmentId": ENVIRONMENT_ID,
+            "connectionId": normalized_connection_id,
+            "draftSemanticHash": snow._draft_semantic_hash(components),
+            "connectionBindingHash": connection_binding_hash,
+        },
+    }
+    if publish is not None:
+        state["evidence"]["publish"] = publish
+    state_path = _lifecycle_path(root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    return state
+
+
 def _components(connection_id: str | None = None) -> dict:
     return {
         "changeToken": "token",
@@ -162,6 +216,41 @@ def test_summarize_components_requires_active_state_and_status() -> None:
 
     assert result["serviceNowTopicCount"] == 1
     assert result["activeServiceNowTopicCount"] == 0
+
+
+def test_draft_semantic_hash_ignores_only_known_publish_metadata() -> None:
+    components = _components(CONNECTION_ID)
+    baseline = snow._draft_semantic_hash(components)
+    metadata_only = copy.deepcopy(components)
+    metadata_only["changeToken"] = "server-revision"
+    topic = metadata_only["botComponentChanges"][0]["component"]
+    topic["version"] = 99
+    topic["auditInfo"] = {"modifiedAt": "2026-10-01T00:00:00Z"}
+
+    assert snow._draft_semantic_hash(metadata_only) == baseline
+
+    authored_edit = copy.deepcopy(metadata_only)
+    authored_edit["botComponentChanges"][0]["component"]["displayName"] = (
+        "Edited authored topic"
+    )
+    assert snow._draft_semantic_hash(authored_edit) != baseline
+
+    connection_edit = copy.deepcopy(metadata_only)
+    reference = connection_edit["connectionReferenceChanges"][0][
+        "connectionReference"
+    ]
+    parameters = json.loads(reference["sharedConnectionParameters"])
+    parameters["values"]["token:InstanceName"]["value"] = "dev456"
+    reference["sharedConnectionParameters"] = json.dumps(parameters)
+    assert snow._draft_semantic_hash(connection_edit) != baseline
+
+
+def test_draft_semantic_hash_fails_closed_on_malformed_relevant_shape() -> None:
+    components = _components(CONNECTION_ID)
+    components["botComponentChanges"] = {"unexpected": True}
+
+    with pytest.raises(snow.ServiceNowConnectError, match="topic collection"):
+        snow._draft_semantic_hash(components)
 
 
 def test_topic_state_update_replays_full_dialog_component() -> None:
@@ -602,6 +691,7 @@ def test_publish_receipt_uses_post_publish_component_revision(
 
     client = FakeAgentBuilder()
     monkeypatch.chdir(tmp_path)
+    _seed_passing_test(tmp_path, before)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -619,6 +709,43 @@ def test_publish_receipt_uses_post_publish_component_revision(
     assert receipt["status"] == "completed"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["componentHash"] == snow._component_hash(after)
+
+
+def test_publish_rejects_missing_test_before_remote_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    state = _seed_passing_test(tmp_path, components)
+    state["evidence"].pop("test")
+    _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
+
+    class FakeAgentBuilder:
+        def __init__(self) -> None:
+            self.publish_count = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            return components
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            self.publish_count += 1
+            return {"validationPending": False}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Test this exact draft before publishing",
+    ):
+        snow.publish(_context(), confirmed=True)
+
+    assert client.publish_count == 0
 
 
 def test_validation_pending_publish_receipt_matches_current_manual_evidence(
@@ -641,6 +768,7 @@ def test_validation_pending_publish_receipt_matches_current_manual_evidence(
             return {"validationPending": True}
 
     monkeypatch.chdir(tmp_path)
+    _seed_passing_test(tmp_path, before)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -685,6 +813,7 @@ def test_publish_refetch_failure_requires_reconciliation_without_retry(
 
     client = FakeAgentBuilder()
     monkeypatch.chdir(tmp_path)
+    _seed_passing_test(tmp_path, before)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -705,6 +834,49 @@ def test_publish_refetch_failure_requires_reconciliation_without_retry(
     assert client.publish_count == 1
 
 
+def test_publish_semantic_drift_after_mutation_requires_retest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    before = _components(CONNECTION_ID)
+    after = copy.deepcopy(before)
+    after["botComponentChanges"][0]["component"]["displayName"] = (
+        "Server-returned authored drift"
+    )
+
+    class FakeAgentBuilder:
+        def __init__(self) -> None:
+            self.fetch_count = 0
+            self.publish_count = 0
+
+        def fetch_components(self, _agent_id: str) -> dict:
+            self.fetch_count += 1
+            return before if self.fetch_count == 1 else after
+
+        def publish_agent(self, _agent_id: str) -> dict:
+            self.publish_count += 1
+            return {"validationPending": False}
+
+    client = FakeAgentBuilder()
+    monkeypatch.chdir(tmp_path)
+    _seed_passing_test(tmp_path, before)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: client,
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="changed authored semantic content",
+    ):
+        snow.publish(_context(), confirmed=True)
+
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    assert state["evidence"]["publish"]["status"] == "needs_remediation"
+    assert client.publish_count == 1
+
+
 def test_publish_rejects_conflicting_validation_pending_response(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -722,6 +894,7 @@ def test_publish_rejects_conflicting_validation_pending_response(
             }
 
     monkeypatch.chdir(tmp_path)
+    _seed_passing_test(tmp_path, components)
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -742,20 +915,17 @@ def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
     components = _components(CONNECTION_ID)
     component_hash = snow._component_hash(components)
     last_published_at = "2026-09-30T20:22:44.5041453Z"
-    state_path = _lifecycle_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
-    state = snow._state_base(_context(), components)
-    state["evidence"]["credential"] = {
-        "connectionId": CONNECTION_ID.replace("-", "")
-    }
-    state["evidence"]["publish"] = {
-        "requestedAt": "2026-09-30T20:22:44.806391Z",
-        "completedAt": "2026-09-30T20:22:54.575668Z",
-        "status": "confirmation-required",
-        "componentHash": "a" * 64,
-        "response": {"validationPending": None},
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _seed_passing_test(
+        tmp_path,
+        components,
+        publish={
+            "requestedAt": "2026-09-30T20:22:44.806391Z",
+            "completedAt": "2026-09-30T20:22:54.575668Z",
+            "status": "confirmation-required",
+            "componentHash": "a" * 64,
+            "response": {"validationPending": None},
+        },
+    )
 
     class FakeAgentBuilder:
         def get_agent(self, _agent_id: str) -> dict:
@@ -794,10 +964,12 @@ def test_reconcile_legacy_publish_receipt_requires_stable_double_read(
         result="pass",
         failure_category=None,
     )
-    assert test_record["binding"]["publishCompletedAt"] == (
-        reconciled["completedAt"]
+    assert test_record["binding"]["draftSemanticHash"] == (
+        reconciled["publishedSemanticHash"]
     )
-    assert test_record["binding"]["publishedComponentHash"] == component_hash
+    assert test_record["binding"]["connectionBindingHash"] == (
+        reconciled["connectionBindingHash"]
+    )
     acknowledgement = _phase_contract("test")[
         "manualAcknowledgementEvidence"
     ]
@@ -815,15 +987,15 @@ def test_reconcile_legacy_publish_receipt_uses_server_time_when_completion_missi
     components = _components(CONNECTION_ID)
     component_hash = snow._component_hash(components)
     last_published_at = "2026-09-30T20:22:44.5041453Z"
-    state_path = _lifecycle_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
-    state = snow._state_base(_context(), components)
-    state["evidence"]["publish"] = {
-        "requestedAt": "2026-09-30T20:22:44.806391Z",
-        "status": "needs_remediation",
-        "componentHash": "a" * 64,
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _seed_passing_test(
+        tmp_path,
+        components,
+        publish={
+            "requestedAt": "2026-09-30T20:22:44.806391Z",
+            "status": "needs_remediation",
+            "componentHash": "a" * 64,
+        },
+    )
 
     class FakeAgentBuilder:
         def get_agent(self, _agent_id: str) -> dict:
@@ -856,14 +1028,15 @@ def test_reconcile_publish_receipt_rejects_revision_drift(
 ) -> None:
     components = _components(CONNECTION_ID)
     state_path = _lifecycle_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
-    state = snow._state_base(_context(), components)
-    state["evidence"]["publish"] = {
-        "requestedAt": "2026-09-30T20:22:44.806391Z",
-        "status": "confirmation-required",
-        "componentHash": "a" * 64,
-    }
-    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _seed_passing_test(
+        tmp_path,
+        components,
+        publish={
+            "requestedAt": "2026-09-30T20:22:44.806391Z",
+            "status": "confirmation-required",
+            "componentHash": "a" * 64,
+        },
+    )
 
     class FakeAgentBuilder:
         def get_agent(self, _agent_id: str) -> dict:
@@ -1020,7 +1193,7 @@ def test_inspect_preserves_progress_and_reports_completed_steps(
         result["progress"]["agentConnection"]["status"]
         == "confirmation-required"
     )
-    assert result["progress"]["parameterSharing"]["status"] == "pending"
+    assert "parameterSharing" not in result["progress"]
     assert result["progress"]["test"]["status"] == "pending"
     state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
     assert state["evidence"]["agentConnection"]["reconfirmRequired"] is True
@@ -1160,73 +1333,16 @@ def test_inspect_preserves_explicit_keep_current_topic_choice(
     assert result["progress"]["topics"]["status"] == "pending"
 
 
-def test_record_parameter_sharing_persists_maker_observation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    state_path = (
-        tmp_path
-        / ".local"
-        / "connect"
-        / "servicenow"
-        / "agents"
-        / AGENT_ID
-        / "state.json"
-    )
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        snow,
-        "_agentbuilder_client",
-        lambda _context: type(
-            "FakeAgentBuilder",
-            (),
-            {"fetch_components": lambda self, _agent_id: _components()},
-        )(),
-    )
-    lifecycle_path = _lifecycle_path(tmp_path)
-    lifecycle_path.parent.mkdir(parents=True)
-    lifecycle_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 2,
-                "provider": snow.PROVIDER_KEY,
-                "profile": "hrsd",
-                "agentSlug": AGENT_SLUG,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-                "phases": {},
-                "evidence": {
-                    "credential": {
-                        "connectionId": CONNECTION_ID.replace("-", ""),
-                    }
-                },
-                "transactions": {"topics": {}},
-                "migration": {},
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_parameter_sharing_has_no_active_cli_surface() -> None:
+    help_text = snow.build_parser().format_help()
+    phase_help = snow.build_parser()._subparsers._group_actions[0].choices[
+        "record-admin-phase"
+    ].format_help()
 
-    result = snow.record_parameter_sharing(
-        _context(),
-        "not-exposed",
-    )
-
-    assert result["status"] == "not-exposed"
-    assert result["makerAttested"] is True
-    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
-    assert state["evidence"]["parameterSharing"]["status"] == "not-exposed"
+    assert "record-parameter-sharing" not in help_text
+    assert not hasattr(snow, "record_parameter_sharing")
+    assert "--claim" not in phase_help
+    assert "--user-field" not in phase_help
 
 
 def test_connectivity_scopes_are_read_only() -> None:
@@ -1484,21 +1600,21 @@ def test_admin_operation_records_only_non_secret_identity_fields(
         _context(),
         phase="servicenow-oidc",
         status="completed",
-        claim="upn",
-        user_field="user_name",
     )
 
     assert app["evidence"]["clientId"] == APP_CLIENT_ID
-    assert mapping["evidence"]["claim"] == "upn"
-    assert mapping["evidence"]["userField"] == "user_name"
     assert mapping["evidence"]["oidcCapabilityConfirmed"] is True
+    assert mapping["evidence"]["runbookCompleted"] is True
+    assert mapping["evidence"]["mappingDetailsCollected"] is False
+    assert "claim" not in mapping["evidence"]
+    assert "userField" not in mapping["evidence"]
     serialized = _lifecycle_path(tmp_path).read_text(encoding="utf-8")
     assert "secret" not in serialized.casefold()
     assert "password" not in serialized.casefold()
     assert "token" not in serialized.casefold()
 
 
-def test_v2_lifecycle_migrates_to_v5_without_obsolete_preflight_gates(
+def test_v2_lifecycle_migrates_to_v6_without_obsolete_preflight_gates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1549,7 +1665,7 @@ def test_v2_lifecycle_migrates_to_v5_without_obsolete_preflight_gates(
     state_again = snow._load_lifecycle_state(_context())
     snow._write_lifecycle_state(_context(), state_again)
 
-    assert state["schemaVersion"] == 5
+    assert state["schemaVersion"] == 6
     assert state["acceptedContractRevision"] == 1
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert set(state["adminSetup"]["phaseHandoffs"]) == {
@@ -1566,11 +1682,12 @@ def test_v2_lifecycle_migrates_to_v5_without_obsolete_preflight_gates(
     for phase_id in (
         "topics",
         "agent-connection",
-        "parameter-sharing",
         "publish",
         "test",
     ):
         assert state["phases"][phase_id]["status"] == "pending"
+    assert "parameter-sharing" not in state["phases"]
+    assert state["retiredPhases"]["parameter-sharing"]["status"] == "pending"
     assert state["evidence"]["custom"]["mustSurvive"] is True
     assert state["transactions"]["topics"]["operation"]["status"] == "committed"
     assert state["migration"]["schemaV3"]["reuseApprovalInferred"] is False
@@ -1581,6 +1698,72 @@ def test_v2_lifecycle_migrates_to_v5_without_obsolete_preflight_gates(
         "retainedCompletedPreflight"
     ] is False
     assert state["migration"]["schemaV5"]["removedScenarioGate"] is True
+    assert first_bytes == state_path.read_bytes()
+
+
+def test_v5_migration_retires_parameter_phase_without_fabricating_draft_test(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    components = _components(CONNECTION_ID)
+    component_hash = snow._component_hash(components)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 5,
+                "provider": snow.PROVIDER_KEY,
+                "profile": snow.PROFILE_KEY,
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+                "phases": {
+                    "parameter-sharing": {
+                        "status": "done",
+                        "checkpointResults": {
+                            "SN-DA-HRSD-PARAMETER-SHARING-001": "Manual"
+                        },
+                    }
+                },
+                "evidence": {
+                    "credential": {"connectionId": CONNECTION_ID},
+                    "parameterSharing": {
+                        "status": "not-exposed",
+                        "makerAttested": True,
+                    },
+                    "publish": {
+                        "status": "completed",
+                        "componentHash": component_hash,
+                        "publishedComponentHash": component_hash,
+                    },
+                    "test": {
+                        "status": "completed",
+                        "result": "pass",
+                        "binding": {
+                            "publishedComponentHash": component_hash,
+                        },
+                    },
+                },
+                "transactions": {"topics": {}},
+                "migration": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    migrated = snow._load_lifecycle_state(_context(), components)
+    snow._write_lifecycle_state(_context(), migrated)
+    first_bytes = state_path.read_bytes()
+    migrated_again = snow._load_lifecycle_state(_context(), components)
+    snow._write_lifecycle_state(_context(), migrated_again)
+
+    assert "parameter-sharing" not in migrated["phases"]
+    assert migrated["retiredPhases"]["parameter-sharing"]["status"] == "done"
+    assert migrated["evidence"]["parameterSharing"]["status"] == "not-exposed"
+    assert "draftSemanticHash" not in migrated["evidence"]["test"]["binding"]
+    assert "testedDraftSemanticHash" not in migrated["evidence"]["publish"]
     assert first_bytes == state_path.read_bytes()
 
 
@@ -1658,8 +1841,8 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["schemaVersion"] == 5
-    assert state["adminSetup"]["schemaVersion"] == 3
+    assert state["schemaVersion"] == 6
+    assert state["adminSetup"]["schemaVersion"] == 4
     assert "scenario" not in state["adminSetup"]["preflight"]
     assert "reuseDecision" not in state["adminSetup"]["preflight"]
     assert "fingerprint" not in state["adminSetup"]["preflight"]["discovery"]
@@ -1680,9 +1863,10 @@ def test_v4_migration_removes_obsolete_gates_and_keeps_completed_discovery(
         "servicenow-oidc"
     ]["evidence"]
     assert oidc_evidence["oidcCapabilityConfirmed"] is True
-    assert oidc_evidence["oidcCapabilitySource"] == (
-        "legacy-completed-oidc-handoff"
-    )
+    assert oidc_evidence["runbookCompleted"] is True
+    assert oidc_evidence["mappingDetailsCollected"] is False
+    assert "claim" not in oidc_evidence
+    assert "userField" not in oidc_evidence
     assert state["migration"]["schemaV5"][
         "inferredOidcCapabilityFromCompletedHandoff"
     ] is True
@@ -1745,11 +1929,12 @@ def test_v4_migration_does_not_infer_oidc_capability_from_invalid_evidence(
     )
 
     state = snow._load_lifecycle_state(_context())
-    migrated = state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
-        "evidence"
-    ]
+    migrated = state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]
 
-    assert migrated.get("oidcCapabilityConfirmed") is not True
+    assert migrated == {"status": "pending"}
+    assert state["migration"]["retiredOidcMappingEvidence"][
+        "qualifiedCompletion"
+    ] is False
     assert state["migration"]["schemaV5"][
         "inferredOidcCapabilityFromCompletedHandoff"
     ] is False
@@ -1799,9 +1984,9 @@ def test_v4_migration_does_not_infer_oidc_capability_from_pending_handoff(
 
     state = snow._load_lifecycle_state(_context())
 
-    assert state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"][
-        "evidence"
-    ].get("oidcCapabilityConfirmed") is not True
+    assert state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"] == {
+        "status": "pending"
+    }
 
 
 def test_v4_migration_removes_scenario_and_resets_incomplete_preflight_only(
@@ -2070,33 +2255,9 @@ def test_record_test_attestation_persists_result(
     context = _context()
     components = _components(CONNECTION_ID)
     state_path = _lifecycle_path(tmp_path)
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 2,
-                "provider": snow.PROVIDER_KEY,
-                "profile": "hrsd",
-                "agentSlug": AGENT_SLUG,
-                "agentId": AGENT_ID,
-                "environmentId": ENVIRONMENT_ID,
-                "phases": {},
-                "evidence": {
-                    "credential": {
-                        "connectionId": CONNECTION_ID.replace("-", ""),
-                    },
-                    "publish": {
-                        "status": "completed",
-                        "completedAt": "2026-09-28T00:00:00Z",
-                        "componentHash": snow._component_hash(components),
-                    },
-                },
-                "transactions": {"topics": {}},
-                "migration": {},
-            }
-        ),
-        encoding="utf-8",
-    )
+    state = _seed_passing_test(tmp_path, components)
+    state["evidence"].pop("test")
+    state_path.write_text(json.dumps(state), encoding="utf-8")
     monkeypatch.setattr(
         snow,
         "_agentbuilder_client",
@@ -2122,10 +2283,72 @@ def test_record_test_attestation_persists_result(
     )
     assert "prompt" not in state["evidence"]["test"]
     assert "details" not in state["evidence"]["test"]
-    assert (
-        state["evidence"]["test"]["binding"]["publishedComponentHash"]
-        == snow._component_hash(components)
+    assert state["evidence"]["test"]["binding"]["draftSemanticHash"] == (
+        snow._draft_semantic_hash(components)
     )
+    assert state["evidence"]["test"]["binding"]["connectionBindingHash"]
+    assert "publishedComponentHash" not in state["evidence"]["test"]["binding"]
+
+
+def test_record_test_requires_current_agent_connection_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    state = _seed_passing_test(tmp_path, components)
+    state["evidence"].pop("test")
+    state["evidence"].pop("agentConnection")
+    _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: type(
+            "FakeAgentBuilder",
+            (),
+            {"fetch_components": lambda self, _agent_id: components},
+        )(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="current Agent Connect observation",
+    ):
+        snow.record_test_attestation(
+            _context(),
+            prompt_category="list-my-open-hr-cases",
+            result="pass",
+            failure_category=None,
+        )
+
+
+def test_fresh_draft_test_bridges_trustworthy_existing_publish_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _components(CONNECTION_ID)
+    component_hash = snow._component_hash(components)
+    state = _seed_passing_test(
+        tmp_path,
+        components,
+        publish={
+            "kind": "maker-attestation",
+            "status": "completed",
+            "recordedAt": "2026-09-28T00:00:00Z",
+            "completedAt": "2026-09-28T00:00:00Z",
+            "componentHash": component_hash,
+            "publishedComponentHash": component_hash,
+        },
+    )
+    _lifecycle_path(tmp_path).write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    loaded = snow._load_lifecycle_state(_context(), components)
+    receipt = loaded["evidence"]["publish"]
+
+    assert receipt["testedDraftSemanticHash"] == loaded["draftSemanticHash"]
+    assert receipt["publishedSemanticHash"] == loaded["draftSemanticHash"]
+    assert receipt["connectionBindingHash"] == loaded["connectionBindingHash"]
 
 
 @pytest.mark.parametrize(

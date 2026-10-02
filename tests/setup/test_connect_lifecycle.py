@@ -117,7 +117,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
 
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 4
+    assert contract["contractRevision"] == 5
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
         "ServiceNow Admin / security_admin",
@@ -133,9 +133,8 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "credential",
         "topics",
         "agent-connection",
-        "parameter-sharing",
-        "publish",
         "test",
+        "publish",
     ]
     by_id = {phase["id"]: phase for phase in contract["phases"]}
     assert by_id["preflight"]["actionExecution"] == "every-invocation"
@@ -148,7 +147,6 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     ):
         assert by_id[phase_id]["actionExecution"] == "once"
     assert by_id["agent-connection"]["actionExecution"] == "every-invocation"
-    assert by_id["parameter-sharing"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["actionExecution"] == "every-invocation"
     assert by_id["test"]["mutates"] is False
     assert by_id["test"]["completionStatuses"] == ["Manual"]
@@ -165,9 +163,8 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "servicenow-oidc",
         "topics",
         "agent-connection",
-        "parameter-sharing",
-        "publish",
         "test",
+        "publish",
     ):
         acknowledgement = by_id[phase_id]["manualAcknowledgementEvidence"]
         assert "path" in acknowledgement
@@ -295,6 +292,13 @@ def test_matching_admin_evidence_skips_only_same_phase_manual_ack() -> None:
             }
         }
     }
+    state["adminSetup"]["phaseHandoffs"]["servicenow-oidc"]["evidence"].update(
+        {
+            "oidcCapabilityConfirmed": True,
+            "runbookCompleted": True,
+            "mappingDetailsCollected": False,
+        }
+    )
 
     for phase_id in (
         "plugin-prerequisites",
@@ -394,6 +398,8 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         "agentId": "agent-id",
         "environmentId": "environment-id",
         "componentHash": "component-hash",
+        "draftSemanticHash": "draft-semantic-hash",
+        "connectionBindingHash": "connection-binding-hash",
         "evidence": {
             "credential": {"connectionId": "connection-id"},
             "topics": {
@@ -418,20 +424,7 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
                     "agentSlug": "employee-self-service-hr",
                     "agentId": "agent-id",
                     "environmentId": "environment-id",
-                    "componentHash": "component-hash",
-                },
-            },
-            "parameterSharing": {
-                "kind": "maker-attestation",
-                "status": "not-exposed",
-                "recordedAt": "2026-10-01T00:00:00Z",
-                "makerAttested": True,
-                "binding": {
-                    "agentSlug": "employee-self-service-hr",
-                    "agentId": "agent-id",
-                    "environmentId": "environment-id",
-                    "componentHash": "component-hash",
-                    "connectionId": "connection-id",
+                    "draftSemanticHash": "draft-semantic-hash",
                 },
             },
             "publish": {
@@ -440,6 +433,9 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
                 "recordedAt": "2026-10-01T00:00:00Z",
                 "completedAt": "2026-10-01T00:00:00Z",
                 "publishedComponentHash": "component-hash",
+                "testedDraftSemanticHash": "draft-semantic-hash",
+                "publishedSemanticHash": "draft-semantic-hash",
+                "connectionBindingHash": "connection-binding-hash",
             },
             "test": {
                 "kind": "maker-attestation",
@@ -449,9 +445,14 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
                 "result": "pass",
                 "failureCategory": None,
                 "binding": {
+                    "provider": "servicenow-da-hrsd",
+                    "profile": "hrsd",
+                    "agentSlug": "employee-self-service-hr",
+                    "agentId": "agent-id",
+                    "environmentId": "environment-id",
                     "connectionId": "connection-id",
-                    "publishedComponentHash": "component-hash",
-                    "publishCompletedAt": "2026-10-01T00:00:00Z",
+                    "draftSemanticHash": "draft-semantic-hash",
+                    "connectionBindingHash": "connection-binding-hash",
                 },
             },
         },
@@ -460,9 +461,8 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
     for phase_id in (
         "topics",
         "agent-connection",
-        "parameter-sharing",
-        "publish",
         "test",
+        "publish",
     ):
         assert _matching_action_evidence_acknowledges(
             phases[phase_id],
@@ -472,13 +472,25 @@ def test_matching_maker_evidence_skips_only_current_bound_manual_ack() -> None:
         )
 
     state["componentHash"] = "later-drift"
-    for phase_id in (
-        "topics",
-        "agent-connection",
-        "parameter-sharing",
-        "publish",
-        "test",
-    ):
+    for phase_id in ("topics", "publish"):
+        assert not _matching_action_evidence_acknowledges(
+            phases[phase_id],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
+    state["componentHash"] = "component-hash"
+    state["draftSemanticHash"] = "later-draft"
+    for phase_id in ("agent-connection", "test", "publish"):
+        assert not _matching_action_evidence_acknowledges(
+            phases[phase_id],
+            "Manual",
+            state,
+            action_succeeded_this_invocation=True,
+        )
+    state["draftSemanticHash"] = "draft-semantic-hash"
+    state["connectionBindingHash"] = "later-connection"
+    for phase_id in ("test", "publish"):
         assert not _matching_action_evidence_acknowledges(
             phases[phase_id],
             "Manual",

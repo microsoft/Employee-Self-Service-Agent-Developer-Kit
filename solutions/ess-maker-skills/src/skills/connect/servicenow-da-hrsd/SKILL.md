@@ -43,11 +43,13 @@ AGENT_SLUG = the exact active agent slug
 The runner loads
 `src/skills/connect/servicenow-da-hrsd/contract.json`, persists state at
 `.local/connect/servicenow-da-hrsd/agents/{AGENT_SLUG}/lifecycle.json`, and
-live-reverifies every phase. Agent binding, parameter sharing, and Test pane
-results remain maker-confirmed evidence; topic mutation and publish require
-explicit confirmation.
+live-reverifies every phase. Agent binding and Test pane results remain
+maker-confirmed evidence; topic mutation and publish require explicit
+confirmation. Parameter-sharing is not a standalone lifecycle phase; legacy
+evidence is retained only as historical state and never treated as proof that
+the direct connector-action path was independently verified.
 
-Only report the integration connected after the runner completes all ten
+Only report the integration connected after the runner completes all nine
 phases, including explicit remote reuse approval and the four admin
 prerequisite phases before the physical connection and topics. Do not add a
 second completion message.

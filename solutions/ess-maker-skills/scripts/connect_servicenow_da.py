@@ -42,8 +42,8 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 PROVIDER_KEY = "servicenow-da-hrsd"
 PROFILE_KEY = "hrsd"
-LIFECYCLE_SCHEMA_VERSION = 5
-ADMIN_SETUP_SCHEMA_VERSION = 3
+LIFECYCLE_SCHEMA_VERSION = 6
+ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
 SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 PORTAL_ORIGINS = {
@@ -272,7 +272,25 @@ def _legacy_oidc_handoff_proves_capability(
         and evidence.get("recordedAt")
         and evidence.get("claim")
         and evidence.get("userField")
-        and evidence.get("oidcCapabilityConfirmed") is not True
+    )
+
+
+def _legacy_oidc_handoff_proves_completion(
+    handoff: object,
+) -> bool:
+    return bool(
+        _legacy_oidc_handoff_proves_capability(handoff)
+        or (
+            isinstance(handoff, dict)
+            and handoff.get("status") in {"completed", "reused"}
+            and isinstance(handoff.get("evidence"), dict)
+            and handoff["evidence"].get("kind")
+            == "structured-admin-attestation"
+            and isinstance(handoff["evidence"].get("recordedAt"), str)
+            and handoff["evidence"].get("recordedAt")
+            and handoff["evidence"].get("runbookCompleted") is True
+            and handoff["evidence"].get("oidcCapabilityConfirmed") is True
+        )
     )
 
 
@@ -315,13 +333,28 @@ def _admin_setup(state: dict[str, Any]) -> dict[str, Any]:
     for phase in sorted(ADMIN_PHASES):
         handoffs.setdefault(phase, {"status": "pending"})
     oidc_handoff = handoffs.get("servicenow-oidc")
-    if version < 3 and _legacy_oidc_handoff_proves_capability(oidc_handoff):
+    if version < 4 and isinstance(oidc_handoff, dict):
         oidc_evidence = oidc_handoff.get("evidence")
-        if isinstance(oidc_evidence, dict):
+        qualified_completion = _legacy_oidc_handoff_proves_completion(
+            oidc_handoff
+        )
+        if isinstance(oidc_evidence, dict) and qualified_completion:
             oidc_evidence["oidcCapabilityConfirmed"] = True
-            oidc_evidence["oidcCapabilitySource"] = (
-                "legacy-completed-oidc-handoff"
-            )
+            oidc_evidence["runbookCompleted"] = True
+            oidc_evidence["mappingDetailsCollected"] = False
+            oidc_evidence.pop("claim", None)
+            oidc_evidence.pop("userField", None)
+        elif isinstance(oidc_evidence, dict) and (
+            "claim" in oidc_evidence or "userField" in oidc_evidence
+        ):
+            state.setdefault("migration", {})[
+                "retiredOidcMappingEvidence"
+            ] = {
+                "sourceSha256": _canonical_json_hash(oidc_evidence),
+                "qualifiedCompletion": False,
+                "retiredAt": _utc_now(),
+            }
+            handoffs["servicenow-oidc"] = {"status": "pending"}
     preflight_handoff = handoffs.get("preflight")
     if isinstance(preflight_handoff, dict):
         evidence = preflight_handoff.get("evidence")
@@ -999,6 +1032,7 @@ def _state_base(
         "environmentId": context["environment"]["id"],
         "ring": context["environment"]["ring"],
         "componentHash": _component_hash(components),
+        "draftSemanticHash": _draft_semantic_hash(components),
         "reference": summary["reference"],
         "phases": {},
         "evidence": {},
@@ -1175,17 +1209,41 @@ def _migrate_lifecycle_schema(
             "removedGlobalReuseDecision": True,
             "retainedCompletedPreflight": retained_preflight,
         }
+    if version <= 4:
+        migration["schemaV5"] = {
+            "from": 4,
+            "to": 5,
+            "sourceSha256": source_sha256,
+            "migratedAt": _utc_now(),
+            "removedScenarioGate": True,
+            "retainedCompletedPreflight": retained_preflight,
+            "inferredOidcCapabilityFromCompletedHandoff": (
+                inferred_oidc_capability
+            ),
+        }
+    retired_parameter_sharing = None
+    if version < 6:
+        retired_phases = state.setdefault("retiredPhases", {})
+        if not isinstance(retired_phases, dict):
+            raise ServiceNowConnectError(
+                "ServiceNow retiredPhases state must be an object."
+            )
+        retired_parameter_sharing = phases.pop("parameter-sharing", None)
+        if retired_parameter_sharing is not None:
+            retired_phases.setdefault(
+                "parameter-sharing",
+                retired_parameter_sharing,
+            )
     state["schemaVersion"] = LIFECYCLE_SCHEMA_VERSION
-    migration["schemaV5"] = {
-        "from": 4 if version <= 4 else version,
+    migration["schemaV6"] = {
+        "from": 5 if version <= 5 else version,
         "to": LIFECYCLE_SCHEMA_VERSION,
         "sourceSha256": source_sha256,
         "migratedAt": _utc_now(),
-        "removedScenarioGate": True,
-        "retainedCompletedPreflight": retained_preflight,
-        "inferredOidcCapabilityFromCompletedHandoff": (
-            inferred_oidc_capability
-        ),
+        "collapsedOidcMappingEvidence": inferred_oidc_capability,
+        "removedOidcMappingCollection": True,
+        "retiredParameterSharingPhase": retired_parameter_sharing is not None,
+        "testBeforePublish": True,
     }
     return state
 
@@ -1337,9 +1395,62 @@ def _load_lifecycle_state(
             "environmentId",
             "ring",
             "componentHash",
+            "draftSemanticHash",
             "reference",
         ):
             state[key] = current[key]
+        credential = state.get("evidence", {}).get("credential")
+        if (
+            isinstance(credential, dict)
+            and credential.get("connectionId")
+            and _agent_connection_attestation_current(state, components)
+        ):
+            state["connectionBindingHash"] = _connection_binding_hash(
+                context,
+                state,
+                components,
+            )
+        else:
+            state.pop("connectionBindingHash", None)
+        publish_record = state.get("evidence", {}).get("publish")
+        test_record = state.get("evidence", {}).get("test")
+        published_hash = (
+            publish_record.get("publishedComponentHash")
+            or publish_record.get("componentHash")
+            if isinstance(publish_record, dict)
+            else None
+        )
+        test_binding = (
+            test_record.get("binding")
+            if isinstance(test_record, dict)
+            else None
+        )
+        if (
+            isinstance(publish_record, dict)
+            and publish_record.get("status")
+            in {"completed", "confirmation-required"}
+            and published_hash == state["componentHash"]
+            and isinstance(test_record, dict)
+            and test_record.get("status") == "completed"
+            and test_record.get("result") == "pass"
+            and isinstance(test_binding, dict)
+            and test_binding.get("draftSemanticHash")
+            == state["draftSemanticHash"]
+            and test_binding.get("connectionBindingHash")
+            == state.get("connectionBindingHash")
+        ):
+            publish_record.setdefault(
+                "testedDraftSemanticHash",
+                state["draftSemanticHash"],
+            )
+            publish_record.setdefault(
+                "publishedSemanticHash",
+                state["draftSemanticHash"],
+            )
+            publish_record.setdefault(
+                "connectionBindingHash",
+                state["connectionBindingHash"],
+            )
     state.setdefault("phases", {})
     state.setdefault("evidence", {})
     _admin_setup(state)
@@ -1416,23 +1527,28 @@ def _inspection_progress(
         publish_record = {}
     published_hash = publish_record.get("componentHash")
     current_hash = state.get("componentHash")
+    current_draft_hash = state.get("draftSemanticHash")
     publish_done = (
         publish_record.get("status") == "completed"
-        and (
-            published_hash == current_hash
-            or published_hash is None
-        )
+        and published_hash == current_hash
+        and publish_record.get("testedDraftSemanticHash")
+        == current_draft_hash
+        and publish_record.get("publishedSemanticHash")
+        == current_draft_hash
     )
 
     test_record = evidence.get("test")
     if not isinstance(test_record, dict):
         test_record = {}
     test_result = test_record.get("result")
+    test_binding = test_record.get("binding")
+    test_current = bool(
+        isinstance(test_binding, dict)
+        and test_binding.get("draftSemanticHash") == current_draft_hash
+        and test_binding.get("connectionBindingHash")
+        == state.get("connectionBindingHash")
+    )
 
-    parameter_record = evidence.get("parameterSharing")
-    if not isinstance(parameter_record, dict):
-        parameter_record = {}
-    parameter_status = parameter_record.get("status")
     return {
         "topics": {
             "status": "done" if topics_done else "pending",
@@ -1465,17 +1581,25 @@ def _inspection_progress(
                 )
             ),
         },
-        "parameterSharing": {
+        "test": {
             "status": (
                 "confirmation-required"
-                if parameter_status in {"enabled", "not-exposed"}
+                if test_current and test_result in {"pass", "fail"}
                 else "pending"
             ),
             "message": (
-                f"Parameter sharing was recorded as {parameter_status}; "
-                "the current UI state requires maker confirmation."
-                if parameter_status
-                else "Parameter-sharing availability has not been recorded."
+                "A passing Test pane result was previously recorded; a "
+                "current functional result requires maker confirmation."
+                if test_current and test_result == "pass"
+                else (
+                    "A failing Test pane result was previously recorded; a "
+                    "current functional result requires maker confirmation."
+                )
+                if test_current and test_result == "fail"
+                else (
+                    "Functional Test pane validation has not been recorded "
+                    "for the current saved draft and selected connection."
+                )
             ),
         },
         "publish": {
@@ -1484,24 +1608,6 @@ def _inspection_progress(
                 "The current component revision is recorded as published."
                 if publish_done
                 else "The current component revision is not recorded as published."
-            ),
-        },
-        "test": {
-            "status": (
-                "confirmation-required"
-                if test_result in {"pass", "fail"}
-                else "pending"
-            ),
-            "message": (
-                "A passing Test pane result was previously recorded; a "
-                "current functional result requires maker confirmation."
-                if test_result == "pass"
-                else (
-                    "A failing Test pane result was previously recorded; a "
-                    "current functional result requires maker confirmation."
-                )
-                if test_result == "fail"
-                else "Functional Test pane validation has not been recorded."
             ),
         },
     }
@@ -1621,8 +1727,6 @@ def record_admin_phase(
     phase: str,
     status: str,
     client_id: str | None = None,
-    claim: str | None = None,
-    user_field: str | None = None,
 ) -> dict[str, Any]:
     if phase not in ADMIN_PHASES:
         raise ServiceNowConnectError("Unsupported ServiceNow admin phase.")
@@ -1650,26 +1754,12 @@ def record_admin_phase(
         )
 
     if phase == "servicenow-oidc":
-        normalized_claim = (claim or "").strip()
-        normalized_user_field = (user_field or "").strip()
-        if not _SAFE_USER_FIELD.fullmatch(normalized_claim):
-            raise ServiceNowConnectError(
-                "OIDC claim must be a non-secret token claim identifier."
-            )
-        if not _SAFE_USER_FIELD.fullmatch(normalized_user_field):
-            raise ServiceNowConnectError(
-                "ServiceNow user field must be a field identifier."
-            )
         evidence.update(
             {
                 "oidcCapabilityConfirmed": True,
-                "claim": normalized_claim,
-                "userField": normalized_user_field,
+                "runbookCompleted": True,
+                "mappingDetailsCollected": False,
             }
-        )
-    elif claim is not None or user_field is not None:
-        raise ServiceNowConnectError(
-            "Claim mapping values are accepted only for servicenow-oidc."
         )
 
     record = {
@@ -1986,6 +2076,7 @@ def record_agent_connection_attestation(
             "provider": PROVIDER_KEY,
             "profile": PROFILE_KEY,
             "componentHash": _component_hash(components),
+            "draftSemanticHash": _draft_semantic_hash(components),
         },
     }
     evidence = state.setdefault("evidence", {})
@@ -2014,42 +2105,6 @@ def record_agent_connection_attestation(
             "lastVerifiedAt": _utc_now(),
         },
     )
-    _write_lifecycle_state(context, state)
-    return result
-
-
-def record_parameter_sharing(
-    context: dict[str, Any],
-    status: str,
-) -> dict[str, Any]:
-    if status not in {"enabled", "not-exposed"}:
-        raise ServiceNowConnectError(
-            "Parameter-sharing status must be enabled or not-exposed."
-        )
-    components = _agentbuilder_client(context).fetch_components(
-        context["agent"]["id"]
-    )
-    state = _load_lifecycle_state(context, components)
-    credential = state.get("evidence", {}).get("credential", {})
-    if not isinstance(credential, dict) or not credential.get("connectionId"):
-        raise ServiceNowConnectError(
-            "Select and verify a ServiceNow credential before recording "
-            "parameter sharing."
-        )
-    result = {
-        "kind": "maker-attestation",
-        "status": status,
-        "makerAttested": True,
-        "recordedAt": _utc_now(),
-        "binding": {
-            "connectionId": credential.get("connectionId"),
-            "environmentId": context["environment"]["id"],
-            "agentId": context["agent"]["id"],
-            "agentSlug": _agent_slug(context),
-            "componentHash": _component_hash(components),
-        },
-    }
-    state.setdefault("evidence", {})["parameterSharing"] = result
     _write_lifecycle_state(context, state)
     return result
 
@@ -2125,6 +2180,127 @@ def _component_content_hash(component: dict[str, Any]) -> str:
     normalized.pop("version", None)
     normalized.pop("auditInfo", None)
     return _canonical_json_hash(normalized)
+
+
+def _draft_semantic_hash(components: dict[str, Any]) -> str:
+    topics: list[dict[str, Any]] = []
+    changes = components.get("botComponentChanges")
+    if not isinstance(changes, list):
+        raise ServiceNowConnectError(
+            "MinimalBot component state has an invalid topic collection."
+        )
+    for change in changes:
+        if not isinstance(change, dict):
+            raise ServiceNowConnectError(
+                "MinimalBot topic collection contains an invalid change."
+            )
+        component = change.get("component")
+        if not isinstance(component, dict):
+            continue
+        if "ServiceNowHRSD" not in str(component.get("schemaName") or ""):
+            continue
+        normalized = copy.deepcopy(component)
+        normalized.pop("version", None)
+        normalized.pop("auditInfo", None)
+        topics.append(normalized)
+    topics.sort(
+        key=lambda component: (
+            str(component.get("id") or ""),
+            str(component.get("schemaName") or ""),
+        )
+    )
+    reference = copy.deepcopy(find_servicenow_reference(components))
+    reference.pop("version", None)
+    reference.pop("auditInfo", None)
+    reference["sharedConnectionParameters"] = _shared_parameters(reference)
+    projection = {
+        "serviceNowTopics": topics,
+        "serviceNowReference": reference,
+    }
+    return _canonical_json_hash(projection)
+
+
+def _agent_connection_attestation_current(
+    state: dict[str, Any],
+    components: dict[str, Any],
+) -> bool:
+    credential = state.get("evidence", {}).get("credential")
+    attestation = state.get("evidence", {}).get("agentConnection")
+    attestation_binding = (
+        attestation.get("binding")
+        if isinstance(attestation, dict)
+        else None
+    )
+    if not isinstance(credential, dict) or not credential.get("connectionId"):
+        return False
+    normalized_connection_id = str(credential["connectionId"]).replace("-", "")
+    return not (
+        not isinstance(attestation, dict)
+        or attestation.get("kind") != "maker-attestation"
+        or attestation.get("status") != "completed"
+        or attestation.get("makerAttested") is not True
+        or attestation.get("physicalStatus") != "Connected"
+        or str(attestation.get("connectionId") or "").replace("-", "")
+        != normalized_connection_id
+        or not isinstance(attestation_binding, dict)
+        or attestation_binding.get("draftSemanticHash")
+        != _draft_semantic_hash(components)
+    )
+
+
+def _connection_binding_hash(
+    context: dict[str, Any],
+    state: dict[str, Any],
+    components: dict[str, Any],
+    *,
+    require_agent_attestation: bool = True,
+) -> str:
+    credential = state.get("evidence", {}).get("credential")
+    if not isinstance(credential, dict) or not credential.get("connectionId"):
+        raise ServiceNowConnectError(
+            "Select and verify a ServiceNow credential before recording Test "
+            "evidence."
+        )
+    attestation = state.get("evidence", {}).get("agentConnection")
+    attestation_current = _agent_connection_attestation_current(
+        state,
+        components,
+    )
+    if require_agent_attestation and not attestation_current:
+        raise ServiceNowConnectError(
+            "Record a current Agent Connect observation for this saved draft "
+            "and selected credential before recording Test evidence."
+        )
+    summary = summarize_components(components)
+    reference = summary["reference"]
+    return _canonical_json_hash(
+        {
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
+            "agentSlug": _agent_slug(context),
+            "agentId": context["agent"]["id"],
+            "environmentId": context["environment"]["id"],
+            "connectionId": credential["connectionId"],
+            "agentConnectionRecordedAt": (
+                attestation.get("recordedAt")
+                if isinstance(attestation, dict)
+                else None
+            ),
+            "reference": {
+                "id": reference.get("id"),
+                "logicalName": reference.get("logicalName"),
+                "authMode": reference.get("authMode"),
+                "instanceName": reference.get("instanceName"),
+                "resourceUri": reference.get("resourceUri"),
+            },
+            "serviceNowInvokeConnectorActionCount": summary[
+                "serviceNowInvokeConnectorActionCount"
+            ],
+            "serviceNowInvokeFlowActionCount": summary[
+                "serviceNowInvokeFlowActionCount"
+            ],
+        }
+    )
 
 
 def _topic_transaction_diagnostics(
@@ -2622,6 +2798,7 @@ def _publish_validation_pending(response: dict[str, Any]) -> bool | None:
 
 def _publish_remote_snapshot(
     context: dict[str, Any],
+    state: dict[str, Any],
 ) -> dict[str, Any]:
     agentbuilder = _agentbuilder_client(context)
     agent = agentbuilder.get_agent(context["agent"]["id"])
@@ -2631,6 +2808,12 @@ def _publish_remote_snapshot(
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "componentHash": _component_hash(components),
+        "draftSemanticHash": _draft_semantic_hash(components),
+        "connectionBindingHash": _connection_binding_hash(
+            context,
+            state,
+            components,
+        ),
         "serverLastPublishedAt": (
             last_published_at
             if isinstance(last_published_at, str) and last_published_at
@@ -2645,7 +2828,7 @@ def inspect_publish_state(
     state = _load_lifecycle_state(context)
     receipt = state.get("evidence", {}).get("publish")
     receipt = receipt if isinstance(receipt, dict) else {}
-    snapshot = _publish_remote_snapshot(context)
+    snapshot = _publish_remote_snapshot(context, state)
     return {
         "status": "read-only",
         **snapshot,
@@ -2727,7 +2910,7 @@ def reconcile_publish_receipt(
             "The server publish timestamp does not match the legacy request."
         )
 
-    snapshot = _publish_remote_snapshot(context)
+    snapshot = _publish_remote_snapshot(context, state)
     if snapshot["componentHash"] != expected_component_hash:
         raise ServiceNowConnectError(
             "The current component revision changed after maker confirmation."
@@ -2735,6 +2918,21 @@ def reconcile_publish_receipt(
     if snapshot["serverLastPublishedAt"] != expected_last_published_at:
         raise ServiceNowConnectError(
             "The server publish timestamp changed after maker confirmation."
+        )
+    test_record = evidence.get("test")
+    if (
+        not isinstance(test_record, dict)
+        or test_record.get("status") != "completed"
+        or test_record.get("result") != "pass"
+        or not isinstance(test_record.get("binding"), dict)
+        or test_record["binding"].get("draftSemanticHash")
+        != snapshot["draftSemanticHash"]
+        or test_record["binding"].get("connectionBindingHash")
+        != snapshot["connectionBindingHash"]
+    ):
+        raise ServiceNowConnectError(
+            "The current draft and selected connection do not have a matching "
+            "privacy-safe Test result for publish receipt reconciliation."
         )
 
     legacy_receipt = {
@@ -2763,6 +2961,9 @@ def reconcile_publish_receipt(
         ),
         "publishedComponentHash": expected_component_hash,
         "componentHash": expected_component_hash,
+        "testedDraftSemanticHash": snapshot["draftSemanticHash"],
+        "publishedSemanticHash": snapshot["draftSemanticHash"],
+        "connectionBindingHash": snapshot["connectionBindingHash"],
         "serverLastPublishedAt": expected_last_published_at,
         "verifiedBy": "maker-attested-current-revision",
         "recordedAt": reconciled_at,
@@ -2772,6 +2973,8 @@ def reconcile_publish_receipt(
     }
     evidence["publish"] = reconciled
     state["componentHash"] = expected_component_hash
+    state["draftSemanticHash"] = snapshot["draftSemanticHash"]
+    state["connectionBindingHash"] = snapshot["connectionBindingHash"]
     _write_lifecycle_state(context, state)
     return reconciled
 
@@ -2788,7 +2991,33 @@ def publish(
     agentbuilder = _agentbuilder_client(context)
     components = agentbuilder.fetch_components(context["agent"]["id"])
     requested_component_hash = _component_hash(components)
+    tested_draft_semantic_hash = _draft_semantic_hash(components)
     state = _load_lifecycle_state(context, components)
+    current_connection_binding_hash = _connection_binding_hash(
+        context,
+        state,
+        components,
+    )
+    test_record = state.get("evidence", {}).get("test")
+    credential = state.get("evidence", {}).get("credential")
+    if (
+        not isinstance(test_record, dict)
+        or test_record.get("status") != "completed"
+        or test_record.get("result") != "pass"
+        or not isinstance(test_record.get("binding"), dict)
+        or test_record["binding"].get("draftSemanticHash")
+        != tested_draft_semantic_hash
+        or test_record["binding"].get("connectionBindingHash")
+        != current_connection_binding_hash
+        or not isinstance(credential, dict)
+        or test_record["binding"].get("connectionId")
+        != credential.get("connectionId")
+    ):
+        raise ServiceNowConnectError(
+            "The current draft content and selected connection have not "
+            "passed the privacy-safe HRSD Test pane check. Test this exact "
+            "draft before publishing."
+        )
     requested_at = _utc_now()
     try:
         response = agentbuilder.publish_agent(context["agent"]["id"])
@@ -2854,6 +3083,34 @@ def publish(
         _write_lifecycle_state(context, state)
         raise ServiceNowConnectError(publish_error["remediation"]) from exc
     published_component_hash = _component_hash(published_components)
+    published_semantic_hash = _draft_semantic_hash(published_components)
+    if published_semantic_hash != tested_draft_semantic_hash:
+        publish_error = {
+            "kind": "maker-attestation",
+            "requestedAt": requested_at,
+            "acceptedAt": _utc_now(),
+            "status": "needs_remediation",
+            "mutationMayHaveOccurred": True,
+            "requestedComponentHash": requested_component_hash,
+            "publishedComponentHash": published_component_hash,
+            "testedDraftSemanticHash": tested_draft_semantic_hash,
+            "publishedSemanticHash": published_semantic_hash,
+            "connectionBindingHash": current_connection_binding_hash,
+            "response": {
+                "validationPending": validation_pending,
+                "responseKeys": sorted(response.keys()),
+            },
+            "remediation": (
+                "Publish changed authored semantic content relative to the "
+                "tested draft. Do not republish blindly; inspect the current "
+                "draft and run Test again."
+            ),
+            "recordedAt": _utc_now(),
+        }
+        state.setdefault("evidence", {})["publish"] = publish_error
+        state["componentHash"] = published_component_hash
+        _write_lifecycle_state(context, state)
+        raise ServiceNowConnectError(publish_error["remediation"])
     completed_at = _utc_now()
     publish_record = {
         "kind": "maker-attestation",
@@ -2865,6 +3122,9 @@ def publish(
         "requestedComponentHash": requested_component_hash,
         "publishedComponentHash": published_component_hash,
         "componentHash": published_component_hash,
+        "testedDraftSemanticHash": tested_draft_semantic_hash,
+        "publishedSemanticHash": published_semantic_hash,
+        "connectionBindingHash": current_connection_binding_hash,
         "response": {
             "validationPending": validation_pending,
             "responseKeys": sorted(response.keys()),
@@ -2878,6 +3138,8 @@ def publish(
     }
     state.setdefault("evidence", {})["publish"] = publish_record
     state["componentHash"] = published_component_hash
+    state["draftSemanticHash"] = published_semantic_hash
+    state["connectionBindingHash"] = current_connection_binding_hash
     _write_lifecycle_state(context, state)
     return state
 
@@ -2919,19 +3181,16 @@ def record_test_attestation(
     state = _load_lifecycle_state(context, components)
     evidence = state.setdefault("evidence", {})
     credential = evidence.get("credential")
-    publish_record = evidence.get("publish")
     if not isinstance(credential, dict) or not credential.get("connectionId"):
         raise ServiceNowConnectError(
             "Select and verify a ServiceNow credential before recording a test."
         )
-    if (
-        not isinstance(publish_record, dict)
-        or publish_record.get("status")
-        not in {"completed", "confirmation-required"}
-    ):
-        raise ServiceNowConnectError(
-            "Publish the current component revision before recording a test."
-        )
+    draft_semantic_hash = _draft_semantic_hash(components)
+    connection_binding_hash = _connection_binding_hash(
+        context,
+        state,
+        components,
+    )
     attestation = {
         "kind": "maker-attestation",
         "status": "completed" if result == "pass" else "failed",
@@ -2941,17 +3200,18 @@ def record_test_attestation(
         "recordedAt": _utc_now(),
         "binding": {
             "connectionId": credential["connectionId"],
-            "publishCompletedAt": publish_record.get("completedAt"),
-            "publishedComponentHash": (
-                publish_record.get("publishedComponentHash")
-                or publish_record.get("componentHash")
-            ),
+            "provider": PROVIDER_KEY,
+            "profile": PROFILE_KEY,
             "environmentId": context["environment"]["id"],
             "agentId": context["agent"]["id"],
             "agentSlug": _agent_slug(context),
+            "draftSemanticHash": draft_semantic_hash,
+            "connectionBindingHash": connection_binding_hash,
         },
     }
     evidence["test"] = attestation
+    state["draftSemanticHash"] = draft_semantic_hash
+    state["connectionBindingHash"] = connection_binding_hash
     _write_lifecycle_state(context, state)
     return attestation
 
@@ -3005,8 +3265,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("completed", "reused"),
     )
     phase_parser.add_argument("--client-id")
-    phase_parser.add_argument("--claim")
-    phase_parser.add_argument("--user-field")
 
     create_parser = subparsers.add_parser(
         "create",
@@ -3027,16 +3285,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record the maker's manual Connect action after health validation.",
     )
     agent_connection_parser.add_argument("--connection-id", required=True)
-    parameter_parser = subparsers.add_parser(
-        "record-parameter-sharing",
-        help="Record the maker-observed parameter-sharing state.",
-    )
-    parameter_parser.add_argument(
-        "--status",
-        required=True,
-        choices=("enabled", "not-exposed"),
-    )
-
     topic_state_parser = subparsers.add_parser(
         "set-topic-state",
         help="Set one ServiceNow topic to Active or Inactive.",
@@ -3145,8 +3393,6 @@ def main(argv: list[str] | None = None) -> int:
                 phase=args.phase,
                 status=args.status,
                 client_id=args.client_id,
-                claim=args.claim,
-                user_field=args.user_field,
             )
         elif args.command == "create":
             result = prepare_manual_connection(
@@ -3165,8 +3411,6 @@ def main(argv: list[str] | None = None) -> int:
                 context,
                 args.connection_id,
             )
-        elif args.command == "record-parameter-sharing":
-            result = record_parameter_sharing(context, args.status)
         elif args.command == "set-topic-state":
             result = set_topic_state(
                 context,

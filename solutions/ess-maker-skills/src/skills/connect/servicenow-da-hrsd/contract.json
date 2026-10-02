@@ -1,5 +1,5 @@
 {
-  "contractRevision": 4,
+  "contractRevision": 5,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -67,7 +67,12 @@
         "path": "adminSetup.phaseHandoffs.{phaseId}",
         "evidenceObjectPath": "evidence",
         "acceptedRecordStatuses": ["completed", "reused"],
-        "requiredEvidenceKind": "structured-admin-attestation"
+        "requiredEvidenceKind": "structured-admin-attestation",
+        "requiredValues": {
+          "oidcCapabilityConfirmed": true,
+          "runbookCompleted": true,
+          "mappingDetailsCollected": false
+        }
       },
       "mutates": false
     },
@@ -134,69 +139,12 @@
             "statePath": "environmentId"
           },
           {
-            "evidencePath": "binding.componentHash",
-            "statePath": "componentHash"
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
           },
           {
             "evidencePath": "connectionId",
             "statePath": "evidence.credential.connectionId"
-          }
-        ]
-      },
-      "mutates": true,
-      "requiredRole": "ESS Maker / Agent Developer",
-      "gateMode": "attested"
-    },
-    {
-      "id": "parameter-sharing",
-      "label": "Confirm the ServiceNow connection's parameter-sharing behavior",
-      "checkpoints": ["SN-DA-HRSD-PARAMETER-SHARING-001"],
-      "completionStatuses": ["Manual"],
-      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-parameter-sharing.md",
-      "actionExecution": "every-invocation",
-      "manualAcknowledgementEvidence": {
-        "path": "evidence.parameterSharing",
-        "evidenceObjectPath": "",
-        "acceptedRecordStatuses": ["enabled", "not-exposed"],
-        "requiredEvidenceKind": "maker-attestation",
-        "requiredValues": {"makerAttested": true},
-        "bindings": [
-          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
-          {"evidencePath": "binding.agentId", "statePath": "agentId"},
-          {
-            "evidencePath": "binding.environmentId",
-            "statePath": "environmentId"
-          },
-          {
-            "evidencePath": "binding.componentHash",
-            "statePath": "componentHash"
-          },
-          {
-            "evidencePath": "binding.connectionId",
-            "statePath": "evidence.credential.connectionId"
-          }
-        ]
-      },
-      "mutates": true,
-      "requiredRole": "ESS Maker / Agent Developer",
-      "gateMode": "attested"
-    },
-    {
-      "id": "publish",
-      "label": "Publish the current ServiceNow HRSD agent revision",
-      "checkpoints": ["SN-DA-HRSD-PUBLISH-001"],
-      "completionStatuses": ["Passed", "Manual"],
-      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
-      "actionExecution": "once",
-      "manualAcknowledgementEvidence": {
-        "path": "evidence.publish",
-        "evidenceObjectPath": "",
-        "acceptedRecordStatuses": ["confirmation-required"],
-        "requiredEvidenceKind": "maker-attestation",
-        "bindings": [
-          {
-            "evidencePath": "publishedComponentHash",
-            "statePath": "componentHash"
           }
         ]
       },
@@ -222,21 +170,64 @@
           "failureCategory": null
         },
         "bindings": [
+          {"evidencePath": "binding.provider", "statePath": "provider"},
+          {"evidencePath": "binding.profile", "statePath": "profile"},
+          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
+          {"evidencePath": "binding.agentId", "statePath": "agentId"},
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
           {
             "evidencePath": "binding.connectionId",
             "statePath": "evidence.credential.connectionId"
           },
           {
-            "evidencePath": "binding.publishedComponentHash",
-            "statePath": "componentHash"
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
           },
           {
-            "evidencePath": "binding.publishCompletedAt",
-            "statePath": "evidence.publish.completedAt"
+            "evidencePath": "binding.connectionBindingHash",
+            "statePath": "connectionBindingHash"
           }
         ]
       },
       "mutates": false
+    },
+    {
+      "id": "publish",
+      "label": "Publish the tested ServiceNow HRSD agent revision",
+      "checkpoints": ["SN-DA-HRSD-PUBLISH-001"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.publish",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["confirmation-required"],
+        "requiredEvidenceKind": "maker-attestation",
+        "bindings": [
+          {
+            "evidencePath": "publishedComponentHash",
+            "statePath": "componentHash"
+          },
+          {
+            "evidencePath": "testedDraftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "publishedSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "connectionBindingHash",
+            "statePath": "connectionBindingHash"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
     }
   ]
 }
