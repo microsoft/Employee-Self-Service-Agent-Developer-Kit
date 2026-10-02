@@ -12,21 +12,30 @@ Every **Message** block is the exact text to show the user. Copy it verbatim.
 Read `workspace/agents/{AGENT_SLUG}/.component-map.json`. This map is the
 materialized workspace projection of the source `agent.yml`.
 
-Select every entry that satisfies all of these conditions:
+Resolve the repository-reviewed ESS HR Workday inventory. The resolver must
+match all 23 exact schema names in the checked-in contract, including the two
+topics whose schema names do not begin with `Workday`:
 
-- `componentKind` is `DialogComponent`;
-- `schemaName` starts with `{AGENT_SCHEMA}.topic.Workday`;
-- `displayName` starts with `Workday`;
+- `{AGENT_SCHEMA}.topic.EmployeeUpdatePhoneNumber`
+- `{AGENT_SCHEMA}.topic.GetReferenceData`
+
+For every reviewed entry:
+
+- `componentKind` must be `DialogComponent`;
+- the exact schema name must be in the reviewed 23-topic HR inventory;
+- `displayName` must start with `Workday`;
 - the mapped path starts with `topics/` and ends with `.mcs.yml`;
 - the mapped file exists beneath the selected agent directory.
 
-Reject unsafe paths, duplicate component IDs, missing schema names, or an empty
-result. `push.py --activate` independently enforces the same exact mapped set
-and rejects omitted Workday topics or any selected non-Workday dialog; these
-instructions are not the only safety boundary. Do not use a handwritten
-filename list. For the current reviewed ESS HR template this resolves all 21
-Workday dialog topics from `agent.yml`, including business topics and
-supporting system topics.
+Reject unsafe paths, duplicate component IDs, missing schema names, any missing
+reviewed schema, or an empty result. `push.py --activate` independently
+enforces the same exact mapped set and rejects omitted Workday topics or any
+selected non-Workday dialog; these instructions are not the only safety
+boundary. Do not derive the set from a broad display-name search. The two
+disabled employee/manager handoff topics are not in the reviewed inventory and
+must remain excluded. For the current ESS HR template this resolves all 23
+active-contract Workday dialog topics, including business and supporting
+system topics.
 
 Sort the mapped paths and build `{WORKDAY_TOPIC_ARGS}` as one exact
 `--only "{path}"` argument per selected topic.

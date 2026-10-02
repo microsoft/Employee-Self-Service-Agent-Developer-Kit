@@ -82,8 +82,34 @@ NATIVE_REVIEW_LOCAL_ONLY_WARNING = (
 )
 _TOKEN_CACHE_PATH = os.path.join(".local", ".token_cache.bin")
 _EVAL_KINDS = {"EvaluationSet", "EvaluationData"}
-_EXPECTED_WORKDAY_TOPIC_COUNTS = {
-    "gptagent_copilotforemployeeselfservicehr": 21,
+_REVIEWED_WORKDAY_TOPIC_SUFFIXES = {
+    "gptagent_copilotforemployeeselfservicehr": frozenset(
+        {
+            "EmployeeUpdatePhoneNumber",
+            "GetReferenceData",
+            "WorkdayCompanyCode",
+            "WorkdayEmployeeID",
+            "WorkdayGetBaseCompensation",
+            "WorkdayGetCertifications",
+            "WorkdayGetCostCenter",
+            "WorkdayGetEmergencyContact",
+            "WorkdayGetEmploymentInformation",
+            "WorkdayGetLanguageInformation",
+            "WorkdayGetNationalIDs",
+            "WorkdayGetPassports",
+            "WorkdayGetVisas",
+            "WorkdayManagerCheck",
+            "WorkdayOnError",
+            "WorkdaySystemAccessCheck",
+            "WorkdaySystemGetCommonExecution",
+            "WorkdaySystemGetRESTExecution",
+            "WorkdaySystemGetUserContextV2",
+            "WorkdaySystemRefreshReferenceData",
+            "WorkdaySystemSetRuntimeTemplateConfigurations",
+            "Workdayemployeeupdateemail",
+            "Workdayserviceanniversary",
+        }
+    ),
 }
 
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
@@ -315,6 +341,17 @@ def resolve_workday_dialogs(
             "The active agent component map must contain a JSON object."
         )
 
+    reviewed_suffixes = _REVIEWED_WORKDAY_TOPIC_SUFFIXES.get(
+        schema.casefold()
+    )
+    reviewed_schemas = (
+        {
+            f"{schema}.topic.{suffix}".casefold()
+            for suffix in reviewed_suffixes
+        }
+        if reviewed_suffixes is not None
+        else None
+    )
     schema_prefix = f"{schema}.topic.Workday".casefold()
     entries: list[dict[str, str]] = []
     component_ids: set[str] = set()
@@ -324,12 +361,25 @@ def resolve_workday_dialogs(
             continue
         component_schema = str(raw_entry.get("schemaName") or "").strip()
         display_name = str(raw_entry.get("displayName") or "").strip()
+        normalized_component_schema = component_schema.casefold()
+        is_workday_topic = (
+            normalized_component_schema in reviewed_schemas
+            if reviewed_schemas is not None
+            else (
+                normalized_component_schema.startswith(schema_prefix)
+                and display_name.startswith("Workday")
+            )
+        )
         if (
             raw_entry.get("componentKind") != "DialogComponent"
-            or not component_schema.casefold().startswith(schema_prefix)
-            or not display_name.startswith("Workday")
+            or not is_workday_topic
         ):
             continue
+        if not display_name.startswith("Workday"):
+            raise MinimalBotEvaluationError(
+                "A reviewed Workday topic has an unexpected display name: "
+                f"{component_schema}."
+            )
         relative_path = raw_path.replace("\\", "/")
         safe_path = PurePosixPath(relative_path)
         if (
@@ -372,7 +422,29 @@ def resolve_workday_dialogs(
         raise MinimalBotEvaluationError(
             "No mapped Workday dialog topics were found for the active agent."
         )
-    expected_count = _EXPECTED_WORKDAY_TOPIC_COUNTS.get(schema.casefold())
+    if reviewed_schemas is not None:
+        observed_schemas = {
+            entry["schemaName"].casefold() for entry in entries
+        }
+        missing_schemas = sorted(reviewed_schemas - observed_schemas)
+        unexpected_schemas = sorted(observed_schemas - reviewed_schemas)
+        if missing_schemas or unexpected_schemas:
+            details = []
+            if missing_schemas:
+                details.append(
+                    "missing=" + ", ".join(missing_schemas)
+                )
+            if unexpected_schemas:
+                details.append(
+                    "unexpected=" + ", ".join(unexpected_schemas)
+                )
+            raise MinimalBotEvaluationError(
+                "The active ESS HR component map does not match the reviewed "
+                "23-topic Workday inventory ("
+                + "; ".join(details)
+                + "). Refresh the workspace before activation."
+            )
+    expected_count = len(reviewed_schemas) if reviewed_schemas is not None else None
     if expected_count is not None and len(entries) != expected_count:
         raise MinimalBotEvaluationError(
             "The active ESS HR component map contains "
