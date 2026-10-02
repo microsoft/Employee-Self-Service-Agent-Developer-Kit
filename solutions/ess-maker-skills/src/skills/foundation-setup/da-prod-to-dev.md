@@ -67,7 +67,8 @@ python scripts/setup_existing_da.py validate-agent \
   --host "{SOURCE_VALIDATED_HOST}" \
   --ring "{SOURCE_RING}" \
   --api-version "{SOURCE_API_VERSION}" \
-  --agent-id "{RELATED_DEV_AGENT_ID}"
+  --agent-id "{RELATED_DEV_AGENT_ID}" \
+  --require-alm-family
 ```
 
 Use the related Dev only when validation succeeds and `DA_AGENT_VALIDATION_JSON:` returns the same `almFamilyId` as the Prod inspection. Mark **Establish an editable Dev agent** complete, then show:
@@ -158,7 +159,9 @@ relationship from the failed Prod operation.
 On a validated related-Dev path or successful import result, run the parent's
 selected-agent product-line reconciliation with
 `--known-native-schema "{RETURNED_SCHEMA_NAME}"` for the returned identity,
-then attach it:
+then attach it. Do not invoke `ensure-alm` for an established Prod-to-Dev
+relationship or successful import; those paths already prove the ALM-family
+relationship:
 
 ```text
 python scripts/setup_existing_da.py attach \

@@ -227,8 +227,8 @@ class FakeClient:
         agent_realm: str = "dev",
         configuration_realm: str = "Dev",
         configured_agent_id: str | None = None,
-        route_realm: int | str = 0,
         include_agent_schema: bool = True,
+        include_collection_schema: bool = True,
         published_config_available: bool = True,
         changeset: dict[str, Any] | None = None,
     ) -> None:
@@ -238,8 +238,8 @@ class FakeClient:
         self.agent_realm = agent_realm
         self.configuration_realm = configuration_realm
         self.configured_agent_id = configured_agent_id or agent_id
-        self.route_realm = route_realm
         self.include_agent_schema = include_agent_schema
+        self.include_collection_schema = include_collection_schema
         self.published_config_available = published_config_available
         self.changeset = changeset or _changeset(
             agent_id=agent_id,
@@ -247,14 +247,23 @@ class FakeClient:
         )
         self.list_calls = 0
         self.fetch_calls = 0
-        self.realm_calls = 0
         self.configuration_calls = 0
 
     def list_agents(self) -> list[dict[str, Any]]:
         self.list_calls += 1
+        dev_agent = {
+            "cdsBotId": self.agent_id,
+            "displayName": self.agent_name,
+        }
+        if self.include_collection_schema:
+            dev_agent["schemaName"] = self.schema_name
         return [
-            {"botId": self.agent_id, "fullBotName": self.agent_name},
-            {"botId": OTHER_AGENT_ID, "fullBotName": "Production Agent"},
+            dev_agent,
+            {
+                "cdsBotId": OTHER_AGENT_ID,
+                "displayName": "Production Agent",
+                "schemaName": "gptagent_production",
+            },
         ]
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
@@ -273,10 +282,6 @@ class FakeClient:
         if self.include_agent_schema:
             agent["schemaName"] = self.schema_name
         return agent
-
-    def get_realms(self, _agent_id: str) -> dict[str, Any]:
-        self.realm_calls += 1
-        return {"routeRealm": self.route_realm}
 
     def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
         self.configuration_calls += 1
@@ -451,12 +456,29 @@ def test_validate_agent_is_direct_and_side_effect_free(tmp_path: Path) -> None:
         "name": "Employee Self-Service HR",
         "schemaName": SCHEMA_NAME,
         "realm": "dev",
-        "almFamilyId": FAMILY_ID,
+        "alm": {"isEnrolled": True},
+        "almFamilyId": None,
         "isManaged": True,
         "workspaceSlug": "employee-self-service-hr",
     }
     assert connection["selectedBy"] == "direct-id"
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
     assert list(tmp_path.iterdir()) == []
+
+
+def test_validate_agent_can_require_explicit_alm_family() -> None:
+    client = FakeClient()
+
+    connection = setup_existing_da.validate_existing_dev_connection(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        require_alm_family=True,
+    )
+
+    assert connection["agent"]["almFamilyId"] == FAMILY_ID
+    assert client.configuration_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -464,7 +486,10 @@ def test_validate_agent_is_direct_and_side_effect_free(tmp_path: Path) -> None:
     [
         (FakeClient(configuration_realm="Prod"), "returned realm"),
         (FakeClient(configured_agent_id=OTHER_AGENT_ID), "different agent"),
-        (FakeClient(agent_realm="prod"), "non-Dev realm"),
+        (
+            FakeClient(agent_realm="prod"),
+            "did not identify an ALM-enrolled Dev agent",
+        ),
     ],
 )
 def test_validate_agent_rejects_wrong_identity_or_realm(
@@ -476,25 +501,27 @@ def test_validate_agent_rejects_wrong_identity_or_realm(
             client,
             environment_id=ENVIRONMENT_ID,
             agent_id=AGENT_ID,
+            require_alm_family=True,
         )
 
 
 @pytest.mark.parametrize(
-    ("route_realm", "expected"),
-    [(0, "dev"), (1, "test"), (2, "prod"), ("Prod", "prod")],
+    "expected",
+    ["dev", "test", "prod"],
 )
 def test_inspect_agent_route_returns_service_realm(
-    route_realm: int | str,
     expected: str,
 ) -> None:
+    client = FakeClient(agent_realm=expected)
     result = setup_existing_da.inspect_agent_route(
-        FakeClient(route_realm=route_realm),
+        client,
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
     )
 
     assert result["realm"] == expected
     assert result["routeStatus"] == "resolved"
+    assert result["alm"] == {"isEnrolled": True}
     assert result["agentId"] == AGENT_ID
     assert result["tenantId"] == TENANT_ID
 
@@ -512,18 +539,8 @@ def test_inspect_agent_route_does_not_require_dev_configuration() -> None:
     assert client.configuration_calls == 0
 
 
-def test_inspect_agent_route_distinguishes_missing_route() -> None:
-    client = FakeClient()
-
-    def missing_realms(_agent_id: str) -> dict[str, Any]:
-        raise setup_existing_da.AgentBuilderHTTPError(
-            "Agent realm family",
-            404,
-            error_code="ObjectNotFound",
-            request_id="request-123",
-        )
-
-    client.get_realms = missing_realms  # type: ignore[method-assign]
+def test_inspect_agent_route_classifies_unenrolled_agent() -> None:
+    client = FakeClient(agent_realm=None)
 
     result = setup_existing_da.inspect_agent_route(
         client,
@@ -531,20 +548,18 @@ def test_inspect_agent_route_distinguishes_missing_route() -> None:
         agent_id=AGENT_ID,
     )
 
-    assert result["realm"] is None
-    assert result["routeStatus"] == "not-found"
-    assert result["statusCode"] == 404
-    assert result["errorCode"] == "ObjectNotFound"
-    assert result["requestId"] == "request-123"
+    assert "realm" not in result
+    assert result["alm"] == {"isEnrolled": False}
+    assert result["routeStatus"] == "not-established"
 
 
 def test_inspect_agent_route_rejects_unknown_realm() -> None:
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="recognized route realm",
+        match="unrecognized ALM realm",
     ):
         setup_existing_da.inspect_agent_route(
-            FakeClient(route_realm=9),
+            FakeClient(agent_realm="staging"),
             environment_id=ENVIRONMENT_ID,
             agent_id=AGENT_ID,
         )
@@ -557,24 +572,52 @@ def test_list_agents_classifies_every_verified_realm() -> None:
 
     assert result["devAgents"] == [
         {
-            "botId": AGENT_ID,
-            "fullBotName": "Employee Self-Service HR",
-            "realm": "dev",
+            "cdsBotId": AGENT_ID,
+            "displayName": "Employee Self-Service HR",
             "schemaName": SCHEMA_NAME,
-            "managedProperties": {"isManaged": True},
+            "realm": "dev",
         }
     ]
     assert result["testAgents"] == []
     assert result["prodAgents"] == [
         {
-            "botId": OTHER_AGENT_ID,
-            "fullBotName": "Production Agent",
+            "cdsBotId": OTHER_AGENT_ID,
+            "displayName": "Production Agent",
+            "schemaName": "gptagent_production",
             "realm": "prod",
         }
     ]
     assert result["realmNotEstablishedAgents"] == []
     assert result["productIdentityUnavailableCount"] == 0
-    assert client.configuration_calls == 1
+    assert client.configuration_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("agent", "observation", "error_type"),
+    [
+        ({}, "field-absent", "SchemaNameFieldAbsent"),
+        ({"schemaName": None}, "null", "SchemaNameNull"),
+        ({"schemaName": "  "}, "empty", "SchemaNameEmpty"),
+        (
+            {"schemaName": {"value": SCHEMA_NAME}},
+            "invalid-type",
+            "SchemaNameInvalidType",
+        ),
+    ],
+)
+def test_listed_product_identity_preserves_invalid_schema_observation(
+    agent: dict[str, Any],
+    observation: str,
+    error_type: str,
+) -> None:
+    schema_name, product_identity = (
+        setup_existing_da._listed_product_identity(agent)
+    )
+
+    assert schema_name is None
+    assert product_identity is not None
+    assert product_identity["observation"] == observation
+    assert product_identity["error"]["type"] == error_type
 
 
 def test_list_agents_uses_collection_schema_for_unpublished_dev() -> None:
@@ -602,19 +645,14 @@ def test_list_agents_uses_collection_schema_for_unpublished_dev() -> None:
             "displayName": "Employee Self-Service HR",
             "schemaName": SCHEMA_NAME,
             "publishedOn": None,
-            "botId": AGENT_ID,
-            "fullBotName": "Employee Self-Service HR",
             "realm": "dev",
-            "managedProperties": {"isManaged": True},
         }
     ]
     assert result["productIdentityUnavailableCount"] == 0
     assert client.configuration_calls == 0
 
 
-def test_list_agents_keeps_schema_when_service_surfaces_conflicting_values(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_list_agents_uses_collection_schema_without_direct_aliases() -> None:
     class ConflictingSchemaClient(FakeClient):
         def list_agents(self) -> list[dict[str, Any]]:
             return [
@@ -628,13 +666,11 @@ def test_list_agents_keeps_schema_when_service_surfaces_conflicting_values(
     client = ConflictingSchemaClient(schema_name="gptagent_direct")
 
     result = setup_existing_da.inspect_listed_agents(client)
-    captured = capsys.readouterr()
 
     assert len(result["devAgents"]) == 1
-    assert result["devAgents"][0]["schemaName"] == "gptagent_direct"
+    assert result["devAgents"][0]["schemaName"] == "gptagent_collection"
     assert result["productIdentityUnavailableCount"] == 0
     assert client.configuration_calls == 0
-    assert "returned different schemas" in captured.err
 
 
 def test_list_agents_preserves_test_and_unknown_realm_facts() -> None:
@@ -644,10 +680,15 @@ def test_list_agents_preserves_test_and_unknown_realm_facts() -> None:
     class RealmClient(FakeClient):
         def list_agents(self) -> list[dict[str, Any]]:
             return [
-                {"botId": test_agent_id, "fullBotName": "Test Agent"},
                 {
-                    "botId": unknown_agent_id,
-                    "fullBotName": "Unknown Realm Agent",
+                    "cdsBotId": test_agent_id,
+                    "displayName": "Test Agent",
+                    "schemaName": "gptagent_test",
+                },
+                {
+                    "cdsBotId": unknown_agent_id,
+                    "displayName": "Unknown Realm Agent",
+                    "schemaName": None,
                 },
             ]
 
@@ -669,8 +710,9 @@ def test_list_agents_preserves_test_and_unknown_realm_facts() -> None:
     assert result["devAgents"] == []
     assert result["testAgents"] == [
         {
-            "botId": test_agent_id,
-            "fullBotName": "Test Agent",
+            "cdsBotId": test_agent_id,
+            "displayName": "Test Agent",
+            "schemaName": "gptagent_test",
             "realm": "test",
         }
     ]
@@ -680,16 +722,28 @@ def test_list_agents_preserves_test_and_unknown_realm_facts() -> None:
             "listedId": unknown_agent_id,
             "name": "Unknown Realm Agent",
             "realm": 9,
+            "productIdentity": {
+                "outcome": "uncertain",
+                "source": "agent-collection",
+                "observation": "null",
+                "error": {
+                    "type": "SchemaNameNull",
+                    "message": (
+                        "The listed BotEntity returned a null schemaName."
+                    ),
+                },
+            },
         }
     ]
+    assert result["productIdentityUnavailableCount"] == 1
 
 
 def test_summarize_realm_agents_returns_only_identity_and_realm() -> None:
     result = setup_existing_da.summarize_realm_agents(
         [
             {
-                "botId": OTHER_AGENT_ID,
-                "fullBotName": "Production Agent",
+                "cdsBotId": OTHER_AGENT_ID,
+                "displayName": "Production Agent",
                 "realm": 2,
                 "schemaName": "must-not-project",
                 "unknown": "must-not-project",
@@ -709,13 +763,13 @@ def test_summarize_realm_agents_returns_only_identity_and_realm() -> None:
 def test_summarize_agents_adds_only_exact_registered_product_key() -> None:
     agents = [
         {
-            "botId": AGENT_ID,
-            "fullBotName": "Employee Self-Service HR",
+            "cdsBotId": AGENT_ID,
+            "displayName": "Employee Self-Service HR",
             "schemaName": SCHEMA_NAME,
         },
         {
-            "botId": OTHER_AGENT_ID,
-            "fullBotName": "Employee Self-Service HR",
+            "cdsBotId": OTHER_AGENT_ID,
+            "displayName": "Employee Self-Service HR",
             "schemaName": f"{SCHEMA_NAME}_preview",
         },
     ]
@@ -744,8 +798,8 @@ def test_summarize_agents_prefers_workspace_observation(
     result = setup_existing_da.summarize_agents(
         [
             {
-                "botId": AGENT_ID,
-                "fullBotName": "Workspace Agent",
+                "cdsBotId": AGENT_ID,
+                "displayName": "Workspace Agent",
                 "schemaName": "workspace-schema",
             }
         ],
@@ -836,9 +890,7 @@ def test_list_agents_keeps_partial_inventory_after_agent_lookup_500(
     assert "DA_AGENT_LIST_WARNING_RESPONSE_JSON:" in captured.out
 
 
-def test_list_agents_keeps_dev_agent_when_product_identity_is_unavailable(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_list_agents_preserves_missing_collection_schema_evidence() -> None:
     class UnclassifiedClient(FakeClient):
         def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
             response = SimpleNamespace(
@@ -856,19 +908,27 @@ def test_list_agents_keeps_dev_agent_when_product_identity_is_unavailable(
             )
 
     result = setup_existing_da.inspect_listed_agents(
-        UnclassifiedClient(include_agent_schema=False)
+        UnclassifiedClient(include_collection_schema=False)
     )
-    captured = capsys.readouterr()
 
     assert len(result["devAgents"]) == 1
     assert result["productIdentityUnavailableCount"] == 1
-    assert "product identity" in captured.err
-    assert "DA_AGENT_LIST_PRODUCT_WARNING_RESPONSE_JSON:" in captured.out
+    assert "schemaName" not in result["devAgents"][0]
+    assert result["devAgents"][0]["productIdentity"] == {
+        "outcome": "uncertain",
+        "source": "agent-collection",
+        "observation": "field-absent",
+        "error": {
+            "type": "SchemaNameFieldAbsent",
+            "message": "The listed BotEntity omitted schemaName.",
+        },
+    }
+    assert result["devAgents"][0]["realm"] == "dev"
+    assert result["prodAgents"]
+    assert result["productIdentityUnavailableCount"] == 1
 
 
-def test_list_agents_keeps_dev_agent_after_configuration_500(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_list_agents_does_not_query_configuration_for_missing_schema() -> None:
     class FailingConfigurationClient(FakeClient):
         def get_dev_configuration(
             self,
@@ -889,26 +949,29 @@ def test_list_agents_keeps_dev_agent_after_configuration_500(
             )
 
     result = setup_existing_da.inspect_listed_agents(
-        FailingConfigurationClient(include_agent_schema=False)
+        FailingConfigurationClient(include_collection_schema=False)
     )
-    captured = capsys.readouterr()
 
     assert len(result["devAgents"]) == 1
     assert "schemaName" not in result["devAgents"][0]
     assert len(result["prodAgents"]) == 1
     assert result["productIdentityUnavailableCount"] == 1
-    assert "DA_AGENT_LIST_PRODUCT_WARNING_RESPONSE_JSON:" in captured.out
+    assert result["devAgents"][0]["productIdentity"]["observation"] == (
+        "field-absent"
+    )
 
 
-def test_list_agents_classifies_failed_dev_confirmation_as_unresolved(
+def test_list_agents_rejects_direct_identity_mismatch(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    result = setup_existing_da.inspect_listed_agents(
-        FakeClient(
-            configuration_realm="Prod",
-            include_agent_schema=False,
-        )
-    )
+    class MismatchedDirectClient(FakeClient):
+        def get_agent(self, agent_id: str) -> dict[str, Any]:
+            result = super().get_agent(agent_id)
+            if agent_id == AGENT_ID:
+                result["botId"] = OTHER_AGENT_ID
+            return result
+
+    result = setup_existing_da.inspect_listed_agents(MismatchedDirectClient())
     captured = capsys.readouterr()
 
     assert result["devAgents"] == []
@@ -917,12 +980,11 @@ def test_list_agents_classifies_failed_dev_confirmation_as_unresolved(
         {
             "listedId": AGENT_ID,
             "name": "Employee Self-Service HR",
-            "realm": "dev",
             "verificationErrorType": "ExistingDASetupError",
         }
     ]
     assert result["productIdentityUnavailableCount"] == 0
-    assert "Dev validation" in captured.err
+    assert "different agent identity" in captured.err
 
 
 def test_print_exception_includes_type_and_notes(
@@ -1159,7 +1221,6 @@ def test_attach_materializes_without_published_config(
     )
 
     assert result["connectionStatus"] == "workspace-ready"
-    assert client.realm_calls == 1
     assert client.configuration_calls == 0
     assert client.fetch_calls == 1
     metadata = json.loads(
@@ -1187,9 +1248,101 @@ def test_existing_dev_attach_derives_schema_from_components(
 
     assert result["connectionStatus"] == "workspace-ready"
     assert result["schemaName"] == SCHEMA_NAME
-    assert client.realm_calls == 1
     assert client.configuration_calls == 0
     assert client.fetch_calls == 1
+
+
+def test_attach_allows_explicit_unenrolled_authoring(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_realm=None,
+        include_agent_schema=False,
+    )
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        allow_unenrolled_authoring=True,
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert result["schemaName"] == SCHEMA_NAME
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    metadata = json.loads(
+        (
+            _agent_root(tmp_path)
+            / setup_existing_da.ATTACH_METADATA
+        ).read_text(encoding="utf-8")
+    )
+    assert "realm" not in metadata
+    assert metadata["alm"] == {"isEnrolled": False}
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert "realm" not in config["agent"]
+    assert config["agent"]["alm"] == {"isEnrolled": False}
+    canonical = _agent_setup_state(tmp_path)
+    assert "realm" not in canonical["agent"]
+    assert canonical["agent"]["alm"] == {"isEnrolled": False}
+
+
+def test_unenrolled_authoring_rejects_direct_non_dev_realm(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_realm="prod",
+        include_agent_schema=False,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="already enrolled in ALM with realm 'prod'",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            allow_unenrolled_authoring=True,
+        )
+
+    assert client.fetch_calls == 0
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_resolved_route_upgrades_unenrolled_authoring_state(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(agent_realm=None, include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        allow_unenrolled_authoring=True,
+    )
+
+    result = setup_existing_da.attach_existing_dev(
+        FakeClient(include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert result["status"] == "resumed"
+    assert result["realm"] == "dev"
+    assert result["alm"] == {"isEnrolled": True}
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["agent"]["realm"] == "dev"
+    assert config["agent"]["alm"] == {"isEnrolled": True}
+    canonical = _agent_setup_state(tmp_path)
+    assert canonical["agent"]["realm"] == "dev"
+    assert canonical["agent"]["alm"] == {"isEnrolled": True}
 
 
 @pytest.mark.parametrize(
@@ -1223,23 +1376,22 @@ def test_receipt_backed_attach_rejects_component_schema_mismatch(
             expected_schema_name=SCHEMA_NAME,
         )
 
-    assert client.realm_calls == 1
     assert client.configuration_calls == 0
     assert client.fetch_calls == 1
     assert not (tmp_path / "workspace").exists()
 
 
-def test_alm_import_attach_rejects_non_dev_route(
+def test_alm_import_attach_rejects_direct_non_dev_realm(
     tmp_path: Path,
 ) -> None:
     client = FakeClient(
-        route_realm="Prod",
+        agent_realm="prod",
         include_agent_schema=False,
     )
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="realm discovery returned realm",
+        match="did not identify an ALM-enrolled Dev agent",
     ):
         setup_existing_da.attach_existing_dev(
             client,
@@ -1251,7 +1403,6 @@ def test_alm_import_attach_rejects_non_dev_route(
             expected_schema_name=SCHEMA_NAME,
         )
 
-    assert client.realm_calls == 1
     assert client.configuration_calls == 0
     assert client.fetch_calls == 0
     assert not (tmp_path / "workspace").exists()
@@ -1392,7 +1543,13 @@ def test_blocked_state_failure_does_not_replace_primary_error(
         setup_existing_da.ExistingDASetupError,
         match="different agent",
     ):
-        _attach(FakeClient(changeset=changeset), tmp_path)
+        setup_existing_da.attach_existing_dev(
+            FakeClient(changeset=changeset),
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            expected_schema_name=SCHEMA_NAME,
+        )
 
     assert "Canonical blocked-state persistence failed" in (
         capsys.readouterr().err
@@ -1734,7 +1891,13 @@ def test_attach_rejects_changeset_for_another_agent(tmp_path: Path) -> None:
         setup_existing_da.ExistingDASetupError,
         match="different agent",
     ):
-        _attach(FakeClient(changeset=changeset), tmp_path)
+        setup_existing_da.attach_existing_dev(
+            FakeClient(changeset=changeset),
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            expected_schema_name=SCHEMA_NAME,
+        )
 
     setup_state = _agent_setup_state(tmp_path)
     assert setup_state["connect_ready"] is False
@@ -1936,6 +2099,52 @@ def test_main_validate_agent_writes_no_setup_state(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_main_ensure_alm_emits_shared_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+    observed: dict[str, Any] = {}
+
+    def ensure(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {
+            "environmentId": kwargs["environment_id"],
+            "agentId": kwargs["agent_id"],
+            "outcome": "already-enabled",
+            "persistedValue": True,
+        }
+
+    monkeypatch.setattr(setup_existing_da, "ensure_alm", ensure)
+
+    result = setup_existing_da.main(
+        [
+            "ensure-alm",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert observed == {
+        "environment_id": ENVIRONMENT_ID,
+        "agent_id": AGENT_ID,
+    }
+    payload = json.loads(
+        capsys.readouterr().out.removeprefix("DA_ALM_ENROLLMENT_JSON:")
+    )
+    assert payload["outcome"] == "already-enabled"
+    assert payload["persistedValue"] is True
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_main_attach_preflights_serializer_before_authentication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2030,6 +2239,44 @@ def test_main_attach_forwards_setup_provenance(
         if setup_source in {"alm-import", "prod-to-dev", "mos-starter"}
         else None
     )
+    assert observed["allow_unenrolled_authoring"] is False
+
+
+def test_main_attach_forwards_unenrolled_authoring_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_require_object_model_dependencies",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    def attach(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"status": "created"}
+
+    monkeypatch.setattr(setup_existing_da, "attach_existing_dev", attach)
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+            "--allow-unenrolled-authoring",
+        ]
+    )
+
+    assert result == 0
+    assert observed["allow_unenrolled_authoring"] is True
 
 
 def test_parser_exposes_only_composable_setup_operations() -> None:
@@ -2043,6 +2290,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
     assert set(subparsers.choices) == {
         "attach",
         "cached-accounts",
+        "ensure-alm",
         "inspect-agent",
         "list-environments",
         "list-agents",
