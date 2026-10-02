@@ -16,6 +16,11 @@ def test_workday_contract_uses_generic_lifecycle() -> None:
     contract = json.loads(
         (_CONNECT / "workday" / "contract.json").read_text(encoding="utf-8")
     )
+    schema = (
+        _CONNECT / "shared" / "lifecycle-contract-schema.md"
+    ).read_text(encoding="utf-8")
+    assert "`stateInitializationCommand`" in schema
+    assert "provider command must create its complete canonical state" in schema
 
     assert contract["provider"] == "workday"
     assert [phase["id"] for phase in contract["phases"]] == [
@@ -76,6 +81,9 @@ def test_lifecycle_runner_requires_reverification_and_rollback() -> None:
     assert "provider plan passed" not in runner
     assert 'acceptedContractRevision' in runner
     assert "Do not run a migration command on a first run" in runner
+    assert "stateInitializationCommand" in runner
+    assert "never write a generic fallback" in runner
+    assert "Do not write a state file before the plan" in runner
     assert '**`"waiting"`**' in runner
     assert "provider-owned question, discovery, decision" in runner
     assert "exactly one pause boundary per attempt" in runner
@@ -126,6 +134,10 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "Power Platform Maker / Admin",
     ]
     assert contract["stateMigrationCommand"].endswith("migrate-state")
+    assert contract["stateInitializationCommand"] == (
+        "python scripts/connect_servicenow_da.py initialize-state "
+        "--contract-revision {contractRevision}"
+    )
     assert [phase["id"] for phase in contract["phases"]] == [
         "preflight",
         "plugin-prerequisites",

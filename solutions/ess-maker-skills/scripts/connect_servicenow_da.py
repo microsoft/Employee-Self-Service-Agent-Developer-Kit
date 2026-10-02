@@ -42,6 +42,9 @@ HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 PROVIDER_KEY = "servicenow-da-hrsd"
 PROFILE_KEY = "hrsd"
+CONTRACT_PATH = Path(
+    "src/skills/connect/servicenow-da-hrsd/contract.json"
+)
 LIFECYCLE_SCHEMA_VERSION = 6
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
@@ -114,6 +117,41 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _create_json_atomic_no_clobber(
+    path: Path,
+    value: dict[str, Any],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary_path, path)
+        except FileExistsError as exc:
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle state appeared during initialization; "
+                "the existing state was preserved."
+            ) from exc
+        except OSError as exc:
+            raise ServiceNowConnectError(
+                "Could not publish the initial ServiceNow lifecycle state "
+                "without replacing an existing file."
+            ) from exc
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
@@ -1040,6 +1078,86 @@ def _state_base(
         "transactions": {"topics": {}},
         "migration": {},
         "updatedAt": _utc_now(),
+    }
+
+
+def initialize_lifecycle_state(
+    context: dict[str, Any],
+    *,
+    contract_revision: int,
+) -> dict[str, Any]:
+    if (
+        not isinstance(contract_revision, int)
+        or isinstance(contract_revision, bool)
+        or contract_revision < 1
+    ):
+        raise ServiceNowConnectError(
+            "Contract revision must be a positive integer."
+        )
+    path = _lifecycle_state_path(context)
+    if path.exists():
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle state already exists; initialize-state "
+            "never repairs or replaces existing state."
+        )
+    contract = _load_json(context["root"] / CONTRACT_PATH)
+    if (
+        contract.get("provider") != PROVIDER_KEY
+        or contract.get("profile") != PROFILE_KEY
+        or contract.get("contractRevision") != contract_revision
+    ):
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle contract identity or revision does not "
+            "match the initialization request."
+        )
+    phases = contract.get("phases")
+    if not isinstance(phases, list) or not phases:
+        raise ServiceNowConnectError(
+            "ServiceNow lifecycle contract has no phases."
+        )
+    phase_ids: list[str] = []
+    for phase in phases:
+        phase_id = phase.get("id") if isinstance(phase, dict) else None
+        if (
+            not isinstance(phase_id, str)
+            or not phase_id
+            or phase_id in phase_ids
+        ):
+            raise ServiceNowConnectError(
+                "ServiceNow lifecycle contract has invalid phase IDs."
+            )
+        phase_ids.append(phase_id)
+
+    components = _load_json(context["snapshotPath"])
+    state = _state_base(context, components)
+    state.update(
+        {
+            "attested": True,
+            "attestedAt": _utc_now(),
+            "acceptedContractRevision": contract_revision,
+            "roleAttestations": {},
+            "phases": {
+                phase_id: {
+                    "status": "pending",
+                    "checkpointResults": {},
+                    "checkpointAcknowledgements": {},
+                }
+                for phase_id in phase_ids
+            },
+        }
+    )
+    _create_json_atomic_no_clobber(path, state)
+    return {
+        "status": "initialized",
+        "statePath": str(path),
+        "schemaVersion": state["schemaVersion"],
+        "provider": state["provider"],
+        "profile": state["profile"],
+        "agentSlug": state["agentSlug"],
+        "agentId": state["agentId"],
+        "environmentId": state["environmentId"],
+        "acceptedContractRevision": state["acceptedContractRevision"],
+        "phaseIds": phase_ids,
     }
 
 
@@ -3371,6 +3489,15 @@ def build_parser() -> argparse.ArgumentParser:
         "migrate-state",
         help="Migrate legacy Agent-ID ServiceNow state into lifecycle state.",
     )
+    initialize_parser = subparsers.add_parser(
+        "initialize-state",
+        help="Create the first provider-owned lifecycle state after plan approval.",
+    )
+    initialize_parser.add_argument(
+        "--contract-revision",
+        type=int,
+        required=True,
+    )
     return parser
 
 
@@ -3451,6 +3578,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "migrate-state":
             result = migrate_state(context)
+        elif args.command == "initialize-state":
+            result = initialize_lifecycle_state(
+                context,
+                contract_revision=args.contract_revision,
+            )
         else:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:

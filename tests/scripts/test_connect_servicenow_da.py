@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 
 from pathlib import Path
@@ -28,6 +29,13 @@ _CONTRACT_PATH = (
     / "connect"
     / snow.PROVIDER_KEY
     / "contract.json"
+)
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "scripts"
+    / "connect_servicenow_da.py"
 )
 
 
@@ -188,6 +196,84 @@ def _components(connection_id: str | None = None) -> dict:
             {"$kind": "ConnectorDefinitionInsert"}
         ],
     }
+
+
+def _write_foundation_context(
+    root: Path,
+    *,
+    components: dict | None = None,
+) -> Path:
+    setup_path = root / snow.SETUP_STATE
+    config_path = root / snow.ACTIVE_CONFIG
+    snapshot = Path(
+        "workspace/agents/employee-self-service-hr/"
+        ".agentbuilder/components.json"
+    )
+    setup_path.parent.mkdir(parents=True, exist_ok=True)
+    setup_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "intent": "DA foundation setup",
+                "environment": {
+                    "id": ENVIRONMENT_ID,
+                    "tenant_id": "00000000-0000-4000-8000-000000009999",
+                    "ring": "test",
+                    "api_version": "2024-10-01",
+                    "power_platform_api_endpoint": (
+                        "https://example.environment.api.test.powerplatform.com"
+                    ),
+                },
+                "agents": {
+                    AGENT_ID: {
+                        "authoring_ready": True,
+                        "connect_ready": False,
+                        "agent": {
+                            "id": AGENT_ID,
+                            "schema_name": snow.HR_SCHEMA_NAME,
+                            "realm": "dev",
+                            "workspace_slug": AGENT_SLUG,
+                        },
+                        "workspace": {
+                            "folder": f"workspace/agents/{AGENT_SLUG}",
+                            "agent_path": "agent.mcs.yml",
+                        },
+                        "steps": {
+                            "SETUP-01": {"state": "done"},
+                            "SETUP-02.1": {"state": "done"},
+                            "SETUP-02.2": {"state": "blocked"},
+                            "SETUP-03": {"state": "done"},
+                            "SETUP-04": {"state": "done"},
+                            "SETUP-05": {"state": "blocked"},
+                            "SETUP-06": {"state": "done"},
+                            "SETUP-07": {"state": "done"},
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path.write_text(
+        json.dumps(
+            {
+                "activeAgent": AGENT_SLUG,
+                "agents": [
+                    {
+                        "slug": AGENT_SLUG,
+                        "botId": AGENT_ID,
+                        "agentBuilderChangeSetPath": snapshot.as_posix(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    if components is not None:
+        snapshot_path = root / snapshot
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(json.dumps(components), encoding="utf-8")
+    return snapshot
 
 
 def test_summarize_components_separates_servicenow_from_workday_flows() -> None:
@@ -506,72 +592,7 @@ def test_connection_summary_prefers_token_status() -> None:
 def test_load_context_requires_matching_schema_v4_hr_agent(
     tmp_path: Path,
 ) -> None:
-    setup_path = tmp_path / snow.SETUP_STATE
-    config_path = tmp_path / snow.ACTIVE_CONFIG
-    snapshot = Path(
-        "workspace/agents/employee-self-service-hr/"
-        ".agentbuilder/components.json"
-    )
-    setup_path.parent.mkdir(parents=True)
-    setup_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 4,
-                "intent": "DA foundation setup",
-                "environment": {
-                    "id": ENVIRONMENT_ID,
-                    "tenant_id": "00000000-0000-4000-8000-000000009999",
-                    "ring": "test",
-                    "api_version": "2024-10-01",
-                    "power_platform_api_endpoint": (
-                        "https://example.environment.api.test.powerplatform.com"
-                    ),
-                },
-                "agents": {
-                    AGENT_ID: {
-                        "authoring_ready": True,
-                        "connect_ready": False,
-                        "agent": {
-                            "id": AGENT_ID,
-                            "schema_name": snow.HR_SCHEMA_NAME,
-                            "realm": "dev",
-                            "workspace_slug": "employee-self-service-hr",
-                        },
-                        "workspace": {
-                            "folder": "workspace/agents/employee-self-service-hr",
-                            "agent_path": "agent.mcs.yml",
-                        },
-                        "steps": {
-                            "SETUP-01": {"state": "done"},
-                            "SETUP-02.1": {"state": "done"},
-                            "SETUP-02.2": {"state": "blocked"},
-                            "SETUP-03": {"state": "done"},
-                            "SETUP-04": {"state": "done"},
-                            "SETUP-05": {"state": "blocked"},
-                            "SETUP-06": {"state": "done"},
-                            "SETUP-07": {"state": "done"},
-                        },
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    config_path.write_text(
-        json.dumps(
-            {
-                "activeAgent": "employee-self-service-hr",
-                "agents": [
-                    {
-                        "slug": "employee-self-service-hr",
-                        "botId": AGENT_ID,
-                        "agentBuilderChangeSetPath": snapshot.as_posix(),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    snapshot = _write_foundation_context(tmp_path)
 
     result = snow.load_context(tmp_path)
 
@@ -2441,6 +2462,219 @@ def test_legacy_state_migration_is_idempotent_and_preserves_source(
         == "keep-current"
     )
     assert state["evidence"]["test"]["reconfirmRequired"] is True
+
+
+def test_first_run_initialize_then_migrate_and_inspect_offline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    components = _components(CONNECTION_ID)
+    _write_foundation_context(tmp_path, components=components)
+    contract = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    contract_path = tmp_path / snow.CONTRACT_PATH
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(
+        [
+            "initialize-state",
+            "--contract-revision",
+            str(contract["contractRevision"]),
+        ]
+    ) == 0
+    initialized = json.loads(capsys.readouterr().out)
+    state_path = _lifecycle_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert initialized["status"] == "initialized"
+    assert state["schemaVersion"] == snow.LIFECYCLE_SCHEMA_VERSION
+    assert state["provider"] == snow.PROVIDER_KEY
+    assert state["profile"] == snow.PROFILE_KEY
+    assert state["agentSlug"] == AGENT_SLUG
+    assert state["agentId"] == AGENT_ID
+    assert state["environmentId"] == ENVIRONMENT_ID
+    assert state["attested"] is True
+    assert state["acceptedContractRevision"] == contract["contractRevision"]
+    expected_phase_ids = [
+        phase["id"] for phase in contract["phases"]
+    ]
+    assert initialized["phaseIds"] == expected_phase_ids
+    assert set(state["phases"]) == set(expected_phase_ids)
+    assert all(
+        phase == {
+            "status": "pending",
+            "checkpointResults": {},
+            "checkpointAcknowledgements": {},
+        }
+        for phase in state["phases"].values()
+    )
+
+    assert snow.main(["migrate-state"]) == 0
+    migrated = json.loads(capsys.readouterr().out)
+    assert migrated["status"] == "migrated"
+
+    assert snow.main(["inspect", "--offline"]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["mode"] == "offline"
+    assert inspected["agentId"] == AGENT_ID
+    assert inspected["components"]["serviceNowTopicCount"] == 1
+
+
+def test_initialize_state_never_replaces_existing_malformed_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_foundation_context(
+        tmp_path,
+        components=_components(CONNECTION_ID),
+    )
+    contract = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    contract_path = tmp_path / snow.CONTRACT_PATH
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    malformed = {
+        "provider": snow.PROVIDER_KEY,
+        "agentSlug": AGENT_SLUG,
+    }
+    state_path.write_text(json.dumps(malformed), encoding="utf-8")
+    before = state_path.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(
+        [
+            "initialize-state",
+            "--contract-revision",
+            str(contract["contractRevision"]),
+        ]
+    ) == 1
+    error = json.loads(capsys.readouterr().out)
+
+    assert error["status"] == "error"
+    assert "already exists" in error["message"]
+    assert state_path.read_bytes() == before
+
+
+def test_initialize_state_preserves_file_created_during_atomic_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_foundation_context(
+        tmp_path,
+        components=_components(CONNECTION_ID),
+    )
+    contract = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
+    contract_path = tmp_path / snow.CONTRACT_PATH
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+    state_path = _lifecycle_path(tmp_path)
+    sentinel = b'{"sentinel":"concurrent-state"}\n'
+    original_link = snow.os.link
+
+    def create_concurrent_state_then_link(
+        source: str | bytes | Path,
+        destination: str | bytes | Path,
+        *args,
+        **kwargs,
+    ) -> None:
+        Path(destination).write_bytes(sentinel)
+        original_link(source, destination, *args, **kwargs)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        snow.os,
+        "link",
+        create_concurrent_state_then_link,
+    )
+
+    assert snow.main(
+        [
+            "initialize-state",
+            "--contract-revision",
+            str(contract["contractRevision"]),
+        ]
+    ) == 1
+    error = json.loads(capsys.readouterr().out)
+
+    assert error["status"] == "error"
+    assert "appeared during initialization" in error["message"]
+    assert state_path.read_bytes() == sentinel
+
+
+def test_migrate_state_cli_returns_nonzero_for_malformed_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_foundation_context(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "provider": snow.PROVIDER_KEY,
+                "profile": snow.PROFILE_KEY,
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = state_path.read_bytes()
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(["migrate-state"]) == 1
+    error = json.loads(capsys.readouterr().out)
+
+    assert error == {
+        "status": "error",
+        "message": "ServiceNow lifecycle schemaVersion must be an integer.",
+    }
+    assert state_path.read_bytes() == before
+
+
+def test_migrate_state_process_exits_nonzero_for_malformed_state(
+    tmp_path: Path,
+) -> None:
+    _write_foundation_context(tmp_path)
+    state_path = _lifecycle_path(tmp_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "provider": snow.PROVIDER_KEY,
+                "profile": snow.PROFILE_KEY,
+                "agentSlug": AGENT_SLUG,
+                "agentId": AGENT_ID,
+                "environmentId": ENVIRONMENT_ID,
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = state_path.read_bytes()
+
+    completed = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "migrate-state"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    error = json.loads(completed.stdout)
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    assert error == {
+        "status": "error",
+        "message": "ServiceNow lifecycle schemaVersion must be an integer.",
+    }
+    assert state_path.read_bytes() == before
 
 
 def test_enable_all_topics_rolls_back_ambiguous_partial_mutation(

@@ -12,6 +12,7 @@
     "Power Platform Maker / Admin"
   ],
   "stateMigrationCommand": "python scripts/connect_servicenow_da.py migrate-state",
+  "stateInitializationCommand": "python scripts/connect_servicenow_da.py initialize-state --contract-revision {contractRevision}",
   "detect": {
     "checkpoint": "SN-DA-HRSD-PKG-001",
     "meansInstalled": "Passed",

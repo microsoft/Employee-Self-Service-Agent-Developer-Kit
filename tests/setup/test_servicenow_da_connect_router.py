@@ -102,6 +102,7 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     entra = (actions / "guide-entra-registration.md").read_text(
         encoding="utf-8"
     )
+    entra_normalized = " ".join(entra.split())
     oidc = (actions / "guide-servicenow-oidc.md").read_text(
         encoding="utf-8"
     )
@@ -180,6 +181,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
     assert "one category evaluation" in entra
     assert "Do not decide checkpoint success in this action" in entra
+    assert "same as old" in entra_normalized
+    assert "What is the existing Application (client) ID?" in entra_normalized
+    assert "do not tell them to restart `/connect`" in entra_normalized
+    assert "does not infer Entra configuration from the physical connection" in (
+        entra_normalized
+    )
     assert "upn" in oidc
     assert "Configure an OIDC provider to verify ID tokens" in oidc
     assert "multi-provider sso" in " ".join(oidc.split()).casefold()

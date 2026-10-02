@@ -48,12 +48,12 @@ If `AGENT_SLUG` is empty, stop and ask the user to run `/setup`; agent-specific
 mutation and validation must never fall back to scanning every local agent.
 
 Read `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json`. If it
-does not exist, this is a first run: initialize it in memory with
-`provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: false`,
-`acceptedContractRevision: 0`, `roleAttestations: {}`, and every phase from
-the contract at
-`status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
-(write only after the plan is shown, in L.1).
+does not exist, this is a first run. Do not write a state file before the plan
+is accepted. For plan rendering only, treat every contract phase as pending
+and `attested` as false. If the contract has `stateInitializationCommand`,
+the provider owns the complete canonical initial state; do not construct or
+persist a generic substitute. Providers without that command retain the
+generic first-run state described in L.1.
 
 If existing state identifies a different provider or agent slug, stop instead
 of reusing it. Never copy plan or role attestation across provider/agent
@@ -126,12 +126,22 @@ Use the `vscode_askQuestions` tool:
 contract-revision re-attestation, preserve the existing state unchanged. The
 next invocation should show this same plan again.
 
-**If "Yes, let's go" on a first run:** Write
-`.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` now with
-`provider: PROVIDER`, `agentSlug: AGENT_SLUG`, `attested: true`,
-`attestedAt` = current UTC timestamp,
+**If "Yes, let's go" on a first run:** If the contract has
+`stateInitializationCommand`, replace `{contractRevision}` in that exact
+checked-in command and run it now. Require exit code `0` and a structured
+success result. Then read the canonical state file and verify its provider,
+profile when present, agent slug, agent ID and environment ID when present,
+`attested: true`, and exact `acceptedContractRevision`. Verify every contract
+phase exists at `status: "pending"` with empty checkpoint results. Any command
+failure, missing file, malformed schema, identity mismatch, missing phase, or
+non-pending phase blocks the lifecycle; never write a generic fallback and
+never silently repair an existing file.
+
+If the contract has no initialization command, write the historical generic
+state now with `provider: PROVIDER`, `agentSlug: AGENT_SLUG`,
+`attested: true`, `attestedAt` = current UTC timestamp,
 `acceptedContractRevision: contractRevision`, `roleAttestations: {}`, and
-every phase at `status: "pending"`.
+every phase at `status: "pending"` with empty checkpoint results.
 
 **If "Yes, let's go" after a contract revision changed:** update only
 `attested`, `attestedAt`, and `acceptedContractRevision`, plus missing phases

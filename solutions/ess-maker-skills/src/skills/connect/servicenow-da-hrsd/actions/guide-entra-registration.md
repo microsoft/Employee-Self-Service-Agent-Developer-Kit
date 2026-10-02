@@ -70,6 +70,16 @@ Ask one completion question for the whole Entra registration step. While the
 question is pending, do not return an action result. If the admin is not done,
 return `ACTION_RESULT = "waiting"`.
 
+The completed/reused answer must contain the Application (client) ID in GUID
+form. If the Maker answers only with an ambiguous phrase such as "same as
+old", "reuse it", or "done" and does not include a GUID, do not treat that as
+verified completion and do not tell them to restart `/connect`. In the same
+turn and as a clarification of this one completion pause, ask:
+**What is the existing Application (client) ID?** Accept only the non-secret
+GUID. If the Maker cannot provide it yet, return
+`ACTION_RESULT = "waiting"`. This clarification is not another checklist gate
+and does not infer Entra configuration from the physical connection.
+
 After verification or completion, validate the Application client ID as a
 GUID, then record one bundled phase handoff. Use `reused` for a valid existing
 app and `completed` for an app that required configuration:
