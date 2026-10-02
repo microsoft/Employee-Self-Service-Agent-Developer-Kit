@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
+
 from flightcheck.checks.native_agent import run_native_agent_checks
 
 
@@ -57,16 +59,21 @@ class _AgentBuilder:
     tenant_id = TENANT_ID
     api_version = "2024-10-01"
 
-    def __init__(self, references: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        references: list[dict[str, Any]],
+        *,
+        realm: int | str | None = 0,
+    ) -> None:
         self.references = references
+        self.realm = realm
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == AGENT_ID
         return {
             "botId": AGENT_ID,
             "fullBotName": "Employee Self-Service",
-            "schemaName": "gptagent_ess",
-            "realm": 0,
+            "realm": self.realm,
             "managedProperties": {"isManaged": False},
         }
 
@@ -76,8 +83,9 @@ class _AgentBuilder:
         )
 
     def get_realms(self, agent_id: str) -> dict[str, Any]:
-        assert agent_id == AGENT_ID
-        return {"routeRealm": "Dev"}
+        raise AssertionError(
+            f"Native FlightCheck must not require an ALM route for {agent_id}"
+        )
 
     def fetch_components(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == AGENT_ID
@@ -203,6 +211,51 @@ def test_explicit_agent_slug_overrides_different_active_agent() -> None:
     assert _by_id(results, "DA-AGENT-001").status == "Passed"
     assert _by_id(results, "DA-CONTENT-001").status == "Passed"
     assert _by_id(results, "DA-CONN-001").status == "Skipped"
+
+
+def test_native_flightcheck_accepts_swagger_unenrolled_null_realm() -> None:
+    runner = _Runner(
+        agentbuilder=_AgentBuilder([], realm=None),
+        connectivity=_Connectivity([]),
+    )
+
+    results = run_native_agent_checks(runner)
+
+    assert _by_id(results, "DA-AGENT-001").status == "Passed"
+    assert _by_id(results, "DA-CONTENT-001").status == "Passed"
+
+
+def test_native_flightcheck_uses_direct_dev_over_stale_local_alm_state() -> None:
+    runner = _Runner(
+        agentbuilder=_AgentBuilder([], realm="dev"),
+        connectivity=_Connectivity([]),
+    )
+    runner.config["agent"]["alm"] = {"isEnrolled": False}
+
+    results = run_native_agent_checks(runner)
+
+    assert _by_id(results, "DA-AGENT-001").status == "Passed"
+    assert _by_id(results, "DA-CONTENT-001").status == "Passed"
+
+
+@pytest.mark.parametrize("realm", ("test", "prod"))
+def test_native_flightcheck_rejects_enrolled_non_dev_realm(
+    realm: str,
+) -> None:
+    runner = _Runner(
+        agentbuilder=_AgentBuilder([], realm=realm),
+        connectivity=_Connectivity([]),
+    )
+
+    results = run_native_agent_checks(runner)
+
+    access = _by_id(results, "DA-AGENT-001")
+    assert access.status == "Failed"
+    assert "editable Dev or unenrolled authoring target" in access.result
+    assert all(
+        result.checkpoint_id != "DA-CONTENT-001"
+        for result in results
+    )
 
 
 def test_single_connected_candidate_passes_with_mapping_disclaimer() -> None:

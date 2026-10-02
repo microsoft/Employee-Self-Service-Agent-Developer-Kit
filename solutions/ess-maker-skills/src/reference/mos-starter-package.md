@@ -4,9 +4,9 @@
 
 ## Scope
 
-This reference defines the safety and evidence contract for installing a new Dev agent from an entitled MOS ("AgentSchemaTemplates") starter package. A workspace may install multiple products into its one recorded Power Platform environment. The path separates read-only discovery, a guarded create request, and ALM enablement. It never publishes, promotes, removes components, or calls Dataverse.
+This reference defines the safety and evidence contract for installing a new Dev agent from an entitled MOS ("AgentSchemaTemplates") starter package. A workspace may install multiple products into its one recorded Power Platform environment. The path separates read-only discovery, a guarded create request, route inspection, and optional maker-confirmed ALM enrollment. It never publishes, promotes, removes components, or calls Dataverse.
 
-`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch per explicit request identity, separately invoked ALM enablement, and response evidence. It has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) owns component acquisition, projection, and per-agent canonical workspace completion. The executing session composes these operations; the script does not wrap them into a transaction.
+`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch per explicit request identity, and response evidence. Shared ALM enrollment is exposed by `setup_existing_da.py ensure-alm`; after creation, MOS setup inspects the route and composes that operation only when the route is missing and the maker selects **Continue (Recommended)** rather than **Skip enrollment**. The MOS script has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) owns component acquisition, projection, and per-agent canonical workspace completion. The executing session composes these operations; no script wraps them into a transaction.
 
 ## Current evidence
 
@@ -85,7 +85,7 @@ It does not:
 - install, configure, or infer any hybrid Dataverse extension;
 - publish, deploy, promote, or remove components from the agent.
 
-`create` and `enable-alm` are separate remotely mutating commands. Neither invokes the other or attachment. `list` never mutates. An accepted create response emits the returned identity but does not opt in, attach, or report setup complete. A successful `list` emits
+`create` and the shared `setup_existing_da.py ensure-alm` operation are separate remotely mutating commands. Neither invokes the other or attachment. `list` and `inspect-agent` never mutate. An accepted create response emits the returned identity but does not opt in, attach, or report setup complete. Enrollment remains a separate maker-confirmed choice; skipping it performs no update or attachment. A successful `list` emits
 `DA_MOS_STARTER_PACKAGES_JSON:` with a `packages` array plus a
 `catalogWarnings` array, empty when every row was valid.
 Each package and verified Dev agent resolves `.local/setup/da-product-observations.json` before the checked-in seed. `da_product_registry.py observe` atomically upserts session-established package, catalog, schema, environment, ring, and installed facts; it does not call the service or interpret operation results. Successful create responses and definitive collision handling can supply these facts through the existing setup flow. Product identity remains reusable across targets, while installed state applies only to the exact observed environment and ring. `setup_existing_da.py list-agents` returns `devAgents`, `testAgents`, `prodAgents`, and `realmNotEstablishedAgents` rather than discarding listed identities after realm inspection. Product identity enrichment applies only to `devAgents`; `productIdentityUnavailableCount` reports verified Dev agents whose exact schema could not be read. A session may correlate known keys or exact observed schemas to offer an existing editable Dev agent, but the correlation does not establish installed template version.
@@ -99,14 +99,13 @@ A failed `list` instead emits
 it emits `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:` followed by either
 `DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or
 `DA_MOS_STARTER_CREATE_RESPONSE_TEXT:`, and finally
-`DA_MOS_STARTER_CREATE_JSON:` on success. `enable-alm` emits
-`DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and the update response when
-it writes, then `DA_MOS_STARTER_ALM_JSON:` only after successful read-back.
-An already-enabled agent emits only the final result and performs no write.
-A failed verification emits `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`
-with response evidence when available, or
-`DA_MOS_STARTER_ALM_VERIFY_JSON:` when read-back completed but the setting
-did not persist.
+`DA_MOS_STARTER_CREATE_JSON:` on success. Shared enrollment emits
+`DA_ALM_ENROLLMENT_ANNOTATIONS_JSON:` and the update response when it writes,
+then `DA_ALM_ENROLLMENT_JSON:` only after successful read-back. An
+already-enabled agent emits only the final result and performs no write. A
+failed verification emits `DA_ALM_ENROLLMENT_VERIFY_ANNOTATIONS_JSON:` with
+response evidence when available, or `DA_ALM_ENROLLMENT_VERIFY_JSON:` when
+read-back completed but the setting did not persist.
 
 Create annotations report observed operation and fuse facts only. Listing failures emit
 `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` for HTTP, transport, and invalid-shape

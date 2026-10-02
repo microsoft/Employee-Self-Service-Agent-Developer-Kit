@@ -344,8 +344,8 @@ def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
             ),
             FakeResponse(
                 {
-                    "entities": [second_agent],
-                    "continuationToken": "",
+                    "Entities": [second_agent],
+                    "ContinuationToken": "",
                 }
             ),
         ]
@@ -371,9 +371,12 @@ def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
     "body",
     (
         [],
+        {"entities": [], "continuationToken": ""},
         {"Entities": None, "ContinuationToken": ""},
         {"Entities": ["not-an-object"], "ContinuationToken": ""},
+        {"Entities": [], "ContinuationToken": None},
         {"Entities": [], "ContinuationToken": 123},
+        {"Entities": []},
     ),
 )
 def test_agent_listing_rejects_invalid_collection_shape(body: Any) -> None:
