@@ -494,6 +494,8 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert "python scripts/analytics_pointer.py --show" in push
     assert "only after deployment verification" in push
     assert "do not substitute the Copilot Studio home page" in push
+    assert "General component push for a DA-GA agent is not yet available" not in push
+    assert "After a fully successful general push" in push
     assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))

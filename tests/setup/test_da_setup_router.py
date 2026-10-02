@@ -1880,7 +1880,6 @@ def test_non_da_ga_setup_implementation_is_absent() -> None:
 
 def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
-        "push.prompt.md": "DA-GA agent is not yet available",
         "delete.prompt.md": "DA-GA agent is not yet available",
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
@@ -1891,6 +1890,10 @@ def test_da_commands_degrade_by_operation() -> None:
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
         assert "transport" not in prompt.casefold(), name
+
+    push_prompt = (_PROMPTS / "push.prompt.md").read_text(encoding="utf-8")
+    assert "python scripts/push.py --dry-run" in push_prompt
+    assert "python scripts/analytics_pointer.py --show" in push_prompt
 
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
     assert "src/skills/connect/SKILL.md" in connect_prompt
@@ -1918,8 +1921,19 @@ def test_hybrid_workday_config_commands_remain_available() -> None:
         assert (_SOLUTION / script_path).is_file(), name
 
 
-def test_da_local_capabilities_remain_available() -> None:
-    for name in ("create.prompt.md", "update.prompt.md"):
+def test_da_local_create_remains_local_and_update_can_deploy() -> None:
+    create_prompt = (_PROMPTS / "create.prompt.md").read_text(encoding="utf-8")
+    normalized_create = " ".join(create_prompt.split()).casefold()
+    assert "continue with local authoring" in normalized_create
+    assert "skip every instruction to push, publish" in normalized_create
+
+    update_prompt = (_PROMPTS / "update.prompt.md").read_text(encoding="utf-8")
+    normalized_update = " ".join(update_prompt.split()).casefold()
+    assert "appropriate push flow" in normalized_update
+    assert "existing topic edits" in normalized_update
+    assert "da-ga deployment is not yet available" not in normalized_update
+
+    for name in ("create.prompt.md",):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         normalized = " ".join(prompt.split()).casefold()
         assert "continue with local authoring" in normalized, name
@@ -1938,7 +1952,7 @@ def test_da_local_capabilities_remain_available() -> None:
     assert "server-side diagnostics are not yet available" in normalized_test
     assert "da-ga workflow testing is not yet available" in normalized_test
 
-    for name in ("create.prompt.md", "update.prompt.md"):
+    for name in ("create.prompt.md",):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         normalized = " ".join(prompt.split())
         assert "Do not offer `/test`" in normalized, name

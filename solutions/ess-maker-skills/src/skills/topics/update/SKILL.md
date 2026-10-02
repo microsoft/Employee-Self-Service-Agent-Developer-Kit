@@ -4,11 +4,12 @@ This skill guides the user through modifying an existing Copilot Studio topic.
 Updating means editing the local working copy AND pushing the change to the
 live environment via push.
 
-This skill is local-only. Complete the checkpoint, edit, scan, and review, but
-skip every
-push, publish, or server-backed validation instruction. Finish by saying the
-local topic is ready and DA-GA deployment is not yet available. Do not offer to
-test the change because it is not deployed.
+This skill owns the complete existing-topic update flow: checkpoint, edit,
+scan, dry-run, push, publish, and optional runtime validation. For a
+Dataverse-free MinimalBot agent, `push.py` automatically scopes an unscoped
+push containing only existing topic edits. Topic creation/deletion and
+unsupported component types remain outside this flow and must not be reported
+as deployed.
 
 ## CRITICAL — Local Files Are a Working Copy
 

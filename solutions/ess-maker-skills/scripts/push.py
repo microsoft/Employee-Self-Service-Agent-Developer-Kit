@@ -1414,6 +1414,64 @@ def _minimalbot_push(
     print("MinimalBot agent detected (Dataverse-free).")
     if only_globs:
         print(f"(Scoped push — {len(only_globs)} filter(s) active)")
+    else:
+        baseline_dir = os.path.join(agent_dir, ".baseline")
+        if os.path.isdir(baseline_dir):
+            changed, new, deleted = compute_diff(
+                collect_files(baseline_dir), collect_files(agent_dir)
+            )
+            topic_changes = sorted(
+                path.replace("\\", "/")
+                for path in changed
+                if path.replace("\\", "/").startswith("topics/")
+                and path.replace("\\", "/").endswith(".mcs.yml")
+            )
+            non_eval_changes = sorted(
+                path.replace("\\", "/")
+                for path in (*changed, *new, *deleted)
+                if not path.replace("\\", "/").startswith("evaluations/")
+            )
+            evaluation_changes = sorted(
+                path.replace("\\", "/")
+                for path in (*changed, *new, *deleted)
+                if path.replace("\\", "/").startswith("evaluations/")
+            )
+            unsupported_topic_changes = sorted(
+                path.replace("\\", "/")
+                for path in (*new, *deleted)
+                if path.replace("\\", "/").startswith("topics/")
+            )
+            if topic_changes and evaluation_changes:
+                print(
+                    "ERROR: MinimalBot pushes must separate existing topic "
+                    "updates from evaluation changes. Re-run with an explicit "
+                    "--only scope for one operation."
+                )
+                sys.exit(1)
+            if unsupported_topic_changes:
+                print(
+                    "ERROR: MinimalBot general push supports updates to "
+                    "existing topics only; topic create/delete is not "
+                    "supported through this path:"
+                )
+                for path in unsupported_topic_changes:
+                    print(f"  - {path}")
+                sys.exit(1)
+            if topic_changes:
+                only_globs = topic_changes
+                print(
+                    "(Auto-scoped MinimalBot topic push — existing topic "
+                    "updates only.)"
+                )
+            elif non_eval_changes:
+                print(
+                    "ERROR: MinimalBot general push supports evaluation sets "
+                    "and updates to existing topics only. These changes "
+                    "require an explicit supported scope:"
+                )
+                for path in non_eval_changes:
+                    print(f"  - {path}")
+                sys.exit(1)
 
     client = MinimalBotEvaluationClient.from_config(config)
     try:

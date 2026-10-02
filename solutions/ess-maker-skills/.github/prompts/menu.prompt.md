@@ -25,7 +25,7 @@ Here's what I can help you with:
 | `/evaluate` | Type Enter to create, update, tag, review, run, view results, or delete evaluation test sets |
 | `/run` | Type Enter to run evaluation test sets or view run results |
 | `/flightcheck` | Type Enter to validate local agent files |
-| `/push` | Show native DA-GA deployment availability |
+| `/push` | Push local changes to Copilot Studio |
 | `/backup-template-configs` | Back up hybrid Workday reference-data template configs |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs |
 | `/troubleshoot` | Show DA-GA integration troubleshooting availability |

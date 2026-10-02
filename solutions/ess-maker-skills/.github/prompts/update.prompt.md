@@ -14,12 +14,12 @@ Workspace-level evaluation updates and review-tag workflows do not. Apply the
 setup gate only after the user chooses a topic or workflow, or when an
 evaluation operation needs a configured agent for push.
 
-For **topic and workflow updates only**, continue with local authoring but skip
-every instruction to push, publish, or
-run server-backed validation. Finish by stating that the local files were
-saved and DA-GA deployment is not yet available in this release. Do not offer
-`/test` as validation of the local change because `/test` can exercise only
-the unchanged deployed version.
+For **topic and workflow updates**, continue through local authoring, the
+appropriate push flow, and publish/validation steps in the selected skill.
+Existing topic edits on Dataverse-free MinimalBot agents are pushed through
+the supported scoped topic-update path. Topic creation/deletion and unsupported
+component types remain local or must be reported as unsupported; do not claim
+they were deployed.
 
 This restriction does not apply to evaluation operations. Evaluation edit/add,
 Request Review, Run, reviewer completion, and explicit evaluation push follow
@@ -88,10 +88,7 @@ Do NOT proceed without reading the appropriate skill file first.
 
 ## Topic/workflow completion gate
 
-This gate does not apply in this DA-only release. State that runtime testing
-is deferred until a supported deployment path can make the local change live.
-
-This gate applies only to topic and workflow updates. Evaluation updates and
+This gate applies to topic and workflow updates. Evaluation updates and
 evaluation review workflows follow their evaluation skill's completion steps.
 
 For a topic or workflow, a scan, a push, `validate.py` (flow

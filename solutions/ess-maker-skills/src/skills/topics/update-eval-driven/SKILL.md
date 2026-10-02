@@ -7,11 +7,12 @@ validation, and the manifest for future automated eval execution.
 This is the default topic path used by `/update` for simple topics:
 informational responses, clarification, routing, and handoff.
 
-Complete local materialization, validation, and review, but skip every dry-run,
-push, and
-deployment-verification instruction. Finish by saying the local files are ready
-and DA-GA deployment is not yet available. Do not offer to test the change
-because it is not deployed.
+Complete local materialization, validation, review, dry-run, push, and
+deployment verification for the selected existing topic. On a Dataverse-free
+MinimalBot agent, the push flow supports updates to existing topics only;
+topic creation/deletion and unsupported component types remain local or must
+be reported as unsupported. Offer runtime testing only after verified push and
+publish.
 
 ## Rules
 

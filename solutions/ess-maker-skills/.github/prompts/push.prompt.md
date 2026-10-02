@@ -50,19 +50,20 @@ that message and do not substitute the Copilot Studio home page.
 
 ## General component push
 
-For a general component push, show:
-
-> General component push for a DA-GA agent is not yet available in this release. No local or remote files have been changed.
-
-and STOP. The explicit evaluation-push branch above remains available.
-
-Run a dry-run first so the user sees the exact diff before any mutation:
+For a general component push, run a dry-run first so the user sees the exact
+diff before any mutation:
 
 ```
 python scripts/push.py --dry-run
 ```
 
 Show the dry-run output to the user. Then ask: "Push these changes to Copilot Studio? (yes/no)"
+
+For a Dataverse-free MinimalBot agent, the script automatically scopes an
+unscoped push containing only updates to existing topic YAML files. It does
+not support topic creation/deletion or mixing topic updates with evaluation
+changes; report the returned error and ask the maker to separate those
+operations.
 
 Only after the user answers `yes` (or `y`), run:
 
@@ -85,3 +86,13 @@ The script will:
 4. Update the baseline only after a fully-successful push (zero errors)
 
 If the script reports any errors, the baseline is intentionally NOT updated so the next push retries the failed components. Do not pass `--yes` as a workaround - investigate the errors first.
+
+After a fully successful general push, run:
+
+```
+python scripts/analytics_pointer.py --show
+```
+
+Show that command's stdout verbatim. Do not run it after a dry-run,
+cancellation, or failed push, and do not substitute the Copilot Studio
+homepage if the analytics link is unavailable.

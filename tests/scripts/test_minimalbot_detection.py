@@ -619,6 +619,25 @@ def test_scoped_minimalbot_topic_push_pins_account_and_updates_baseline(
     ).read_text(encoding="utf-8")
 
 
+def test_unscoped_minimalbot_push_auto_scopes_existing_topic_updates(
+    tmp_path, monkeypatch, capsys
+):
+    _write_existing_topic_change(tmp_path)
+    fake = _RecordingClient()
+    _patch_client(monkeypatch, fake)
+    monkeypatch.setattr(push, "yaml_to_object_models", _fake_topic_conversion)
+
+    push._minimalbot_push(
+        _minimalbot_config(str(tmp_path)),
+        auto_yes=True,
+    )
+
+    out = capsys.readouterr().out
+    assert "Auto-scoped MinimalBot topic push" in out
+    assert fake.authenticated is True
+    assert fake.topic_updates[0]["path"] == "topics/Setusercontext.mcs.yml"
+
+
 def test_scoped_minimalbot_topic_activation_does_not_require_content_diff(
     tmp_path,
 ):
