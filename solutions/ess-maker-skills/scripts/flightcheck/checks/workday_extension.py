@@ -20,12 +20,10 @@ via ``--checkpoint``:
     (never assert a verdict from an unconfirmed API response shape) — this
     checkpoint echoes the observed ``connectionParametersSet.name`` for the
     operator to confirm, rather than PASS/FAIL on a guessed value.
-  * ``DV-CONN-001`` (S5.4) — the Workday SOAP connection reference reported by
-    the Declarative Agent minimalBots components API is bound (``connectionId``
-    present), and its owner is echoed so the operator can confirm it is their
-    **own** account. Programmatic PASS/FAIL on the validated minimalBots
-    components read (same endpoint + ``connectionReferenceChanges`` shape as the
-    shipped native ``DA-CONN-001`` check).
+  * ``DV-CONN-001`` (S5.4) — the Workday runtime package's Microsoft Dataverse
+    connection reference is present exactly once, active, and bound. It reads
+    the documented Dataverse ``connectionreferences`` table, matching the same
+    surface Runtime apply mutates and verifies.
   * ``WD-REST-001`` (S5.5) — the captured ``restBaseUrl`` is present and
     **trimmed to** ``/api``. Pure-config check, no client.
   * ``WD-REST-002`` (S5.7) — the agent's mapped admin user-context topic
@@ -42,8 +40,8 @@ Design invariants (per ``scripts/flightcheck/AGENTS.md``):
     failure degrades to a WARNING for that checkpoint instead of aborting the
     whole run.
   * **One CheckResult per checkpoint** (principle 7).
-  * **No guessed API shapes** — the two API-backed checks read documented fields
-    only (minimalBots ``connectionReferenceChanges`` connector/connection ids; BAP
+  * **No guessed API shapes** — the API-backed checks read documented fields
+    only (Dataverse reference identity/status/binding; BAP
     ``connectionParametersSet.name`` / ``createdBy``), and degrade gracefully
     when a client is unavailable.
   * **Every** ``CheckResult`` declares ``roles=`` (enforced by
@@ -58,9 +56,9 @@ from pathlib import Path, PureWindowsPath
 
 import yaml
 
+from auth import query_all
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
-from ._da_connection_refs import read_active_agent_connection_references
 
 DOC_BASE = (
     "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
@@ -89,9 +87,10 @@ _WORKDAY_AUTH_REF_SUFFIX = "ff0df"
 _WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
     "msdyn_sharedworkdaysoap_workdayruntime"
 )
-# The Workday SOAP connection reference the Declarative Agent reports via the
-# minimalBots components API (connector ``shared_workdaysoap``).
-_WORKDAY_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
+_DATAVERSE_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedcommondataserviceforapps_workdayruntime"
+)
+_DATAVERSE_CONNECTOR_SUFFIX = "/apis/shared_commondataserviceforapps"
 _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 
 # ---- Local user-context topic (WD-REST-002) ----
@@ -104,7 +103,7 @@ _CONN_AUTH_DESC = (
     "Workday connection authentication type is Microsoft Entra ID Integrated"
 )
 _DV_CONN_DESC = (
-    "Workday SOAP connection reference bound to a connection you own"
+    "Workday runtime Dataverse connection reference is active and bound"
 )
 _REST_URL_DESC = "Workday REST base URL present and trimmed to '/api'"
 _REDIRECT_DESC = (
@@ -286,23 +285,20 @@ def _resolve_owner(props: dict) -> str:
 
 
 def _query_connection_references(runner):
-    """Return the agent's connection references from the Declarative Agent
-    minimalBots components API, normalized to the row shape
-    ``_check_dv_connection`` consumes, or ``None`` when the AgentBuilder client
-    or the active-agent ``botId`` is unavailable.
-
-    Validated-tier read (minimalBots ``POST …/components``). The same endpoint
-    and ``connectionReferenceChanges`` shape already back the shipped native
-    ``DA-CONN-001`` check (``checks/native_agent.py``); see
-    ``tests/fixtures/cassettes/INDEX.md`` and ``tests/mocks/
-    agentbuilder_connectivity.py``. Fails loudly (lets the dispatcher degrade
-    this checkpoint to a WARNING) rather than overclaiming: an
-    ``AgentBuilderHTTPError`` propagates, and a 200 payload whose
-    ``connectionReferenceChanges`` is present but not a list raises
-    ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
-    changeset is treated as "no references" (genuine absence), not an error.
-    """
-    return read_active_agent_connection_references(runner)
+    """Read the runtime Dataverse reference from the table Runtime apply uses."""
+    env_url = getattr(runner, "env_url", None)
+    token = getattr(runner, "dv_token", None)
+    if not env_url or not token:
+        return None
+    logical_name = _DATAVERSE_RUNTIME_REF_LOGICAL_NAME.replace("'", "''")
+    return query_all(
+        env_url,
+        token,
+        "connectionreferences",
+        "connectionreferenceid,connectionreferencelogicalname,"
+        "connectionreferencedisplayname,connectorid,connectionid,statuscode",
+        f"connectionreferencelogicalname eq '{logical_name}'",
+    )
 
 
 def _get_connections(runner):
@@ -471,58 +467,54 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=_DV_CONN_DESC,
             result=(
-                "AgentBuilder client or active-agent botId not available — "
-                "skipping the Workday connection-reference check."
+                "Dataverse URL or access token not available — skipping the "
+                "runtime Dataverse connection-reference check."
             ),
         )]
 
-    wd_ref = next(
-        (
-            r
-            for r in refs
-            if str(r.get("connectorid") or "")
-            .lower()
-            .endswith(_WORKDAY_CONNECTOR_SUFFIX)
-        ),
-        None,
-    )
-
-    if wd_ref is None:
+    matching_refs = [
+        ref
+        for ref in refs
+        if str(ref.get("connectionreferencelogicalname") or "").casefold()
+        == _DATAVERSE_RUNTIME_REF_LOGICAL_NAME.casefold()
+        and str(ref.get("connectorid") or "").casefold().rstrip("/")
+        .endswith(_DATAVERSE_CONNECTOR_SUFFIX)
+    ]
+    if len(matching_refs) != 1:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="DV-CONN-001", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_DV_CONN_DESC,
             result=(
-                "The ESS Workday SOAP connection reference (connector "
-                "shared_workdaysoap) was not found in the Declarative Agent "
-                "components payload."
+                "Expected exactly one Workday runtime Dataverse connection "
+                f"reference; found {len(matching_refs)}."
             ),
             remediation=(
-                "Install or repair the Workday extension pack so its Workday "
-                "SOAP connection reference is created, then bind it to a "
-                "Workday connection you own."
+                "Install or repair the Workday runtime package so its "
+                "Microsoft Dataverse connection reference is present exactly "
+                "once, then rerun Runtime."
             ),
             doc_link=_DOC_SIMPLIFIED,
         )]
 
+    wd_ref = matching_refs[0]
     wd_ref_name = str(
         wd_ref.get("connectionreferencelogicalname") or "(unnamed)"
     )
     connection_id = wd_ref.get("connectionid")
 
-    if not connection_id:
+    if not connection_id or wd_ref.get("statuscode") != 1:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="DV-CONN-001", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_DV_CONN_DESC,
             result=(
-                "The ESS Workday SOAP connection reference "
-                f"({wd_ref_name}) is unbound (connectionId=null)."
+                "The Workday runtime Dataverse connection reference "
+                f"({wd_ref_name}) is not active and bound."
             ),
             remediation=(
-                "In Power Platform / Copilot Studio, bind the Workday SOAP "
-                "connection reference to an active Workday connection owned by "
-                "your own account."
+                "Bind the runtime Microsoft Dataverse connection reference to "
+                "the verified Dataverse connection and rerun Runtime."
             ),
             doc_link=_DOC_SIMPLIFIED,
         )]
@@ -542,8 +534,8 @@ def _check_dv_connection(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.PASSED.value,
         description=_DV_CONN_DESC,
         result=(
-            "The ESS Workday SOAP connection reference "
-            f"({wd_ref_name}) is bound to a connection." + owner_note
+            "The Workday runtime Dataverse connection reference "
+            f"({wd_ref_name}) is active and bound." + owner_note
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]

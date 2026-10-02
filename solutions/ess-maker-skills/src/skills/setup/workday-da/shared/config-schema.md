@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Workday connect state contract
 
 The only writable lifecycle state is:
@@ -11,11 +12,11 @@ The only writable lifecycle state is:
 writes, and phase transitions. Skills must use `scripts/workday_connect.py`;
 they must not edit this file directly or create a Markdown state mirror.
 
-## Schema version 7
+## Schema version 9
 
 ```json
 {
-  "schemaVersion": 7,
+  "schemaVersion": 9,
   "provider": "workday",
   "status": "in-progress",
   "scope": {},
@@ -85,10 +86,10 @@ reopened without discarding valid sibling values.
 
 These values are independent and must never be aliases:
 
-| Field | Meaning | Format |
-| --- | --- | --- |
+| Field                             | Meaning                                                     | Format                            |
+| --------------------------------- | ----------------------------------------------------------- | --------------------------------- |
 | `identifiers.workdaySamlEntityId` | Workday SAML Service Provider ID and connector resource URL | `http://www.workday.com/{tenant}` |
-| `identifiers.entraAppIdUri` | Entra exposed API Application ID URI | `api://{entraAppId}` |
+| `identifiers.entraAppIdUri`       | Entra exposed API Application ID URI                        | `api://{entraAppId}`              |
 
 ## Persistence rules
 
@@ -109,11 +110,13 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2 through schema-v6, or legacy row-based state, is backed up to
-`config.pre-v7.json` before one-time migration. Schema-v6 administrator
+Schema-v2 through schema-v8, or legacy row-based state, is backed up to
+`config.pre-v9.json` before one-time migration. Schema-v6 administrator
 evidence is preserved as safe partial evidence, while Entra and downstream
 phases reopen for the expanded directory, application-pairing, federation, and
 least-privilege checks. A previously complete runtime phase is reopened when
 it lacks live Workday runtime-template wiring or topic-activation evidence.
+Schema-v8 package verification evidence moves from Preflight to Connections
+so an existing installation is reused without repeating package installation.
 Legacy Markdown task files, when present, are historical snapshots and are
 never rewritten.

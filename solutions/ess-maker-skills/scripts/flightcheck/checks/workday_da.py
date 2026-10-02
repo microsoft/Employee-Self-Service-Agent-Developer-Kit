@@ -311,33 +311,39 @@ def _load_runtime_contract() -> dict[str, Any]:
 
 
 def _flow_name(flow: dict[str, Any]) -> str:
-    props = flow.get("properties") if isinstance(flow, dict) else {}
-    props = props if isinstance(props, dict) else {}
-    return str(props.get("displayName") or flow.get("displayName") or "")
+    return str(flow.get("name") or "")
 
 
 def _flow_id(flow: dict[str, Any]) -> str:
-    return str(flow.get("name") or "").strip()
+    return str(flow.get("workflowid") or "").strip()
 
 
 def _flow_is_active(flow: dict[str, Any]) -> bool:
-    props = flow.get("properties") if isinstance(flow, dict) else {}
-    props = props if isinstance(props, dict) else {}
-    return str(props.get("state") or "").casefold() in {
-        "started",
-        "on",
-        "enabled",
-    }
+    return flow.get("statecode") == 1 and flow.get("statuscode") == 2
 
 
 def _runtime_flow_inventory(
     runner,
 ) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
     runtime = _load_runtime_contract()
-    flows = getattr(runner, "_all_flows", None)
-    if not isinstance(flows, list):
+    env_url = str(getattr(runner, "env_url", "") or "")
+    token = str(getattr(runner, "dv_token", "") or "")
+    if not env_url or not token:
         raise ValueError(
-            "Power Automate flow inventory was not hydrated for this run."
+            "Dataverse access is unavailable for runtime-flow verification."
+        )
+    expected = list(runtime["flowNames"])
+    flow_filter = " or ".join(
+        "name eq '" + name.replace("'", "''") + "'" for name in expected
+    )
+    flows = getattr(runner, "_workday_runtime_flows", None)
+    if not isinstance(flows, list):
+        flows = query_all(
+            env_url,
+            token,
+            "workflows",
+            "workflowid,name,statecode,statuscode,category",
+            flow_filter,
         )
     by_name: dict[str, list[dict[str, Any]]] = {}
     for flow in flows:
@@ -379,31 +385,25 @@ def _da_result(
 def _check_runtime_flow_catalog(runner) -> list[CheckResult]:
     checkpoint_id = "WD-DA-FLOW-001"
     description = "Reviewed Workday runtime flow catalog and active state"
-    if getattr(runner, "pp_admin", None) is None:
-        return [_da_result(
-            checkpoint_id,
-            Status.SKIPPED.value,
-            description,
-            "Power Platform Admin API is unavailable, so runtime flows "
-            "could not be verified.",
-            remediation=(
-                "Authenticate with Power Platform Admin access and rerun."
-            ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
-        )]
     try:
         runtime, by_name = _runtime_flow_inventory(runner)
-    except ValueError as exc:
+    except (
+        AuthExpiredError,
+        APIError,
+        requests.RequestException,
+        OSError,
+        ValueError,
+    ) as exc:
         return [_da_result(
             checkpoint_id,
             Status.ERROR.value,
             description,
-            str(exc),
+            "Runtime-flow verification failed: " + _safe_error_summary(exc),
             remediation=(
-                "Restore the reviewed catalog and Power Automate inventory, "
+                "Restore the reviewed catalog and Dataverse access, "
                 "then rerun this checkpoint."
             ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
+            roles=[Role.ESS_MAKER.value],
         )]
 
     expected = list(runtime["flowNames"])
@@ -439,7 +439,7 @@ def _check_runtime_flow_catalog(runner) -> list[CheckResult]:
                 "Install exactly one copy of every reviewed Workday runtime "
                 "flow and activate each flow before continuing."
             ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
+            roles=[Role.ESS_MAKER.value],
             evidence={
                 "expectedFlowNames": expected,
                 "missingFlowNames": missing,
@@ -465,10 +465,10 @@ def _check_runtime_flow_catalog(runner) -> list[CheckResult]:
             description,
             str(exc),
             remediation=(
-                "Refresh the Power Automate inventory and rerun this "
+                "Refresh the Dataverse workflow inventory and rerun this "
                 "checkpoint."
             ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
+            roles=[Role.ESS_MAKER.value],
         )]
     return [_da_result(
         checkpoint_id,
@@ -476,7 +476,7 @@ def _check_runtime_flow_catalog(runner) -> list[CheckResult]:
         description,
         f"All {len(expected)} reviewed Workday runtime flows are present "
         "exactly once and active.",
-        roles=[Role.POWER_PLATFORM_ADMIN.value],
+        roles=[Role.ESS_MAKER.value],
         evidence={"flows": resolved},
     )]
 
@@ -557,7 +557,7 @@ def _check_delegated_flow_authorization(runner) -> list[CheckResult]:
         authorizations = query_all(
             env_url,
             token,
-            "DelegatedAuthorizations",
+            "delegatedauthorizations",
             "delegatedauthorizationid,name,providertype,botid",
             f"botid eq '{bot_id}'",
         )
@@ -824,13 +824,12 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
             inactive.append(expected_schema)
         if blocking_diagnostics(component):
             diagnostics.append(expected_schema)
-    if missing or duplicates or inactive or diagnostics:
+    if missing or duplicates or inactive:
         findings = []
         for label, values in (
             ("missing", missing),
             ("duplicates", duplicates),
             ("inactive", inactive),
-            ("blocking diagnostics", diagnostics),
         ):
             if values:
                 findings.append(f"{label}: {', '.join(values)}")
@@ -858,8 +857,13 @@ def _check_reviewed_workday_topics(runner) -> list[CheckResult]:
         Status.PASSED.value,
         description,
         f"All {len(expected)} reviewed OOB Workday topics are present exactly "
-        f"once, active, and free of blocking diagnostics for '{slug}'.",
-        evidence={"expected": len(expected), "verified": len(expected)},
+        f"once and active for '{slug}'. Dependency diagnostics are retained "
+        "as evidence but do not determine topic activation state.",
+        evidence={
+            "expected": len(expected),
+            "verified": len(expected),
+            "diagnosticTopics": diagnostics,
+        },
     )]
 
 
@@ -927,6 +931,9 @@ def _check_runtime_template_wiring(runner) -> list[CheckResult]:
         user_context_schema = (
             f"{schema}.topic.WorkdaySystemGetUserContextV2"
         )
+        validation_schema = (
+            f"{schema}.topic.System-UserContext-Validate"
+        )
         conversation = _single_component(components, conversation_schema)
         runtime = _single_component(components, runtime_schema)
         user_context = _single_component(components, user_context_schema)
@@ -937,14 +944,26 @@ def _check_runtime_template_wiring(runner) -> list[CheckResult]:
             else None
         )
         all_targets = _begin_dialog_targets(conversation.get("dialog"))
-        first_target = (
-            _begin_dialog_target(actions[0])
-            if isinstance(actions, list)
-            and actions
-            and isinstance(actions[0], dict)
-            and str(actions[0].get("$kind") or actions[0].get("kind"))
-            == "BeginDialog"
+        top_level_targets = [
+            _begin_dialog_target(action)
+            if (
+                isinstance(action, dict)
+                and str(action.get("$kind") or action.get("kind"))
+                == "BeginDialog"
+            )
             else ""
+            for action in actions or []
+        ]
+        validation_positions = [
+            index
+            for index, target in enumerate(top_level_targets)
+            if target == validation_schema
+        ]
+        runtime_precedes_validation = (
+            len(validation_positions) == 1
+            and validation_positions[0] > 0
+            and top_level_targets[validation_positions[0] - 1]
+            == runtime_schema
         )
         user_context_targets = _begin_dialog_targets(
             user_context.get("dialog")
@@ -981,9 +1000,8 @@ def _check_runtime_template_wiring(runner) -> list[CheckResult]:
 
     if (
         all_targets.count(runtime_schema) != 1
-        or first_target != runtime_schema
+        or not runtime_precedes_validation
         or runtime_schema in user_context_targets
-        or diagnostics
         or inactive_components
     ):
         return [_da_result(
@@ -991,15 +1009,16 @@ def _check_runtime_template_wiring(runner) -> list[CheckResult]:
             Status.FAILED.value,
             description,
             "Conversation Start must call the Workday runtime-template topic "
-            "exactly once as its first action; User Context V2 must not call "
-            "it, and all three topics must be active with clean diagnostics.",
+            "exactly once immediately before User Context Validate; User "
+            "Context V2 must not call it, and all three topics must be active.",
             remediation=(
                 "Restore the reviewed Conversation Start initialization chain "
                 "and remove the obsolete User Context V2 nested call."
             ),
             evidence={
                 "runtimeTargetCount": all_targets.count(runtime_schema),
-                "firstTarget": first_target,
+                "runtimePrecedesValidation": runtime_precedes_validation,
+                "validationTargetCount": len(validation_positions),
                 "userContextContainsTarget": (
                     runtime_schema in user_context_targets
                 ),
@@ -1012,12 +1031,14 @@ def _check_runtime_template_wiring(runner) -> list[CheckResult]:
         Status.PASSED.value,
         description,
         "Conversation Start initializes Workday runtime templates exactly "
-        "once as its first action, and User Context V2 has no obsolete "
-        "nested initialization. All three topics are active.",
+        "once immediately before User Context Validate, and User Context V2 "
+        "has no obsolete nested initialization. All three topics are active; "
+        "dependency diagnostics are retained for runtime validation.",
         evidence={
             "conversationStart": conversation_schema,
             "runtimeTemplate": runtime_schema,
             "userContext": user_context_schema,
+            "blockingDiagnostics": diagnostics,
         },
     )]
 

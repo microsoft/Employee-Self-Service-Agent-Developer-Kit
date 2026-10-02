@@ -66,11 +66,21 @@ def test_workday_wiring_uses_installed_identity_and_explicit_result() -> None:
     action = (
         _CONNECT / "workday" / "actions" / "wire-user-context-redirect.md"
     ).read_text(encoding="utf-8")
+    runtime_action = (
+        _CONNECT / "workday" / "actions" / "wire-runtime-template-config.md"
+    ).read_text(encoding="utf-8")
+    normalized_action = " ".join(action.split())
 
     assert "workspace/agents/{AGENT_SLUG}/.component-map.json" in action
     assert "workspace/agents/{AGENT_SLUG}/{USER_CONTEXT_TOPIC_PATH}" in action
-    assert 'ACTION_RESULT = "cancelled"' in action
+    assert 'ACTION_RESULT = "cancelled"' not in action
     assert 'ACTION_RESULT = "applied"' in action
+    assert (
+        "without asking for a separate publish confirmation"
+        in normalized_action
+    )
+    assert 'dialog: "{USER_CONTEXT_DIALOG}"' in action
+    assert 'dialog: "{WORKDAY_RUNTIME_TEMPLATE_DIALOG}"' in runtime_action
     assert "ACTION_ROLLBACK_PUSH_GLOB" in action
     assert "install-workday-extension-pack.md" not in action
 
