@@ -356,6 +356,7 @@ def _resume_create_after_cleanup(
                 client,
                 environment_id=environment_id,
                 agent_id=imported["cdsBotId"],
+                require_alm_family=True,
                 selection_source="create-recovery",
                 setup_source="alm-import",
             )
@@ -756,6 +757,7 @@ def import_package_once(
             client,
             environment_id=normalized_environment_id,
             agent_id=normalized_replacement_id,
+            require_alm_family=True,
             selection_source="explicit-replacement",
             setup_source="alm-import",
         )

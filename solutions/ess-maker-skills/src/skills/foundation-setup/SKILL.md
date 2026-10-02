@@ -94,6 +94,8 @@ Retain a confirmed cached sign-in name as `{SETUP_ACCOUNT}` and append `--accoun
 
 When no cached account exists, or the maker selects **Use a different user** or **Use the Microsoft account picker**, omit `--account` and append `--select-account` only to the first command that can authenticate. Parse `DA_AGENTBUILDER_AUTH_JSON:` from that command's output, retain its non-empty `account` as `{SETUP_ACCOUNT}`, and use `--account "{SETUP_ACCOUNT}"` for every later command in this invocation. The picker establishes the identity once; later commands reuse its cached token and sign-in name.
 
+`reconcile_setup_agent.py` does not accept `--select-account`. When product-line reconciliation is the next authenticated operation after no cached account was returned or the maker selected the picker, first run `setup_existing_da.py list-environments --ring "{RING}" --select-account` only to establish `{SETUP_ACCOUNT}`. Parse `DA_AGENTBUILDER_AUTH_JSON:`, retain the selected account, and pass it to every reconciliation probe with `--account "{SETUP_ACCOUNT}"`. Do not pass `--select-account` to `reconcile_setup_agent.py`.
+
 If the first authenticated command succeeds but does not return an account identity, run `setup_existing_da.py cached-accounts` again. Retain its sole account when exactly one is present. When no single identity can be established, state that setup could not retain the selected sign-in and rerun the Microsoft account picker before continuing.
 
 Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
@@ -230,7 +232,11 @@ python scripts/reset_local_workspace.py --confirm-reset
 
 Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
 
-For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, complete the selected-agent product-line reconciliation before changing the active local selection, then run:
+For **Switch to another configured agent**, do not use the saved `agents` array as the picker inventory. Run `setup_existing_da.py list-agents` against the active agent's exact environment connection and build the picker from the current live result using the established existing-agent candidate rules. Use `.local/config.json` only to match the exact active `botId` and locally configured identities against that live inventory.
+
+Render every live option using its exact service-provided display name. Append **— Current** only to the option whose exact ID matches the active `botId`; do not append a realm, enrollment state, ALM label, preparation status, schema, ID, or workspace slug to any option. Keep the current option visible so the maker can verify which agent is populated in the workspace. If the maker selects it, make no changes and return to the completion choices.
+
+After the maker selects another exact live identity, complete the selected-agent product-line reconciliation. When the selected identity already has a matching local `agents` entry, change only the active local selection by running:
 
 ```text
 python scripts/setup_existing_da.py select-agent \
@@ -239,10 +245,12 @@ python scripts/setup_existing_da.py select-agent \
 
 Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectReady` value is not `true`; otherwise present the completion choices below. This operation changes only local active-agent selection.
 
+When the selected live identity is not locally configured, continue through the established existing-agent route: direct Dev identities use normal attachment; `realmNotEstablishedAgents` first require successful native product reconciliation, then direct inspection may offer optional enrollment or `--allow-unenrolled-authoring`; and Prod identities use the established Prod-to-Dev handoff. A native `not-found`, access failure, or uncertain result must stop without offering enrollment. Do not manufacture a local entry before the selected route validates and attaches the exact identity.
+
 The final handoff is the detailed completion report and the standard completion choice surface. After it, present these context-appropriate choices:
 
 - **Finish setup**
-- **Switch to another configured agent** -- only when another configured agent exists.
+- **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Install another product in this environment**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
@@ -329,7 +337,7 @@ For a usable local target, ask:
 Present these standard context-appropriate choices:
 
 - **Continue with this agent**, or **Resume setup for this agent** when its canonical agent record is incomplete or blocked.
-- **Switch to another configured agent** -- only when another configured agent exists.
+- **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Install another product in this environment**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
@@ -375,15 +383,20 @@ python scripts/setup_existing_da.py inspect-agent \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
-environment metadata.
+Parse `DA_AGENT_ROUTE_JSON:`. The command reads the exact direct
+`MinimalBotCard` identity and normalizes its Swagger-defined nullable `realm`
+into explicit `alm.isEnrolled`. It does not call the ALM `/realms` endpoint.
+Do not infer the realm from names, URLs, or environment metadata.
 
-- When `routeStatus` is `not-found`, the earlier native identity probe still
-  proves that the agent exists. Say that no ALM route is established for local
-  authoring, then offer **Choose a different agent**, **Choose a different
-  environment**, and **Go back** using the exact recovery routes in
-  `product-line-reconciliation.md`. Do not call the agent missing and do not
-  continue to validation or attachment.
+- When `routeStatus` is `not-established` and `alm.isEnrolled` is `false`, the
+  direct native metadata still proves that the agent exists. Say that setup
+  could not establish an ALM authoring route for that agent, then read
+  `src/skills/foundation-setup/alm-enrollment.md` and follow its
+  exact choice surface and bounded operation sequence. Do not call the agent
+  missing and do not continue directly from this file. The shared path may
+  return to local attachment without an ALM route only after the maker selects
+  **Skip enrollment** and exact supported native product identity is already
+  established.
 - When `realm` is `prod`, read
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent
