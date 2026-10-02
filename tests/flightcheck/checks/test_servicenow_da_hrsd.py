@@ -13,7 +13,7 @@ from agentbuilder import AgentBuilderHTTPError
 from flightcheck.checks.servicenow_da_hrsd import (
     run_servicenow_da_hrsd_checks,
 )
-from flightcheck.runner import Status
+from flightcheck.runner import FlightCheckRunner, Status
 
 import connect_servicenow_da as snow
 from tests.conftest import require_validated_mock
@@ -123,6 +123,32 @@ def _runner(components: dict):
     )
 
 
+def _registered_runner(
+    components: dict,
+    *,
+    target_test_only: bool = False,
+) -> FlightCheckRunner:
+    source = _runner(components)
+    runner = FlightCheckRunner(
+        scope="servicenow-da-hrsd",
+        target_matcher=(
+            lambda checkpoint_id: checkpoint_id == "SN-DA-HRSD-TEST-001"
+        )
+        if target_test_only
+        else None,
+    )
+    for name in ("config", "agentbuilder", "connectivity", "env_id"):
+        setattr(runner, name, getattr(source, name))
+    runner.register("ServiceNow DA HRSD", run_servicenow_da_hrsd_checks)
+    return runner
+
+
+def _checkpoint(results, checkpoint_id: str):
+    return next(
+        row for row in results if row.checkpoint_id == checkpoint_id
+    )
+
+
 def _graph_client(
     *,
     missing_claims: bool = False,
@@ -183,8 +209,8 @@ def _graph_client(
     return FakeGraph()
 
 
-def _write_state(root: Path, components: dict) -> None:
-    path = (
+def _state_path(root: Path) -> Path:
+    return (
         root
         / ".local"
         / "connect"
@@ -193,6 +219,10 @@ def _write_state(root: Path, components: dict) -> None:
         / AGENT_SLUG
         / "lifecycle.json"
     )
+
+
+def _write_state(root: Path, components: dict) -> None:
+    path = _state_path(root)
     path.parent.mkdir(parents=True)
     component_hash = snow._component_hash(components)
     discovery = {
@@ -318,6 +348,201 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
     assert "SN-DA-HRSD-PARAMETER-SHARING-001" not in statuses
     assert statuses["SN-DA-HRSD-PUBLISH-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TEST-001"] == Status.MANUAL.value
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_phrase"),
+    [
+        ("disconnected", "not a Connected Microsoft Entra ID User Login"),
+        ("wrong-auth", "not a Connected Microsoft Entra ID User Login"),
+        ("wrong-instance", "different Instance Name or Resource URI"),
+        ("wrong-resource", "different Instance Name or Resource URI"),
+    ],
+)
+def test_test_checkpoint_propagates_current_credential_failure(
+    monkeypatch,
+    tmp_path: Path,
+    case: str,
+    expected_phrase: str,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    connection = _connection()
+    if case == "disconnected":
+        connection["properties"]["statuses"] = [
+            {"target": "token", "status": "Disconnected"}
+        ]
+    elif case == "wrong-auth":
+        connection["properties"]["connectionParametersSet"]["name"] = (
+            "keyBasedAuth"
+        )
+    elif case == "wrong-instance":
+        connection["properties"]["connectionParametersSet"]["values"][
+            "token:InstanceName"
+        ]["value"] = "dev456"
+    else:
+        connection["properties"]["connectionParametersSet"]["values"][
+            "token:ResourceUri"
+        ]["value"] = "00000000-0000-4000-8000-000000009999"
+    runner = _runner(components)
+    runner.connectivity = SimpleNamespace(
+        list_connector_connections=lambda _environment_id, _connector: [
+            connection
+        ]
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    credential = _checkpoint(results, "SN-DA-HRSD-CREDENTIAL-001")
+    test = _checkpoint(results, "SN-DA-HRSD-TEST-001")
+
+    assert credential.status == Status.FAILED.value
+    assert test.status == Status.FAILED.value
+    assert "Current credential prerequisite is Failed" in test.result
+    assert expected_phrase in test.result
+    assert test.remediation == credential.remediation
+
+
+def test_test_checkpoint_propagates_connectivity_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    runner = _runner(components)
+    runner.connectivity = SimpleNamespace(
+        list_connector_connections=lambda *_args: (_ for _ in ()).throw(
+            RuntimeError("synthetic inventory failure")
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+
+    results = run_servicenow_da_hrsd_checks(runner)
+    credential = _checkpoint(results, "SN-DA-HRSD-CREDENTIAL-001")
+    test = _checkpoint(results, "SN-DA-HRSD-TEST-001")
+
+    assert credential.status == Status.ERROR.value
+    assert test.status == Status.ERROR.value
+    assert "Current credential prerequisite is Error" in test.result
+    assert "synthetic inventory failure" in test.result
+    assert test.remediation == credential.remediation
+
+
+@pytest.mark.parametrize(
+    ("case", "prerequisite_label"),
+    [
+        ("credential-pending", "credential"),
+        ("topics-inactive", "topics"),
+        ("agent-binding-stale", "Agent Connect"),
+    ],
+)
+def test_test_checkpoint_blocks_noncompleted_prerequisite(
+    monkeypatch,
+    tmp_path: Path,
+    case: str,
+    prerequisite_label: str,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if case == "credential-pending":
+        state["adminSetup"]["phaseHandoffs"]["credential"] = {
+            "status": "pending"
+        }
+    elif case == "topics-inactive":
+        components["botComponentChanges"][0]["component"]["state"] = "Inactive"
+        components["botComponentChanges"][0]["component"]["status"] = "Inactive"
+    else:
+        state["evidence"]["agentConnection"]["binding"][
+            "draftSemanticHash"
+        ] = "stale-draft"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    test = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-TEST-001",
+    )
+
+    assert test.status == Status.NOT_CONFIGURED.value
+    assert (
+        f"Current {prerequisite_label} prerequisite is NotConfigured"
+        in test.result
+    )
+
+
+def test_test_checkpoint_keeps_healthy_metadata_only_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    components["changeToken"] = "server-metadata-only"
+    monkeypatch.chdir(tmp_path)
+
+    test = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-TEST-001",
+    )
+
+    assert test.status == Status.MANUAL.value
+    assert test.result == "Maker recorded a passing HRSD Test pane result."
+
+
+def test_test_checkpoint_rejects_stale_test_connection_binding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["evidence"]["test"]["binding"]["connectionBindingHash"] = (
+        "stale-connection-binding"
+    )
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    test = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-TEST-001",
+    )
+
+    assert test.status == Status.NOT_CONFIGURED.value
+    assert "selected connection" in test.result
+
+
+@pytest.mark.parametrize("disconnected", [False, True])
+def test_test_checkpoint_full_and_fixed_runs_match(
+    monkeypatch,
+    tmp_path: Path,
+    disconnected: bool,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    full_runner = _registered_runner(components)
+    fixed_runner = _registered_runner(components, target_test_only=True)
+    if disconnected:
+        connection = _connection()
+        connection["properties"]["statuses"] = [
+            {"target": "token", "status": "Disconnected"}
+        ]
+        inventory = SimpleNamespace(
+            list_connector_connections=lambda *_args: [connection]
+        )
+        full_runner.connectivity = inventory
+        fixed_runner.connectivity = inventory
+    monkeypatch.chdir(tmp_path)
+
+    full = full_runner.run()
+    fixed = fixed_runner.run()
+    full_test = _checkpoint(full.results, "SN-DA-HRSD-TEST-001")
+    fixed_test = _checkpoint(fixed.results, "SN-DA-HRSD-TEST-001")
+
+    assert vars(fixed_test) == vars(full_test)
+    assert fixed.results == [fixed_test]
+    assert fixed.overall == full.overall
 
 
 def test_admin_prerequisites_pass_with_graph_and_structured_evidence(

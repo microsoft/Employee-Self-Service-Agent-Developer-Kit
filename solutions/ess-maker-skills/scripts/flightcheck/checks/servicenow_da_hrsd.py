@@ -246,31 +246,36 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         except Exception as exc:
             connectivity_error = f"{type(exc).__name__}: {exc}"
 
+    topics_result = _topics_result(summary, evidence, component_hash)
+    credential_result = _credential_result(
+        evidence,
+        admin_setup,
+        connections,
+        connectivity_error,
+    )
+    agent_connection_result = _agent_connection_result(
+        evidence,
+        credential_result,
+        draft_semantic_hash,
+    )
+    test_result = _test_result(
+        evidence,
+        draft_semantic_hash,
+        current_connection_binding_hash,
+        topics_result,
+        credential_result,
+        agent_connection_result,
+    )
     return [
         _package_result(slug, summary),
         _preflight_result(admin_setup),
         _plugin_result(admin_setup),
         *_entra_results(getattr(runner, "graph", None), admin_setup),
         _oidc_result(admin_setup),
-        _topics_result(summary, evidence, component_hash),
-        _credential_result(
-            evidence,
-            admin_setup,
-            connections,
-            connectivity_error,
-        ),
-        _agent_connection_result(
-            evidence,
-            admin_setup,
-            connections,
-            connectivity_error,
-            draft_semantic_hash,
-        ),
-        _test_result(
-            evidence,
-            draft_semantic_hash,
-            current_connection_binding_hash,
-        ),
+        topics_result,
+        credential_result,
+        agent_connection_result,
+        test_result,
         _publish_result(
             evidence,
             component_hash,
@@ -1039,17 +1044,9 @@ def _binding_evaluation(
 
 def _agent_connection_result(
     evidence: dict[str, Any],
-    admin_setup: dict[str, Any],
-    connections: list[dict[str, Any]],
-    error: str,
+    credential_check: CheckResult,
     draft_semantic_hash: str,
 ) -> CheckResult:
-    credential_check = _credential_result(
-        evidence,
-        admin_setup,
-        connections,
-        error,
-    )
     record = evidence.get("agentConnection")
     if credential_check.status not in {
         Status.PASSED.value,
@@ -1159,7 +1156,17 @@ def _test_result(
     evidence: dict[str, Any],
     draft_semantic_hash: str,
     connection_binding_hash: str | None,
+    topics_check: CheckResult,
+    credential_check: CheckResult,
+    agent_connection_check: CheckResult,
 ) -> CheckResult:
+    prerequisite = _test_prerequisite_gate(
+        topics_check,
+        credential_check,
+        agent_connection_check,
+    )
+    if prerequisite is not None:
+        return prerequisite
     record = evidence.get("test")
     valid_binding = (
         isinstance(record, dict)
@@ -1218,3 +1225,48 @@ def _test_result(
         result,
         "Run a low-side-effect HRSD prompt in the Test pane and record the current result.",
     )
+
+
+def _test_prerequisite_gate(
+    topics_check: CheckResult,
+    credential_check: CheckResult,
+    agent_connection_check: CheckResult,
+) -> CheckResult | None:
+    prerequisites = (
+        ("credential", credential_check, {Status.PASSED.value}),
+        (
+            "topics",
+            topics_check,
+            {Status.PASSED.value, Status.MANUAL.value},
+        ),
+        (
+            "Agent Connect",
+            agent_connection_check,
+            {Status.MANUAL.value},
+        ),
+    )
+    passthrough = {
+        Status.FAILED.value,
+        Status.BLOCKED.value,
+        Status.ERROR.value,
+        Status.WARNING.value,
+    }
+    for label, check, accepted in prerequisites:
+        if check.status in accepted:
+            continue
+        status = (
+            check.status
+            if check.status in passthrough
+            else Status.NOT_CONFIGURED.value
+        )
+        return _result(
+            "SN-DA-HRSD-TEST-001",
+            status,
+            "ServiceNow HRSD Test pane result",
+            (
+                f"Current {label} prerequisite is {check.status}: "
+                f"{check.result}"
+            ),
+            check.remediation,
+        )
+    return None
