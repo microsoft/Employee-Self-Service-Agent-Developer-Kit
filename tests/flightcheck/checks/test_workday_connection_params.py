@@ -139,7 +139,12 @@ def test_resolver_ignores_named_non_oauth_parameter_set(monkeypatch):
     )
 
 
-def test_resolver_treats_unknown_parameter_set_as_unresolved(monkeypatch):
+def test_resolver_accepts_oauthuser_named_parameter_set(monkeypatch):
+    """Reviewer repro: an otherwise-complete Workday OAuth connection whose
+    admin-surface parameter-set name is ``OAuthUser`` (not ``oauth``) must be
+    accepted. The gate keys on the presence of ``token:*`` parameter keys, not
+    the param-set name string, so name variance no longer discards a healthy
+    connection into ``ignored_non_oauth_bindings``."""
     monkeypatch.setattr(
         mod,
         "build_active_agent_connection_bindings",
@@ -148,7 +153,39 @@ def test_resolver_treats_unknown_parameter_set_as_unresolved(monkeypatch):
     runner = _runner([
         pp.workday_connection(
             connection_name="workday-oauth-1",
+            display_name="OAuthUser",
+            parameter_set_name="OAuthUser",
             parameter_values=_REQUIRED_VALUES,
+        )
+    ])
+
+    result = mod.resolve_active_workday_oauth_connections(runner)
+
+    assert result is not None
+    assert len(result.connections) == 1
+    assert result.connections[0].values == _REQUIRED_VALUES
+    assert result.ignored_non_oauth_bindings == ()
+    assert result.unresolved_bindings == ()
+
+
+def test_resolver_treats_tokenless_unnamed_parameter_set_as_unresolved(
+    monkeypatch,
+):
+    """A connection carrying no ``token:*`` keys and no param-set name cannot be
+    identified as OAuth, so it is reported unresolved rather than silently
+    accepted."""
+    monkeypatch.setattr(
+        mod,
+        "build_active_agent_connection_bindings",
+        lambda runner: (_binding(),),
+    )
+    runner = _runner([
+        pp.workday_connection(
+            connection_name="workday-oauth-1",
+            parameter_values={
+                "baseUri": "https://wd.example.com/ccx/service",
+                "tenantName": "mocktenant",
+            },
         )
     ])
 

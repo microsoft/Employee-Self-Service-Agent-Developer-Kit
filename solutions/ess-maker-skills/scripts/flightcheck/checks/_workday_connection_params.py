@@ -20,7 +20,16 @@ from ._agent_connection_refs import build_active_agent_connection_bindings
 
 
 WORKDAY_CONNECTOR = "shared_workdaysoap"
-WORKDAY_OAUTH_PARAMETER_SET = "oauth"
+# OAuth (end-user) Workday connections carry secret-token parameter keys
+# (``token:ResourceUri``, ``token:WorkdayTokenUri``, ``token:WorkdayClientId``);
+# basic/ISU connections expose only ``baseUri`` + ``tenantName``. We gate on the
+# presence of these ``token:`` keys rather than the connector's auth param-set
+# *name*, because the observed admin-surface name is not stable: the shipping DA
+# connection reference surfaces as ``OAuthUser`` while a directly-created OAuth
+# connection reports ``oauth``. Keying on the required parameters keeps the gate
+# correct regardless of the name string. See
+# tests/fixtures/cassettes/flightcheck_pp_admin.yaml for both captured shapes.
+WORKDAY_OAUTH_TOKEN_PREFIX = "token:"
 
 
 @dataclass(frozen=True)
@@ -138,9 +147,13 @@ def resolve_active_workday_oauth_connections(
             unresolved.add(label)
             continue
 
-        param_set = props.get("connectionParametersSet") or {}
-        auth_name = str(param_set.get("name") or "").strip()
-        if auth_name.casefold() != WORKDAY_OAUTH_PARAMETER_SET:
+        values = _parameter_values(connection)
+        is_oauth = any(
+            key.startswith(WORKDAY_OAUTH_TOKEN_PREFIX) for key in values
+        )
+        if not is_oauth:
+            param_set = props.get("connectionParametersSet") or {}
+            auth_name = str(param_set.get("name") or "").strip()
             if auth_name:
                 ignored.add(f"{label} ({auth_name})")
             else:
@@ -151,7 +164,7 @@ def resolve_active_workday_oauth_connections(
         connections[binding.connection_name] = WorkdayOAuthConnection(
             name=binding.connection_name,
             display_name=display_name,
-            values=_parameter_values(connection),
+            values=values,
         )
 
     resolution = WorkdayOAuthResolution(
