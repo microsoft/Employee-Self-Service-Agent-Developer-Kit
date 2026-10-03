@@ -27,6 +27,7 @@ CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
+AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
 TEST_REALM = 1
@@ -820,15 +821,15 @@ class AgentBuilderClient:
                 f"{operation} returned a non-JSON response."
             ) from exc
 
-    def list_agents(
+    def list_agent_pages(
         self,
         *,
         max_pages: int = 20,
     ) -> list[dict[str, Any]]:
-        """List environment agents through the MakerOperations collection."""
+        """Return untouched MakerOperations agent-list response pages."""
         if max_pages <= 0:
             raise ValueError("Max pages must be a positive integer.")
-        agents: list[dict[str, Any]] = []
+        pages: list[dict[str, Any]] = []
         continuation: str | None = None
         seen_continuations: set[str] = set()
         for _page in range(max_pages):
@@ -847,6 +848,7 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
+            pages.append(body)
             if "Entities" not in body:
                 raise AgentBuilderError(
                     "Agent listing omitted the Entities collection."
@@ -858,14 +860,13 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
-            agents.extend(listed)
             if "ContinuationToken" not in body:
                 raise AgentBuilderError(
                     "Agent listing omitted the ContinuationToken."
                 )
             next_continuation = body["ContinuationToken"]
             if next_continuation == "":
-                return agents
+                return pages
             if not isinstance(next_continuation, str):
                 raise AgentBuilderError(
                     "Agent listing returned an invalid continuation token."
@@ -879,6 +880,69 @@ class AgentBuilderClient:
         raise AgentBuilderError(
             f"Agent listing exceeded {max_pages} pages."
         )
+
+    def list_minimal_bots(
+        self,
+        *,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> list[dict[str, Any]]:
+        """Return the untouched MinimalBot cards for explicit creation sources."""
+        if not creation_sources:
+            raise ValueError("At least one creation source is required.")
+        body = self._json(
+            "GET",
+            "/copilotstudio/minimalBots/api",
+            "MinimalBot listing",
+            params={
+                "api-version": NATIVE_ALM_API_VERSION,
+                "creationSource": list(creation_sources),
+            },
+        )
+        if not isinstance(body, list) or not all(
+            isinstance(item, dict) for item in body
+        ):
+            raise AgentBuilderError(
+                "MinimalBot listing returned an invalid shape."
+            )
+        return body
+
+    def list_agent_inventory(
+        self,
+        *,
+        max_maker_operations_pages: int = 20,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> dict[str, Any]:
+        """Return both collection responses without merging or interpretation."""
+        def read_source(
+            operation: Callable[[], Any],
+        ) -> dict[str, Any]:
+            try:
+                return {"response": operation(), "error": None}
+            except (AgentBuilderError, requests.RequestException) as exc:
+                error: dict[str, Any] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if isinstance(exc, AgentBuilderHTTPError):
+                    error["httpStatus"] = exc.status_code
+                    if exc.error_code is not None:
+                        error["errorCode"] = exc.error_code
+                    if exc.request_id is not None:
+                        error["requestId"] = exc.request_id
+                return {"response": None, "error": error}
+
+        return {
+            "minimalBots": read_source(
+                lambda: self.list_minimal_bots(
+                    creation_sources=creation_sources
+                )
+            ),
+            "copilotStudioAgents": read_source(
+                lambda: self.list_agent_pages(
+                    max_pages=max_maker_operations_pages
+                )
+            ),
+        }
 
     def list_starter_packages(
         self,

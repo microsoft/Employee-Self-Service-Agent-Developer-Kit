@@ -78,11 +78,12 @@ Apply the first matching rule:
 5. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
 6. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
 7. For any `found` custom or non-empty unknown observation, follow **Unsupported agent** below.
-8. When both probes returned `not-found`, say that the exact agent was not found in either accessible identity store.
-9. When neither probe returned `found` and at least one returned `authentication-required` or `access-denied`, state the endpoint-specific sign-in or permission blocker. Do not claim the agent is missing.
-10. Otherwise state that setup could not establish the agent's identity because one or more lookups were uncertain. Do not continue to realm inspection.
+8. When both probes returned `not-found`, say: **Copilot Studio couldn’t find this agent. We can only inspect agents created by this Microsoft login.**
+9. When neither probe returned `found` and at least one returned `authentication-required`, state the endpoint-specific sign-in blocker. Do not claim the agent is missing.
+10. When neither probe returned `found` and at least one returned `access-denied`, say: **The current Microsoft login doesn’t have access to this agent. This agent might be owned by a different Microsoft login.**
+11. Otherwise say: **Copilot Studio couldn’t complete the inspection of this agent. This agent might be owned by a different Microsoft login.** Do not continue to realm inspection.
 
-Rules 1, 3, 5, 7, 8, 9, and 10 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
+Rules 1, 3, 5, 7, 8, 9, 10, and 11 use the same recovery choices and routes defined under **Unsupported agent**. For every stopped result, render **Choose the starting point and target environment** as complete, **Verify access and agent identity** as blocked, **Establish an editable Dev agent** and **Materialize the local workspace** as pending, and **Review the setup handoff** as in progress while the recovery choice is pending.
 
 ## Use the compatible kit
 

@@ -12,7 +12,7 @@ Read `src/skills/foundation-setup/da-environment-target.md` and follow it, inclu
 
 ## Use the workspace environment
 
-Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow **Create and open a new workspace** in `SKILL.md` and stop this invocation after that handoff. Do not reset a same-environment workspace merely to install another product.
+Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow the conflicting-environment flow under **Shared workspace choices** in `SKILL.md`. Do not reset a same-environment workspace merely to install another product.
 
 Once the target environment is resolved, use this fixed opening as the first product-installation surface:
 
@@ -52,9 +52,15 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_LIST_JSON:`. The result classifies every safely reportable listed identity into `devAgents`, `testAgents`, `prodAgents`, or `realmNotEstablishedAgents`. Catalog and `devAgents` results resolve workspace observations before the checked-in seed in `src/reference/da-product-setup-registry.json`. Join catalog rows only to `devAgents` by the returned `productKey`, or by the exact returned `agentSchemaName` and `schemaName` when a workspace observation supplies them. The mapping identifies a product family; it is not starter-package provenance and does not prove the installed agent's template version.
+Parse `DA_AGENT_LIST_JSON:` as two independent endpoint results. `minimalBots.response` is the untouched MinimalBot-card array for the explicit `CopilotStudio` and `AgentBuilder` creation sources. `copilotStudioAgents.response` is the untouched array of MakerOperations page objects, including each page's exact `Entities` and `ContinuationToken`. Each endpoint label has its own `error`. Do not treat either endpoint's empty response or failure as evidence about the other endpoint.
 
-Determine product mapping values from available operation evidence: `setup_mos_starter.py list` for package ID, catalog name, descriptions, and catalog version; `setup_mos_starter.py create` for successful `sourcePackage` identity or a definitive collision response; `setup_existing_da.py list-agents` for visible editable agents and their exact schemas; and `setup_existing_da.py validate-agent` for the exact identity and schema of a selected agent.
+At the session layer, build one candidate per exact ID while retaining every untouched source object that supplied it. Match only MinimalBot `botId` to MakerOperations `cdsBotId`; never correlate by display name. The `list-agents` operation itself does not merge, classify, enrich, or directly inspect identities.
+
+Before projecting catalog state, establish product and route evidence for the exact candidates needed by the picker. A MakerOperations BotEntity may provide an exact `schemaName`. For a MinimalBot-only candidate or a MakerOperations candidate without a usable schema, run the parent's exact selected-agent product-line reconciliation so the native component response can establish product identity. Run `inspect-agent` for each product-matched candidate to distinguish Dev, Prod, unenrolled, and unresolved routes. Keep these session-derived facts separate from the raw list response.
+
+Catalog results and session-established candidate identities resolve workspace observations before the checked-in seed in `src/reference/da-product-setup-registry.json`. Join catalog rows only to exact candidates whose product identity was established by a MakerOperations `schemaName`, an exact native component result, or a workspace observation connecting that exact schema to the catalog product. The mapping identifies a product family; it is not starter-package provenance and does not prove the installed agent's template version.
+
+Determine product mapping values from available operation evidence: `setup_mos_starter.py list` for package ID, catalog name, descriptions, and catalog version; `setup_mos_starter.py create` for successful `sourcePackage` identity or a definitive collision response; raw `setup_existing_da.py list-agents` responses for exact candidate IDs and source-specific fields; and exact product reconciliation for authoritative schema identity.
 
 The checked-in registry is the initial seed. When current operation results establish a newer package, catalog, and schema mapping, record it with:
 
@@ -71,7 +77,7 @@ python scripts/da_product_registry.py observe \
 
 Parse `DA_PRODUCT_OBSERVATION_JSON:`. The workspace-local observation becomes the preferred mapping for later catalog and agent lists and records that the mapped product was definitively observed as installed in that environment and ring. Product identity interpretation and operation ordering remain session responsibilities; the command only validates and writes the supplied facts.
 
-If agent listing fails, preserve its failure evidence and continue with the catalog using only installation facts already established by workspace observations. Do not interpret a failed operation as an empty environment. When `realmNotEstablishedAgents` is non-empty or `productIdentityUnavailableCount` is nonzero, known exact matches remain usable, but do not claim that unmatched catalog products are uninstalled. `testAgents` and `prodAgents` remain service evidence; they are not direct editable-Dev matches for catalog **Use** actions. A selected Prod identity can still follow the parent setup skill's established Prod-to-Dev route.
+If both endpoint labels report errors, preserve both failures and continue with the catalog using only installation facts already established by workspace observations. If one endpoint fails, retain candidates from the successful endpoint and preserve that inventory is incomplete. Do not interpret any failed operation as an empty environment. Candidates with unresolved product or route evidence remain individually selectable only through exact-ID reconciliation; do not claim that unmatched catalog products are uninstalled. Test and Prod identities remain service evidence, not direct editable-Dev matches for catalog **Use** actions. A selected Prod identity can still follow the parent setup skill's established Prod-to-Dev route.
 
 For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. Render `Employee Self-Service` as `Employee Self-Service (Hub)`, render `Employee Self-Service IT` or `Employee Self-Service (IT)` as `Employee Self-Service (IT)`, and render `Employee Self-Service HR` or `Employee Self-Service (HR)` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
 
@@ -99,14 +105,42 @@ Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}
 
 For **Refresh list**, rerun the catalog list and agent list in their existing order, then rebuild the complete surface from the fresh results. This is a new maker-requested read, not an automatic retry. For **Choose a different environment**, retain the selected account and ring, read `da-environment-target.md`, rerun `list-environments`, and continue from its environment picker. Do not ask the maker to type a product name or number any choice.
 
-Build the product picker as a projection of the latest successful catalog result and the latest agent-list attempt. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Enrich each projected row with workspace observations and the latest `devAgents` evidence. A successful complete agent list is authoritative for the current picker, but only an exact identity in that result renders **Use — Already installed**. An older workspace observation without a current exact identity is historical evidence, not a sticky installed label. When agent listing fails or reports unresolved identities, retain the observation only as historical evidence and state that current installation could not be established; do not convert that uncertainty into either installed or uninstalled. Rebuild this projection whenever a fresh catalog or agent-list result arrives.
+Build the product picker as a projection of the latest successful catalog result, both endpoint-labeled list results, and the session's exact-ID product and route evidence. Group selectable rows by exact `packageId` and render exactly one choice for every resulting catalog product, preserving the catalog-defined product set and order. Only an exact candidate whose product identity and editable Dev route were established renders **Use — Already installed**. An older workspace observation without a currently validated exact identity is historical evidence, not a sticky installed label. When both endpoint reads fail or exact candidate reconciliation remains unresolved, retain the observation only as historical evidence and state that current installation could not be established; do not convert that uncertainty into either installed or uninstalled. Rebuild this projection whenever a fresh catalog or agent-list result arrives.
 
-When one or more `devAgents` have the same exact `productKey` as a catalog row, format that choice as **Use {friendly product name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
+When one or more exact validated Dev candidates match the same catalog product, format that choice as **Use {friendly product name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
 
 - When exactly one agent has the matching key, run the parent's selected-agent product-line reconciliation for that exact returned identity and continue through `da-existing-dev.md`.
 - When multiple agents have the matching key, show those exact returned agent names as the standard choices, leave the selection initially unset, disable custom entry inside the control, and let the maker select one before reconciliation and `da-existing-dev.md`.
 
-When an older environment-scoped observation reports `installed: true` but the latest successful agent list contains no exact matching identity, label the row **Create {friendly product name} {version} — Installation status unconfirmed**. When listing failed or was incomplete, use **Installation status unavailable** instead. In either case, explain that an earlier installation was observed but current agent visibility could not confirm it. Selecting this row asks:
+When the current setup invocation retains a definitive collision for a catalog product and the latest successful agent list contains no exact matching identity, format that choice as **Resolve {friendly product name} — Existing installation not visible**. Use this exact supporting description:
+
+> Copilot Studio confirmed that an installation exists, but it was not returned among the agents created by this Microsoft login.
+
+This resolution state takes precedence over the historical-observation and normal **Create** rows below. Selecting it must not submit another create request. Show the same no-visible-match message and choice set defined under **Interpret the response**. For **Use an agent URL**, continue through direct inspection. For **I have another login we can use to try connecting to this agent**, retain the ring, environment, collided product, and package facts; return to the shared account-selection step in `SKILL.md`; then rerun `list-agents` directly for the same environment and correlate the same product before rendering the next outcome-specific surface. For **Go back**, rebuild the catalog without rerunning create.
+
+When the current setup invocation retains a definitive collision but its latest agent-list attempt failed or returned malformed evidence, format that choice as **Resolve {friendly product name} — Agent visibility unavailable**. Use this exact supporting description:
+
+> Copilot Studio confirmed that an installation exists, but the agent list for this Microsoft login could not be loaded.
+
+Selecting it must show the same unavailable-inventory message and choice set defined under **Interpret the response**. A later successful exact match replaces this resolution row with **Use {friendly product name} — Already installed**.
+
+When an older environment-scoped observation reports `installed: true` with source `setup_mos_starter.py create collision` and the latest successful agent list contains no exact matching identity, label the row **Create {friendly product name} {version} — Previous create conflict**. Replace the product's default supporting description with:
+
+> {default product supporting description} The last create attempt reported that this product already exists in the environment, but the existing agent was not returned among the agents created by this Microsoft login.
+
+Selecting this row must show:
+
+**Message:**
+
+Copilot Studio reported a conflict the last time setup tried to create **{friendly product name}** because this product already exists in the environment. The existing agent was not returned among the agents created by this Microsoft login.
+
+**End message.**
+
+Immediately ask **How would you like to continue?** and present **Create anyway**, **Use an agent URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control.
+
+For **Create anyway**, retain the selected package facts and proceed through **Create** with a new client request UUID. Do not claim that the product is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented direct-inspection, alternate-login, or catalog-return route when another choice is selected.
+
+For any other older environment-scoped observation that reports `installed: true` but the latest successful agent list contains no exact matching identity, label the row **Create {friendly product name} {version} — Installation status unconfirmed**. When listing failed or was incomplete, use **Installation status unavailable** instead. In either case, explain that an earlier installation was observed but current agent visibility could not confirm it. Selecting this row asks:
 
 > Setup previously observed this product in the environment, but current agent visibility could not confirm it. An existing agent may still be hidden from this account. Create anyway and let Copilot Studio validate the current state?
 
@@ -156,13 +190,59 @@ When the annotations report `outcome: created`, keep the distinction between `ca
 
 The successful native create result is authoritative identity and environment-scoped installation evidence. Record its exact package, catalog, returned schema, environment, and ring through `da_product_registry.py observe` with source `setup_mos_starter.py create`, then run the parent's selected-agent product-line reconciliation with the returned identity and `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before the enable-ALM operation.
 
-When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Say that Copilot Studio reports an installed copy of the selected product. When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list agents in the same environment through `setup_existing_da.py list-agents` and correlate only exact `productKey` or observed-schema matches from `devAgents` or `realmNotEstablishedAgents` for the collided product. Never offer unrelated listed agents or bulk-enroll unresolved rows.
+When the annotations report `outcome: collision`, preserve the exact selected package ID and catalog name. Do not render an intermediate collision message. First record and reconcile all available evidence, then render exactly one outcome-specific message immediately followed by the choice set it explains. A collision message must never be separated from its next interactive choice set by another operation or maker-facing message.
 
-When exactly one Dev identity matches, ask **Use {agent display name}?** and present **Use this agent** and **Go back** as the standard choices. Do not add a separate choose-from-existing step. When multiple Dev identities match, ask **Choose the installed {friendly product name} agent.**, present those matching identities plus **Go back** as the standard choices, and render every agent option as its exact service-provided display name only. Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either panel.
+When the definitive collision response supplies an exact agent schema, record that mapping and its environment-scoped installed state immediately through `da_product_registry.py observe` with source `setup_mos_starter.py create collision`; this observation does not prove that a selectable agent is visible. Then list agents in the same environment through `setup_existing_da.py list-agents`. Correlate raw source rows only by exact ID, establish product identity through an exact MakerOperations schema or native component result, and compare that schema with the collided product. Never offer unrelated listed agents or bulk-enroll unresolved rows.
 
-For a selected matching Dev identity, run `setup_existing_da.py validate-agent` only when the list result does not already establish its exact schema, then run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` and continue through `da-existing-dev.md`. For a selected matching `realmNotEstablishedAgents` identity, run both product-line probes and apply their result normally. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment. Successful enrollment requires reconciliation and route inspection before the normal attachment path; skipped enrollment with established supported native identity returns to the attachment command below with `--allow-unenrolled-authoring`. If no exact identity matches, use the installed-without-matching-Dev explanation and **Use an agent URL**, **Try with a different user**, and **Go back** recovery above instead of presenting other agents. This path does not replace an agent.
+When exactly one selectable identity matches after exact-ID product reconciliation, show:
 
-For **Go back**, preserve the collided create result and its client request UUID, then return to the complete action-oriented catalog composed from every selectable row in the latest successful catalog result and the latest agent list. Any later **Create** selection uses a new client request UUID; never repeat the collided request.
+**Message:**
+
+Copilot Studio says an agent for **{friendly product name}** already exists. This Microsoft login can inspect **{agent display name}**.
+
+**End message.**
+
+Immediately ask **Use {agent display name}?** and present **Use this agent** and **Go back** as the standard choices. Do not add a separate choose-from-existing step.
+
+When multiple selectable identities match, show:
+
+**Message:**
+
+Copilot Studio says an agent for **{friendly product name}** already exists. This Microsoft login can inspect more than one matching agent.
+
+**End message.**
+
+Immediately ask **Choose the installed {friendly product name} agent.**, present those matching identities plus **Go back** as the standard choices, and render every agent option as its exact service-provided display name only.
+
+Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either the message or choice panel.
+
+For a selected identity whose matching MakerOperations BotEntity supplies a usable schema, pass that exact schema into the parent's selected-agent product-line reconciliation as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Otherwise run both exact identity probes so the native component result can establish schema identity. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment. Successful enrollment requires reconciliation and route inspection before the normal attachment path; skipped enrollment with established supported native identity returns to the attachment command below with `--allow-unenrolled-authoring`.
+
+If both endpoint labels report errors, or neither endpoint supplies structurally usable evidence, show:
+
+**Message:**
+
+Copilot Studio says an agent for **{friendly product name}** already exists, but I couldn’t load the agent list for this Microsoft login.
+
+**End message.**
+
+Immediately ask **How would you like to connect to this agent?** and present **Retry agent list**, **Use an agent URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices. **Retry agent list** reruns only the same read-only `list-agents` operation for the retained environment and then renders the resulting outcome-specific surface. Apply the direct-inspection and alternate-login routes below for their corresponding choices.
+
+If one endpoint reports an error, the other endpoint returns no exact matching identity, and no matching exact identity is otherwise established, use the same surface but replace `couldn’t load the agent list` with `couldn’t load the complete agent list`. Do not treat the successful endpoint's empty or nonmatching response as proof that the collided agent is hidden.
+
+If both endpoint reads succeed but no exact identity matches, show:
+
+**Message:**
+
+Copilot Studio says an agent for **{friendly product name}** already exists, but it was not returned among the agents created by this Microsoft login.
+
+**End message.**
+
+Immediately ask **How would you like to connect to this agent?** and present **Use an agent URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices instead of presenting unrelated agents.
+
+For **Use an agent URL**, ask for the exact Copilot Studio agent URL and continue through direct inspection in `da-existing-dev.md`. For **I have another login we can use to try connecting to this agent**, retain the ring, environment, collided product, and package facts; return to the shared account-selection step in `SKILL.md`; then rerun `list-agents` directly for the same environment and correlate the same product before rendering the next outcome-specific surface. Neither path creates or replaces an agent.
+
+For **Go back**, preserve the collided create result and its client request UUID, then render the complete action-oriented catalog composed from every selectable row in the latest successful catalog result and latest agent-list attempt. The collided product must render as the applicable **Resolve** row above, not as **Create** or **Installation status unconfirmed**. Do not display another standalone collision message before the catalog. A later create is available only if fresh evidence removes the resolution state and the catalog projection again produces a **Create** row; every such create uses a new client request UUID and never repeats the collided request.
 
 ## Prepare the authoring route
 
