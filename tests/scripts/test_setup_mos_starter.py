@@ -764,7 +764,13 @@ def test_create_removes_fuse_and_reports_collision_on_409(
         kit_root=tmp_path,
     )
 
-    with pytest.raises(mos.MosStarterSetupError, match="collision"):
+    with pytest.raises(
+        mos.MosStarterSetupError,
+        match=(
+            "an agent using this starter package's schema already exists "
+            "in the target environment"
+        ),
+    ):
         mos.create_from_starter_package(
             client,
             environment_id=ENVIRONMENT_ID,

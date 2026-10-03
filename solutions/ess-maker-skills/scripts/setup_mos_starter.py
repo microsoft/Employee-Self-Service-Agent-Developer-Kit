@@ -3,7 +3,7 @@
 
 """List MOS starters and create a Dev agent when requested.
 
-This is the DA `/setup` entitled-product installation path. It exposes two
+This is the DA `/setup` agent-template installation path. It exposes two
 independently observable operations: read-only ``list`` and request-guarded
 ``create``. Shared ALM enrollment belongs to ``setup_existing_da.py
 ensure-alm``. This script has no ``resolve``/``status`` command and no
@@ -542,7 +542,9 @@ def create_from_starter_package(
         _print_evidence(annotations, body, body_is_json)
         if status == 409:
             raise MosStarterSetupError(
-                "The service reported a starter-package collision (HTTP 409). "
+                "Copilot Studio returned HTTP 409 because an agent using this "
+                "starter package's schema already exists in the target "
+                "environment. The response did not identify the existing agent. "
                 "The attempt fuse was cleared."
             )
         raise MosStarterSetupError(
@@ -566,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = commands.add_parser(
         "list",
-        help="List entitled MOS starter packages. Read-only.",
+        help="List available agent templates. Read-only.",
     )
     _add_agentbuilder_target_arguments(list_command)
 

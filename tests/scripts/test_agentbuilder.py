@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 import responses
 
 import agentbuilder
@@ -203,7 +204,10 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, responses: list[FakeResponse]) -> None:
+    def __init__(
+        self,
+        responses: list[FakeResponse | requests.RequestException],
+    ) -> None:
         self.responses = responses
         self.calls: list[dict[str, Any]] = []
         self.mounts: dict[str, Any] = {}
@@ -213,7 +217,10 @@ class FakeSession:
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, requests.RequestException):
+            raise response
+        return response
 
 
 def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
@@ -274,6 +281,7 @@ def test_explicit_host_rejects_cross_ring_and_paths() -> None:
 def test_client_uses_only_configured_environment_host() -> None:
     session = FakeSession(
         [
+            FakeResponse([]),
             FakeResponse({"Entities": [], "ContinuationToken": ""}),
             FakeResponse({"botId": AGENT_ID}),
             FakeResponse({"routeRealm": 0}),
@@ -301,7 +309,8 @@ def test_client_uses_only_configured_environment_host() -> None:
         session=session,
     )
 
-    client.list_agents()
+    client.list_minimal_bots()
+    client.list_agent_pages()
     client.get_agent(AGENT_ID)
     client.get_realms(AGENT_ID)
     client.get_dev_configuration(AGENT_ID)
@@ -309,14 +318,19 @@ def test_client_uses_only_configured_environment_host() -> None:
 
     assert all(call["url"].startswith(HOST) for call in session.calls)
     assert all("crm.dynamics.com" not in call["url"] for call in session.calls)
-    assert session.calls[2]["url"].endswith(f"/alm/{AGENT_ID}/realms")
-    assert session.calls[3]["params"]["realm"] == 0
-    assert session.calls[4]["method"] == "POST"
-    assert session.calls[4]["json"] == {}
-    assert session.calls[4]["params"] == {
+    assert session.calls[0]["url"].endswith("/copilotstudio/minimalBots/api")
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION,
+        "creationSource": ["CopilotStudio", "AgentBuilder"],
+    }
+    assert session.calls[3]["url"].endswith(f"/alm/{AGENT_ID}/realms")
+    assert session.calls[4]["params"]["realm"] == 0
+    assert session.calls[5]["method"] == "POST"
+    assert session.calls[5]["json"] == {}
+    assert session.calls[5]["params"] == {
         "api-version": agentbuilder.NATIVE_ALM_API_VERSION
     }
-    assert _non_auth_headers(session.calls[4]) == {
+    assert _non_auth_headers(session.calls[5]) == {
         "Accept": "application/json",
         "Content-Type": "application/json",
         "x-ms-client-name": "CopilotStudio",
@@ -358,7 +372,16 @@ def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
         session=session,
     )
 
-    assert client.list_agents() == [first_agent, second_agent]
+    assert client.list_agent_pages() == [
+        {
+            "Entities": [first_agent],
+            "ContinuationToken": "next-page",
+        },
+        {
+            "Entities": [second_agent],
+            "ContinuationToken": "",
+        },
+    ]
     assert session.calls[0]["url"] == f"{HOST}/copilotstudio/agents"
     assert session.calls[0]["params"] == {"api-version": "2024-10-01"}
     assert session.calls[1]["params"] == {
@@ -389,7 +412,7 @@ def test_agent_listing_rejects_invalid_collection_shape(body: Any) -> None:
     )
 
     with pytest.raises(agentbuilder.AgentBuilderError, match="Agent listing"):
-        client.list_agents()
+        client.list_agent_pages()
 
 
 def test_agent_listing_rejects_repeated_continuation() -> None:
@@ -420,7 +443,193 @@ def test_agent_listing_rejects_repeated_continuation() -> None:
         agentbuilder.AgentBuilderError,
         match="repeated a continuation token",
     ):
-        client.list_agents()
+        client.list_agent_pages()
+
+
+def test_minimal_bot_listing_preserves_service_cards() -> None:
+    cards = [
+        {
+            "botId": AGENT_ID,
+            "shortBotName": "Employee Self-Service",
+            "realm": "dev",
+        }
+    ]
+    session = FakeSession([FakeResponse(cards)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    assert client.list_minimal_bots() == cards
+    assert session.calls[0]["url"] == (
+        f"{HOST}/copilotstudio/minimalBots/api"
+    )
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION,
+        "creationSource": ["CopilotStudio", "AgentBuilder"],
+    }
+
+
+@pytest.mark.parametrize("body", ({}, {"value": []}, ["not-an-object"]))
+def test_minimal_bot_listing_rejects_invalid_shape(body: Any) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(body)]),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="MinimalBot listing",
+    ):
+        client.list_minimal_bots()
+
+
+def test_agent_inventory_preserves_each_endpoint_response() -> None:
+    cards = [{"botId": AGENT_ID, "shortBotName": "ESS"}]
+    maker_page = {
+        "Entities": [
+            {
+                "cdsBotId": AGENT_ID,
+                "displayName": "ESS",
+                "schemaName": "gptagent_ess",
+            }
+        ],
+        "ContinuationToken": "",
+    }
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [FakeResponse(cards), FakeResponse(maker_page)]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {"response": cards, "error": None},
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_attempts_maker_operations_after_minimal_bot_failure() -> None:
+    maker_page = {"Entities": [], "ContinuationToken": ""}
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(
+                    {"error": {"code": "AccessDenied"}},
+                    status_code=403,
+                    headers={"request-id": "minimal-request"},
+                ),
+                FakeResponse(maker_page),
+            ]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {
+            "response": None,
+            "error": {
+                "type": "AgentBuilderHTTPError",
+                "message": (
+                    "MinimalBot listing failed with HTTP 403 "
+                    "(AccessDenied); the signed-in account is not "
+                    "authorized [request minimal-request]"
+                ),
+                "httpStatus": 403,
+                "errorCode": "AccessDenied",
+                "requestId": "minimal-request",
+            },
+        },
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_keeps_other_source_after_network_failure() -> None:
+    maker_page = {"Entities": [], "ContinuationToken": ""}
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                requests.ConnectionError("MinimalBot connection failed."),
+                FakeResponse(maker_page),
+            ]
+        ),
+    )
+
+    assert client.list_agent_inventory() == {
+        "minimalBots": {
+            "response": None,
+            "error": {
+                "type": "ConnectionError",
+                "message": "MinimalBot connection failed.",
+            },
+        },
+        "copilotStudioAgents": {
+            "response": [maker_page],
+            "error": None,
+        },
+    }
+
+
+def test_agent_inventory_attempts_minimal_bots_when_maker_operations_fails() -> None:
+    cards = [{"botId": AGENT_ID, "shortBotName": "ESS"}]
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(cards),
+                FakeResponse(
+                    {"error": {"code": "Unavailable"}},
+                    status_code=503,
+                    headers={"request-id": "agents-request"},
+                ),
+            ]
+        ),
+    )
+
+    result = client.list_agent_inventory()
+
+    assert result["minimalBots"] == {
+        "response": cards,
+        "error": None,
+    }
+    assert result["copilotStudioAgents"] == {
+        "response": None,
+        "error": {
+            "type": "AgentBuilderHTTPError",
+            "message": (
+                "Agent listing failed with HTTP 503 (Unavailable) "
+                "[request agents-request]"
+            ),
+            "httpStatus": 503,
+            "errorCode": "Unavailable",
+            "requestId": "agents-request",
+        },
+    }
 
 
 def test_realm_configuration_rejects_unknown_realm() -> None:
@@ -1139,7 +1348,7 @@ def test_http_403_is_explicit_without_echoing_response_body() -> None:
         agentbuilder.AgentBuilderHTTPError,
         match="not authorized",
     ) as error:
-        client.list_agents()
+        client.list_agent_pages()
 
     assert "sensitive platform detail" not in str(error.value)
     assert error.value.response is not None
@@ -1167,7 +1376,7 @@ def test_http_error_carries_raw_response_without_leaking_it_into_str() -> None:
     )
 
     with pytest.raises(agentbuilder.AgentBuilderHTTPError) as error:
-        client.list_agents()
+        client.list_agent_pages()
 
     assert error.value.response is raw_response
     assert "sensitive platform detail" not in str(error.value)

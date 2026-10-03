@@ -44,7 +44,6 @@ from agentbuilder_object_model import (
 )
 from da_product_registry import (
     DAProductRegistryError,
-    resolve_product_identity,
     resolve_product_setup,
 )
 
@@ -515,6 +514,7 @@ def _validate_canonical_agent_state(
             None,
             "automated",
             "manual-attested",
+            "manual-overridden",
             "skipped",
         }:
             raise ExistingDASetupError(
@@ -918,6 +918,7 @@ def maintain_setup_flightcheck(
     checkpoint: str,
     results_path: Path,
     manual_attested: bool = False,
+    manual_overridden: bool = False,
 ) -> dict[str, Any]:
     """Persist one supported FlightCheck result into canonical setup state."""
     state = _load_canonical_setup_state(kit_root)
@@ -1006,6 +1007,11 @@ def maintain_setup_flightcheck(
         str(row.get("status") or "")
         for row in matching
     }
+    if manual_attested and manual_overridden:
+        raise ExistingDASetupError(
+            "Capacity evidence cannot be both manually attested and "
+            "manually overridden."
+        )
     if manual_attested:
         if checkpoint != "ENV-CAPACITY-001":
             raise ExistingDASetupError(
@@ -1023,6 +1029,33 @@ def maintain_setup_flightcheck(
                 "ENV-CAPACITY-001 result."
             )
         complete = True
+    elif manual_overridden:
+        if checkpoint != "ENV-CAPACITY-001":
+            raise ExistingDASetupError(
+                "Manual override is supported only for "
+                "ENV-CAPACITY-001."
+            )
+        current_step = agent_state["steps"][step_id]
+        if (
+            current_step.get("state") != "blocked"
+            or current_step.get("checkpoint") != "ENV-CAPACITY-001"
+            or not current_step.get("failure_causes")
+        ):
+            raise ExistingDASetupError(
+                "Manual override requires a previously recorded zero "
+                "allocation and a fresh Warning recheck."
+            )
+        if (
+            len(matching) != 1
+            or statuses != {"Warning"}
+            or payload.get("failed") != 0
+            or payload.get("errors") != 0
+        ):
+            raise ExistingDASetupError(
+                "Manual override requires a fresh Warning "
+                "ENV-CAPACITY-001 recheck."
+            )
+        complete = True
     elif requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}
     elif checkpoint == "ENV-CAPACITY-001":
@@ -1033,7 +1066,7 @@ def maintain_setup_flightcheck(
         complete = (
             not run_blocked
             and bool(statuses)
-            and statuses <= {"Passed", "Warning"}
+            and statuses == {"Passed"}
         )
     else:
         run_blocked = (
@@ -1046,11 +1079,12 @@ def maintain_setup_flightcheck(
     if complete:
         note = SETUP_STEP_NOTES[step_id]
         mode = "automated"
-        if checkpoint == "ENV-CAPACITY-001" and "Warning" in statuses:
+        if manual_overridden:
+            mode = "manual-overridden"
             note = (
-                "ENV-CAPACITY-001 recorded a Copilot Studio message capacity "
-                "risk. Setup continued because capacity allocation is not a "
-                "foundation setup blocker."
+                "A maker explicitly continued with a manual override after "
+                "ENV-CAPACITY-001 automatically rechecked this environment "
+                "and still found no allocated Copilot Studio message capacity."
             )
         elif manual_attested:
             mode = "manual-attested"
@@ -1073,6 +1107,11 @@ def maintain_setup_flightcheck(
             requirement=requirement,
         )
     else:
+        non_blocking_statuses = (
+            {"Passed"}
+            if checkpoint == "ENV-CAPACITY-001"
+            else {"Passed", "Warning"}
+        )
         causes = (
             [
                 str(
@@ -1081,7 +1120,8 @@ def maintain_setup_flightcheck(
                     or "FlightCheck failed"
                 )
                 for row in matching
-                if str(row.get("status") or "") not in {"Passed", "Warning"}
+                if str(row.get("status") or "")
+                not in non_blocking_statuses
             ]
             if matching
             else [
@@ -1275,86 +1315,6 @@ def _record_canonical_setup_ready(
     return agent_state
 
 
-def _safe_listed_agent(
-    agent: dict[str, Any],
-    *,
-    realm: Any = None,
-    verification_error_type: str | None = None,
-    verification_http_status: int | None = None,
-) -> dict[str, Any]:
-    agent_id = str(agent.get("cdsBotId") or "")
-    display_name = agent.get("displayName")
-    name = (
-        display_name.strip()
-        if isinstance(display_name, str) and display_name.strip()
-        else agent_id
-    )
-    result: dict[str, Any] = {
-        "listedId": agent_id,
-        "name": name,
-    }
-    if realm is not None:
-        result["realm"] = realm
-    if verification_error_type is not None:
-        result["verificationErrorType"] = verification_error_type
-    if verification_http_status is not None:
-        result["verificationHttpStatus"] = verification_http_status
-    product_identity = agent.get("productIdentity")
-    if isinstance(product_identity, dict):
-        result["productIdentity"] = product_identity
-    return result
-
-
-def _listed_product_identity(
-    agent: dict[str, Any],
-) -> tuple[str | None, dict[str, Any] | None]:
-    if "schemaName" not in agent:
-        return None, {
-            "outcome": "uncertain",
-            "source": "agent-collection",
-            "observation": "field-absent",
-            "error": {
-                "type": "SchemaNameFieldAbsent",
-                "message": "The listed BotEntity omitted schemaName.",
-            },
-        }
-    raw_schema_name = agent["schemaName"]
-    if raw_schema_name is None:
-        return None, {
-            "outcome": "uncertain",
-            "source": "agent-collection",
-            "observation": "null",
-            "error": {
-                "type": "SchemaNameNull",
-                "message": "The listed BotEntity returned a null schemaName.",
-            },
-        }
-    if not isinstance(raw_schema_name, str):
-        return None, {
-            "outcome": "uncertain",
-            "source": "agent-collection",
-            "observation": "invalid-type",
-            "error": {
-                "type": "SchemaNameInvalidType",
-                "message": (
-                    "The listed BotEntity returned a non-string schemaName."
-                ),
-            },
-        }
-    schema_name = raw_schema_name.strip()
-    if not schema_name:
-        return None, {
-            "outcome": "uncertain",
-            "source": "agent-collection",
-            "observation": "empty",
-            "error": {
-                "type": "SchemaNameEmpty",
-                "message": "The listed BotEntity returned an empty schemaName.",
-            },
-        }
-    return schema_name, None
-
-
 def _realm_name(value: Any) -> str | None:
     return next(
         (
@@ -1368,109 +1328,6 @@ def _realm_name(value: Any) -> str | None:
         ),
         None,
     )
-
-
-def inspect_listed_agents(client: AgentBuilderClient) -> dict[str, Any]:
-    """Classify every listed identity using direct service realm metadata."""
-    listed_agents = client.list_agents()
-    dev_agents: list[dict[str, Any]] = []
-    test_agents: list[dict[str, Any]] = []
-    prod_agents: list[dict[str, Any]] = []
-    realm_not_established_agents: list[dict[str, Any]] = []
-    product_identity_unavailable = 0
-    for listed_agent in listed_agents:
-        agent_id = str(listed_agent.get("cdsBotId") or "")
-        try:
-            normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
-        except ExistingDASetupError as exc:
-            print(
-                f"WARNING: Listed agent ID {agent_id!r}: "
-                f"{type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
-            realm_not_established_agents.append(
-                _safe_listed_agent(
-                    listed_agent,
-                    verification_error_type=type(exc).__name__,
-                )
-            )
-            continue
-        try:
-            metadata = client.get_agent(normalized_agent_id)
-        except AgentBuilderHTTPError as exc:
-            print(
-                f"WARNING: Agent {normalized_agent_id}: "
-                f"{type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
-            _print_http_error_response(
-                exc,
-                marker="DA_AGENT_LIST_WARNING",
-            )
-            realm_not_established_agents.append(
-                _safe_listed_agent(
-                    listed_agent,
-                    verification_error_type=type(exc).__name__,
-                    verification_http_status=exc.status_code,
-                )
-            )
-            continue
-        try:
-            direct_agent_id = _normalize_guid(
-                str(metadata.get("botId") or ""),
-                "Direct agent ID",
-            )
-            if direct_agent_id.casefold() != normalized_agent_id.casefold():
-                raise ExistingDASetupError(
-                    "Direct agent lookup returned a different agent identity."
-                )
-        except ExistingDASetupError as exc:
-            print(
-                f"WARNING: Agent {normalized_agent_id}: "
-                f"{type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
-            realm_not_established_agents.append(
-                _safe_listed_agent(
-                    listed_agent,
-                    verification_error_type=type(exc).__name__,
-                )
-            )
-            continue
-        realm = _realm_name(metadata.get("realm"))
-        enriched_agent = {
-            **listed_agent,
-            "realm": metadata.get("realm"),
-        }
-        schema_name, product_identity = _listed_product_identity(
-            listed_agent
-        )
-        if product_identity is not None:
-            enriched_agent.pop("schemaName", None)
-            enriched_agent["productIdentity"] = product_identity
-            product_identity_unavailable += 1
-        elif schema_name is not None:
-            enriched_agent["schemaName"] = schema_name
-        if realm == "dev":
-            dev_agents.append(enriched_agent)
-        elif realm == "test":
-            test_agents.append(enriched_agent)
-        elif realm == "prod":
-            prod_agents.append(enriched_agent)
-        else:
-            realm_not_established_agents.append(
-                _safe_listed_agent(
-                    enriched_agent,
-                    realm=metadata.get("realm"),
-                )
-            )
-    return {
-        "devAgents": dev_agents,
-        "testAgents": test_agents,
-        "prodAgents": prod_agents,
-        "realmNotEstablishedAgents": realm_not_established_agents,
-        "productIdentityUnavailableCount": product_identity_unavailable,
-    }
 
 
 def _confirm_dev(
@@ -2704,77 +2561,6 @@ def attach_existing_dev(
     return response
 
 
-def summarize_agents(
-    agents: list[dict[str, Any]],
-    *,
-    kit_root: Path | None = None,
-) -> list[dict[str, Any]]:
-    """Return safe user-choice fields and exact registered product identity."""
-    choices: list[dict[str, Any]] = []
-    for agent in agents:
-        agent_id = str(agent.get("cdsBotId") or "")
-        try:
-            normalized_id = _normalize_guid(agent_id, "Agent ID")
-        except ExistingDASetupError:
-            continue
-        display_name = agent.get("displayName")
-        name = (
-            display_name.strip()
-            if isinstance(display_name, str) and display_name.strip()
-            else normalized_id
-        )
-        choice = {"id": normalized_id, "name": name}
-        schema_name = str(agent.get("schemaName") or "").strip()
-        product = resolve_product_identity(
-            agent_schema_name=schema_name,
-            kit_root=kit_root,
-        )
-        if product is not None:
-            choice["productKey"] = product["productKey"]
-            choice["productIdentitySource"] = product["identitySource"]
-        if schema_name:
-            choice["schemaName"] = schema_name
-        product_identity = agent.get("productIdentity")
-        if isinstance(product_identity, dict):
-            choice["productIdentity"] = product_identity
-        choices.append(choice)
-    return sorted(
-        choices,
-        key=lambda item: (item["name"].casefold(), item["id"]),
-    )
-
-
-def summarize_realm_agents(
-    agents: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Return safe identity and realm facts without product interpretation."""
-    choices: list[dict[str, Any]] = []
-    for agent in agents:
-        agent_id = str(agent.get("cdsBotId") or "")
-        try:
-            normalized_id = _normalize_guid(agent_id, "Agent ID")
-        except ExistingDASetupError:
-            continue
-        display_name = agent.get("displayName")
-        name = (
-            display_name.strip()
-            if isinstance(display_name, str) and display_name.strip()
-            else normalized_id
-        )
-        item: dict[str, Any] = {
-            "id": normalized_id,
-            "name": name,
-        }
-        realm = _realm_name(agent.get("realm"))
-        if realm is not None:
-            item["realm"] = realm
-        choices.append(item)
-    return sorted(
-        choices,
-        key=lambda item: (item["name"].casefold(), item["id"]),
-    )
-
-
 def summarize_environments(
     environments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -2917,6 +2703,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Record an explicit maker attestation for a current Manual "
+            "ENV-CAPACITY-001 result."
+        ),
+    )
+    maintain_flightcheck.add_argument(
+        "--manual-overridden",
+        action="store_true",
+        help=(
+            "Record an explicit maker override for a current Warning "
             "ENV-CAPACITY-001 result."
         ),
     )
@@ -3136,6 +2930,7 @@ def main(argv: list[str] | None = None) -> int:
                 checkpoint=args.checkpoint,
                 results_path=results_path,
                 manual_attested=args.manual_attested,
+                manual_overridden=args.manual_overridden,
             )
             print(
                 "DA_SETUP_FLIGHTCHECK_JSON:"
@@ -3165,30 +2960,22 @@ def main(argv: list[str] | None = None) -> int:
             _require_object_model_dependencies()
         client = _client_from_args(args, environment_id, target["ring"])
         if args.command == "list-agents":
-            inspection = inspect_listed_agents(client)
+            inventory = client.list_agent_inventory()
             result = {
                 "environmentId": environment_id,
-                "devAgents": summarize_agents(
-                    inspection["devAgents"],
-                    kit_root=args.kit_root.resolve(),
-                ),
-                "testAgents": summarize_realm_agents(
-                    inspection["testAgents"]
-                ),
-                "prodAgents": summarize_realm_agents(
-                    inspection["prodAgents"]
-                ),
-                "realmNotEstablishedAgents": inspection[
-                    "realmNotEstablishedAgents"
-                ],
-                "productIdentityUnavailableCount": inspection[
-                    "productIdentityUnavailableCount"
-                ],
+                **inventory,
             }
             print(
                 f"DA_AGENT_LIST_JSON:{json.dumps(result, ensure_ascii=True)}"
             )
-            return 0
+            return (
+                0
+                if any(
+                    source["response"] is not None
+                    for source in inventory.values()
+                )
+                else 1
+            )
 
         if args.command == "inspect-agent":
             result = inspect_agent_route(
