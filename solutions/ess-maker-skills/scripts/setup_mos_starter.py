@@ -542,7 +542,9 @@ def create_from_starter_package(
         _print_evidence(annotations, body, body_is_json)
         if status == 409:
             raise MosStarterSetupError(
-                "The service reported a starter-package collision (HTTP 409). "
+                "Copilot Studio returned HTTP 409 because an agent using this "
+                "starter package's schema already exists in the target "
+                "environment. The response did not identify the existing agent. "
                 "The attempt fuse was cleared."
             )
         raise MosStarterSetupError(

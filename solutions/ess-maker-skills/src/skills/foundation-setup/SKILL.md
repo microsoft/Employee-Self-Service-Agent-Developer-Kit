@@ -265,7 +265,7 @@ python scripts/setup_existing_da.py select-agent \
 
 Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectReady` value is not `true`; otherwise present the completion choices below. This operation changes only local active-agent selection.
 
-When the selected live identity is not locally configured, continue through the established existing-agent route: direct Dev identities use normal attachment; `realmNotEstablishedAgents` first require successful native product reconciliation, then direct inspection may offer optional enrollment or `--allow-unenrolled-authoring`; and Prod identities use the established Prod-to-Dev handoff. A native `not-found`, access failure, or uncertain result must stop without offering enrollment. Do not manufacture a local entry before the selected route validates and attaches the exact identity.
+When the selected live identity is not locally configured, continue through the established existing-agent route. Use an exact MakerOperations schema when the matching source object supplies one; otherwise run both exact product-line probes before route inspection. A resolved Dev identity uses normal attachment, an unenrolled identity may offer optional enrollment or `--allow-unenrolled-authoring` under the established rules, and a Prod identity uses the established Prod-to-Dev handoff. A native `not-found`, access failure, or uncertain result must stop without offering enrollment. Do not manufacture a local entry before the selected route validates and attaches the exact identity.
 
 The final handoff is the detailed completion report and the standard completion choice surface. After it, present these context-appropriate choices:
 

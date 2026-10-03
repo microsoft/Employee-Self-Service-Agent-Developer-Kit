@@ -101,20 +101,33 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Parse `DA_AGENT_LIST_JSON:`. The command reads the environment's Copilot Studio agent collection using its exact public JSON fields: top-level `Entities` and `ContinuationToken`, then `cdsBotId`, `displayName`, and `schemaName` on each BotEntity. It directly inspects each returned `cdsBotId` only to validate the same identity and classify its realm; direct metadata, ALM configuration, casing variants, and alternate ID or name properties must not replace collection identity. A missing, null, empty, or invalid collection schema is retained as `productIdentity` uncertainty rather than normalized to an empty value or recovered from another property source. Treat `devAgents` and `prodAgents` as supported setup-source candidates. Keep `testAgents` as internal evidence and do not offer them as editable-agent choices. A `realmNotEstablishedAgents` row may be offered only as an exact candidate selected individually by its service-provided display name. Every option in that agent list must contain only the service-provided display name; do not append a realm, enrollment state, ALM status, or preparation suffix. Never bulk-enroll unresolved rows. A command failure or malformed collection is unavailable inventory evidence, not an empty environment; preserve the reported failure and use the existing target-recovery choices.
+Parse `DA_AGENT_LIST_JSON:` as endpoint-labeled evidence. `minimalBots.response` is the untouched array returned by `GET /copilotstudio/minimalBots/api` for the explicit `CopilotStudio` and `AgentBuilder` creation sources. `copilotStudioAgents.response` is the untouched array of paged response objects returned by `GET /copilotstudio/agents`; each page retains its exact `Entities` and `ContinuationToken` fields. Each endpoint label also has an `error` field. The command does not merge, deduplicate, rename, enrich, classify, or directly inspect any listed identity.
 
-When supported candidates are returned, show only their exact service-provided display names and ask the maker to choose one exact identity. Retain realm and enrollment classifications as internal routing evidence. Run the parent's selected-agent product-line reconciliation before realm-specific setup:
+Interpret the two sources independently. A successful empty response from one source does not negate identities returned by the other, and one endpoint's error does not make the other endpoint unavailable. Preserve every endpoint-specific error. At the session layer, correlate candidates only by exact `botId` from a MinimalBot card or exact `cdsBotId` from a MakerOperations BotEntity. Retain both untouched source objects when the same ID appears in both responses, but render only one picker option per exact ID. Never correlate by display name.
 
-- For a selected `devAgents` identity with a non-empty returned schema, pass its exact returned schema as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`, then validate or attach only that identity through this file.
-- For a selected `devAgents` identity without a returned schema, do not synthesize one or withhold the candidate. Run both exact identity probes in the parent's product-line reconciliation so its native component fallback can establish the schema before validation or attachment.
-- For a selected `prodAgents` identity, do not require a Dev schema from the list result. Run the parent's exact `inspect-agent` route and continue through its existing `da-prod-to-dev.md` handoff. Do not validate or attach the Prod ID as though it were Dev.
-- For one selected `realmNotEstablishedAgents` identity, retain that the native collection returned the exact ID and run both exact identity probes. Apply the product-line reconciliation result normally. Only a supported native `found` result may continue to direct route inspection; when that inspection returns `alm.isEnrolled: false`, read `alm-enrollment.md`. A native `not-found`, access failure, or uncertain result must use the stopped-result recovery without offering enrollment.
+Use exact source fields only. A MakerOperations BotEntity may provide `displayName` and `schemaName`; a MinimalBot card may provide `shortBotName`, `fullBotName`, and `realm`, but it does not provide schema identity. Do not copy a value between source-specific fields or insert a synthesized schema into either response. Every maker-facing agent option contains only the selected source's service-provided display name. Do not append a realm, enrollment state, ALM status, source, or preparation suffix.
 
-When `devAgents`, `prodAgents`, and `realmNotEstablishedAgents` are all empty, say:
+When both endpoint labels report an error, agent inventory is unavailable. Preserve both failures and say:
 
-> No visible Dev or Prod setup-source agents were listed in this environment. A directly addressable agent may still be available.
+> I couldn’t load the agent list for this Microsoft login.
+
+Then use **Retry setup with another target** from `da-environment-target.md`.
+
+When exact-ID candidates are returned by either endpoint, show their exact service-provided display names and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation for the selected ID before realm-specific setup:
+
+- When the matching MakerOperations BotEntity has a non-empty exact `schemaName`, pass it as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`.
+- When no matching MakerOperations BotEntity supplies a usable schema, do not synthesize one or withhold the candidate. Run both exact identity probes so the native component response can establish product identity.
+- After successful product reconciliation, run `inspect-agent` for the exact ID. A resolved Dev route continues through normal validation or attachment. A resolved Prod route continues through `da-prod-to-dev.md`; do not validate or attach the Prod ID as though it were Dev. An unenrolled route may offer optional enrollment or `--allow-unenrolled-authoring` only under the established rules. Native not-found, access failure, or uncertainty uses stopped-result recovery.
+
+Never bulk-enroll, validate, or attach unselected rows.
+
+When both endpoint reads succeed and both contain no identities, say:
+
+> No agents created by this Microsoft login were returned for this environment.
 
 Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
+
+When one endpoint reports an error and the other succeeds with no identities, do not use the empty-list message. State that the successful source returned no agents but the other source could not be loaded, then present the same recovery choices.
 
 ## Maintain native FlightCheck evidence
 
