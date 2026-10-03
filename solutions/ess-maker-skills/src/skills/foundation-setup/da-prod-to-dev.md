@@ -2,7 +2,7 @@
 
 # Set Up Dev from a Known Prod Agent
 
-Use this setup path when server-backed inspection identifies the maker's Copilot Studio agent URL as Prod. It is a same-tenant, create-only path.
+Use this setup path when server-backed inspection identifies the maker's Microsoft Copilot Studio URL as Prod. It is a same-tenant, create-only path.
 Read `src/reference/native-alm-import.md` for the import contract and reuse `da-existing-dev.md` for attachment and completion handling. Do not generate HTTP code or an end-to-end setup script.
 
 Before this file runs its first source inspection, related-Dev validation, export, import, or attachment operation, complete the parent skill's **Confirm people and role availability for the selected path** checkpoint if it was not already completed for the current existing-agent path, environment, and Microsoft login. Use **Existing-agent setup** from `permission-guidance.md`. **Yes, the required people are present** does not replace the exact-agent access checks performed by those operations.
@@ -150,7 +150,7 @@ Present **Use related Dev agent** and **Go back** as the standard choices, and o
 
 For any other result besides `kind: success`, use the outcome guidance in `src/reference/native-alm-import.md`. A create-only ambiguous or invalid-success result may proceed through read-only reconciliation and an explicitly approved new create request with a new client request UUID; let the service return conflict when a prior create actually succeeded. The ordinary import above and any safe-failure retry omit that UUID.
 
-If source inspection, related-Dev validation, or export is unauthorized, preserve the operation evidence and follow the exact-agent path under **Existing-agent discovery and access** in `permission-guidance.md`. Retain the selected Prod source while the maker chooses another account, agent, environment, or **Go back**. For another unavailable result, report the observed limitation and stop. A maker who already has the editable Dev agent can restart `/setup` with that Dev agent's Copilot Studio URL; do not infer the relationship from the failed Prod operation.
+If source inspection, related-Dev validation, or export is unauthorized, preserve the operation evidence and follow the exact-agent path under **Existing-agent discovery and access** in `permission-guidance.md`. Retain the selected Prod source while the maker chooses another account, agent, environment, or **Go back**. For another unavailable result, report the observed limitation and stop. A maker who already has the editable Dev agent can restart `/setup` with that Dev agent's Microsoft Copilot Studio URL; do not infer the relationship from the failed Prod operation.
 
 ## Attach and complete
 

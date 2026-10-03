@@ -14,9 +14,9 @@ account. Use **Existing-agent setup** from `permission-guidance.md`. A **Yes,
 the required people are present** answer does not replace the exact-agent
 access check below.
 
-## Connect from the agent URL
+## Connect from a Microsoft Copilot Studio URL
 
-Ask for the URL of the agent in Copilot Studio only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete agent URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
+Ask for the Microsoft Copilot Studio URL only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete Microsoft Copilot Studio URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
 
 Infer the environment ID, agent ID, and service ring from the URL. When the URL
 does not identify the ring, use **Resolve the service ring** in
@@ -128,7 +128,9 @@ When both endpoint labels report an error, agent inventory is unavailable. Prese
 
 Then use **Retry setup with another target** from `da-environment-target.md`.
 
-When exact-ID candidates are returned by either endpoint, show their exact service-provided display names and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation for the selected ID before realm-specific setup:
+When exact-ID candidates are returned by either endpoint, show their exact service-provided display names followed by **Help me decide** and ask the maker to choose one exact identity. Every agent identity option contains only its service-provided display name; the separate help action is not an agent identity. Run the parent's selected-agent product-line reconciliation for the selected ID before realm-specific setup:
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what the intended agent is used for, which name or owner the maker recognizes, and whether they have its Microsoft Copilot Studio URL. Recommend only one exact returned display name grounded in the maker's answer. If the intended identity still cannot be established, tell the maker not to guess and explain that its Microsoft Copilot Studio URL or creator login can resolve the target.
 
 - When the matching MakerOperations BotEntity has a non-empty exact `schemaName`, pass it as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`.
 - When no matching MakerOperations BotEntity supplies a usable schema, do not synthesize one or withhold the candidate. Run both exact identity probes so the native component response can establish product identity.
@@ -140,7 +142,7 @@ When both endpoint reads succeed and both contain no identities, say:
 
 > No agents created by this Microsoft login were returned for this environment.
 
-Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
+Present **Retry setup with another target** from `da-environment-target.md`, including its **Use a Microsoft Copilot Studio URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
 
 When one endpoint reports an error and the other succeeds with no identities, do not use the empty-list message. State that the successful source returned no agents but the other source could not be loaded, then present the same recovery choices.
 
@@ -237,6 +239,9 @@ Present these standard choices:
 
 - **Yes — capacity is allocated**
 - **Not yet**
+- **Help me decide**
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what the maker or administrator can see for this exact environment in **Manage Copilot Credits**. Recommend **Yes — capacity is allocated** only when they confirm a positive allocation for this environment; recommend **Not yet** when it has not been checked, cannot be viewed, or still shows zero. This conversation is not capacity verification and does not apply manual attestation.
 
 For **Yes — capacity is allocated**, apply the same current evidence with explicit attestation:
 
@@ -302,15 +307,15 @@ While checks remain, render the second line's status as **🔄 {resolved count} 
 
 After successful materialization and after the three setup-readiness checks and broad connection diagnostic have been attempted, build the agent link from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both even when `connectReady` is false.
 
-Infer a concise user-friendly product name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
+Infer a concise user-friendly agent name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
 
-Build the exact Classic Copilot Studio agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details?agentBackend=cosmos`, using the retained origin from **Resolve the service ring** and the exact environment and agent IDs from setup evidence. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`. Never link to the environment's agent-list page.
+Build the exact Microsoft Copilot Studio URL for the agent as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details?agentBackend=cosmos`, using the retained origin from **Resolve the service ring** and the exact environment and agent IDs from setup evidence. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`. Never link to the environment's agent-list page.
 
 **Message:**
 
 Your local workspace is ready for authoring.
 
-> **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
 
 For listing newer declarative agents, use the Classic experience. From the new experience, open the **…** menu beside your profile, select **Open classic experience**, then select **Skip feedback** or **Open in a new tab**.
 
@@ -330,6 +335,8 @@ Use the same five rows and order in every runtime-readiness table. Map the three
 
 Each evidence summary states whether the check ran, its target, and the result file's `started` observation time when available. Preserve the row's safe `serviceStatus`, `requestId`, `outcome`, and other non-secret evidence when a check is unavailable. Do not expose tokens, authorization headers, or customer content.
 
+Convert every maker-facing FlightCheck timestamp to the local timezone of the machine running setup. Render timestamps at second precision using `YYYY-MM-DDTHH:mm:ss`, for example `2026-10-03T01:43:19`. Truncate fractional seconds; do not round. Do not display a UTC suffix, numeric offset, or timezone abbreviation. Apply this format to every `{observation time}` and `{recorded time}` in the runtime-readiness table. Format presentation only; do not rewrite persisted evidence. If a source timestamp is missing, invalid, or lacks timezone information, omit the displayed time rather than inferring one.
+
 Use concise factual details:
 
 - Agent access: **Access to {agent display name} was verified. Observed at {observation time}.**
@@ -338,10 +345,6 @@ Use concise factual details:
 - Environment capacity after override: **A recheck of {environment display name} at {observation time} found 0 allocated credits. You selected Continue with manual override.**
 - Connections when ready: **{required connection display name} is connected for {environment display name}. Observed at {observation time}.**
 - Agent content when ready: **Agent content is present in your local workspace. Observed for {agent display name} at {observation time}.**
-
-Before presenting the shared completion choices, say:
-
-> **Exit setup (Recommended)** acknowledges these results and closes setup. It does not run the checks again.
 
 Calculate Overall from canonical `connectReady`. When `connectReady` is true, render Overall as **✅ Foundation ready**. When it is false after materialization, render Overall as **⚠️ Foundation needs attention** and state that local authoring is ready while the setup-owned prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
 

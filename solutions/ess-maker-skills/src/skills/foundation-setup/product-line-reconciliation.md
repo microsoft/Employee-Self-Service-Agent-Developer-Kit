@@ -2,7 +2,7 @@
 
 # Reconcile the Selected Agent Product Line
 
-Run this handoff whenever setup has selected one exact environment and agent, regardless of whether the identity came from a supplied Copilot Studio URL, active local setup state, a configured-agent switch, environment candidate selection, MOS creation, or ALM import. Run it once per `(environmentId, agentId)` in one setup invocation and run it again only when that selected identity changes.
+Run this handoff whenever setup has selected one exact environment and agent, regardless of whether the identity came from a supplied Microsoft Copilot Studio URL, active local setup state, a configured-agent switch, environment candidate selection, MOS creation, or ALM import. Run it once per `(environmentId, agentId)` in one setup invocation and run it again only when that selected identity changes.
 
 This check is read-only. The script exposes independent identity probes and preserves each service result. This skill owns probe ordering, combines the observations, interprets product support, and presents recovery choices. URL shape, query parameters, display names, generic API failures, and environment-level solution presence are not product evidence.
 
@@ -19,7 +19,7 @@ Parse `DA_SETUP_PRODUCT_RECONCILIATION_JSON:` as one native `found` observation,
 
 ## Probe an externally supplied identity
 
-For an identity that was not already proven by a native operation, run both independent probes. The Copilot Studio URL's `agentBackend` query value is an ordering hint only:
+For an identity that was not already proven by a native operation, run both independent probes. The Microsoft Copilot Studio URL's `agentBackend` query value is an ordering hint only:
 
 - `dataverse` means run the Dataverse probe first.
 - `cosmos` means run the native probe first.
@@ -73,7 +73,7 @@ Apply the first matching rule:
 
 1. When both probes returned `found`, stop before any realm or ALM operation. Say that both supported identity stores returned an agent for the same ID, so setup cannot safely choose a backend. Preserve both observations; do not select one from the URL hint.
 2. When exactly one probe returned `found`, that observation proves existence and backend even if the other probe returned `not-found`, an access outcome, or an uncertainty outcome. Preserve a backend-hint mismatch as internal evidence, use the backend that actually returned the agent, and do not call the agent missing.
-3. When the authoritative `found` observation has `productIdentity.outcome` equal to `uncertain`, say that the agent was found in that backend but its product family could not be established. Preserve the schema-identity source, observation, and error internally. Do not call the agent missing or unsupported and do not continue to realm inspection.
+3. When the authoritative `found` observation has `productIdentity.outcome` equal to `uncertain`, say that the agent was found in that backend but its agent type could not be established. Preserve the schema-identity source, observation, and error internally. Do not call the agent missing or unsupported and do not continue to realm inspection.
 4. For a native `found` DA-GA observation, continue at the next DA-GA setup operation. Only this result makes native ALM realm inspection applicable.
 5. For a Dataverse-only `found` DA-GA observation, stop before native inspection. Say that the agent belongs to the Employee Self-Service DA family but was found only in Dataverse, and this native setup path cannot safely prepare it for local authoring.
 6. For any `found` solution-backed Employee Self-Service observation, follow **Use the compatible kit** below. This includes classic CA and DA-Preview variants.
@@ -135,7 +135,7 @@ Leave the selection initially unset. Do not add `recommended`, `default`, or any
 
 - For **Install and open the compatible kit**, run `recoveryCommand` in a terminal using `recoveryShell`. On success, render **Review the setup handoff** as complete and say:
 
-  > Continue setup in the workspace opened by the compatible installer. No Copilot Studio agent or setup state was changed by this product-line check.
+  > Continue setup in the workspace opened by the compatible installer. No Copilot Studio agent or setup state was changed by this agent-type check.
 
 - Apply the three shared recovery routes below for the other choices.
 - When command execution fails, render **Review the setup handoff** as blocked and state the observed installer failure. Do not label the unchanged command as a retry or reinterpret installer failure as a successful handoff. When the output identifies an existing installation, verify that its checkout matches `releaseTag` and offer to open its `solutions/ess-maker-skills` workspace directly. Otherwise provide one recovery action grounded in the observed failure.
