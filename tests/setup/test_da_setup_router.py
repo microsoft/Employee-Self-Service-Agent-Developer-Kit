@@ -1907,6 +1907,15 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     assert "Do not preselect a choice or recommend replacement" in normalized
     assert "setup_existing_da.py list-agents" in text
     assert "Never preselect or recommend **Continue replacement**" in text
+    replacement = text.split("Before replacement, validate", 1)[1].split(
+        "After a successful replacement",
+        1,
+    )[0]
+    replacement_commands = replacement.split("```text")[1:]
+    assert len(replacement_commands) == 2
+    for command_block in replacement_commands:
+        command = command_block.split("```", 1)[0]
+        assert '--account "{SETUP_ACCOUNT}"' in command
     assert (
         "For **Go back**, make no changes and return to **Handle a collision**."
         in normalized

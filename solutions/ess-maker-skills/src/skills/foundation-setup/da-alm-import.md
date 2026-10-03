@@ -153,7 +153,8 @@ Before replacement, validate the exact selected Dev agent. Enrollment preparatio
 python scripts/setup_existing_da.py validate-agent \
   --environment-id "{ENVIRONMENT_ID}" \
   --agent-id "{INTERNAL_AGENT_ID}" \
-  --ring "{RING}"
+  --ring "{RING}" \
+  --account "{SETUP_ACCOUNT}"
 ```
 
 Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
@@ -180,7 +181,8 @@ python scripts/setup_alm_import.py \
   --ring "{RING}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}" \
   --replace-agent-id "{INTERNAL_AGENT_ID}" \
-  --confirm-replace-agent-id "{INTERNAL_AGENT_ID}"
+  --confirm-replace-agent-id "{INTERNAL_AGENT_ID}" \
+  --account "{SETUP_ACCOUNT}"
 ```
 
 After a successful replacement, complete workspace setup through the existing
