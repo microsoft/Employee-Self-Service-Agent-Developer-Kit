@@ -346,6 +346,9 @@ def test_native_deployment_reuses_existing_insert_with_action_aware_consent():
         "Native `--force-delete` remains rejected",
         "pending insertion retry retain their verified or confirmed planned IDs",
         "Do not convert that existing limitation into a failed push",
+        "python scripts/analytics_pointer.py --post-deploy",
+        "one-time reminder",
+        "DA environment/agent association",
     ):
         assert fragment in text
     run = _normalized(_skill("run"))
@@ -489,6 +492,10 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert push.index("## Explicit evaluation push") < push.index("## General component push")
     assert "evaluation_deployment" not in push  # Shared guide owns the CLI.
     assert "deployment-flow.md" in push
+    assert "python scripts/analytics_pointer.py --post-deploy" in push
+    assert "--show" not in push
+    assert "only after deployment verification" in push
+    assert "do not substitute the Copilot Studio home page" in push
     assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))

@@ -24,7 +24,11 @@ def _client() -> PowerPlatformClient:
     return client
 
 
-def test_authenticate_uses_preferred_cached_account(monkeypatch) -> None:
+def test_authenticate_uses_preferred_cached_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     selected_accounts = []
 
     class FakeCache:

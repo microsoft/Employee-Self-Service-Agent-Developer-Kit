@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Phase 3 - Workday administrator
 
 This phase never modifies Workday. The skill generates one handoff, validates
@@ -19,11 +20,12 @@ Connections. Show only the affected Workday remediation step if a later
 connection or employee test proves that the stored foundation has drifted.
 
 When no matching foundation can be reused, identify the current federation
-before rendering a detailed handoff. Do not add another availability
-confirmation in this phase; the phase-boundary self-attestation already covers
-it. Use `identityProviderQuestion` from the packet in one structured
-`vscode_askQuestions` call. Present its options unchanged and leave the
-selection unset.
+before rendering a detailed handoff. The phase boundary must already have
+asked **Have you looped in the Workday administrator?** and must not dispatch
+this guide until the maker confirms engagement. Do not add a second
+engagement question here. Use `identityProviderQuestion` from the packet in
+one structured `vscode_askQuestions` call. Present its options unchanged and
+leave the selection unset.
 
 This question selects a safe handoff branch. It is not evidence that the
 administrator finished configuration.
@@ -31,7 +33,7 @@ administrator finished configuration.
 - For **Microsoft Entra ID**, render **Workday Administrator Steps - Existing
   Microsoft Entra federation** and the applicable numbered handoff below.
   Do not infer a match from the
-     provider choice alone; the administrator must confirm the displayed
+  provider choice alone; the administrator must confirm the displayed
   Issuer exactly matches the verified Entra issuer.
 - For **No enabled SAML row**, render **Workday Administrator Steps - New
   Microsoft Entra federation** and the greenfield handoff below.
@@ -51,9 +53,18 @@ administrator finished configuration.
 If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
 
-Record that the handoff is waiting for the administrator:
+Render the selected branch as one standalone section titled **Workday
+administrator handoff - share this whole section**. It must contain the
+administrator role, exact Workday tenant and environment, packet reference
+values, every applicable numbered task, and the packet's
+`informationToReturn` checklist. The maker must be able to forward that one
+section without copying values from earlier chat messages.
+
+After rendering the complete handoff, record that it was presented and is
+waiting for the administrator:
 
 ```powershell
+python scripts/workday_connect.py administrator-stage --phase workday-admin --substage handoff-presented
 python scripts/workday_connect.py administrator-stage --phase workday-admin --substage awaiting-completion
 ```
 
@@ -78,14 +89,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Certificate.”
 
    Handle the answer as follows:
-
    - **The new certificate created from the Entra Base64 file** - record
      `certificateSelectionOutcome` as
-     `entra-signing-certificate-selected`. If both displayed dates exactly
-     match the verified Entra dates shown in the form, record
+     `entra-signing-certificate-selected`. If the displayed expiration date
+     exactly matches the verified Entra expiration date shown in the form,
+     record
      `certificateValidityOutcome` as
-     `matches-verified-entra-certificate`. The customer-created certificate
-     display name is optional support context, not a completion gate.
+     `matches-verified-entra-certificate`.
    - **A different existing Workday certificate** - stop. Do not replace or
      reuse it until the Workday and identity administrators confirm it is the
      same active Entra signing certificate.
@@ -97,6 +107,7 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
      selected key, stop rather than guessing.
 
    Never collect the certificate body in chat.
+
 3. **Configure tenant security.** Return to **Edit Tenant Setup - Security**.
    Enable **OAuth 2.0 Clients Enabled** and **SAML**. In SAML Setup, set the
    exact Service Provider ID to
@@ -113,8 +124,9 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    approved clients.
 5. **Configure employee domain security separately from API scopes.** Choose
    whether this rollout covers the entire workforce or a limited/test
-   population. Select the intended employee security group; for a limited/test
-   rollout, never default to All Employees. Grant **Get** on
+   population. For a limited/test rollout, configure the intended Workday
+   security group and include the test employee; never default to All
+   Employees. Grant **Get** on
    **Worker Data: Public Worker Reports** and **Integration Permissions**.
    Do not treat the functional-area scopes from step 4 as domain permissions.
    Add another domain only when it is tied to a named supported scenario.
@@ -188,8 +200,21 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
    firewall change is required.
-10. Record the enabled row's exact Issuer and Service Provider ID for the
-   response form.
+10. Confirm whether the enabled row's Issuer, Service Provider ID,
+    identity-provider SSO service URL, and sign-on redirect URL match the
+    expected values.
+
+End the shareable handoff with **Information to return to the maker** and show
+every item from the packet's `informationToReturn` list. Do not defer this
+checklist until after completion; the administrator must know what to return
+before starting the tasks.
+
+Then render a section titled **Workday administrator return worksheet**. Use
+the customer-facing headers, questions, and choices from the worksheet
+definition below. Render them as one copyable worksheet that the administrator
+can complete and return through the customer's approved collaboration channel.
+Do not submit the definition as a multi-question `vscode_askQuestions` call;
+VS Code renders that array as a sequential wizard.
 
 After an applicable handoff is shown, ask exactly:
 
@@ -210,19 +235,16 @@ If the administrator reports that the provider state changed from the branch
 selected above, return to provider discovery instead of forcing the current
 form.
 
-Collect exactly one response form using one structured
-`vscode_askQuestions` call. Do not collapse these fields into a multiline text
-box, ask the administrator to edit a prose template, or ask for these values
-as a sequence of separate chat questions. This avoids repeated confirmations
-while retaining all required evidence:
+Collect the completed worksheet in one response. Do not ask for these values
+as a sequence of separate chat or form questions. The worksheet retains all
+required evidence:
 
-- confirmation that the enabled issuer exactly matches the displayed verified
-  Entra issuer, or the exact different Issuer value;
-- enabled Service Provider ID;
+- confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
+  Provider ID, identity-provider SSO service URL, and sign-on redirect URL
+  exactly match the expected values;
 - confirmation that the Entra-derived certificate is selected;
-- confirmation that its displayed validity dates exactly match the verified
-  Entra dates;
-- optional Workday certificate display name;
+- confirmation that its displayed expiration date exactly matches the
+  verified Entra expiration date;
 - Workday OAuth client ID;
 - OAuth token URL;
 - REST base URL ending at `/ccx/api`;
@@ -232,39 +254,30 @@ while retaining all required evidence:
 - whether an approved existing API client was verified or a new one was
   registered;
 - exact client grant type and Include Workday Owned Scope outcome;
-- the Workday identity-provider SSO service URL and sign-on redirect URL;
 - rollout type: entire workforce or limited/test;
-- selected employee security-group identity, without membership data;
 - `Worker Data: Public Worker Reports` Get-permission outcome;
 - `Integration Permissions > Get` outcome;
-- exact API functional-area scopes;
-- optional domains paired with their named supported scenarios;
+- confirmation that all four required API functional-area scopes are present;
+- any additional domain paired with its named supported scenario, only when
+  custom ESS scenarios require one;
 - authorization outcome, including whether a bounded `Task not authorized`
   remediation was required; when it was, the affected domain, named scenario,
   and successful retest outcome.
 
-Use this exact form, substituting the packet's expected issuer, Service
-Provider ID, and verified certificate dates:
+Use this exact worksheet definition, substituting the packet's expected
+issuer, Service Provider ID, and verified certificate expiration date:
 
 ```json
 [
   {
-    "header": "Issuer",
-    "question": "Does the enabled Microsoft Entra SAML row's Issuer exactly match {EXPECTED_ENTRA_ISSUER}?",
+    "header": "SAML row settings",
+    "question": "In Workday, open Edit Tenant Setup - Security -> SAML Setup. On the enabled Microsoft Entra identity-provider row, do Issuer, Service Provider ID, identity-provider SSO service URL, and sign-on redirect URL exactly match {EXPECTED_ENTRA_ISSUER}, {EXPECTED_SERVICE_PROVIDER_ID}, {EXPECTED_ENTRA_LOGIN_URL}, and {EXPECTED_ENTRA_REPLY_URL}?",
     "options": [
-      { "label": "Yes, it matches exactly" },
-      { "label": "No, the displayed Issuer is different" },
+      { "label": "Yes, all four values match exactly" },
+      { "label": "No, one or more values are different" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
-  },
-  {
-    "header": "Different issuer",
-    "question": "If the Issuer is different, enter the exact displayed value. Otherwise leave this blank."
-  },
-  {
-    "header": "Service Provider ID",
-    "question": "Enter the enabled Service Provider ID. Expected value: {EXPECTED_SERVICE_PROVIDER_ID}"
   },
   {
     "header": "Certificate",
@@ -278,18 +291,14 @@ Provider ID, and verified certificate dates:
     "allowFreeformInput": false
   },
   {
-    "header": "Certificate dates",
-    "question": "Do the selected Workday certificate dates exactly match {CERTIFICATE_VALID_FROM} through {CERTIFICATE_VALID_TO}?",
+    "header": "Certificate expiration",
+    "question": "Does the selected Workday certificate expiration date exactly match {CERTIFICATE_VALID_TO}?",
     "options": [
-      { "label": "Yes, both dates match exactly" },
-      { "label": "No, one or both dates are different" },
+      { "label": "Yes, the expiration date matches exactly" },
+      { "label": "No, the expiration date is different" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
-  },
-  {
-    "header": "Certificate name",
-    "question": "Optional: enter the Workday certificate display name, or leave this blank."
   },
   {
     "header": "OAuth client ID",
@@ -316,19 +325,8 @@ Provider ID, and verified certificate dates:
   {
     "header": "Workday owned scope",
     "question": "Is Include Workday Owned Scope set to Yes?",
-    "options": [
-      { "label": "Yes" },
-      { "label": "No or not sure" }
-    ],
+    "options": [{ "label": "Yes" }, { "label": "No or not sure" }],
     "allowFreeformInput": false
-  },
-  {
-    "header": "SSO service URL",
-    "question": "Enter the identity-provider SSO service URL. Expected value: {EXPECTED_ENTRA_LOGIN_URL}"
-  },
-  {
-    "header": "Sign-on redirect URL",
-    "question": "Enter the sign-on redirect URL. Expected value: {EXPECTED_ENTRA_REPLY_URL}"
   },
   {
     "header": "OAuth token URL",
@@ -364,16 +362,15 @@ Provider ID, and verified certificate dates:
   },
   {
     "header": "Rollout",
-    "question": "Which employee population is this Workday rollout configured for?",
+    "question": "Which employee population did the Workday administrator configure and verify for this rollout?",
     "options": [
-      { "label": "Entire workforce" },
-      { "label": "Limited or test population" }
+      { "label": "Entire workforce - All Employees access is configured" },
+      {
+        "label": "Limited or test population - the intended Workday security group and test employee access are configured"
+      },
+      { "label": "The employee population is not configured or I'm not sure" }
     ],
     "allowFreeformInput": false
-  },
-  {
-    "header": "Employee security group",
-    "question": "Enter the selected Workday employee security-group name. Do not enter membership data."
   },
   {
     "header": "Public worker reports",
@@ -395,11 +392,27 @@ Provider ID, and verified certificate dates:
   },
   {
     "header": "Functional-area scopes",
-    "question": "Enter a JSON string array containing exactly: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave. Example: [\"Core Payroll\",\"Organizations and Roles\",\"Staffing\",\"Time Off and Leave\"]"
+    "question": "Did the administrator verify that the API client includes all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
+    "options": [
+      { "label": "Yes, all four required functional areas are present" },
+      { "label": "No, one or more required functional areas are missing" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
   },
   {
     "header": "Optional domains",
-    "question": "Enter a JSON array of {\"domain\":\"...\",\"scenario\":\"...\"} objects, or [] when none are required."
+    "question": "Are additional Workday domains required for named custom ESS scenarios beyond the standard setup?",
+    "options": [
+      { "label": "No additional domains are required" },
+      { "label": "Yes, additional supported scenarios require domains" },
+      { "label": "I'm not sure" }
+    ],
+    "allowFreeformInput": false
+  },
+  {
+    "header": "Additional domain mappings",
+    "question": "Only when additional domains are required: enter one per line as Domain | supported scenario. Otherwise leave this blank."
   },
   {
     "header": "Authorization",
@@ -431,29 +444,46 @@ Provider ID, and verified certificate dates:
 ]
 ```
 
-Leave every field and option initially unset. Do not add `recommended`,
-`default`, suggested-answer wording, or any equivalent preselection. The
-expected values in the question text are comparison references, not answers.
+Leave every worksheet answer blank. Do not add `recommended`, `default`,
+suggested-answer wording, or any equivalent preselection. The expected values
+in the question text are comparison references, not answers.
 
-Map the selected provider branch and submitted fields to the controller
-response object:
+After the administrator confirms completion, use one
+`vscode_askQuestions` call containing exactly one free-form question:
 
-- an applicable Microsoft Entra branch plus **Yes, it matches exactly** ->
-  `identityProviderOutcome: verified-entra-issuer`;
-- a different Issuer -> `activeIdentityProviderIssuer`, then stop for identity
-  administrator review instead of submitting successful evidence;
+```json
+[
+  {
+    "header": "Workday administrator return worksheet",
+    "question": "Paste the completed Workday administrator return worksheet in one response. Keep every field label with its answer. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
+  }
+]
+```
+
+The response is a strict labeled worksheet, not free-form evidence. Preserve
+the exact labels and answers unchanged. The controller rejects missing,
+duplicate, or unknown labels and maps only the listed successful choices into
+the structured response object described below. Never parse, rename, infer,
+or normalize an answer in the skill:
+
+- an applicable Microsoft Entra branch plus
+  **Yes, all four values match exactly** ->
+  `identityProviderOutcome: verified-entra-issuer`,
+  `enabledServiceProviderId: {EXPECTED_SERVICE_PROVIDER_ID}`,
+  `identityProviderSsoServiceUrl: {EXPECTED_ENTRA_LOGIN_URL}`, and
+  `signOnRedirectUrl: {EXPECTED_ENTRA_REPLY_URL}`;
+- a different or uncertain Issuer, Service Provider ID, SSO service URL, or
+  sign-on redirect URL -> stop for administrator remediation instead of
+  submitting successful evidence;
 - **The new certificate created from the Entra Base64 file** ->
   `certificateSelectionOutcome: entra-signing-certificate-selected`;
-- matching certificate dates ->
+- matching certificate expiration date ->
   `certificateValidityOutcome: matches-verified-entra-certificate`;
-- the optional display name -> `certificateName`;
 - approved existing client -> `apiClientOutcome:
-  existing-client-verified`;
+existing-client-verified`;
 - newly registered client -> `apiClientOutcome: new-client-registered`;
 - **SAML Bearer** -> `clientGrantType: saml-bearer`;
 - **Yes** for Workday owned scope -> `includeWorkdayOwnedScope: yes`;
-- the SSO service and sign-on redirect values ->
-  `identityProviderSsoServiceUrl` and `signOnRedirectUrl`;
 - the entered connection/policy fields -> their corresponding controller
   keys;
 - existing active policy -> `existing-active-policy`;
@@ -461,14 +491,21 @@ response object:
 - both hosts allowed -> `confirmed-hosts-allowed`;
 - no firewall change required ->
   `no-customer-firewall-change-required`.
-- entire workforce -> `rolloutType: entire-workforce`;
-- limited/test population -> `rolloutType: limited-or-test`;
-- selected group -> `employeeSecurityGroup`;
+- configured entire workforce -> `rolloutType: entire-workforce`;
+- configured limited/test population -> `rolloutType: limited-or-test`;
+- an unconfigured or uncertain employee population -> stop for administrator
+  remediation instead of submitting successful evidence;
 - each verified domain permission ->
   `get-permission-verified`;
-- functional-area entries -> `functionalAreaScopes` as a JSON string array;
-- optional domains -> `optionalDomains` as
-  `{"domain": "...", "scenario": "..."}` objects;
+- **Yes, all four required functional areas are present** ->
+  `functionalAreaScopes` populated with `Core Payroll`,
+  `Organizations and Roles`, `Staffing`, and `Time Off and Leave`;
+- **No additional domains are required** -> `optionalDomains: []`;
+- additional domain lines -> `optionalDomains` objects with one `domain` and
+  one named supported `scenario` per line;
+- a missing or uncertain required functional area, or an uncertain optional
+  domain outcome -> stop for administrator remediation instead of submitting
+  successful evidence;
 - verified authorization -> `authorizationOutcome: verified`;
 - remediated and retested authorization ->
   `authorizationOutcome: task-not-authorized-remediated`, plus
@@ -485,11 +522,13 @@ Show the affected remediation step and keep the phase waiting.
 If the administrator omits a required value or replies only with wording such
 as "done", "all good", "continue", or "proceed", do not move to another field,
 search workspace files, inspect environment variables, or infer the missing
-evidence. Reopen the same structured form with only the missing or invalid
-fields; never replace it with a free-text request for several numbered answers.
-Preserve progress and stop until the structured form is complete.
+evidence. Render one mini-worksheet containing only the missing or invalid
+customer-facing labels and repeat the applicable handoff location or
+instruction. Then use one free-form question to collect that completed
+mini-worksheet. Do not reopen a sequence of individual questions. Preserve
+progress and stop until the worksheet is complete.
 
-After each structured response, write only the safe valid fields and the field
+After each worksheet response, write only the safe valid fields and the field
 names that must be reopened to
 `.local/connect/workday-da/workday-admin-partial-evidence.json`:
 
@@ -498,9 +537,7 @@ names that must be reopened to
   "fields": {
     "oauthClientId": "{validated non-secret client ID}"
   },
-  "invalidFields": [
-    "oauthTokenUrl"
-  ]
+  "invalidFields": ["oauthTokenUrl"]
 }
 ```
 
@@ -517,14 +554,20 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the response directly to
-`.local/connect/workday-da/workday-admin-response.json` using a structured
-file-write tool; never interpolate administrator-entered values into a
-generated shell command. Pass the response once:
+key. Write the exact labeled response directly to
+`.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
+interpolate administrator-entered values into a generated shell command. Pass
+the worksheet once:
 
 ```powershell
-python scripts/workday_connect.py record-workday-admin --response-file ".local\connect\workday-da\workday-admin-response.json"
+python scripts/workday_connect.py record-workday-admin --response-worksheet-file ".local\connect\workday-da\workday-admin-return-worksheet.txt"
 ```
+
+The controller reconciles the administrator evidence with automatic readiness
+checks before this phase completes. If a live check
+or guided setting still needs attention, keep the owning phase open and show
+the returned remediation. Do not direct the customer to run a separate
+readiness profile or display internal validation identifiers.
 
 If an exact replay matches persisted evidence, the controller returns
 `replayed: true`. If it returns `driftDetected: true`, the Workday
@@ -568,7 +611,6 @@ For example:
   "authenticationPolicyOutcome": "existing-active-policy",
   "networkReadinessOutcome": "confirmed-hosts-allowed",
   "rolloutType": "limited-or-test",
-  "employeeSecurityGroup": "ESS Workday Pilot Employees",
   "publicWorkerReportsOutcome": "get-permission-verified",
   "integrationPermissionsGetOutcome": "get-permission-verified",
   "functionalAreaScopes": [

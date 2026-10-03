@@ -16,6 +16,8 @@ from workday_connect_contracts import (  # noqa: E402
     WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
+    parse_entra_return_worksheet,
+    parse_workday_admin_return_worksheet,
     validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
     validate_employee_evidence,
@@ -24,7 +26,10 @@ from workday_connect_contracts import (  # noqa: E402
     validate_workday_admin_response,
 )
 import workday_connect_contracts as contracts  # noqa: E402
-from workday_connect_model import default_state  # noqa: E402
+from workday_connect_model import (  # noqa: E402
+    ADMINISTRATOR_REQUIRED_FIELDS,
+    default_state,
+)
 
 
 def _state():
@@ -151,6 +156,9 @@ def _entra_verification(*, reply_urls=None, reply_url=None):
 
 def _workday_state():
     state = _state()
+    state["identifiers"]["workdaySamlEntityId"] = (
+        "http://www.workday.com/contoso_impl"
+    )
     state["identifiers"]["signingCertificate"] = {
         "thumbprint": "AA11",
         "validFrom": "2026-01-01T00:00:00Z",
@@ -198,10 +206,55 @@ def _workday_response(**overrides):
     return response
 
 
+def _entra_worksheet() -> str:
+    return """Directory name: Contoso
+Enterprise application: Workday exact
+Application ID: 44444444-4444-4444-4444-444444444444
+Selected Reply URL: https://www.workday.com/saml/acs
+NameID source: user.userPrincipalName
+SAML signing: Sign SAML response and assertion
+Certificate thumbprint (active certificate row): AA11
+Certificate expiration date (active certificate row): 2027-01-01
+SAML configuration: Yes, confirmed
+Signing certificate: Yes, confirmed
+Authorized connector: Yes, confirmed
+Permissions and consent: Yes, permissions and consent are confirmed
+Employee assignment: Yes, access is confirmed or assignment is not required
+Existing configuration: Preserved without changes
+"""
+
+
+def _workday_worksheet() -> str:
+    return """SAML row settings: Yes, all four values match exactly
+Certificate: The new certificate created from the Entra Base64 file
+Certificate expiration: Yes, the expiration date matches exactly
+OAuth client ID: safe-client-id
+API client: An existing approved client was verified
+Client grant type: SAML Bearer
+Workday owned scope: Yes
+OAuth token URL: https://example.workday.com/ccx/oauth2/contoso_impl/token
+REST base URL: https://example.workday.com/ccx/api
+SOAP base URL: https://example.workday.com/ccx/service
+Authentication policy: An existing active policy allows SAML
+Network readiness: Both Workday hosts are allowed
+Rollout: Entire workforce - All Employees access is configured
+Public worker reports: Yes, Get permission is verified
+Integration permissions: Yes, Get permission is verified
+Functional-area scopes: Yes, all four required functional areas are present
+Optional domains: No additional domains are required
+Additional domain mappings:
+Authorization: Verified without an authorization error
+Remediated domain:
+Remediation scenario:
+Authorization retest:
+"""
+
+
 def test_entra_handoff_selects_only_exact_service_provider_id():
     handoff = build_entra_handoff(
         _state(),
         {
+            "directoryDisplayName": "Contoso",
             "applications": [
                 {
                     "displayName": "Workday wrong",
@@ -237,18 +290,115 @@ def test_entra_handoff_selects_only_exact_service_provider_id():
 
 def test_entra_handoff_rejects_missing_exact_discovery():
     with pytest.raises(WorkdayConnectContractError, match="No exact"):
-        build_entra_handoff(_state(), {"applications": []})
+        build_entra_handoff(
+            _state(),
+            {
+                "directoryDisplayName": "Contoso",
+                "applications": [],
+            },
+        )
 
 
 def test_entra_handoff_can_request_explicit_creation():
     handoff = build_entra_handoff(
         _state(),
-        {"applications": [], "allowCreate": True},
+        {
+            "directoryDisplayName": "Contoso",
+            "applications": [],
+            "allowCreate": True,
+        },
     )
 
     assert handoff["target"]["mode"] == "create"
     assert handoff["identifiers"]["entraAppIdUri"] is None
     assert handoff["requiresRediscovery"] is True
+    assert handoff["scope"]["directoryDisplayName"] == "Contoso"
+    assert handoff["engagementQuestion"].startswith("Have you looped in")
+    assert handoff["completionQuestion"].startswith("Has the Microsoft Entra")
+    assert any("NameID" in item for item in handoff["informationToReturn"])
+    capture_by_field = {
+        field: instruction
+        for instruction in handoff["captureInstructions"]
+        for field in instruction["fields"]
+    }
+    assert (
+        ADMINISTRATOR_REQUIRED_FIELDS["entra"] - {"entraChecks"}
+        <= capture_by_field.keys()
+    )
+    assert {
+        "entraChecks.samlMode",
+        "entraChecks.signingCertificate",
+        "entraChecks.connectorPreauthorized",
+        "entraChecks.graphDelegatedPermissions",
+        "entraChecks.adminConsent",
+        "entraChecks.userAssignment",
+        "entraChecks.nameId",
+        "entraChecks.samlSigningOption",
+        "entraChecks.existingScopesPreserved",
+        "entraChecks.authorizedClientsPreserved",
+        "entraChecks.permissionsPreserved",
+    } <= capture_by_field.keys()
+    assert set(handoff["responseForm"]["required"]) == (
+        ADMINISTRATOR_REQUIRED_FIELDS["entra"]
+    )
+    assert len(handoff["responseForm"]["required"]) == 9
+    assert handoff["responseForm"]["collection"]["mode"] == (
+        "labeled-worksheet"
+    )
+    assert handoff["responseForm"]["collection"]["validator"] == (
+        "parse_entra_return_worksheet"
+    )
+    assert "completed administrator worksheet" in handoff["responseForm"]["note"]
+    assert "Basic SAML Configuration" in capture_by_field[
+        "replyUrl"
+    ]["portalLocation"]
+    assert "Unique User Identifier" in capture_by_field[
+        "nameIdSource"
+    ]["portalLocation"]
+    signing_location = capture_by_field["samlSigningOption"]["portalLocation"]
+    assert "SAML Signing Certificate" in signing_location
+    assert "Edit pencil -> Signing Option" in signing_location
+    assert "Expose an API" in capture_by_field[
+        "entraChecks.connectorPreauthorized"
+    ]["portalLocation"]
+    assert "API permissions" in capture_by_field[
+        "entraChecks.graphDelegatedPermissions"
+    ]["portalLocation"]
+
+
+def test_entra_labeled_worksheet_parses_to_validated_evidence() -> None:
+    parsed = parse_entra_return_worksheet(_state(), _entra_worksheet())
+
+    result = validate_entra_verification(_state(), parsed)
+
+    assert result["identifiers"]["entraAppId"] == (
+        "44444444-4444-4444-4444-444444444444"
+    )
+    assert result["evidence"]["checks"]["adminConsent"] == {
+        "outcome": "confirmed",
+        "provenance": "administrator-attestation",
+    }
+
+
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _entra_worksheet().replace(
+            "Directory name: Contoso\n",
+            "Directory name: Contoso\nDirectory name: Other\n",
+        ),
+        _entra_worksheet() + "Unknown field: value\n",
+        _entra_worksheet().replace(
+            "SAML configuration: Yes, confirmed",
+            "SAML configuration: I'm not sure",
+        ),
+    ],
+)
+def test_entra_labeled_worksheet_rejects_ambiguous_or_failed_evidence(
+    worksheet: str,
+) -> None:
+    with pytest.raises(WorkdayConnectContractError):
+        parse_entra_return_worksheet(_state(), worksheet)
 
 
 def test_entra_handoff_reuses_matching_tenant_foundation():
@@ -277,6 +427,7 @@ def test_entra_handoff_reuses_matching_tenant_foundation():
     handoff = build_entra_handoff(
         state,
         {
+            "directoryDisplayName": "Contoso",
             "applications": [
                 {
                     "displayName": "Workday exact",
@@ -291,7 +442,7 @@ def test_entra_handoff_reuses_matching_tenant_foundation():
 
     assert handoff["foundationReuse"]["eligible"] is True
     assert set(handoff["foundationReuse"]) == {"eligible"}
-    assert "Reread" in handoff["actions"][0]
+    assert "administrator to review" in handoff["actions"][0]
 
 
 def test_entra_verification_requires_all_expected_graph_evidence():
@@ -343,6 +494,41 @@ def test_entra_verification_requires_all_expected_graph_evidence():
         "provenance": "administrator-attestation",
         "observedValue": "Sign SAML response and assertion",
     }
+
+
+def test_entra_verification_accepts_reduced_guided_evidence():
+    app_id = "44444444-4444-4444-4444-444444444444"
+
+    result = validate_entra_verification(
+        _state(),
+        {
+            "selectedDirectory": {"displayName": "Contoso"},
+            "application": {
+                "displayName": "Workday exact",
+                "appId": app_id,
+            },
+            "replyUrl": "https://www.workday.com/saml/acs",
+            "certificate": {
+                "thumbprint": "AA11",
+                "validTo": "2027-01-01T00:00:00Z",
+            },
+            "checks": _entra_checks(),
+        },
+    )
+
+    assert result["identifiers"]["entraAppIdUri"] == f"api://{app_id}"
+    assert result["identifiers"]["microsoftEntraIdentifier"].startswith(
+        "https://sts.windows.net/"
+    )
+    assert "entraAppObjectId" not in result["identifiers"]
+    assert "entraServicePrincipalId" not in result["identifiers"]
+    assert "scopeGuid" not in result["identifiers"]
+    assert "validFrom" not in result["identifiers"]["signingCertificate"]
+    assert "certificateValidFrom" not in result["partialEvidence"]
+    assert result["partialEvidence"]["applicationIdentifierUris"] == [
+        "http://www.workday.com/contoso_impl",
+        f"api://{app_id}",
+    ]
 
 
 def test_entra_verification_binds_reply_url_to_graph_evidence():
@@ -472,41 +658,19 @@ def test_entra_verification_rejects_unused_check_fields():
         )
 
 
-def test_entra_verification_rejects_attestation_for_graph_check():
-    app_id = "44444444-4444-4444-4444-444444444444"
-    checks = _entra_checks()
-    checks["adminConsent"] = {
+def test_entra_verification_accepts_guided_admin_attestation():
+    verification = _entra_verification()
+    verification["checks"]["adminConsent"] = {
         "outcome": "confirmed",
         "provenance": "administrator-attestation",
     }
 
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="must be proven by Microsoft Graph",
-    ):
-        validate_entra_verification(
-            _state(),
-            {
-                "tenantId": "00000000-0000-0000-0000-000000000000",
-                "application": {
-                    "displayName": "Workday exact",
-                    "appId": app_id,
-                    "objectId": "55555555-5555-5555-5555-555555555555",
-                    "servicePrincipalId": ("66666666-6666-6666-6666-666666666666"),
-                    "identifierUris": [
-                        "http://www.workday.com/contoso_impl",
-                        f"api://{app_id}",
-                    ],
-                },
-                "scopeGuid": "77777777-7777-7777-7777-777777777777",
-                "certificate": {
-                    "thumbprint": "AA11",
-                    "validFrom": "2026-01-01T00:00:00Z",
-                    "validTo": "2027-01-01T00:00:00Z",
-                },
-                "checks": checks,
-            },
-        )
+    result = validate_entra_verification(_state(), verification)
+
+    assert result["evidence"]["checks"]["adminConsent"] == {
+        "outcome": "confirmed",
+        "provenance": "administrator-attestation",
+    }
 
 
 def test_workday_packet_uses_service_provider_id_not_app_id_uri():
@@ -517,7 +681,6 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
             "entraAppIdUri": ("api://44444444-4444-4444-4444-444444444444"),
             "signingCertificate": {
                 "thumbprint": "AA11",
-                "validFrom": "2026-01-01T00:00:00Z",
                 "validTo": "2027-01-01T00:00:00Z",
             },
         }
@@ -531,7 +694,7 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert packet["referenceValues"]["expectedIdentityProviderIssuer"] == (
         "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
     )
-    assert packet["referenceValues"]["certificateValidFrom"] == "2026-01-01"
+    assert "certificateValidFrom" not in packet["referenceValues"]
     assert packet["referenceValues"]["certificateValidTo"] == "2027-01-01"
     provider_question = packet["identityProviderQuestion"]
     assert "sign-in provider" in provider_question["question"]
@@ -553,8 +716,12 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     )
     assert "No certificate is selected" in certificate_question["options"]
     assert "I'm not sure" in certificate_question["options"]
-    assert "exactly match" in packet["issuerConfirmationQuestion"]["question"]
-    assert "both dates match exactly" in (
+    identifier_question = packet["issuerConfirmationQuestion"]
+    assert "identity-provider SSO service URL" in identifier_question["question"]
+    assert "sign-on redirect URL" in identifier_question["question"]
+    assert "http://www.workday.com/contoso_impl" in identifier_question["question"]
+    assert "Yes, all four values match exactly" in identifier_question["options"]
+    assert "expiration date matches exactly" in (
         packet["certificateValidityQuestion"]["options"][0]
     )
     assert "customerTaskList" not in packet
@@ -564,6 +731,80 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert any("REST and SOAP hosts" in action for action in packet["actions"])
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
+    assert packet["responseForm"]["collection"]["mode"] == (
+        "labeled-worksheet"
+    )
+    assert packet["responseForm"]["collection"]["validator"] == (
+        "parse_workday_admin_return_worksheet"
+    )
+    assert packet["engagementQuestion"].startswith("Have you looped in")
+    assert packet["completionQuestion"].startswith("Has the Workday")
+    assert any(
+        "OAuth client ID" in item for item in packet["informationToReturn"]
+    )
+
+
+def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _workday_worksheet(),
+    )
+
+    result = validate_workday_admin_response(_workday_state(), parsed)
+
+    assert result["identifiers"]["oauthClientId"] == "safe-client-id"
+    assert result["evidence"]["rolloutType"] == "entire-workforce"
+    assert result["evidence"]["optionalDomains"] == []
+
+
+def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
+    worksheet = _workday_worksheet().replace(
+        "Optional domains: No additional domains are required\n"
+        "Additional domain mappings:\n",
+        "Optional domains: Yes, additional supported scenarios require domains\n"
+        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Absence | custom leave lookup\n",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["optionalDomains"] == [
+        {
+            "domain": "Worker Data",
+            "scenario": "custom worker lookup",
+        },
+        {
+            "domain": "Absence",
+            "scenario": "custom leave lookup",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _workday_worksheet().replace(
+            "Workday owned scope: Yes",
+            "Workday owned scope: No or not sure",
+        ),
+        _workday_worksheet().replace(
+            "OAuth client ID: safe-client-id\n",
+            "",
+        ),
+        _workday_worksheet() + "Unknown field: value\n",
+    ],
+)
+def test_workday_labeled_worksheet_rejects_incomplete_or_failed_evidence(
+    worksheet: str,
+) -> None:
+    with pytest.raises(WorkdayConnectContractError):
+        parse_workday_admin_return_worksheet(
+            _workday_state(),
+            worksheet,
+        )
 
 
 def test_workday_packet_rejects_identifier_aliasing():
@@ -919,10 +1160,6 @@ def test_agent_binding_and_employee_evidence_are_strict():
                 "environmentId": "environment-id",
                 "botId": "bot-id",
                 "makerUsername": "maker@example.com",
-                "checkpoints": {
-                    "WD-REST-002": "Passed",
-                    "WD-CONN-013": "Passed",
-                },
                 "workdayTopics": {
                     "expected": 23,
                     "verified": 23,
@@ -951,10 +1188,6 @@ def test_agent_binding_and_employee_evidence_are_strict():
             "environmentId": "environment-id",
             "botId": "bot-id",
             "makerUsername": "maker@example.com",
-            "checkpoints": {
-                "WD-REST-002": "Passed",
-                "WD-CONN-013": "Passed",
-            },
             "workdayTopics": {
                 "expected": 23,
                 "verified": 23,

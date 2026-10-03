@@ -40,6 +40,33 @@ def test_alm_import_probe_requires_explicit_target(monkeypatch) -> None:
     assert exc.value.code == 2
 
 
+def test_main_accepts_explicit_tenant_id_for_profile(monkeypatch) -> None:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+    captured = {}
+
+    def _run_profile(args):
+        captured["tenant_id"] = args.tenant_id
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_run_profile", _run_profile)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cli.py",
+            "--profile",
+            "workday-da:setup-readiness",
+            "--tenant-id",
+            tenant_id,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["tenant_id"] == tenant_id
+
+
 def test_create_alm_import_target_uses_separate_environment(monkeypatch) -> None:
     created = []
     monkeypatch.setattr(
@@ -116,9 +143,12 @@ def test_create_alm_import_target_rejects_source_environment(monkeypatch) -> Non
 def test_workday_da_check_is_explicit_scope_only() -> None:
     """An optional DA HR package must not fail unrelated full runs."""
     assert cli.SCOPE_MAP["workdayda"] == [
-        ("Workday DA", cli.run_workday_da_checks)
+        ("Workday DA", cli.run_workday_da_package_check)
     ]
-    assert ("Workday DA", cli.run_workday_da_checks) not in cli.FULL_SCOPE
+    assert (
+        "Workday DA",
+        cli.run_workday_da_package_check,
+    ) not in cli.FULL_SCOPE
 
 
 class TestOpenReportInBrowser:

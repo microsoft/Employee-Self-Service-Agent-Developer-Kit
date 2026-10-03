@@ -10,8 +10,10 @@ PowerApps APIs for FlightCheck checks (environments, flows, connections, DLP).
 Authentication uses the same MSAL cache as auth.py / graph_client.py.
 """
 
+from datetime import datetime
 import os
 import sys
+import time
 from urllib.parse import urlparse
 
 try:
@@ -34,7 +36,7 @@ except ImportError:
     sys.exit(1)
 
 
-CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 BAP_BASE = "https://api.bap.microsoft.com"
 POWERAPPS_BASE = "https://api.powerapps.com"
@@ -58,15 +60,38 @@ FLOW_SCOPE = "https://service.flow.microsoft.com//.default"
 # enough that a single transient 503 mid-FlightCheck would otherwise blow up
 # the whole readiness report. Read-only verbs only; FlightCheck never mutates
 # tenant state through these clients.
+_RETRY_TOTAL = 2
 _RETRY = Retry(
-    total=3,
+    total=_RETRY_TOTAL,
     backoff_factor=1,
+    backoff_max=2,
     status_forcelist=(429, 500, 502, 503, 504),
     allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
-    respect_retry_after_header=True,
+    # Service-provided Retry-After values are not allowed to turn a bounded
+    # FlightCheck into an arbitrarily long wait.
+    respect_retry_after_header=False,
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+_MAX_RETRY_BACKOFF_SECONDS = 3.0
+
+
+def _same_origin_pagination_url(next_url: object, base: str) -> str:
+    """Accept only absolute HTTPS pagination links on the API's own origin."""
+    value = str(next_url or "").strip()
+    parsed = urlparse(value)
+    expected = urlparse(base)
+    if (
+        parsed.scheme.casefold() != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname is None
+        or parsed.hostname.casefold()
+        != str(expected.hostname or "").casefold()
+        or parsed.port not in (None, 443)
+    ):
+        raise ValueError("API pagination link has an unexpected origin.")
+    return value
 
 
 def _policy_env_scope(policy: dict) -> tuple[str | None, list[str]]:
@@ -217,11 +242,22 @@ class PPAdminClient:
             return result["access_token"], username
 
         pp_token, pp_username = acquire(PP_SCOPE, "PowerApps/BAP")
-        flow_token = (
-            acquire(FLOW_SCOPE, "Power Automate (Flow)")[0]
-            if include_flow
-            else None
-        )
+        flow_token = None
+        flow_username = None
+        if include_flow:
+            flow_token, flow_username = acquire(
+                FLOW_SCOPE,
+                "Power Automate (Flow)",
+            )
+            if (
+                not pp_username
+                or not flow_username
+                or pp_username.casefold() != flow_username.casefold()
+            ):
+                raise RuntimeError(
+                    "Power Platform authentication used different or "
+                    "unverifiable accounts across required API audiences."
+                )
 
         if cache.has_state_changed:
             os.makedirs(".local", exist_ok=True)
@@ -329,7 +365,12 @@ class PPAdminClient:
             resp.raise_for_status()
             data = resp.json()
             items.extend(data.get("value", []))
-            url = data.get("nextLink") or data.get("@odata.nextLink")
+            next_url = data.get("nextLink") or data.get("@odata.nextLink")
+            url = (
+                _same_origin_pagination_url(next_url, base)
+                if next_url
+                else None
+            )
             params = None
         return items
 
@@ -467,6 +508,84 @@ class PPAdminClient:
         if isinstance(resp, dict) and "_error" in resp:
             return resp
         return resp.get("value", [])
+
+    def get_flow_runs_since(
+        self,
+        env_id: str,
+        flow_id: str,
+        since: datetime,
+        *,
+        max_pages: int = 5,
+        max_runs: int = 500,
+        max_elapsed_seconds: float = 45.0,
+    ) -> list | dict:
+        """Read bounded run-history pages until ``since`` is covered."""
+        if max_pages <= 0 or max_runs <= 0:
+            raise ValueError("Run-history limits must be positive.")
+        items: list = []
+        url = (
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/"
+            f"{env_id}/flows/{flow_id}/runs"
+        )
+        params: dict | None = {"api-version": "2016-11-01"}
+        deadline = time.monotonic() + max_elapsed_seconds
+        for _page in range(max_pages):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"_error": "run_history_deadline_exceeded"}
+            request_budget = max(
+                0.5,
+                (
+                    remaining - _MAX_RETRY_BACKOFF_SECONDS
+                ) / (2 * (_RETRY_TOTAL + 1)),
+            )
+            resp = _SESSION.get(
+                url,
+                headers=self.flow_headers,
+                params=params,
+                timeout=min(10.0, request_budget),
+            )
+            if time.monotonic() > deadline:
+                return {"_error": "run_history_deadline_exceeded"}
+            if resp.status_code in (401, 403):
+                return {
+                    "_error": "insufficient_permissions",
+                    "_status": resp.status_code,
+                }
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("Run history returned an invalid response.")
+            page = data.get("value")
+            if not isinstance(page, list):
+                raise ValueError("Run history returned an invalid page.")
+            items.extend(page)
+            if len(items) > max_runs:
+                return {"_error": "run_history_limit_reached"}
+            page_times = []
+            for run in page:
+                if not isinstance(run, dict):
+                    continue
+                properties = run.get("properties")
+                if not isinstance(properties, dict):
+                    continue
+                start_time = str(properties.get("startTime") or "")
+                if not start_time:
+                    continue
+                try:
+                    parsed = datetime.fromisoformat(
+                        start_time.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    continue
+                if parsed.tzinfo is not None:
+                    page_times.append(parsed)
+            next_url = data.get("nextLink") or data.get("@odata.nextLink")
+            if not next_url or (page_times and min(page_times) <= since):
+                return items
+            url = _same_origin_pagination_url(next_url, FLOW_BASE)
+            params = None
+        return {"_error": "run_history_window_not_covered"}
 
     # ----- Connection APIs -----
 

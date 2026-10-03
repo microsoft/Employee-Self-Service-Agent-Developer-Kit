@@ -7,12 +7,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import copy
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 import time
 from typing import Any, Callable, Iterator, Mapping
@@ -21,6 +20,7 @@ import uuid
 from workday_connect_model import (
     ADMINISTRATOR_PARTIAL_FIELDS,
     ADMINISTRATOR_PHASES,
+    ADMINISTRATOR_REQUIRED_FIELDS,
     ADMINISTRATOR_SUBSTAGES,
     LEGACY_PHASE_ROWS,
     LIFECYCLE_BLOCKER_CATEGORIES,
@@ -732,10 +732,13 @@ def _reset_phase(phase: dict[str, Any]) -> None:
             "approvedPlanHash": None,
             "approvedPlan": None,
             "evidence": [],
+            "validationProfiles": {},
             "blocker": None,
             "updatedAt": utc_now(),
         }
     )
+    if "employeeTestAttempt" in phase:
+        phase["employeeTestAttempt"] = None
     if administrator is not None:
         phase["administrator"] = administrator
 
@@ -859,10 +862,279 @@ def _invalidate_after_phase(
             matched = True
 
 
+def _employee_target_fingerprint(
+    state: Mapping[str, Any],
+    flow_ids: list[str],
+) -> str:
+    scope = state.get("scope") or {}
+    agent = scope.get("agent") or {}
+    return plan_hash(
+        {
+            "phase": "employee-validation",
+            "scope": {
+                "environmentId": scope.get("environmentId"),
+                "environmentUrl": scope.get("dataverseUrl"),
+                "tenantId": scope.get("entraTenantId"),
+                "agentSlug": (
+                    agent.get("slug")
+                    if isinstance(agent, Mapping)
+                    else None
+                ),
+                "agentSchemaName": (
+                    agent.get("schemaName")
+                    if isinstance(agent, Mapping)
+                    else None
+                ),
+                "agentId": (
+                    agent.get("botId")
+                    if isinstance(agent, Mapping)
+                    else None
+                ),
+            },
+            "actions": ["Run signed-in employee read scenario"],
+            "flowIds": sorted(set(flow_ids)),
+            "acceptanceGeneration": {
+                phase_id: {
+                    "status": (state.get("phases") or {})
+                    .get(phase_id, {})
+                    .get("status"),
+                    "completedActions": (state.get("phases") or {})
+                    .get(phase_id, {})
+                    .get("completedActions"),
+                    "approvedPlanHash": (state.get("phases") or {})
+                    .get(phase_id, {})
+                    .get("approvedPlanHash"),
+                    "evidence": (state.get("phases") or {})
+                    .get(phase_id, {})
+                    .get("evidence"),
+                }
+                for phase_id in (
+                    "preflight",
+                    "entra",
+                    "workday-admin",
+                    "connections",
+                    "runtime",
+                )
+            },
+            "identifiers": state.get("identifiers") or {},
+            "endpoints": state.get("endpoints") or {},
+        }
+    )
+
+
+def _employee_runtime_flow_ids(state: Mapping[str, Any]) -> list[str]:
+    runtime = (state.get("phases") or {}).get("runtime") or {}
+    runtime_plan = runtime.get("approvedPlan") or {}
+    flow_ids_by_name = {
+        str(flow.get("name") or "").strip().casefold(): str(
+            flow.get("workflowId") or ""
+        ).strip()
+        for flow in runtime_plan.get("flows") or []
+        if isinstance(flow, Mapping)
+        and str(flow.get("name") or "").strip()
+        and str(flow.get("workflowId") or "").strip()
+    }
+    attachment = next(
+        (
+            record
+            for record in runtime.get("evidence") or []
+            if isinstance(record, Mapping)
+            and record.get("action") == "flow-attachment-confirmed"
+        ),
+        None,
+    )
+    flow_names = (
+        attachment.get("flowNames")
+        if isinstance(attachment, Mapping)
+        else None
+    )
+    if (
+        not isinstance(flow_names, list)
+        or not flow_names
+        or any(not isinstance(name, str) or not name.strip() for name in flow_names)
+    ):
+        return []
+    normalized_names = [name.strip().casefold() for name in flow_names]
+    if (
+        len(normalized_names) != len(set(normalized_names))
+        or any(name not in flow_ids_by_name for name in normalized_names)
+    ):
+        return []
+    return sorted(
+        {
+            flow_ids_by_name[name]
+            for name in normalized_names
+        }
+    )
+
+
+def _clear_employee_validation_evidence(phase: dict[str, Any]) -> None:
+    phase["completedActions"] = [
+        action
+        for action in phase.get("completedActions") or []
+        if action != "signed-in-scenario"
+    ]
+    phase["evidence"] = [
+        record
+        for record in phase.get("evidence") or []
+        if record.get("action") != "signed-in-scenario"
+    ]
+    phase["employeeTestAttempt"] = None
+
+
+def _transition_phase_state(
+    state: dict[str, Any],
+    phase_id: str,
+    status: str,
+    *,
+    blocker: Mapping[str, Any] | None = None,
+    invalidate_downstream: bool = True,
+) -> None:
+    definition = PHASE_BY_ID[phase_id]
+    prerequisite = definition.prerequisite
+    if status == PhaseStatus.COMPLETE.value and prerequisite:
+        prerequisite_status = state["phases"][prerequisite.value]["status"]
+        if prerequisite_status != PhaseStatus.COMPLETE.value:
+            raise WorkdayConnectStoreError(
+                f"Complete '{prerequisite.value}' before '{phase_id}'."
+            )
+    phase = state["phases"][phase_id]
+    if (
+        invalidate_downstream
+        and phase["status"] == PhaseStatus.COMPLETE.value
+        and status != PhaseStatus.COMPLETE.value
+    ):
+        _invalidate_after_phase(state, phase_id)
+    if status == PhaseStatus.COMPLETE.value:
+        required = PHASE_REQUIRED_ACTIONS[phase_id]
+        completed = set(phase["completedActions"])
+        evidence_actions = {
+            str(record.get("action") or "") for record in phase["evidence"]
+        }
+        missing = sorted((required - completed) | (required - evidence_actions))
+        if missing:
+            raise WorkdayConnectStoreError(
+                f"Phase '{phase_id}' is missing required verified actions: "
+                + ", ".join(missing)
+                + "."
+            )
+        if phase_id in ADMINISTRATOR_PHASES:
+            administrator = phase["administrator"]
+            administrator["substage"] = "evidence-validated"
+            administrator["invalidFields"] = []
+            administrator["updatedAt"] = utc_now()
+    previous_status = phase["status"]
+    phase["status"] = status
+    phase["blocker"] = dict(blocker) if blocker else None
+    phase["updatedAt"] = utc_now()
+    if status == PhaseStatus.BLOCKED.value:
+        if previous_status == PhaseStatus.PENDING.value:
+            _append_lifecycle_event(state, "phase-started", phase=phase_id)
+            previous_status = PhaseStatus.ACTIVE.value
+        if previous_status == PhaseStatus.ACTIVE.value:
+            _append_lifecycle_event(
+                state,
+                "phase-paused",
+                phase=phase_id,
+                outcome="blocked",
+                duration_ms=_phase_active_segment_ms(state, phase_id),
+            )
+        _append_lifecycle_event(
+            state,
+            "blocked",
+            phase=phase_id,
+            outcome="blocked",
+            blocker_category=_blocker_category(blocker),
+            remediation_id=_remediation_id(blocker),
+        )
+    elif (
+        status == PhaseStatus.ACTIVE.value
+        and previous_status == PhaseStatus.BLOCKED.value
+    ):
+        _append_lifecycle_event(
+            state,
+            "phase-resumed",
+            phase=phase_id,
+            increment_retry=True,
+            increment_resume=True,
+        )
+    elif (
+        status == PhaseStatus.ACTIVE.value
+        and previous_status != PhaseStatus.ACTIVE.value
+    ):
+        _append_lifecycle_event(state, "phase-started", phase=phase_id)
+    elif (
+        status == PhaseStatus.COMPLETE.value
+        and previous_status != PhaseStatus.COMPLETE.value
+    ):
+        _append_lifecycle_event(
+            state,
+            "phase-completed",
+            phase=phase_id,
+            outcome="success",
+            duration_ms=_phase_total_duration_ms(state, phase_id),
+        )
+        if all(
+            item["status"] == PhaseStatus.COMPLETE.value
+            for item in state["phases"].values()
+        ):
+            _append_lifecycle_event(state, "completed", outcome="success")
+
+
+def _block_validation_state(
+    state: dict[str, Any],
+    *,
+    phase_id: str,
+    error_type: str,
+    message: str,
+    customer_remediation: str,
+    remediation_id: str,
+) -> None:
+    reached_owner = False
+    for definition in PHASE_DEFINITIONS:
+        current_id = definition.identifier.value
+        if current_id == phase_id:
+            reached_owner = True
+        if not reached_owner:
+            continue
+        current = state["phases"][current_id]
+        current["validationProfiles"] = {}
+        if current_id == phase_id:
+            profile_blocker = {
+                "operation": "readiness-validation",
+                "errorType": error_type,
+                "message": message,
+                "remediation": customer_remediation,
+                **(
+                    {"remediationId": remediation_id}
+                    if remediation_id
+                    else {}
+                ),
+            }
+            _transition_phase_state(
+                state,
+                current_id,
+                PhaseStatus.BLOCKED.value,
+                blocker=profile_blocker,
+                invalidate_downstream=False,
+            )
+        else:
+            if current_id == "employee-validation":
+                _clear_employee_validation_evidence(current)
+            current["status"] = PhaseStatus.PENDING.value
+            current["blocker"] = None
+        current["updatedAt"] = utc_now()
+    state["status"] = "in-progress"
+
+
 def _upgrade_or_migrate_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     source_version = document.get("schemaVersion")
+    if source_version == 8:
+        return upgrade_v8_state(document)
+    if source_version == 7:
+        return upgrade_v7_state(document)
     if source_version == 6:
         return upgrade_v6_state(document)
     if source_version == 5:
@@ -950,6 +1222,11 @@ def _upgrade_structured_state(
     for definition in PHASE_DEFINITIONS:
         phase_id = definition.identifier.value
         phase = state["phases"][phase_id]
+        phase.setdefault("validationProfiles", {})
+        if phase_id == "employee-validation":
+            phase.setdefault("employeeTestAttempt", None)
+        else:
+            phase.pop("employeeTestAttempt", None)
         if phase_id in ADMINISTRATOR_PHASES:
             phase.setdefault("administrator", default_administrator_state())
         else:
@@ -1140,6 +1417,103 @@ def upgrade_v6_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_pre_v7_state(document, source_version=6)
 
 
+def _source_state_was_ready(document: Mapping[str, Any]) -> bool:
+    phases = document.get("phases")
+    return (
+        document.get("status") == "ready"
+        and isinstance(phases, Mapping)
+        and all(
+            isinstance(phases.get(definition.identifier.value), Mapping)
+            and phases[definition.identifier.value].get("status")
+            == PhaseStatus.COMPLETE.value
+            for definition in PHASE_DEFINITIONS
+        )
+    )
+
+
+def _normalize_package_evidence_ownership(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    migrated = copy.deepcopy(dict(document))
+    preflight = migrated["phases"]["preflight"]
+    connections = migrated["phases"]["connections"]
+    package_evidence = next(
+        (
+            copy.deepcopy(record)
+            for record in preflight.get("evidence") or []
+            if isinstance(record, Mapping)
+            and record.get("action") == "verify-package"
+        ),
+        None,
+    )
+    preflight["completedActions"] = [
+        action
+        for action in preflight.get("completedActions") or []
+        if action != "verify-package"
+    ]
+    preflight["evidence"] = [
+        record
+        for record in preflight.get("evidence") or []
+        if not (
+            isinstance(record, Mapping)
+            and record.get("action") == "verify-package"
+        )
+    ]
+    if package_evidence is not None:
+        if "verify-package" not in connections["completedActions"]:
+            connections["completedActions"].append("verify-package")
+        if not any(
+            isinstance(record, Mapping)
+            and record.get("action") == "verify-package"
+            for record in connections["evidence"]
+        ):
+            connections["evidence"].append(package_evidence)
+    return migrated
+
+
+def _upgrade_readiness_state(
+    document: Mapping[str, Any],
+    *,
+    source_version: int,
+) -> dict[str, Any]:
+    legacy_ready = _source_state_was_ready(document)
+    normalized = _normalize_package_evidence_ownership(document)
+    state = _upgrade_structured_state(
+        normalized,
+        source_version=source_version,
+    )
+    baseline_required = any(
+        state["phases"][phase_id]["status"] == PhaseStatus.COMPLETE.value
+        for phase_id in ("preflight", "workday-admin", "runtime")
+    )
+    migration = dict(state.get("migration") or {})
+    migration.update(
+        {
+            "source": f"workday-connect-state-v{source_version}",
+            "migratedAt": utc_now(),
+            "flightcheckBaselineRequired": baseline_required,
+            "legacyReady": legacy_ready,
+        }
+    )
+    state["migration"] = migration
+    if baseline_required:
+        if legacy_ready:
+            employee_phase = state["phases"]["employee-validation"]
+            employee_phase["status"] = PhaseStatus.ACTIVE.value
+            employee_phase["updatedAt"] = utc_now()
+        state["status"] = "in-progress"
+    state["updatedAt"] = utc_now()
+    return validate_state(state)
+
+
+def upgrade_v7_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_readiness_state(document, source_version=7)
+
+
+def upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_readiness_state(document, source_version=8)
+
+
 class WorkdayConnectStore:
     """Own the single durable Workday connect state file."""
 
@@ -1155,11 +1529,103 @@ class WorkdayConnectStore:
         self.workspace_root = workspace_root.resolve()
         self.config_path = self.workspace_root / CONFIG_PATH
         self.lock_path = self.config_path.with_name("state.lock")
+        self.migration_lock_path = self.config_path.with_name(
+            "flightcheck-migration.lock"
+        )
+        self.employee_validation_lock_path = self.config_path.with_name(
+            "employee-validation.lock"
+        )
+        self.operation_lock_path = self.config_path.with_name(
+            "operation.lock"
+        )
         self.backup_path = self.config_path.with_name(
             f"config.pre-v{STATE_SCHEMA_VERSION}.json"
         )
         self.lock_timeout = lock_timeout
         self.event_sink = event_sink
+
+    def _ensure_migration_backup(
+        self,
+        existing: Mapping[str, Any],
+    ) -> None:
+        backup_valid = False
+        if self.backup_path.exists():
+            try:
+                backup = _read_json(self.backup_path)
+                backup_valid = backup == dict(existing)
+            except WorkdayConnectStoreError:
+                backup_valid = False
+        if not backup_valid:
+            _atomic_write_json(self.backup_path, existing)
+
+    def _refresh_validation_profile_fingerprints(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+        from workday_connect_flightcheck import (
+            effective_validation_state,
+            validation_input_fingerprint,
+        )
+
+        effective_state = effective_validation_state(
+            self.workspace_root,
+            state,
+        )
+        for phase in state["phases"].values():
+            for profile_name, summary in phase[
+                "validationProfiles"
+            ].items():
+                summary["inputFingerprint"] = (
+                    validation_input_fingerprint(
+                        effective_state,
+                        str(
+                            summary.get("sourceProfile")
+                            or profile_name
+                        ),
+                    )
+                )
+
+    @contextmanager
+    def migration_guard(self) -> Iterator[None]:
+        lock = _file_lock(self.migration_lock_path, self.lock_timeout)
+        try:
+            lock.__enter__()
+        except WorkdayConnectStoreError as exc:
+            exc.profile_blocker_persisted = True
+            raise
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
+
+    @contextmanager
+    def employee_validation_guard(self) -> Iterator[None]:
+        lock = _file_lock(
+            self.employee_validation_lock_path,
+            self.lock_timeout,
+        )
+        try:
+            lock.__enter__()
+        except WorkdayConnectStoreError as exc:
+            exc.profile_blocker_persisted = True
+            raise
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
+
+    @contextmanager
+    def operation_guard(self) -> Iterator[None]:
+        lock = _file_lock(self.operation_lock_path, self.lock_timeout)
+        try:
+            lock.__enter__()
+        except WorkdayConnectStoreError as exc:
+            exc.profile_blocker_persisted = True
+            raise
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
 
     def initialize(self) -> dict[str, Any]:
         with _file_lock(self.lock_path, self.lock_timeout):
@@ -1174,9 +1640,7 @@ class WorkdayConnectStore:
                 if state != existing:
                     _atomic_write_json(self.config_path, state)
                 return state
-            if not self.backup_path.exists():
-                self.backup_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(self.config_path, self.backup_path)
+            self._ensure_migration_backup(existing)
             state = _upgrade_or_migrate_state(existing)
             _atomic_write_json(self.config_path, state)
             return state
@@ -1199,8 +1663,7 @@ class WorkdayConnectStore:
             if not current:
                 current = default_state()
             elif current.get("schemaVersion") != STATE_SCHEMA_VERSION:
-                if not self.backup_path.exists():
-                    shutil.copy2(self.config_path, self.backup_path)
+                self._ensure_migration_backup(current)
                 current = _upgrade_or_migrate_state(current)
             else:
                 current = _normalize_current_state(current)
@@ -1307,6 +1770,15 @@ class WorkdayConnectStore:
                     _invalidate_after_phase(state, invalidation_phase)
                 else:
                     _invalidate_from_phase(state, invalidation_phase)
+            if (
+                (section == "scope" and "workdayTenant" in changed_keys)
+                or (
+                    section == "identifiers"
+                    and bool(changed_keys & _WORKDAY_IDENTIFIER_KEYS)
+                )
+                or (section == "endpoints" and bool(changed_keys))
+            ):
+                state["tenantFoundation"] = None
             state[section].update(dict(values))
             if section == "operators":
                 phases = {
@@ -1438,6 +1910,36 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
+    def record_operator_credential_store(
+        self,
+        operator_key: str,
+        credential_store: str,
+        status: str,
+    ) -> dict[str, Any]:
+        if operator_key not in _OPERATOR_PHASES:
+            raise WorkdayConnectStoreError(
+                f"Unknown Workday operator: {operator_key}."
+            )
+        if not credential_store.strip() or not status.strip():
+            raise WorkdayConnectStoreError(
+                "Credential store name and status are required."
+            )
+
+        def mutation(state: dict[str, Any]) -> None:
+            operator = state["operators"].get(operator_key)
+            if not isinstance(operator, Mapping):
+                raise WorkdayConnectStoreError(
+                    f"Workday operator '{operator_key}' is not recorded."
+                )
+            credential_stores = dict(operator.get("credentialStores") or {})
+            credential_stores[credential_store] = status
+            state["operators"][operator_key] = {
+                **dict(operator),
+                "credentialStores": credential_stores,
+            }
+
+        return self._mutate(mutation)
+
     def capture_tenant_foundation(self) -> dict[str, Any]:
         """Persist reusable Entra and Workday tenant configuration evidence."""
 
@@ -1482,7 +1984,7 @@ class WorkdayConnectStore:
                 return
             phase = state["phases"]["workday-admin"]
             _reset_phase(phase)
-            phase["status"] = PhaseStatus.COMPLETE.value
+            phase["status"] = PhaseStatus.ACTIVE.value
             phase["completedActions"] = copy.deepcopy(
                 list(snapshot.get("completedActions") or [])
             )
@@ -1500,7 +2002,7 @@ class WorkdayConnectStore:
                         "workday-admin",
                     )
                 )
-            phase["administrator"]["substage"] = "evidence-validated"
+            phase["administrator"]["substage"] = "collecting-evidence"
             phase["administrator"]["invalidFields"] = []
             phase["administrator"]["updatedAt"] = utc_now()
             phase["evidence"].append(
@@ -1531,108 +2033,12 @@ class WorkdayConnectStore:
             raise WorkdayConnectStoreError(f"Unknown Workday phase status: {status}.")
 
         def mutation(state: dict[str, Any]) -> None:
-            definition = PHASE_BY_ID[phase_id]
-            prerequisite = definition.prerequisite
-            if status == PhaseStatus.COMPLETE.value and prerequisite:
-                prerequisite_status = state["phases"][prerequisite.value]["status"]
-                if prerequisite_status != PhaseStatus.COMPLETE.value:
-                    raise WorkdayConnectStoreError(
-                        f"Complete '{prerequisite.value}' before '{phase_id}'."
-                    )
-            phase = state["phases"][phase_id]
-            if (
-                phase["status"] == PhaseStatus.COMPLETE.value
-                and status != PhaseStatus.COMPLETE.value
-            ):
-                _invalidate_after_phase(state, phase_id)
-            if status == PhaseStatus.COMPLETE.value:
-                required = PHASE_REQUIRED_ACTIONS[phase_id]
-                completed = set(phase["completedActions"])
-                evidence_actions = {
-                    str(record.get("action") or "") for record in phase["evidence"]
-                }
-                missing = sorted((required - completed) | (required - evidence_actions))
-                if missing:
-                    raise WorkdayConnectStoreError(
-                        f"Phase '{phase_id}' is missing required verified "
-                        "actions: " + ", ".join(missing) + "."
-                    )
-                if phase_id in ADMINISTRATOR_PHASES:
-                    administrator = phase["administrator"]
-                    administrator["substage"] = "evidence-validated"
-                    administrator["invalidFields"] = []
-                    administrator["updatedAt"] = utc_now()
-            previous_status = phase["status"]
-            phase["status"] = status
-            phase["blocker"] = dict(blocker) if blocker else None
-            phase["updatedAt"] = utc_now()
-            if status == PhaseStatus.BLOCKED.value:
-                if previous_status == PhaseStatus.PENDING.value:
-                    _append_lifecycle_event(
-                        state,
-                        "phase-started",
-                        phase=phase_id,
-                    )
-                    previous_status = PhaseStatus.ACTIVE.value
-                if previous_status == PhaseStatus.ACTIVE.value:
-                    _append_lifecycle_event(
-                        state,
-                        "phase-paused",
-                        phase=phase_id,
-                        outcome="blocked",
-                        duration_ms=_phase_active_segment_ms(
-                            state,
-                            phase_id,
-                        ),
-                    )
-                _append_lifecycle_event(
-                    state,
-                    "blocked",
-                    phase=phase_id,
-                    outcome="blocked",
-                    blocker_category=_blocker_category(blocker),
-                    remediation_id=_remediation_id(blocker),
-                )
-            elif (
-                status == PhaseStatus.ACTIVE.value
-                and previous_status == PhaseStatus.BLOCKED.value
-            ):
-                _append_lifecycle_event(
-                    state,
-                    "phase-resumed",
-                    phase=phase_id,
-                    increment_retry=True,
-                    increment_resume=True,
-                )
-            elif (
-                status == PhaseStatus.ACTIVE.value
-                and previous_status != PhaseStatus.ACTIVE.value
-            ):
-                _append_lifecycle_event(
-                    state,
-                    "phase-started",
-                    phase=phase_id,
-                )
-            elif (
-                status == PhaseStatus.COMPLETE.value
-                and previous_status != PhaseStatus.COMPLETE.value
-            ):
-                _append_lifecycle_event(
-                    state,
-                    "phase-completed",
-                    phase=phase_id,
-                    outcome="success",
-                    duration_ms=_phase_total_duration_ms(state, phase_id),
-                )
-                if all(
-                    item["status"] == PhaseStatus.COMPLETE.value
-                    for item in state["phases"].values()
-                ):
-                    _append_lifecycle_event(
-                        state,
-                        "completed",
-                        outcome="success",
-                    )
+            _transition_phase_state(
+                state,
+                phase_id,
+                status,
+                blocker=blocker,
+            )
 
         return self._mutate(mutation)
 
@@ -1662,6 +2068,39 @@ class WorkdayConnectStore:
                     f"'{phase_id}' evidence."
                 )
             phase = state["phases"][phase_id]
+            existing_evidence = next(
+                (
+                    record
+                    for record in phase["evidence"]
+                    if record.get("action") == action
+                ),
+                None,
+            )
+            evidence_changed = evidence is not None and (
+                not isinstance(existing_evidence, Mapping)
+                or {
+                    key: value
+                    for key, value in existing_evidence.items()
+                    if key not in {"action", "capturedAt"}
+                }
+                != dict(evidence)
+            )
+            if (
+                action in phase["completedActions"]
+                and not evidence_changed
+                and evidence is not None
+            ):
+                return
+            if evidence_changed:
+                phase["validationProfiles"] = {}
+                _invalidate_after_phase(state, phase_id)
+                if phase["status"] == PhaseStatus.COMPLETE.value:
+                    _transition_phase_state(
+                        state,
+                        phase_id,
+                        PhaseStatus.ACTIVE.value,
+                        invalidate_downstream=False,
+                    )
             if action not in phase["completedActions"]:
                 phase["completedActions"].append(action)
             if evidence is not None:
@@ -1702,14 +2141,512 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
+    def record_validation_profile(
+        self,
+        phase_id: str,
+        summary: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if phase_id not in PHASE_BY_ID:
+            raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
+        profile_name = str(summary.get("profile") or "")
+        if not profile_name.startswith("workday-da:"):
+            raise WorkdayConnectStoreError(
+                "Workday validation profile summary is missing its profile."
+            )
+
+        def mutation(state: dict[str, Any]) -> None:
+            from workday_connect_flightcheck import (
+                effective_validation_state,
+                validation_input_fingerprint,
+            )
+
+            expected_fingerprint = str(
+                summary.get("inputFingerprint") or ""
+            )
+            source_profile = str(
+                summary.get("sourceProfile") or profile_name
+            )
+            current_fingerprint = validation_input_fingerprint(
+                effective_validation_state(self.workspace_root, state),
+                source_profile,
+            )
+            if current_fingerprint != expected_fingerprint:
+                raise WorkdayConnectStoreError(
+                    "Workday lifecycle state changed while readiness "
+                    "validation was running. Retry the current operation."
+                )
+            phase = state["phases"][phase_id]
+            if phase["status"] == PhaseStatus.BLOCKED.value:
+                phase["status"] = PhaseStatus.ACTIVE.value
+                phase["blocker"] = None
+                _append_lifecycle_event(
+                    state,
+                    "phase-resumed",
+                    phase=phase_id,
+                    increment_retry=True,
+                    increment_resume=True,
+                )
+            persisted_summary = copy.deepcopy(dict(summary))
+            persisted_summary["inputFingerprint"] = (
+                validation_input_fingerprint(
+                    effective_validation_state(self.workspace_root, state),
+                    source_profile,
+                )
+            )
+            phase["validationProfiles"][profile_name] = {
+                **persisted_summary,
+                "validatedAt": utc_now(),
+            }
+            phase["updatedAt"] = utc_now()
+
+        return self._mutate(mutation)
+
+    def block_validation_profile(
+        self,
+        phase_id: str,
+        profile_name: str,
+        *,
+        error_type: str,
+        message: str,
+        customer_remediation: str,
+        input_fingerprint: str,
+        source_profile: str,
+        remediation_id: str = "",
+    ) -> dict[str, Any]:
+        if phase_id not in PHASE_BY_ID:
+            raise WorkdayConnectStoreError(f"Unknown Workday phase: {phase_id}.")
+
+        def mutation(state: dict[str, Any]) -> None:
+            from workday_connect_flightcheck import (
+                effective_validation_state,
+                validation_input_fingerprint,
+            )
+
+            current_fingerprint = validation_input_fingerprint(
+                effective_validation_state(self.workspace_root, state),
+                source_profile,
+            )
+            if current_fingerprint != input_fingerprint:
+                raise WorkdayConnectStoreError(
+                    "Workday lifecycle state changed while readiness "
+                    "validation was running. Retry the current operation."
+                )
+            _block_validation_state(
+                state,
+                phase_id=phase_id,
+                error_type=error_type,
+                message=message,
+                customer_remediation=customer_remediation,
+                remediation_id=remediation_id,
+            )
+
+        return self._mutate(mutation)
+
+    def begin_employee_test_attempt(self) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            if (
+                state["phases"]["runtime"]["status"]
+                != PhaseStatus.COMPLETE.value
+            ):
+                raise WorkdayConnectStoreError(
+                    "Complete runtime wiring before starting employee validation."
+                )
+            flow_ids = _employee_runtime_flow_ids(state)
+            if not flow_ids:
+                raise WorkdayConnectStoreError(
+                    "The recorded agent attachment does not map to reviewed "
+                    "runtime flow IDs."
+                )
+            phase = state["phases"]["employee-validation"]
+            existing = phase.get("employeeTestAttempt")
+            if isinstance(existing, Mapping) and existing.get("status") in {
+                "active",
+                "validating",
+            }:
+                if not (
+                    existing.get("status") == "validating"
+                    and phase.get("status") == PhaseStatus.BLOCKED.value
+                ):
+                    raise WorkdayConnectStoreError(
+                        "The current employee test attempt is still active. "
+                        "Finish or record that attempt before starting another."
+                    )
+            _clear_employee_validation_evidence(phase)
+            phase["employeeTestAttempt"] = {
+                "attemptId": str(uuid.uuid4()),
+                "scenarioId": "workday-signed-in-employee-read",
+                "status": "active",
+                "startedAt": utc_now(),
+                "completedAt": None,
+                "expectedFlowIds": sorted(set(flow_ids)),
+                "clockSkewSeconds": 120,
+                "targetFingerprint": _employee_target_fingerprint(
+                    state,
+                    flow_ids,
+                ),
+                "correlationMode": "bounded-window-flow-set",
+                "outcome": "",
+            }
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.ACTIVE.value,
+                invalidate_downstream=False,
+            )
+            phase["validationProfiles"] = {}
+            phase["updatedAt"] = utc_now()
+
+        return self._mutate(mutation)
+
+    def freeze_employee_test_attempt(
+        self,
+        *,
+        evidence_timestamp: str,
+    ) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") not in {"active", "validating"}
+            ):
+                raise WorkdayConnectStoreError(
+                    "Start a bounded employee test attempt before recording "
+                    "its outcome."
+                )
+            current_fingerprint = _employee_target_fingerprint(
+                state,
+                list(attempt["expectedFlowIds"]),
+            )
+            if current_fingerprint != attempt["targetFingerprint"]:
+                raise WorkdayConnectStoreError(
+                    "The selected Workday target or reviewed runtime flows "
+                    "changed during employee validation. Start a new attempt."
+                )
+            try:
+                observed = datetime.fromisoformat(
+                    evidence_timestamp.replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                started = datetime.fromisoformat(
+                    attempt["startedAt"].replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                upper = (
+                    datetime.fromisoformat(
+                        attempt["completedAt"].replace("Z", "+00:00")
+                    ).astimezone(timezone.utc)
+                    if attempt["completedAt"]
+                    else datetime.now(timezone.utc)
+                )
+            except (AttributeError, ValueError) as exc:
+                raise WorkdayConnectStoreError(
+                    "Employee validation timestamps must be timezone-qualified "
+                    "ISO-8601 values."
+                ) from exc
+            skew = timedelta(seconds=attempt["clockSkewSeconds"])
+            if observed < started - skew or observed > upper + skew:
+                raise WorkdayConnectStoreError(
+                    "Employee validation evidence is outside the bounded "
+                    "test attempt window. Abandon this attempt, then start "
+                    "a new attempt and rerun the scenario."
+                )
+            if attempt["status"] == "active":
+                attempt["status"] = "validating"
+                attempt["completedAt"] = utc_now()
+                attempt["outcome"] = ""
+            phase["updatedAt"] = utc_now()
+
+        return self._mutate(mutation)
+
+    def abandon_employee_test_attempt(self) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") not in {"active", "validating"}
+            ):
+                return
+            attempt["status"] = "failed"
+            attempt["completedAt"] = attempt["completedAt"] or utc_now()
+            attempt["outcome"] = "abandoned"
+            phase["validationProfiles"] = {}
+            phase["completedActions"] = [
+                action
+                for action in phase["completedActions"]
+                if action != "signed-in-scenario"
+            ]
+            phase["evidence"] = [
+                record
+                for record in phase["evidence"]
+                if record.get("action") != "signed-in-scenario"
+            ]
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.ACTIVE.value,
+                invalidate_downstream=False,
+            )
+            _append_lifecycle_event(
+                state,
+                "abandoned",
+                phase="employee-validation",
+            )
+
+        return self._mutate(mutation)
+
+    def complete_employee_test_attempt(
+        self,
+        *,
+        succeeded: bool,
+    ) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            allowed_statuses = (
+                {"validating"}
+                if succeeded
+                else {"active", "validating"}
+            )
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") not in allowed_statuses
+            ):
+                raise WorkdayConnectStoreError(
+                    "Start a bounded employee test attempt before recording "
+                    "its outcome."
+                )
+            attempt["status"] = "succeeded" if succeeded else "failed"
+            attempt["completedAt"] = attempt["completedAt"] or utc_now()
+            attempt["outcome"] = "success" if succeeded else "failure"
+            phase["updatedAt"] = utc_now()
+
+        return self._mutate(mutation)
+
+    def finalize_employee_validation_success(self) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            if (
+                isinstance(attempt, dict)
+                and attempt.get("status") == "succeeded"
+                and phase["status"] == PhaseStatus.COMPLETE.value
+            ):
+                return
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") != "validating"
+            ):
+                raise WorkdayConnectStoreError(
+                    "Start a bounded employee test attempt before recording "
+                    "its outcome."
+                )
+            attempt["status"] = "succeeded"
+            attempt["completedAt"] = attempt["completedAt"] or utc_now()
+            attempt["outcome"] = "success"
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.COMPLETE.value,
+                invalidate_downstream=False,
+            )
+            self._refresh_validation_profile_fingerprints(state)
+
+        return self._mutate(mutation)
+
+    def finalize_employee_validation_failure(
+        self,
+        *,
+        blocker: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") != "validating"
+            ):
+                raise WorkdayConnectStoreError(
+                    "Start a bounded employee test attempt before recording "
+                    "its outcome."
+                )
+            attempt["status"] = "failed"
+            attempt["completedAt"] = attempt["completedAt"] or utc_now()
+            attempt["outcome"] = "failure"
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.BLOCKED.value,
+                blocker=copy.deepcopy(dict(blocker)),
+                invalidate_downstream=False,
+            )
+
+        return self._mutate(mutation)
+
+    def prepare_migration_employee_test_attempt(self) -> bool:
+        prepared = False
+
+        def mutation(state: dict[str, Any]) -> None:
+            nonlocal prepared
+            phase = state["phases"]["employee-validation"]
+            evidence = next(
+                (
+                    record
+                    for record in phase.get("evidence") or []
+                    if record.get("action") == "signed-in-scenario"
+                ),
+                None,
+            )
+            migration = dict(state.get("migration") or {})
+            if (
+                not migration.get("flightcheckBaselineRequired")
+                or migration.get("legacyReady") is not True
+            ):
+                return
+            flow_ids = _employee_runtime_flow_ids(state)
+            timestamp = str((evidence or {}).get("timestamp") or "").strip()
+            try:
+                observed = datetime.fromisoformat(
+                    timestamp.replace("Z", "+00:00")
+                )
+                if observed.tzinfo is None:
+                    raise ValueError
+                observed = observed.astimezone(timezone.utc)
+            except ValueError:
+                observed = None
+            if observed is None or not flow_ids:
+                phase["status"] = PhaseStatus.ACTIVE.value
+                phase["blocker"] = None
+                phase["validationProfiles"] = {}
+                _clear_employee_validation_evidence(phase)
+                phase["updatedAt"] = utc_now()
+                state["status"] = "in-progress"
+                migration["flightcheckBaselineRequired"] = False
+                migration["flightcheckBaselineOutcome"] = (
+                    "employee-validation-required"
+                )
+                state["migration"] = migration
+                return
+            phase["employeeTestAttempt"] = {
+                "attemptId": str(uuid.uuid4()),
+                "scenarioId": "workday-signed-in-employee-read",
+                "status": "validating",
+                "startedAt": observed.isoformat().replace("+00:00", "Z"),
+                "completedAt": observed.isoformat().replace("+00:00", "Z"),
+                "expectedFlowIds": flow_ids,
+                "clockSkewSeconds": 120,
+                "targetFingerprint": _employee_target_fingerprint(
+                    state,
+                    flow_ids,
+                ),
+                "correlationMode": "bounded-window-flow-set",
+                "outcome": "",
+            }
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.ACTIVE.value,
+                invalidate_downstream=False,
+            )
+            phase["updatedAt"] = utc_now()
+            prepared = True
+
+        self._mutate(mutation)
+        return prepared
+
+    def complete_flightcheck_migration(self) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            attempt = phase.get("employeeTestAttempt")
+            migration = dict(state.get("migration") or {})
+            if migration.get("legacyReady") is True and (
+                migration.get("flightcheckBaselineOutcome") != "accepted"
+            ):
+                final_profile = (phase.get("validationProfiles") or {}).get(
+                    "workday-da:final"
+                )
+                if (
+                    not isinstance(attempt, dict)
+                    or attempt.get("status") != "validating"
+                    or not isinstance(final_profile, Mapping)
+                    or final_profile.get("accepted") is not True
+                ):
+                    raise WorkdayConnectStoreError(
+                        "Complete a bounded employee test attempt and the final "
+                        "readiness profile before accepting the migrated Ready "
+                        "state."
+                    )
+            if isinstance(attempt, dict) and attempt.get("status") == "validating":
+                attempt["status"] = "succeeded"
+                attempt["completedAt"] = attempt["completedAt"] or utc_now()
+                attempt["outcome"] = "success"
+            if (
+                phase["status"] != PhaseStatus.COMPLETE.value
+                and PHASE_REQUIRED_ACTIONS["employee-validation"]
+                <= set(phase["completedActions"])
+            ):
+                _transition_phase_state(
+                    state,
+                    "employee-validation",
+                    PhaseStatus.COMPLETE.value,
+                    invalidate_downstream=False,
+                )
+            self._refresh_validation_profile_fingerprints(state)
+            migration["flightcheckBaselineRequired"] = False
+            migration["flightcheckBaselineOutcome"] = "accepted"
+            migration["flightcheckBaselineAt"] = utc_now()
+            state["migration"] = migration
+
+        return self._mutate(mutation)
+
+    def block_flightcheck_migration(
+        self,
+        phase_id: str,
+        *,
+        error_type: str,
+        message: str,
+        customer_remediation: str,
+        input_fingerprint: str,
+        source_profile: str,
+    ) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            from workday_connect_flightcheck import (
+                effective_validation_state,
+                validation_input_fingerprint,
+            )
+
+            current_fingerprint = validation_input_fingerprint(
+                effective_validation_state(self.workspace_root, state),
+                source_profile,
+            )
+            if current_fingerprint != input_fingerprint:
+                raise WorkdayConnectStoreError(
+                    "Workday lifecycle state changed while readiness "
+                    "validation was running. Retry the current operation."
+                )
+            _block_validation_state(
+                state,
+                phase_id=phase_id,
+                error_type=error_type,
+                message=message,
+                customer_remediation=customer_remediation,
+                remediation_id="",
+            )
+            migration = dict(state.get("migration") or {})
+            migration["flightcheckBaselineRequired"] = False
+            migration["flightcheckBaselineOutcome"] = "remediation-required"
+            migration["flightcheckBaselineAt"] = utc_now()
+            state["migration"] = migration
+
+        return self._mutate(mutation)
+
     def approve_plan(
         self,
         phase_id: str,
         plan: Mapping[str, Any],
     ) -> tuple[dict[str, Any], str]:
-        if phase_id not in {"preflight", "runtime"}:
+        if phase_id not in {"preflight", "connections", "runtime"}:
             raise WorkdayConnectStoreError(
-                "Exact apply-plan approval is supported only for preflight "
+                "Exact apply-plan approval is supported only for package "
                 "installation and controller-owned runtime changes."
             )
         if plan.get("phase") != phase_id:
@@ -1730,8 +2667,14 @@ class WorkdayConnectStore:
                 )
             phase = state["phases"][phase_id]
             previous_status = phase["status"]
-            if phase["status"] == PhaseStatus.COMPLETE.value:
+            plan_changed = phase.get("approvedPlanHash") != approved_hash
+            if (
+                phase["status"] == PhaseStatus.COMPLETE.value
+                or plan_changed
+            ):
                 _invalidate_after_phase(state, phase_id)
+            if plan_changed:
+                _reset_phase(phase)
             phase["approvedPlan"] = dict(plan)
             phase["approvedPlanHash"] = approved_hash
             phase["status"] = PhaseStatus.ACTIVE.value
@@ -1774,20 +2717,90 @@ class WorkdayConnectStore:
         return current_hash
 
     def status(self) -> dict[str, Any]:
+        from workday_connect_flightcheck import (
+            PHASE_REQUIRED_PROFILES,
+            effective_validation_state,
+            validation_input_fingerprint,
+        )
+
         state = self.load()
+        effective_state = effective_validation_state(
+            self.workspace_root,
+            state,
+        )
         phases = []
         next_phase = None
         for definition in PHASE_DEFINITIONS:
             phase = state["phases"][definition.identifier.value]
+            profiles = list(phase["validationProfiles"].values())
+            profile_names = {
+                str(profile.get("profile") or "") for profile in profiles
+            }
+            required_profiles = set(
+                PHASE_REQUIRED_PROFILES[definition.identifier.value]
+            )
+            current_profiles = {
+                str(profile.get("profile") or ""): profile
+                for profile in profiles
+            }
+            profiles_current = all(
+                current_profiles[profile_name].get("inputFingerprint")
+                == validation_input_fingerprint(
+                    effective_state,
+                    str(
+                        current_profiles[profile_name].get(
+                            "sourceProfile"
+                        )
+                        or profile_name
+                    ),
+                )
+                for profile_name in required_profiles
+                if profile_name in current_profiles
+            )
+            readiness_accepted = (
+                bool(required_profiles)
+                and
+                phase["status"] == PhaseStatus.COMPLETE.value
+                and required_profiles <= profile_names
+                and profiles_current
+            )
             phase_status = {
                 "id": definition.identifier.value,
                 "title": definition.title,
                 "status": phase["status"],
+                "readiness": {
+                    "accepted": readiness_accepted,
+                    "summary": (
+                        f"{definition.title} readiness checks passed."
+                        if readiness_accepted
+                        else None
+                    ),
+                    "validatedAt": (
+                        max(profile["validatedAt"] for profile in profiles)
+                        if profiles
+                        else None
+                    ),
+                    "migrationBaseline": any(
+                        profile["migrationBaseline"] for profile in profiles
+                    ),
+                },
             }
+            if definition.identifier.value == "employee-validation":
+                attempt = phase.get("employeeTestAttempt")
+                phase_status["employeeTestAttempt"] = (
+                    {
+                        "scenarioId": attempt["scenarioId"],
+                        "status": attempt["status"],
+                        "startedAt": attempt["startedAt"],
+                        "completedAt": attempt["completedAt"],
+                    }
+                    if isinstance(attempt, Mapping)
+                    else None
+                )
             administrator = phase.get("administrator")
             if isinstance(administrator, Mapping):
                 required_fields = set(
-                    ADMINISTRATOR_PARTIAL_FIELDS[
+                    ADMINISTRATOR_REQUIRED_FIELDS[
                         definition.identifier.value
                     ]
                 )
@@ -1827,9 +2840,31 @@ class WorkdayConnectStore:
             "nextPhaseId": next_phase,
             "nextPhaseSummary": next_phase_summary(state),
             "progressText": progress_text(state),
-            "blocker": (
+            "blocker": self._customer_safe_blocker(
+                next_phase,
                 state["phases"][next_phase]["blocker"]
                 if next_phase is not None
                 else None
             ),
+        }
+
+    @staticmethod
+    def _customer_safe_blocker(
+        phase_id: str | None,
+        blocker: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(blocker, Mapping) or phase_id is None:
+            return None
+        next_action = str(blocker.get("remediation") or "").strip()
+        if not next_action:
+            next_action = (
+                f"Review the {PHASE_BY_ID[phase_id].title} guidance, correct "
+                "the reported issue, and retry this phase."
+            )
+        return {
+            "summary": (
+                f"{PHASE_BY_ID[phase_id].title} needs attention before "
+                "setup can continue."
+            ),
+            **({"nextAction": next_action} if next_action else {}),
         }

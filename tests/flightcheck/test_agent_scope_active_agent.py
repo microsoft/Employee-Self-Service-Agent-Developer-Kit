@@ -24,6 +24,43 @@ def test_active_agent_prefers_active_slug_match():
     assert active_agent_bot_id(config) == "id-beta"
 
 
+def test_explicit_selected_slug_overrides_configured_active_agent():
+    config = {
+        "activeAgent": "alpha",
+        "agents": [
+            {"slug": "alpha", "botId": "id-alpha"},
+            {"slug": "beta", "botId": "id-beta"},
+        ],
+    }
+
+    assert active_agent(config, "beta")["slug"] == "beta"
+    assert active_agent_bot_id(config, "beta") == "id-beta"
+
+
+def test_unknown_explicit_selected_slug_does_not_fall_back():
+    config = {
+        "activeAgent": "alpha",
+        "agent": {"slug": "alpha", "botId": "id-alpha"},
+        "agents": [{"slug": "alpha", "botId": "id-alpha"}],
+    }
+
+    assert active_agent(config, "missing") == {}
+    assert active_agent_bot_id(config, "missing") is None
+
+
+def test_duplicate_selected_slug_fails_closed():
+    config = {
+        "activeAgent": "ess-hr",
+        "agents": [
+            {"slug": "ess-hr", "botId": "bot-1"},
+            {"slug": "ess-hr", "botId": "bot-2"},
+        ],
+    }
+
+    assert active_agent(config, "ess-hr") == {}
+    assert active_agent_bot_id(config, "ess-hr") is None
+
+
 def test_active_agent_falls_back_to_single_agent_copy():
     config = {"agent": {"slug": "solo", "botId": "id-solo"}}
 

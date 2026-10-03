@@ -268,72 +268,95 @@ def run_environment_checks(runner) -> list[CheckResult]:
         return results
 
     # ---- ENV-001: Environment exists ----
-    try:
-        env = pp.get_environment(env_id)
-        if "_error" in env:
+    if pp is None:
+        results.extend([
+            CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-001", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
+                description="Power Platform environment exists",
+                result=(
+                    "Power Platform Admin API is unavailable, so the "
+                    "environment inventory was not rechecked."
+                ),
+                remediation="Authenticate with Power Platform Admin access.",
+            ),
+            CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-002", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
+                description="Dataverse database provisioned",
+                result=(
+                    "Power Platform Admin API is unavailable, so Dataverse "
+                    "provisioning state was not rechecked."
+                ),
+                remediation="Authenticate with Power Platform Admin access.",
+            ),
+        ])
+    else:
+        try:
+            env = pp.get_environment(env_id)
+            if "_error" in env:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-001", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+                    description="Power Platform environment exists",
+                    result=f"Unable to query environment: {env['_error']}",
+                    remediation="Requires Power Platform Administrator role.",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+                return results
+
+            props = env.get("properties", {})
+            display_name = props.get("displayName", env_id)
             results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-001", category="Environment",
-                priority=Priority.CRITICAL.value, status=Status.FAILED.value,
-                description="Power Platform environment exists",
-                result=f"Unable to query environment: {env['_error']}",
-                remediation="Requires Power Platform Administrator role.",
-                doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-            ))
-            return results
-
-        props = env.get("properties", {})
-        display_name = props.get("displayName", env_id)
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-001", category="Environment",
-            priority=Priority.CRITICAL.value, status=Status.PASSED.value,
-            description="Power Platform environment exists",
-            result=f"Environment: {display_name}",
-            doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-        ))
-
-        # ---- ENV-002: Dataverse provisioned ----
-        db_state = (
-            props.get("linkedEnvironmentMetadata", {})
-            .get("resourceProvisioningState", "")
-        )
-        # Also check databaseType
-        db_type = props.get("databaseType", "")
-        if db_state.lower() == "succeeded" or db_type:
-            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-                checkpoint_id="ENV-002", category="Environment",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
-                description="Dataverse database provisioned",
-                result=f"State: {db_state or 'Available'}, Type: {db_type or 'N/A'}",
+                description="Power Platform environment exists",
+                result=f"Environment: {display_name}",
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
-        else:
+
+            # ---- ENV-002: Dataverse provisioned ----
+            db_state = (
+                props.get("linkedEnvironmentMetadata", {})
+                .get("resourceProvisioningState", "")
+            )
+            db_type = props.get("databaseType", "")
+            if db_state.lower() == "succeeded" or db_type:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-002", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.PASSED.value,
+                    description="Dataverse database provisioned",
+                    result=f"State: {db_state or 'Available'}, Type: {db_type or 'N/A'}",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+            else:
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                    checkpoint_id="ENV-002", category="Environment",
+                    priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+                    description="Dataverse database provisioned",
+                    result=f"Provisioning state: {db_state or 'Unknown'}",
+                    remediation="Enable Dataverse database for this environment.",
+                    doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
+                ))
+
+            # ---- ENV-003: Environment type ----
+            env_type = props.get("environmentSku", "")
             results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-                checkpoint_id="ENV-002", category="Environment",
-                priority=Priority.CRITICAL.value, status=Status.FAILED.value,
-                description="Dataverse database provisioned",
-                result=f"Provisioning state: {db_state or 'Unknown'}",
-                remediation="Enable Dataverse database for this environment.",
+                checkpoint_id="ENV-003", category="Environment",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description="Environment type",
+                result=f"Type: {env_type}",
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
 
-        # ---- ENV-003: Environment type ----
-        env_type = props.get("environmentSku", "")
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-003", category="Environment",
-            priority=Priority.HIGH.value, status=Status.PASSED.value,
-            description="Environment type",
-            result=f"Type: {env_type}",
-            doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
-        ))
-
-    except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="ENV-001", category="Environment",
-            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
-            description="Power Platform environment",
-            result=f"Unable to check: {type(e).__name__}: {e}",
-            remediation="Ensure Power Platform Admin permissions.",
-        ))
+        except Exception as e:
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-001", category="Environment",
+                priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+                description="Power Platform environment",
+                result=f"Unable to check: {type(e).__name__}: {e}",
+                remediation="Ensure Power Platform Admin permissions.",
+            ))
 
     # ---- ENV-004: Connections & Connection References ----
     results.extend(_check_connections_and_refs(runner))
@@ -343,6 +366,8 @@ def run_environment_checks(runner) -> list[CheckResult]:
 
     # ---- ENV-008: DLP policies ----
     try:
+        if pp is None:
+            raise RuntimeError("Power Platform Admin API is unavailable")
         policies = iter_effective_policies(pp, env_id)
         if isinstance(policies, dict) and "_error" in policies:
             # The apiPolicies admin endpoint returned 401/403 — we could
@@ -406,8 +431,9 @@ def run_environment_checks(runner) -> list[CheckResult]:
             ),
         ))
 
-    # ---- ENV-009: Maker has preferred customization solution selected ----
-    results.extend(_check_preferred_solution(runner))
+    # Profile execution schedules ENV-009 through its dedicated function.
+    if "ENV-009" not in tuple(getattr(runner, "execution_targets", ())):
+        results.extend(_check_preferred_solution(runner))
 
     return results
 

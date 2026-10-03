@@ -129,6 +129,7 @@ class _Runner:
         }
     )
     native_connector_filter: tuple[str, ...] = ()
+    agent_slug: str = ""
 
 
 def _by_id(results, checkpoint_id: str):
@@ -174,6 +175,42 @@ def test_exact_mapped_connected_reference_passes() -> None:
     assert detail.status == "Passed"
     assert "Exact mapped connection" in detail.result
     assert "unverified" not in detail.result
+
+
+def test_explicit_agent_slug_overrides_different_active_agent() -> None:
+    runner = _Runner(
+        agentbuilder=_AgentBuilder([]),
+        connectivity=_Connectivity([]),
+        agent_slug="selected",
+        config={
+            "releaseLine": "da",
+            "environmentId": ENVIRONMENT_ID,
+            "activeAgent": "other",
+            "agent": {
+                "slug": "other",
+                "botId": "00000000-0000-4000-8000-000000009999",
+                "schemaName": "gptagent_other",
+            },
+            "agents": [
+                {
+                    "slug": "other",
+                    "botId": "00000000-0000-4000-8000-000000009999",
+                    "schemaName": "gptagent_other",
+                },
+                {
+                    "slug": "selected",
+                    "botId": AGENT_ID,
+                    "schemaName": "gptagent_ess",
+                },
+            ],
+        },
+    )
+
+    results = run_native_agent_checks(runner)
+
+    assert _by_id(results, "DA-AGENT-001").status == "Passed"
+    assert _by_id(results, "DA-CONTENT-001").status == "Passed"
+    assert _by_id(results, "DA-CONN-001").status == "Skipped"
 
 
 def test_native_flightcheck_accepts_swagger_unenrolled_null_realm() -> None:

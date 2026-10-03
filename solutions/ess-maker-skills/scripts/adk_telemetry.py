@@ -216,6 +216,7 @@ ADK_CAPABILITIES = (
     "troubleshoot",
     "backup_template_configs",
     "restore_template_configs",
+    "analytics",
     "push",
     "publishing",
     "flightcheck",

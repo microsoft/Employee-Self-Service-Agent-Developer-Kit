@@ -1456,6 +1456,11 @@ def _minimalbot_push(
             update_baseline_paths(agent_dir, pushed_content_paths)
         if client.signed_in_username:
             print(f"Signed in as: {client.signed_in_username}")
+        if result.get("reconciledComponents"):
+            print(
+                "Preserved newer live content while applying the scoped "
+                "topic change."
+            )
         print(
             f"\n✅ Updated and verified "
             f"{result['verifiedComponents']} topic component(s)."

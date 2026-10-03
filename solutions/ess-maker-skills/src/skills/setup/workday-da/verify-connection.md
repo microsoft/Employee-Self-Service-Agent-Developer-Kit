@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Phase 6 - Employee validation
 
 This phase requires a real signed-in employee scenario. Configuration checks
@@ -8,14 +9,32 @@ The skill cannot publish the agent, impersonate an employee, or perform this
 scenario on the employee's behalf. It guides the maker through the test and
 records only the safe outcome.
 
-Ask the maker to:
+First ask the maker to publish the ESS HR agent, open a new Test pane
+conversation, and sign in as the assigned non-maker test employee. Stop before
+running a Workday scenario.
 
-1. publish the ESS HR agent;
-2. start a new conversation;
-3. sign in as a test employee assigned to the Workday Entra application and
-   authorized in Workday;
-4. run one enabled read-only scenario, such as checking a vacation balance;
-5. confirm the agent identifies the signed-in employee and returns real
+When the employee is ready to send the scenario request, start a bounded test
+attempt:
+
+```powershell
+python scripts/workday_connect.py begin-employee-test
+```
+
+The controller records only bounded, non-secret validation context. If the
+command does not succeed, do not ask the employee to run the scenario. If the
+test is interrupted or delayed, abandon the attempt without inventing an
+employee failure classification:
+
+```powershell
+python scripts/workday_connect.py abandon-employee-test
+```
+
+Then start a new attempt immediately before retrying.
+
+Then ask the maker to immediately:
+
+1. run one enabled read-only scenario, such as checking a vacation balance;
+2. confirm the agent identifies the signed-in employee and returns real
    Workday data without an unexpected repeated sign-in.
 
 Use `vscode_askQuestions` for the test result:
@@ -75,19 +94,24 @@ verified `outcome`. Use a non-maker employee category and a
 timezone-qualified ISO-8601 timestamp. The controller rejects additional
 fields. Never record employee data or credentials.
 
+On success, the controller closes the bounded attempt, verifies the reviewed
+flow runs from that window, and evaluates final readiness before marking the
+lifecycle ready. Show any returned customer-safe remediation without exposing
+internal profile or checkpoint identifiers.
+
 On failure, map the selected result to exactly one stable ID below. Do not
 invent a remediation ID.
 
-| Selected result | `remediationId` |
-| --- | --- |
-| Failed - repeated sign-in | `WD-E2E-001` |
-| Failed - connector error | `WD-E2E-002` |
-| Failed - flow error | `WD-E2E-003` |
-| Failed - employee mismatch | `WD-E2E-004` |
-| Failed - network error | `WD-E2E-005` |
-| Failed - Workday access denied | `WD-E2E-006` |
-| Failed - agent not published or unavailable | `WD-E2E-007` |
-| Failed - another issue | `WD-E2E-999` |
+| Selected result                             | `remediationId` |
+| ------------------------------------------- | --------------- |
+| Failed - repeated sign-in                   | `WD-E2E-001`    |
+| Failed - connector error                    | `WD-E2E-002`    |
+| Failed - flow error                         | `WD-E2E-003`    |
+| Failed - employee mismatch                  | `WD-E2E-004`    |
+| Failed - network error                      | `WD-E2E-005`    |
+| Failed - Workday access denied              | `WD-E2E-006`    |
+| Failed - agent not published or unavailable | `WD-E2E-007`    |
+| Failed - another issue                      | `WD-E2E-999`    |
 
 For `WD-E2E-999`, ask where the failure was observed using this separate
 structured choice:
@@ -134,7 +158,8 @@ unbounded failure surfaces, and unknown fields are rejected.
 
 This marks Employee validation blocked and persists the stable remediation ID
 and bounded failure surface while keeping completed prerequisite phases
-intact. Use the failing surface to choose the next check:
+intact. It also closes the active bounded attempt as failed. Use the failing
+surface to choose the next check:
 
 - sign-in loop -> identify which credential store prompted and whether the
   account or tenant differs;
@@ -146,4 +171,7 @@ intact. Use the failing surface to choose the next check:
 - network error -> inspect the exact Workday REST or SOAP host.
 
 After remediation, retry with a new conversation. Do not reset completed
-phases.
+phases. Run `begin-employee-test` again immediately before every retried
+employee scenario, including when the previous `record-validation` command
+returned a readiness or service error. If the prior attempt is still active,
+run `abandon-employee-test` first.

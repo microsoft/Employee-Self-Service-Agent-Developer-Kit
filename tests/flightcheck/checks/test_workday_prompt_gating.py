@@ -43,6 +43,12 @@ class _CheckpointRunner:
     _target_matcher: Callable[[str], bool] | None = None
     config: dict[str, Any] = field(default_factory=dict)
 
+    def should_execute(self, checkpoint_id: str) -> bool:
+        return (
+            self._target_matcher is None
+            or self._target_matcher(checkpoint_id)
+        )
+
 
 def _checkpoint_runner(target: str) -> _CheckpointRunner:
     """Build a runner exactly as cli.py's ``_run_single_checkpoint`` does:
@@ -57,6 +63,57 @@ def _checkpoint_runner(target: str) -> _CheckpointRunner:
 
 def _full_runner() -> _CheckpointRunner:
     return _CheckpointRunner(scope="full", _target_matcher=None)
+
+
+def test_targeted_workday_dispatch_does_not_execute_unrequested_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flightcheck.checks import workday
+
+    runner = _checkpoint_runner("WD-SEC-003")
+    runner.execution_targets = ("WD-SEC-003",)
+    runner.workday_da_profile = True
+    runner._workday_flows = [{"name": "runtime"}]
+    calls = []
+
+    def package(*_args, **_kwargs):
+        calls.append("package")
+        runner._workday_package_flavor = "classic"
+        return []
+
+    def permission(*_args, **_kwargs):
+        calls.append("permission")
+        return []
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("unrequested Workday check executed")
+
+    monkeypatch.setattr(workday, "_check_package_flavor", package)
+    monkeypatch.setattr(
+        workday,
+        "_check_personal_data_write_permission",
+        permission,
+    )
+    for name in (
+        "_check_saml_certificate_health",
+        "_check_entra_workday_federation_alignment",
+        "_check_env_vars",
+        "_check_isu_username_format",
+        "_check_connections",
+        "_check_connection_token_health",
+        "_check_workday_connection_obo_sharing",
+        "_check_flow_status",
+        "_check_workday_run_health",
+        "_check_workflows",
+        "_check_workday_reference_data",
+        "_check_package_connection_completeness",
+        "_check_custom_workflow_inventory",
+    ):
+        monkeypatch.setattr(workday, name, unexpected)
+
+    workday.run_workday_checks(runner)
+
+    assert calls == ["package", "permission"]
 
 
 class TestInteractivePromptsAllowed:
