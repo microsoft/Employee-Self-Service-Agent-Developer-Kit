@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Set Up Dev from a Supplied Agent Package
 
 This is an advanced handoff for a maker who has already supplied a native agent
@@ -11,10 +12,10 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Accept an environment URL and infer its environment ID. The URL should have a
-segment denoting the service ring, such as `test` or `preprod`; when neither
-segment is present, confirm the `prod` ring with the user. Ask the maker only
-when the environment ID is unclear.
+Accept an environment URL and infer its environment ID and service ring. When
+the URL does not identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask the maker
+only when the environment ID is unclear.
 
 Pass the resolved environment ID and ring to the import command.
 
@@ -42,7 +43,10 @@ python scripts/setup_alm_import.py \
   --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
-The first operation must omit both replacement arguments. Never infer
+The first operation must omit both replacement arguments and
+`--client-request-id`. The client request UUID is reserved for the separately
+approved create-only recovery after an ambiguous or invalid-success result.
+Never infer
 replacement permission from the package, collision, environment, schema, or a
 different setup context.
 
@@ -52,8 +56,12 @@ Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
 
 When `kind` is `success`, use the returned environment, tenant, host, ring, API
 version, and agent identity only as internal command inputs. Do not display
-those identifiers. Mark **Verify access and agent identity** and **Establish an
-editable Dev agent** complete, then show:
+those identifiers. The successful native import verification is authoritative
+DA-GA evidence. Do not invoke `ensure-alm` after a successful import; the import
+and its direct verification already own the ALM-family contract. Run the
+parent's selected-agent product-line reconciliation
+with `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Mark **Verify access and
+agent identity** and **Establish an editable Dev agent** complete, then show:
 
 > Agent package imported and verified as an editable Dev agent. Preparing its
 > local authoring workspace...
@@ -103,15 +111,19 @@ show:
 > An editable agent created from this package already exists in the target
 > environment. I did not replace it.
 
-Offer exactly:
+Present these standard choices:
 
 - **Choose an existing agent in this environment**
 - **Replace an existing agent with this package**
-- **Cancel setup**
+- **Go back**
 
-Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
+Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agents and individually selectable `realmNotEstablishedAgents` candidates by their exact service-provided display names, and let the maker choose one exact agent. Every option in that agent list must contain only the service-provided display name; do not append a realm, enrollment state, ALM status, or preparation suffix. Never bulk-enroll unresolved rows. For a selected Dev candidate, the native result is authoritative identity evidence; run the parent's selected-agent product-line reconciliation with `--known-native-schema "{RETURNED_SCHEMA_NAME}"` before validation or replacement. For a selected unresolved candidate, run both product-line probes and apply their result normally. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment.
 
-Before replacement, validate the exact selected Dev agent:
+For **Choose an existing agent in this environment**, skipped enrollment with established supported native identity may continue through `da-existing-dev.md` using `--allow-unenrolled-authoring`; a resolved Dev route uses the normal attachment path. For **Replace an existing agent with this package**, skipped enrollment does not authorize replacement or local attachment. Return to the collision choices and preserve that replacement still requires ALM preparation.
+
+For **Go back**, retain the current account, environment, and ring and return to the parent skill's **What would you like to set up in this environment?** choice surface. Clear package-import and replacement intent, but preserve the import receipt and collision evidence.
+
+Before replacement, validate the exact selected Dev agent. Enrollment preparation, when required, must already have completed through its separate **Continue (Recommended)** confirmation; that confirmation never authorizes replacement.
 
 ```text
 python scripts/setup_existing_da.py validate-agent \
@@ -125,15 +137,18 @@ Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 > Replacing **{agent display name}** will overwrite its current editable
 > content with the supplied package. Continue?
 
-Offer exactly:
+Present these standard choices:
 
 - **Continue replacement**
-- **Choose the existing agent without replacement**
-- **Cancel setup**
+- **Go back**
 
 Never preselect or recommend **Continue replacement**. Continue only after the
-maker explicitly selects it. Pass the same validated internal ID in both
-confirmation arguments:
+maker explicitly selects it. For **Go back**, make no changes and return to
+**Handle a collision**. Reuse the latest successful visible-agent list instead
+of rerunning `list-agents` solely because the maker went back. Clear the
+replacement intent and selected replacement candidate; require an exact agent
+selection for whichever route the maker chooses next. Pass the same validated
+internal ID in both confirmation arguments:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -166,10 +181,12 @@ checkpointing and refreshing them.
   actionable error and preserve its status, error code, and request ID when
   available. Do not retry automatically.
 - `invalid-success` or `ambiguous`: the mutation may have completed, but no
-  usable identity is available. Show: **The import outcome could not be proven.
-  I stopped to avoid creating or replacing the agent twice.** Do not retry.
-  Follow the manual reconciliation procedure in
-  `src/reference/native-alm-import.md`.
+  usable identity is available. Preserve the receipt and follow the read-only
+  reconciliation procedure in `src/reference/native-alm-import.md`. For a
+  create-only import, if no exact identity can be proven, offer an explicitly
+  approved new create request using `--client-request-id
+"{NEW_CLIENT_REQUEST_UUID}"` and let the
+  service return conflict if the earlier create succeeded.
 
 If an older command exits during direct verification after recording status
 `imported`, treat it as the same completed-import state. Rerun the identical
@@ -184,11 +201,22 @@ requires explicit maker approval. Ask:
 
 > The reported prerequisite has been resolved. Start a new import request?
 
-Offer exactly:
+Present these standard choices:
 
 - **Retry import**
 - **Stop without retrying**
 
-Use `--retry-safe-failure` only after the maker selects **Retry import**.
+Use `--retry-safe-failure` only after the maker selects **Retry import**. Rerun
+the original command and add only that flag:
+
+```text
+python scripts/setup_alm_import.py \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
+  --package "{NATIVE_AGENT_PACKAGE_PATH}" \
+  --retry-safe-failure
+```
+
+Do not generate or pass a client request UUID for this existing receipt.
 
 Never remove or edit import records merely to permit another mutation.

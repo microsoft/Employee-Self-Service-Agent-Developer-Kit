@@ -392,6 +392,11 @@ def render_report(results: list[dict], agent_name: str, total_cases: int) -> Non
     print(f"  Date    : {now}")
     print("  Model   : Copilot default")
     print("=" * 65)
+    print(
+        "This reviews the test set's positive, negative, and boundary coverage, "
+        "not whether your agent passes the tests in your tenant. "
+        "Run the evaluation in Copilot Studio to learn that."
+    )
 
     for r in results:
         category = r["category"]
@@ -505,7 +510,7 @@ def main():
 
         # block=True: short-lived CLI process — emit synchronously so the event
         # isn't dropped when the interpreter exits and kills a daemon thread.
-        adk_telemetry.emit_capability_use("evaluations", block=True)
+        adk_telemetry.emit_capability_use("evaluation_validate", block=True)
     except Exception:  # noqa: BLE001 — telemetry must never break evaluation
         pass
 

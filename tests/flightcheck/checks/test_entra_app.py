@@ -390,6 +390,21 @@ class TestWorkdayHints:
         # entraAppId from runner.config; entraAppObjectId filled from connect.
         assert _workday_hints({"entraAppId": "app-r"}) == ("app-r", "obj-x")
 
+    def test_explicit_overlay_does_not_fall_back_to_cea_config(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from flightcheck.checks.entra_app import _workday_hints
+
+        self._write_connect_config(
+            tmp_path, {"entraAppId": "cea-app", "entraAppObjectId": "cea-obj"}
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert _workday_hints({
+            "_connectConfigPath": ".local/connect/workday-da/config.json",
+            "entraAppId": "da-app",
+        }) == ("da-app", "")
+
     def test_missing_connect_config_returns_empty(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -819,7 +834,7 @@ class TestDispatch:
         # Portal-only — MANUAL regardless of auth.
         assert by_id["WD-ENTRA-SIGNOPT-001"].status == "Manual"
 
-    def test_unexpected_error_becomes_warning(self) -> None:
+    def test_unexpected_error_becomes_error(self) -> None:
         from flightcheck.checks.entra_app import run_entra_app_checks
 
         results = run_entra_app_checks(
@@ -827,7 +842,8 @@ class TestDispatch:
         )
 
         scope = _result_by_id(results, "WD-ENTRA-SCOPE-001")
-        assert scope.status == "Warning"
+        assert scope.status == "Error"
+        assert scope.evidence["executionError"] is True
         assert "Unable to verify WD-ENTRA-SCOPE-001" in scope.result
         assert "RuntimeError" in scope.result
         # A single failing emitter must not abort the rest — SIGNOPT

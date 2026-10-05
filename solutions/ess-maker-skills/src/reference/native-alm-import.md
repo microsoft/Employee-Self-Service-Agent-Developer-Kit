@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Native DA ALM Import
 
 ## Scope
@@ -15,31 +16,33 @@ workspace completion.
 
 ## Service evidence
 
-| Claim | Status |
-| --- | --- |
-| Import uses `POST /copilotstudio/minimalBots/alm/import` | Live-proven in TEST |
-| Import uses `api-version=2022-03-01-preview` and `x-ms-client-name: CopilotStudio` | Confirmed by the platform ALM reference |
-| The request uses multipart form data with one binary `package` part | Live-proven in TEST |
-| Omitting `schemaName` requests create-only behavior | Live-proven through successful create and HTTP 409 collision |
-| Supplying a directly validated Dev schema requests replacement | Live-proven in TEST |
-| Replacement can retain the same agent ID and schema | Live-proven in TEST |
-| Successful import returns `cdsBotId` and `schemaName` synchronously | Live-proven in TEST |
-| Direct import can accept a package declaring `packageType: templated` | Live-proven in TEST |
-| A package can fail because a target connection is inaccessible | Live-proven in TEST |
-| Replacement is atomic under every service-side failure | Unknown |
-| Direct templated-package import is a supported product policy | Unknown |
-| Interrupted requests can always be reconciled automatically | Unknown |
-| A supported targeted cleanup operation is available | Unknown |
-| Import behavior outside TEST matches the observed contract | Unknown |
+| Claim                                                                              | Status                                                       |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Import uses `POST /copilotstudio/minimalBots/alm/import`                           | Live-proven in TEST                                          |
+| Import uses `api-version=2022-03-01-preview` and `x-ms-client-name: CopilotStudio` | Confirmed by the platform ALM reference                      |
+| The request uses multipart form data with one binary `package` part                | Live-proven in TEST                                          |
+| Omitting `schemaName` requests create-only behavior                                | Live-proven through successful create and HTTP 409 collision |
+| Supplying a directly validated Dev schema requests replacement                     | Live-proven in TEST                                          |
+| Replacement can retain the same agent ID and schema                                | Live-proven in TEST                                          |
+| Successful import returns `cdsBotId` and `schemaName` synchronously                | Live-proven in TEST                                          |
+| Direct import can accept a package declaring `packageType: templated`              | Live-proven in TEST                                          |
+| A package can fail because a target connection is inaccessible                     | Live-proven in TEST                                          |
+| Replacement is atomic under every service-side failure                             | Unknown                                                      |
+| Direct templated-package import is a supported product policy                      | Unknown                                                      |
+| Interrupted requests can always be reconciled automatically                        | Unknown                                                      |
+| A supported targeted cleanup operation is available                                | Unknown                                                      |
+| Import behavior outside TEST matches the observed contract                         | Unknown                                                      |
 
 Do not describe an unknown claim as supported behavior.
 
 ## Safety invariants
 
 1. For the session-facing supplied-package path, require the caller to supply
-   an explicitly resolved environment ID and service ring. Infer `test` or
-   `preprod` from the environment URL; when neither segment is present,
-   confirm the `prod` ring with the user. Ask when the target remains unclear.
+   an explicitly resolved environment ID and service ring. Treat a recognized
+   Copilot Studio hostname as authoritative ring evidence that completes ring
+   selection. When the hostname is unrecognized and the ring remains
+   unresolved, use the foundation setup's shared ring-selection template. Ask
+   for the target only when it remains unclear.
 2. Validate the exact environment-specific API host before sending a token.
 3. Validate local projection dependencies before remote mutation.
 4. Observe package type, schema, and SHA-256 without extracting or rewriting
@@ -89,15 +92,15 @@ internal command inputs and are not maker-facing output.
 
 ## Outcome contract
 
-| `kind` | Meaning | Safe next action |
-| --- | --- | --- |
-| `success` | The service returned an identity and schema, and direct agent plus realm reads confirmed that the exact agent routes to Dev | Continue through existing-Dev attachment, which confirms the fetched component content matches the returned schema |
-| `imported-unverified` | The import returned and persisted a usable identity, but direct agent or realm verification did not finish | Resolve the reported verification prerequisite, then rerun the identical command to resume verification without another POST |
-| `conflict` | Create-only protection found an existing agent | Use the existing agent or separately approve exact replacement |
-| `rejected` | The service returned a normal non-409 error | Resolve the reported prerequisite; do not retry automatically |
-| `pre-dispatch-failure` | The request did not reach the service | Resolve the local, DNS, or connection failure |
-| `invalid-success` | A success response lacked a usable identity | Reconcile the environment; do not post again |
-| `ambiguous` | Dispatch may have occurred without a classified response | Reconcile the environment; do not post again |
+| `kind`                 | Meaning                                                                                                                     | Safe next action                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `success`              | The service returned an identity and schema, and direct agent plus realm reads confirmed that the exact agent routes to Dev | Continue through existing-Dev attachment, which confirms the fetched component content matches the returned schema                      |
+| `imported-unverified`  | The import returned and persisted a usable identity, but direct agent or realm verification did not finish                  | Resolve the reported verification prerequisite, then rerun the identical command to resume verification without another POST            |
+| `conflict`             | Create-only protection found an existing agent                                                                              | Use the existing agent or separately approve exact replacement                                                                          |
+| `rejected`             | The service returned a normal non-409 error                                                                                 | Resolve the reported prerequisite; do not retry automatically                                                                           |
+| `pre-dispatch-failure` | The request did not reach the service                                                                                       | Resolve the local, DNS, or connection failure                                                                                           |
+| `invalid-success`      | A success response lacked a usable identity                                                                                 | Reconcile the environment; a separately confirmed request with a new client request UUID may let the service return success or conflict |
+| `ambiguous`            | Dispatch may have occurred without a classified response                                                                    | Reconcile the environment; a separately confirmed request with a new client request UUID may let the service return success or conflict |
 
 Repeating an operation returns its cached outcome without another POST.
 `--retry-safe-failure` is permitted only for a recorded normal rejection or
@@ -126,10 +129,16 @@ Each operation has a deterministic record derived from its safe input identity:
 - environment, tenant, host, ring, and API version;
 - package SHA-256, declared type, and schema;
 - create or replacement mode;
+- client request UUID only for a separately approved create-only operation
+  after ambiguous or invalid-success reconciliation;
 - replacement agent ID and schema when applicable.
 
 Records never contain tokens, package paths, package content, or raw response
 bodies.
+
+`--client-request-id` is a local receipt discriminator, not a value sent to the
+service. Do not use it for the initial create, a safe-failure retry, or any
+replacement operation.
 
 An `imported` record means the service returned a usable identity but direct
 verification did not finish. Rerunning resumes verification without replaying
@@ -176,11 +185,17 @@ Recovery is an operator procedure:
    previously approved target.
 5. If an exact agent is identified, use the read-only validator before
    attachment.
-6. If the outcome cannot be proven, stop and escalate with the receipt. Absence
-   from an eventually consistent listing is not proof that the mutation failed.
+6. For replacement, or when the create-only recovery requirements below are
+   not met, stop and escalate with the receipt when the outcome cannot be
+   proven. Absence from an eventually consistent listing is not proof that the
+   mutation failed.
 
-The command provides no override for `ambiguous` or
-`invalid-success`. Never edit or remove a receipt to enable another POST.
+Never edit or remove a receipt to enable another POST. Create-only recovery may
+use one explicitly supplied new client request UUID only when the matching base
+receipt is `ambiguous` or `invalid-success`. This creates one distinct operation
+record while preserving the earlier receipt. The caller must obtain maker
+approval and perform read-only reconciliation first. Replacement never accepts
+a client request UUID.
 
 ## Workspace handoff
 

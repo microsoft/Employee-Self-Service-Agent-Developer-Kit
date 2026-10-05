@@ -13,12 +13,26 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import fetch_and_setup
 
 
-def _args(url=None, bot_id=None, name=None, schema=None, managed=False):
+def _args(
+    url=None,
+    environment_id=None,
+    bot_id=None,
+    name=None,
+    schema=None,
+    managed=False,
+):
     return SimpleNamespace(
-        url=url, bot_id=bot_id, name=name, schema=schema, managed=managed,
+        url=url,
+        environment_id=environment_id,
+        bot_id=bot_id,
+        name=name,
+        schema=schema,
+        managed=managed,
         refresh=True,
     )
 
@@ -26,6 +40,7 @@ def _args(url=None, bot_id=None, name=None, schema=None, managed=False):
 def _config(**overrides):
     cfg = {
         "dataverseEndpoint": "https://old-env.crm.dynamics.com",
+        "environmentId": "old-environment-id",
         "agent": {
             "botId": "old-bot",
             "name": "Old Agent",
@@ -39,25 +54,35 @@ def _config(**overrides):
 
 class TestResolveRefreshTarget:
     def test_falls_back_to_config_when_no_overrides(self):
-        env, bot, name, schema, managed = \
+        env, environment_id, bot, name, schema, managed = \
             fetch_and_setup._resolve_refresh_target(_args(), _config())
         assert env == "https://old-env.crm.dynamics.com"
+        assert environment_id == "old-environment-id"
         assert bot == "old-bot"
         assert name == "Old Agent"
         assert schema == "msdyn_oldagent"
         assert managed is True
 
     def test_url_override_retargets_env(self):
-        env, bot, *_ = fetch_and_setup._resolve_refresh_target(
-            _args(url="https://new-env.crm.dynamics.com/", bot_id="new-bot"),
+        env, environment_id, bot, *_ = fetch_and_setup._resolve_refresh_target(
+            _args(
+                url="https://new-env.crm.dynamics.com/",
+                environment_id="new-environment-id",
+                bot_id="new-bot",
+            ),
             _config(),
         )
         assert env == "https://new-env.crm.dynamics.com"  # trailing slash stripped
+        assert environment_id == "new-environment-id"
         assert bot == "new-bot"
 
     def test_partial_overrides_prefer_args_then_config(self):
-        env, bot, name, schema, _ = fetch_and_setup._resolve_refresh_target(
-            _args(url="https://new-env.crm.dynamics.com", name="New Name"),
+        env, _, bot, name, schema, _ = fetch_and_setup._resolve_refresh_target(
+            _args(
+                url="https://new-env.crm.dynamics.com",
+                environment_id="new-environment-id",
+                name="New Name",
+            ),
             _config(),
         )
         assert env == "https://new-env.crm.dynamics.com"
@@ -67,8 +92,12 @@ class TestResolveRefreshTarget:
 
     def test_managed_reflects_flag_only_when_retargeting(self):
         # Retargeting (--url given): managed reflects the flag literally.
-        _, _, _, _, managed = fetch_and_setup._resolve_refresh_target(
-            _args(url="https://new-env.crm.dynamics.com", managed=False),
+        _, _, _, _, _, managed = fetch_and_setup._resolve_refresh_target(
+            _args(
+                url="https://new-env.crm.dynamics.com",
+                environment_id="new-environment-id",
+                managed=False,
+            ),
             _config(),
         )
         assert managed is False  # new env declared unmanaged
@@ -76,10 +105,43 @@ class TestResolveRefreshTarget:
     def test_managed_keeps_config_on_plain_refresh(self):
         # Plain refresh (no --url): managed comes from config, not the
         # default-False flag, so a plain refresh never downgrades managed.
-        _, _, _, _, managed = fetch_and_setup._resolve_refresh_target(
+        _, _, _, _, _, managed = fetch_and_setup._resolve_refresh_target(
             _args(managed=False), _config(),
         )
         assert managed is True
+
+    def test_agent_environment_id_precedes_top_level_fallback(self):
+        config = _config()
+        config["agent"]["environmentId"] = "agent-environment-id"
+
+        _, environment_id, *_ = fetch_and_setup._resolve_refresh_target(
+            _args(),
+            config,
+        )
+
+        assert environment_id == "agent-environment-id"
+
+    def test_url_retarget_without_environment_id_is_rejected(self):
+        # Regression: retargeting to a new env without --environment-id must
+        # NOT reuse the previous target's stored ID (which would persist a
+        # mismatched URL/ID pair). It raises so the caller can require the ID.
+        with pytest.raises(ValueError) as exc:
+            fetch_and_setup._resolve_refresh_target(
+                _args(url="https://new-env.crm.dynamics.com"),
+                _config(),
+            )
+        assert "--environment-id" in str(exc.value)
+
+    def test_url_retarget_with_environment_id_uses_new_id(self):
+        # The explicit new-env ID is used verbatim (never the stored one).
+        _, environment_id, *_ = fetch_and_setup._resolve_refresh_target(
+            _args(
+                url="https://new-env.crm.dynamics.com",
+                environment_id="new-environment-id",
+            ),
+            _config(),
+        )
+        assert environment_id == "new-environment-id"
 
 
 class TestFetchComponents:

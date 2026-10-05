@@ -1,21 +1,21 @@
 ---
 mode: agent
-description: "Check DA-GA product extension setup availability"
+description: "Connect Workday or another supported integration"
 ---
 
 # Connect
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+Resolve `activeAgent` to the canonical agent whose `agent.workspace_slug`
+matches. Continue when canonical state has `schema_version: 4`, complete
+workspace evidence, and `steps.SETUP-07.state: "done"`. Do not require
+`connect_ready: true`; this command configures the product-extension
+connections that may currently block runtime readiness. If local workspace
+materialization is incomplete, show:
 
 > Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
-
-Show:
-
-> DA-GA connector setup requires the corresponding product extension. Extension setup is not yet available in this release.
-
-and STOP.
 
 You are a script executor. Read `src/skills/connect/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.
@@ -31,6 +31,6 @@ Rules:
 4. Do not compose your own messages. If there is no Message block for a
    situation, stay silent and proceed to the next action.
 
-After reading SKILL.md, your first action is to check for
-`.local/connect/steps.md`. If starting fresh, your first message to the user
-is the checklist table from the Fresh Start section.
+After reading `SKILL.md`, follow its integration-specific state and routing
+instructions. Do not assume a shared `.local/connect/steps.md` file or a
+generic Fresh Start section.

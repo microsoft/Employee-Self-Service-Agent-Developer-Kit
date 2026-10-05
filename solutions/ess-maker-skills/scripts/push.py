@@ -20,6 +20,7 @@ Usage:
 import fnmatch
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -42,7 +43,6 @@ from auth import (
     query_all,
     record_exists,
     dataverse_get,
-    is_connect_ready,
     load_config,
     AuthExpiredError,
 )
@@ -51,6 +51,21 @@ from evaluation_review import (
     ReviewMetadataError,
     metadata_description,
     parse_review_metadata,
+)
+from agentbuilder_object_model import (
+    ObjectModelConverterError,
+    yaml_to_object_models,
+)
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
+    resolve_workday_dialogs,
+)
+from evaluation_method_policy import (
+    EvaluationMethodError,
+    document_kind,
+    validate_evaluation_folder,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
@@ -626,7 +641,7 @@ def _evaluation_parent_path(review_path, component_map, working_files):
         path for path, content in working_files.items()
         if path.startswith(prefix)
         and path.endswith(".mcs.yml")
-        and "kind: EvaluationSet" in content
+        and _is_evaluation_parent(content)
     ]
     return local[0] if len(local) == 1 else None
 
@@ -1115,25 +1130,473 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
-def main():
-    dry_run = "--dry-run" in sys.argv
-    auto_yes = "--yes" in sys.argv
-    force_delete = "--force-delete" in sys.argv
-    repair_mode = "--repair" in sys.argv
-    repair_name = None
-    if repair_mode:
-        _idx = sys.argv.index("--repair")
-        if _idx + 1 < len(sys.argv) and not sys.argv[_idx + 1].startswith("-"):
-            repair_name = sys.argv[_idx + 1]
-    only_globs = parse_only_globs(sys.argv[1:])
+def update_baseline_paths(agent_dir, relative_paths):
+    """Refresh exact successfully pushed files in the local baseline."""
+    import shutil
 
-    if is_connect_ready():
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    working = collect_files(agent_dir)
+    selected = {
+        str(path).replace("\\", "/")
+        for path in relative_paths
+        if isinstance(path, str) and path
+    }
+    for rel in list(selected):
+        if rel.startswith("template-configs/") and rel.endswith(".xml"):
+            meta = rel[:-4] + ".meta.json"
+            if meta in working:
+                selected.add(meta)
+
+    for rel in selected:
+        if rel not in working:
+            raise OSError(
+                f"Successfully pushed baseline path is missing locally: {rel}"
+            )
+        src = os.path.join(agent_dir, *rel.split("/"))
+        dst = os.path.join(baseline_dir, *rel.split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def _warn_minimalbot_non_eval_changes(agent_dir):
+    """Report pending non-evaluation changes the MinimalBot push cannot deploy.
+
+    MinimalBot (Dataverse-free) push handles evaluation components only. Rather
+    than silently dropping topic/workflow/template-config edits, surface them so
+    the maker knows they still require a Dataverse-backed environment.
+    """
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        return
+    try:
+        changed, new, deleted = compute_diff(
+            collect_files(baseline_dir), collect_files(agent_dir))
+    except OSError:
+        return
+    non_eval = sorted({
+        f for f in (*changed, *new, *deleted)
+        if classify_path(f)
+        and not f.replace("\\", "/").startswith("evaluations/")
+    })
+    if not non_eval:
+        return
+    print(
+        "WARNING: the following non-evaluation change(s) will NOT be pushed "
+        "(Dataverse-free agents support evaluation components only):"
+    )
+    for path in non_eval[:20]:
+        print(f"  - {path}")
+    if len(non_eval) > 20:
+        print(f"  ... and {len(non_eval) - 20} more")
+
+
+def _minimalbot_topic_update_plan(
+    agent_dir,
+    only_globs,
+    *,
+    activate_topics=False,
+    agent_schema=None,
+):
+    """Build guarded updates for scoped, existing MinimalBot topics."""
+    if not only_globs:
+        return []
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        return []
+    baseline = collect_files(baseline_dir)
+    working = collect_files(agent_dir)
+    changed, new, deleted = compute_diff(baseline, working)
+    selected_changed = sorted(
+        path
+        for path in changed
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
+        and path.endswith(".mcs.yml")
+    )
+    selected_new_or_deleted = sorted(
+        path
+        for path in (*new, *deleted)
+        if matches_only(path, only_globs)
+        and path.replace("\\", "/").startswith("topics/")
+    )
+    if selected_new_or_deleted:
+        raise MinimalBotEvaluationError(
+            "MinimalBot scoped topic push supports updates to existing topics "
+            "only; create/delete is not allowed: "
+            + ", ".join(selected_new_or_deleted)
+        )
+    if not selected_changed and not activate_topics:
+        return []
+    raw_component_map = load_component_map(agent_dir)
+    component_map = {}
+    for raw_path, entry in raw_component_map.items():
+        normalized_path = str(raw_path).replace("\\", "/")
+        if normalized_path in component_map:
+            raise MinimalBotEvaluationError(
+                "The component map contains duplicate normalized paths."
+            )
+        component_map[normalized_path] = entry
+
+    selected_activation = []
+    if activate_topics:
+        workday_entries = resolve_workday_dialogs(
+            agent_dir,
+            agent_schema or "",
+        )
+        workday_by_path = {
+            entry["path"]: entry
+            for entry in workday_entries
+        }
+        selected_activation = sorted(
+            path
+            for path in workday_by_path
+            if matches_only(path, only_globs)
+        )
+        missing = sorted(set(workday_by_path) - set(selected_activation))
+        selected_dialogs = {
+            str(path).replace("\\", "/")
+            for path, entry in component_map.items()
+            if isinstance(path, str)
+            and isinstance(entry, dict)
+            and entry.get("componentKind") == "DialogComponent"
+            and matches_only(path, only_globs)
+        }
+        non_workday = sorted(selected_dialogs - set(workday_by_path))
+        if missing or non_workday:
+            details = []
+            if missing:
+                details.append(
+                    f"{len(missing)} mapped Workday topic(s) were omitted"
+                )
+            if non_workday:
+                details.append(
+                    "the activation scope also matched non-Workday topics: "
+                    + ", ".join(non_workday)
+                )
+            raise MinimalBotEvaluationError(
+                "Workday activation must target exactly the complete mapped "
+                "Workday topic set; "
+                + "; ".join(details)
+                + "."
+            )
+        changed_workday = sorted(
+            path for path in selected_changed if path in workday_by_path
+        )
+        if changed_workday:
+            raise MinimalBotEvaluationError(
+                "Workday activation cannot publish pending topic content "
+                "changes. Push or discard these changes separately before "
+                "activation: "
+                + ", ".join(changed_workday)
+            )
+        selected_changed = []
+    selected_paths = sorted(
+        set(selected_changed) | set(selected_activation)
+    )
+    if not selected_paths:
+        return []
+
+    conversion_items = []
+    for path in selected_changed:
+        conversion_items.extend(
+            (
+                {"key": f"{path}:baseline", "yaml": baseline[path]},
+                {"key": f"{path}:working", "yaml": working[path]},
+            )
+        )
+    try:
+        converted = yaml_to_object_models(conversion_items)
+    except ObjectModelConverterError as exc:
+        raise MinimalBotEvaluationError(
+            f"Could not convert scoped topic YAML: {exc}"
+        ) from exc
+    converted_by_key = {entry["key"]: entry for entry in converted}
+
+    updates = []
+    for path in selected_paths:
+        entry = component_map.get(path)
+        if not isinstance(entry, dict):
+            raise MinimalBotEvaluationError(
+                f"Scoped topic is missing from .component-map.json: {path}"
+            )
+        if entry.get("componentKind") != "DialogComponent":
+            raise MinimalBotEvaluationError(
+                f"Scoped path is not a dialog component: {path}"
+            )
+        component_id = str(entry.get("componentId") or "").strip()
+        schema_name = str(entry.get("schemaName") or "").strip()
+        if not component_id or not schema_name:
+            raise MinimalBotEvaluationError(
+                f"Scoped topic identity is incomplete in the component map: "
+                f"{path}"
+            )
+        update = {
+            "path": path,
+            "componentId": component_id,
+            "schemaName": schema_name,
+            "displayName": str(entry.get("displayName") or path),
+        }
+        if path in selected_changed:
+            baseline_result = converted_by_key[f"{path}:baseline"]
+            working_result = converted_by_key[f"{path}:working"]
+            failed = next(
+                (
+                    result
+                    for result in (baseline_result, working_result)
+                    if result.get("success") is not True
+                ),
+                None,
+            )
+            if failed:
+                error = failed.get("error") or {}
+                raise MinimalBotEvaluationError(
+                    f"Could not convert scoped topic {path}: "
+                    f"{error.get('message') or 'unknown conversion error'}"
+                )
+            if (
+                baseline_result.get("elementType") != "AdaptiveDialog"
+                or working_result.get("elementType") != "AdaptiveDialog"
+            ):
+                raise MinimalBotEvaluationError(
+                    f"Scoped topic is not an AdaptiveDialog: {path}"
+                )
+            update["expectedDialog"] = baseline_result["objectModel"]
+            update["dialog"] = working_result["objectModel"]
+        if path in selected_activation:
+            update["state"] = "Active"
+            update["status"] = "Active"
+        updates.append(update)
+    return updates
+
+
+def _minimalbot_push(
+    config,
+    *,
+    dry_run=False,
+    force_delete=False,
+    repair_mode=False,
+    only_globs=None,
+    auto_yes=False,
+    preferred_username=None,
+    activate_topics=False,
+):
+    """Push supported changes to a Dataverse-free MinimalBot agent.
+
+    Uses the Power Platform MinimalBot components API on the agent's ring (see
+    :mod:`minimalbot_evaluation`). Evaluation inserts and scoped updates to
+    existing dialog topics are supported. Other component types still require
+    a different authoring path.
+
+    The script-level confirmation gate (a second safety layer the ``/push``
+    prompt relies on) is enforced here before any component insert, mirroring
+    the classic Dataverse path: ``--yes`` bypasses it and dry runs never mutate.
+    """
+    agent_dir = config["agent"]["folder"]
+    if not os.path.exists(agent_dir):
+        print(f"ERROR: Agent folder not found: {agent_dir}")
+        sys.exit(1)
+
+    if repair_mode:
         print(
-            "ERROR: Native DA push is not available in this workstream yet; "
-            "no Dataverse request was attempted."
+            "ERROR: --repair applies to Dataverse flow registration and is not "
+            "supported for Dataverse-free (MinimalBot) agents. No request was "
+            "made."
         )
         sys.exit(1)
-    config = load_config()
+    if force_delete:
+        print(
+            "ERROR: --force-delete is not supported for Dataverse-free "
+            "(MinimalBot) agents; evaluation components cannot be deleted "
+            "through this path yet. No request was made."
+        )
+        sys.exit(1)
+
+    print("MinimalBot agent detected (Dataverse-free).")
+    if only_globs:
+        print(f"(Scoped push — {len(only_globs)} filter(s) active)")
+
+    client = MinimalBotEvaluationClient.from_config(config)
+    try:
+        topic_updates = _minimalbot_topic_update_plan(
+            agent_dir,
+            only_globs,
+            activate_topics=activate_topics,
+            agent_schema=(config.get("agent") or {}).get("schemaName"),
+        )
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if topic_updates:
+        print(f"\nWould update {len(topic_updates)} existing topic(s):")
+        for entry in topic_updates:
+            print(f"  • {entry['displayName']}  ({entry['path']})")
+        if dry_run:
+            print("\n(Dry run — no changes pushed)")
+            return
+        if not auto_yes:
+            response = input(
+                "\nPush these changes to Copilot Studio? (yes/no): "
+            ).strip().lower()
+            if response not in ("yes", "y"):
+                print("Push cancelled.")
+                return
+        try:
+            client.authenticate(preferred_username=preferred_username)
+            result = client.update_dialog_components(topic_updates)
+        except MinimalBotEvaluationError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        pushed_content_paths = [
+            entry["path"]
+            for entry in topic_updates
+            if "dialog" in entry
+        ]
+        if pushed_content_paths:
+            update_baseline_paths(agent_dir, pushed_content_paths)
+        if client.signed_in_username:
+            print(f"Signed in as: {client.signed_in_username}")
+        if result.get("reconciledComponents"):
+            print(
+                "Preserved newer live content while applying the scoped "
+                "topic change."
+            )
+        print(
+            f"\n✅ Updated and verified "
+            f"{result['verifiedComponents']} topic component(s)."
+        )
+        diagnostics = result.get("blockingDiagnostics") or []
+        if diagnostics:
+            print(
+                "WARNING: The topics are enabled, but "
+                f"{len(diagnostics)} dependency diagnostic(s) remain. "
+                "Continue with Workday connection verification."
+            )
+        return
+
+    _warn_minimalbot_non_eval_changes(agent_dir)
+
+    # Build the plan offline first (no auth, no mutation) so the change set can
+    # be shown and confirmed BEFORE any component insert. Honouring only_globs
+    # prevents a selected action from deploying unrelated new evaluation sets.
+    try:
+        plan = client.push_agent_evaluations(
+            agent_dir, dry_run=True, only_globs=only_globs)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    print(f"\nWould push {len(plan['sets'])} evaluation set(s), "
+          f"{plan['componentCount']} component(s):")
+    for entry in plan["sets"]:
+        print(f"  • {entry['displayName']}  (cases: {entry['cases']})")
+    if plan["componentCount"]:
+        print("Native Push creates a new deployed copy; existing remote copies are retained.")
+    if plan.get("reviewWarning"):
+        print(plan["reviewWarning"])
+
+    if dry_run:
+        print("\n(Dry run — no changes pushed)")
+        return {"status": "ready", "backend": "minimalbot", "plan": plan}
+
+    # Confirmation gate — the second safety layer preserved by /push. --yes
+    # covers it (matching the classic path); dry runs return above, never here.
+    if not auto_yes:
+        response = input(
+            "\nPush these changes to Copilot Studio? (yes/no): "
+        ).strip().lower()
+        if response not in ("yes", "y"):
+            print("Push cancelled.")
+            return {"status": "cancelled", "backend": "minimalbot"}
+
+    print("Pushing evaluations via the Power Platform MinimalBot API...")
+    try:
+        client.authenticate()
+        result = client.push_agent_evaluations(
+            agent_dir, dry_run=False, only_globs=only_globs, plan=plan)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if client.signed_in_username:
+        print(f"Signed in as: {client.signed_in_username}")
+    print(f"\n✅ Pushed {len(result['sets'])} evaluation set(s), "
+          f"{result['verifiedComponents']} component(s) verified:")
+    for entry in result["sets"]:
+        print(f"  • {entry['displayName']}")
+        print(f"      testSetId: {entry['testSetId']}  (cases: {entry['cases']})")
+    print("\nRun a set with:")
+    print("  python scripts/evaluation_runs.py run --test-set-id <testSetId>")
+    return {**result, "backend": "minimalbot"}
+
+
+def _is_evaluation_parent(content):
+    document = yaml.safe_load(content)
+    return isinstance(document, dict) and document_kind(
+        document, context="Evaluation parent",
+    ) == "EvaluationSet"
+
+
+def _validate_selected_evaluations(agent_dir, working_files, only_globs, affected):
+    candidates = working_files if only_globs else affected
+    folders = {
+        path.replace("\\", "/").split("/")[1]
+        for path in candidates
+        if path.replace("\\", "/").startswith("evaluations/")
+        and len(path.replace("\\", "/").split("/")) == 3
+        and (not only_globs or matches_only(path, only_globs))
+    }
+    for name in sorted(folders):
+        folder = Path(agent_dir) / "evaluations" / name
+        if folder.is_dir() and any(folder.glob("*.mcs.yml")):
+            validate_evaluation_folder(folder)
+
+
+def main(argv=None, *, config=None, verify=None):
+    argv = sys.argv[1:] if argv is None else argv
+    dry_run = "--dry-run" in argv
+    auto_yes = "--yes" in argv
+    force_delete = "--force-delete" in argv
+    repair_mode = "--repair" in argv
+    repair_name = None
+    if repair_mode:
+        _idx = argv.index("--repair")
+        if _idx + 1 < len(argv) and not argv[_idx + 1].startswith("-"):
+            repair_name = argv[_idx + 1]
+    only_globs = parse_only_globs(argv)
+    preferred_username = None
+    if "--preferred-username" in argv:
+        index = argv.index("--preferred-username")
+        if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
+            print("ERROR: --preferred-username requires a value.")
+            sys.exit(1)
+        preferred_username = argv[index + 1]
+    activate_topics = "--activate" in argv
+
+    config = load_config() if config is None else config
+
+    # Dataverse-free MinimalBot agents cannot use the Dataverse Web API below.
+    # Route evaluation pushes through the Power Platform MinimalBot components
+    # API on the agent's ring instead (see scripts/minimalbot_evaluation.py).
+    if is_minimalbot(config):
+        return _minimalbot_push(
+            config,
+            dry_run=dry_run,
+            force_delete=force_delete,
+            repair_mode=repair_mode,
+            only_globs=only_globs,
+            auto_yes=auto_yes,
+            preferred_username=preferred_username,
+            activate_topics=activate_topics,
+        )
+
+    if activate_topics:
+        print(
+            "ERROR: --activate is supported only for Dataverse-free "
+            "(MinimalBot) agents."
+        )
+        sys.exit(1)
+
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
@@ -1182,13 +1645,21 @@ def main():
         path for path in deleted
         if classify_path(path) != "evaluation-review"
     ]
+    try:
+        _validate_selected_evaluations(
+            agent_dir, working_files, only_globs, changed + new + deleted)
+    except EvaluationMethodError as exc:
+        print(f"ERROR: {exc}")
+        return {"status": "blocked", "backend": "dataverse", "error": str(exc)}
 
     if not changed and not new and not deleted:
         if only_globs:
             print("Nothing to push in the selected scope.")
         else:
             print("Nothing to push. Working files match the baseline.")
-        return
+        if verify is not None:
+            verify(component_map)
+        return {"status": "up_to_date", "backend": "dataverse"}
 
     # Show summary
     print("\n" + "=" * 50)
@@ -1224,7 +1695,8 @@ def main():
 
     if dry_run:
         print("\n(Dry run — no changes pushed)")
-        return
+        return {"status": "ready", "backend": "dataverse",
+                "changes": {"modified": changed, "new": new, "deleted": deleted}}
 
     # Pre-push schema validation: parse-check each file we're about to send
     # so a malformed YAML/JSON surfaces a clear local error rather than a
@@ -1270,7 +1742,7 @@ def main():
         response = input("\nPush these changes to Copilot Studio? (yes/no): ").strip().lower()
         if response not in ("yes", "y"):
             print("Push cancelled.")
-            return
+            return {"status": "cancelled", "backend": "dataverse"}
 
     # Separate confirmation for destructive operations. --yes covers
     # creates and updates; deletes additionally require --force-delete
@@ -1294,7 +1766,7 @@ def main():
         confirm = input("\nType 'delete' to confirm deletion, or anything else to abort: ").strip().lower()
         if confirm != "delete":
             print("Push cancelled (deletes not confirmed).")
-            return
+            return {"status": "cancelled", "backend": "dataverse"}
 
     # Checkpoint before pushing
     run_checkpoint("auto-save before push")
@@ -1314,7 +1786,7 @@ def main():
     try:
         import adk_telemetry
 
-        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="publishing")
+        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="push")
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
 
@@ -1752,7 +2224,7 @@ def main():
         eval_children = []
         for filepath in eval_new:
             content = working_files[filepath]
-            if "kind: EvaluationSet" in content:
+            if _is_evaluation_parent(content):
                 eval_parents.append(filepath)
             else:
                 eval_children.append(filepath)
@@ -2159,6 +2631,18 @@ def main():
     # against records that no longer existed (delete) or duplicated them
     # (create). The atomic gate preserves the contract.
     if errors == 0 and success > 0:
+        if verify is not None:
+            candidate_map = {
+                **component_map, **pending_creates,
+            }
+            for path in pending_deletes:
+                candidate_map.pop(path, None)
+            for path, description in pending_descriptions.items():
+                if path in candidate_map:
+                    candidate_map[path] = {
+                        **candidate_map[path], "description": description,
+                    }
+            verify(candidate_map)
         # Atomic two-phase persist:
         #   Phase 1: mutate the in-memory component_map.
         #   Phase 2: write every disk artifact to a *.tmp sibling first.
@@ -2277,6 +2761,12 @@ def main():
                 "The next /push may report stale changes; run"
                 " /setup --refresh to resync."
             )
+            if verify is not None:
+                return {
+                    "status": "failed", "backend": "dataverse",
+                    "remoteCommitted": True,
+                    "error": f"Baseline synchronization failed: {exc}",
+                }
     elif errors > 0:
         print(
             f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
@@ -2326,11 +2816,11 @@ def main():
                 "error_message": _error_message,
             }
         adk_telemetry.emit_build_complete(
-            agent_id=bot_id, adk_capability="publishing",
+            agent_id=bot_id, adk_capability="push",
             outcome=_outcome, duration_ms=_duration_ms, **_err_kwargs,
         )
         adk_telemetry.emit_agent_deploy(
-            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="publishing",
+            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="push",
             outcome=("server_error" if _failed else "success"),
             duration_ms=_duration_ms,
             **({"error_code": ("DEPLOY_PARTIAL_FAILURE" if errors
@@ -2338,17 +2828,26 @@ def main():
                 "error_category": "runtime",
                 "error_message": _error_message} if _failed else {}),
         )
+        adk_telemetry.emit_capability_use("push", block=False)
         adk_telemetry.flush(timeout=5)
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
 
     if errors:
         print(f"Errors:  {errors}")
+        if verify is not None:
+            return {
+                "status": "failed", "backend": "dataverse",
+                "error": f"{errors} component(s) failed.",
+                "pendingCreates": pending_creates,
+            }
         sys.exit(1)
     if _reg["exit_code"]:
         sys.exit(_reg["exit_code"])
-    print("")
+    return {"status": "pushed", "backend": "dataverse"}
 
 
 if __name__ == "__main__":
-    main()
+    outcome = main()
+    if isinstance(outcome, dict) and outcome.get("status") in {"blocked", "failed"}:
+        raise SystemExit(1)

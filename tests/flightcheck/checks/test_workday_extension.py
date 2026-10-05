@@ -10,9 +10,9 @@ Coverage per emitter:
     connection, degrades gracefully when it does not. Cached-ref read + a
     best-effort Power Platform admin owner echo — no cassette required (the
     admin connections listing is the ``validated`` pp_admin mock).
-  * DV-CONN-001 — PASS/FAIL/NOT_CONFIGURED/SKIPPED over a documented-tier
-    Dataverse ``connectionreferences`` read (stubbed with ``responses``); owner
-    echo via the ``validated`` pp_admin mock.
+  * DV-CONN-001 — PASS/FAIL/SKIPPED over the Dataverse connectionreferences
+    table for the runtime package's Microsoft Dataverse reference; owner echo
+    via the ``validated`` pp_admin mock.
   * WD-REST-001 — pure-config check (restBaseUrl trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
@@ -26,9 +26,11 @@ exercised directly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
-import responses
+import pytest
+
 
 from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
@@ -39,10 +41,6 @@ require_validated_mock(pp)
 
 from flightcheck.checks import workday_extension as wx  # noqa: E402
 from flightcheck.runner import Priority, Role, Status  # noqa: E402
-
-_DV_CONNECTOR_ID = (
-    "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps"
-)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -65,10 +63,13 @@ class _FakePPAdmin:
 @dataclass
 class _Runner:
     config: Any = field(default_factory=dict)
+    agent_slug: str | None = None
     env_url: str | None = None
     dv_token: str | None = None
     pp_admin: Any = None
+    agentbuilder: Any = None
     env_id: str | None = None
+    agent_slug: str = ""
     _workday_connection_refs: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -86,28 +87,6 @@ class _BoomConfig:
 
 def _by_id(results):
     return {r.checkpoint_id: r for r in results}
-
-
-def _dv_ref(*, connection_id, statuscode=1):
-    """A Dataverse connection reference matching the extension pack's shipped
-    ref (connector shared_commondataserviceforapps, logical-name suffix
-    92b66)."""
-    return dv.connection_ref(
-        logical_name="msdyn_sharedcommondataserviceforapps_92b66",
-        display_name="Microsoft Dataverse",
-        connector_id=_DV_CONNECTOR_ID,
-        connection_id=connection_id,
-        statuscode=statuscode,
-    )
-
-
-def _register_refs(base_url: str, refs: list[dict[str, Any]]) -> None:
-    responses.add(
-        method="GET",
-        url=f"{base_url}/api/data/v9.2/connectionreferences",
-        json=dv.collection(refs),
-        status=200,
-    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -253,147 +232,126 @@ class TestConnectionAuth:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# DV-CONN-001 — Dataverse connection binding (S5.4, PASS/FAIL).
+# DV-CONN-001 — runtime Dataverse connection binding (S5.4, PASS/FAIL).
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _runner_with_refs(monkeypatch, references, *, pp_admin=None, env_id=None):
+    monkeypatch.setattr(wx, "query_all", lambda *_a, **_k: references)
+    return _Runner(
+        env_url="https://org.crm.dynamics.com",
+        dv_token="token",
+        pp_admin=pp_admin,
+        env_id=env_id,
+    )
+
+
 class TestDataverseConnection:
-    @responses.activate
-    def test_bound_active_with_owner_echo_passes(
-        self, fake_dataverse_url, fake_token
-    ):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
-        )
+    def test_bound_with_owner_echo_passes(self, monkeypatch):
         owner_conn = pp.connection(
             name="dv-conn-active",
             api_name="shared_commondataserviceforapps",
             extra_properties={"accountName": "maker@contoso.com"},
         )
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {
+                "connectionid": "dv-conn-active"
+            }],
             pp_admin=_FakePPAdmin([owner_conn]),
             env_id="env-1",
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.PASSED.value
-        assert "bound to an active" in r.result
+        assert "active and bound" in r.result
         assert "maker@contoso.com" in r.result
         assert "your own account" in r.result
 
-    @responses.activate
-    def test_passes_without_pp_admin_notes_owner_unreadable(
-        self, fake_dataverse_url, fake_token
-    ):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-active", statuscode=1)],
+    def test_passes_without_pp_admin_notes_owner_unreadable(self, monkeypatch):
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1]],
         )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.PASSED.value
         assert "owner could not be read" in r.result
         assert "your own account" in r.result
 
-    @responses.activate
-    def test_runtime_dataverse_reference_passes(
-        self, fake_dataverse_url, fake_token
-    ):
-        runtime_ref = dv.workday_connection_refs_runtime()[1]
-        _register_refs(fake_dataverse_url, [runtime_ref])
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
+    def test_unbound_fails(self, monkeypatch):
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {
+                "connectionid": None
+            }],
         )
-
-        r = _by_id(
-            wx.run_workday_extension_checks(runner)
-        )["DV-CONN-001"]
-
-        assert r.status == Status.PASSED.value
-        assert (
-            "msdyn_sharedcommondataserviceforapps_workdayruntime"
-            in r.result
-        )
-
-    @responses.activate
-    def test_mixed_runtime_and_legacy_dataverse_refs_warn(
-        self, fake_dataverse_url, fake_token
-    ):
-        runtime_ref = dv.workday_connection_refs_runtime()[1]
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="legacy-dv"), runtime_ref],
-        )
-        runner = _Runner(
-            env_url=fake_dataverse_url,
-            dv_token=fake_token,
-        )
-
-        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
-
-        assert r.status == Status.WARNING.value
-        assert "Multiple ESS Dataverse connection references" in r.result
-        assert "Remove obsolete Workday package references" in r.remediation
-
-    @responses.activate
-    def test_unbound_fails(self, fake_dataverse_url, fake_token):
-        _register_refs(
-            fake_dataverse_url, [_dv_ref(connection_id=None, statuscode=1)]
-        )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
-        assert "unbound" in r.result
-        assert "connectionid=null" in r.result
-        assert "bind the Dataverse connection reference" in r.remediation
+        assert "not active and bound" in r.result
+        assert "Microsoft Dataverse connection reference" in r.remediation
 
-    @responses.activate
-    def test_inactive_statuscode_fails(self, fake_dataverse_url, fake_token):
-        _register_refs(
-            fake_dataverse_url,
-            [_dv_ref(connection_id="dv-conn-inactive", statuscode=2)],
+    def test_inactive_fails(self, monkeypatch):
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[1] | {"statuscode": 2}],
         )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
-        assert "inactive" in r.result
-        assert "statuscode=2" in r.result
-        assert "Re-authenticate or re-bind" in r.remediation
+        assert "not active and bound" in r.result
 
-    @responses.activate
-    def test_missing_ref_not_configured(self, fake_dataverse_url, fake_token):
-        # Only a Workday ref present — no Dataverse (92b66) ref.
-        _register_refs(
-            fake_dataverse_url,
-            [
-                dv.connection_ref(
-                    logical_name="new_sharedworkdaysoap_ff0df",
-                    display_name="OAuthUser",
-                    connector_id=dv.WORKDAY_SOAP_CONNECTOR_ID,
-                    connection_id="wd-conn-1",
-                )
-            ],
+    def test_dataverse_ref_absent_fails(self, monkeypatch):
+        runner = _runner_with_refs(
+            monkeypatch,
+            [dv.workday_connection_refs_runtime()[0]],
         )
-        runner = _Runner(env_url=fake_dataverse_url, dv_token=fake_token)
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
-        assert r.status == Status.NOT_CONFIGURED.value
-        assert "was not found in this environment" in r.result
-        assert "Install/repair the Workday extension pack" in r.remediation
+        assert r.status == Status.FAILED.value
+        assert "found 0" in r.result
+        assert "Microsoft Dataverse connection reference" in r.remediation
 
-    def test_no_dv_token_skips(self):
-        runner = _Runner(env_url="https://x.crm.dynamics.com", dv_token="")
+    def test_no_dataverse_access_skips(self):
+        runner = _Runner()
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.SKIPPED.value
-        assert "Dataverse token not available" in r.result
+        assert "Dataverse URL or access token not available" in r.result
+
+    def test_duplicate_reference_fails(self, monkeypatch):
+        reference = dv.workday_connection_refs_runtime()[1]
+        runner = _runner_with_refs(
+            monkeypatch,
+            [
+                reference,
+                reference | {
+                    "connectionreferenceid":
+                        "00000000-0000-0000-0000-000000008099"
+                },
+            ],
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.FAILED.value
+        assert "found 2" in r.result
+
+    def test_dataverse_read_error_degrades_to_error(self, monkeypatch):
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(wx, "query_all", fail)
+        runner = _Runner(
+            env_url="https://org.crm.dynamics.com",
+            dv_token="token",
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.ERROR.value
+        assert r.evidence["executionError"] is True
+        assert "Unable to run DV-CONN-001" in r.result
+        assert "DV-CONN-001" in r.remediation
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -441,10 +399,65 @@ class TestRestBaseUrl:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _write_component_map(
+    tmp_path,
+    agent: str,
+    *,
+    setup_file: str = "Setusercontext.mcs.yml",
+    setup_path: str | None = None,
+    target_file: str = "WorkdaySystemGetUserContextV2.mcs.yml",
+    target_path: str | None = None,
+    dialog: str | None = None,
+):
+    agent_dir = tmp_path / "workspace" / "agents" / agent
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    component_map_path = agent_dir / ".component-map.json"
+    component_map = (
+        json.loads(component_map_path.read_text(encoding="utf-8"))
+        if component_map_path.exists()
+        else {}
+    )
+    component_map.update({
+        setup_path or f"topics/{setup_file}": {
+            "componentKind": "DialogComponent",
+            "displayName": "[Admin] - User Context - Setup",
+            "schemaName": "contoso.topic.Setusercontext",
+        }
+    })
+    if dialog:
+        component_map[target_path or f"topics/{target_file}"] = {
+            "componentKind": "DialogComponent",
+            "displayName": "Workday [System] - 1: Set User Context V2",
+            "schemaName": dialog,
+        }
+    component_map_path.write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+
 def _write_topic(tmp_path, agent: str, body: str):
     topics = tmp_path / "workspace" / "agents" / agent / "topics"
     topics.mkdir(parents=True, exist_ok=True)
-    (topics / "user-context-setup.mcs.yml").write_text(body, encoding="utf-8")
+    (topics / "Setusercontext.mcs.yml").write_text(body, encoding="utf-8")
+    _write_component_map(tmp_path, agent)
+
+
+def _write_installed_topic(
+    tmp_path,
+    agent: str,
+    dialog: str,
+    *,
+    create_file: bool = True,
+):
+    _write_component_map(tmp_path, agent, dialog=dialog)
+    if create_file:
+        topics = tmp_path / "workspace" / "agents" / agent / "topics"
+        topics.mkdir(parents=True, exist_ok=True)
+        (topics / "WorkdaySystemGetUserContextV2.mcs.yml").write_text(
+            "kind: AdaptiveDialog\n",
+            encoding="utf-8",
+        )
 
 
 class TestUserContextRedirect:
@@ -458,7 +471,7 @@ class TestUserContextRedirect:
 
     def test_no_agents_dir_not_configured(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        runner = _Runner(config={})
+        runner = _Runner(config={}, agent_slug="acme")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.NOT_CONFIGURED.value
@@ -470,22 +483,33 @@ class TestUserContextRedirect:
         (tmp_path / "workspace" / "agents" / "acme" / "topics").mkdir(
             parents=True
         )
-        runner = _Runner(config={})
+        _write_component_map(
+            tmp_path,
+            "acme",
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.FAILED.value
-        assert "No user-context-setup.mcs.yml found" in r.result
-        assert "WorkdaySystemGetUserContextV2" in r.remediation
+        assert "No mapped admin user-context topic found" in r.result
+        assert "selected agent 'acme'" in r.result
+        assert "mapped Workday user-context" in r.remediation
 
     def test_topic_missing_redirect_fails(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_topic(tmp_path, "acme", "kind: AdaptiveDialog\n# no redirect here\n")
-        runner = _Runner(config={})
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.FAILED.value
-        assert "is missing for: acme" in r.result
-        assert "WorkdaySystemGetUserContextV2" in r.result
+        assert "does not redirect" in r.result
+        assert "WorkdaySystemGetUserContextV3" in r.result
         assert "BeginDialog" in r.remediation
 
     def test_wired_topic_passes(self, tmp_path, monkeypatch):
@@ -494,30 +518,265 @@ class TestUserContextRedirect:
             tmp_path,
             "acme",
             "kind: AdaptiveDialog\n"
-            "  - kind: BeginDialog\n"
-            "    dialog: cr123_WorkdaySystemGetUserContextV2\n",
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
-        runner = _Runner(config={})
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.PASSED.value
-        assert "WorkdaySystemGetUserContextV2" in r.result
+        assert "WorkdaySystemGetUserContextV3" in r.result
         assert "acme" in r.result
 
-    def test_one_of_two_agents_unwired_fails(self, tmp_path, monkeypatch):
+    def test_missing_mapped_target_topic_fails(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+            create_file=False,
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "No mapped Workday User Context V2 topic found" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    def test_unsafe_mapped_target_topic_path_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n",
+        )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            target_file="../outside.mcs.yml",
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "Workday User Context V2 topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_setup_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_component_map(
+            tmp_path,
+            "acme",
+            setup_path=mapped_path,
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "admin user-context topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    @pytest.mark.parametrize(
+        "mapped_path",
+        [
+            r"\outside.mcs.yml",
+            r"D:outside.mcs.yml",
+        ],
+    )
+    def test_windows_mapped_target_topic_escape_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+        mapped_path,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n",
+        )
+        _write_component_map(
+            tmp_path,
+            "acme",
+            target_path=mapped_path,
+            dialog="cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "Workday User Context V2 topic path is unsafe" in r.result
+        assert "mapped Workday user-context" in r.remediation
+
+    def test_comment_or_unrelated_field_does_not_count_as_redirect(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "acme",
+            "kind: AdaptiveDialog\n"
+            "# kind: BeginDialog\n"
+            "# dialog: cr123_WorkdaySystemGetUserContextV3\n"
+            "description: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "acme",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="acme")
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+
+    def test_selected_agent_ignores_wired_sibling(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_topic(
             tmp_path,
             "wired",
-            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
         )
         _write_topic(tmp_path, "broken", "kind: AdaptiveDialog\n")
-        runner = _Runner(config={})
+        _write_installed_topic(
+            tmp_path,
+            "wired",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "broken",
+            "cr999_WorkdaySystemGetUserContextV4",
+        )
+        runner = _Runner(config={}, agent_slug="broken")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
 
         assert r.status == Status.FAILED.value
-        assert "broken" in r.result
-        assert "wired" not in r.result.split("missing for:")[1]
+        assert "WorkdaySystemGetUserContextV4" in r.result
+        assert "WorkdaySystemGetUserContextV3" not in r.result
+
+    def test_missing_selected_agent_does_not_scan_siblings(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "wired",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: cr123_WorkdaySystemGetUserContextV3\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "wired",
+            "cr123_WorkdaySystemGetUserContextV3",
+        )
+        runner = _Runner(config={}, agent_slug="missing")
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "selected agent 'missing'" in r.result
+        assert "wired" not in r.result
+
+    def test_active_agent_scope_ignores_unrelated_unwired_agent(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "active",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "active",
+            "WorkdaySystemGetUserContextV2",
+        )
+        _write_topic(tmp_path, "unrelated", "kind: AdaptiveDialog\n")
+
+        runner = _Runner(config={}, agent_slug="active")
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.PASSED.value
+        assert "active" in r.result
+        assert "unrelated" not in r.result
+
+    def test_active_agent_scope_does_not_pass_from_other_agent(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "other",
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: BeginDialog\n"
+            "  dialog: WorkdaySystemGetUserContextV2\n",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "other",
+            "WorkdaySystemGetUserContextV2",
+        )
+        _write_installed_topic(
+            tmp_path,
+            "active",
+            "WorkdaySystemGetUserContextV3",
+        )
+        _write_topic(tmp_path, "active", "kind: AdaptiveDialog\n")
+
+        runner = _Runner(config={}, agent_slug="active")
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "active" in r.result
+        assert "other" not in r.result
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -574,8 +833,8 @@ class TestDispatcher:
             "WD-NET-001",
         ]
 
-    def test_emitter_failure_degrades_to_warning(self, monkeypatch):
-        # A raising emitter must degrade to a WARNING for its own checkpoint
+    def test_emitter_failure_degrades_to_error(self, monkeypatch):
+        # A raising emitter must degrade to an ERROR for its own checkpoint
         # without aborting the remaining four.
         def _boom(_runner):
             raise RuntimeError("kaboom")
@@ -585,19 +844,20 @@ class TestDispatcher:
         by_id = _by_id(results)
 
         assert len(results) == 5
-        assert by_id["WD-REST-001"].status == Status.WARNING.value
+        assert by_id["WD-REST-001"].status == Status.ERROR.value
+        assert by_id["WD-REST-001"].evidence["executionError"] is True
         assert "Unable to run WD-REST-001" in by_id["WD-REST-001"].result
         assert by_id["WD-REST-001"].roles == [Role.ESS_MAKER.value]
         # The other four still emitted normally.
         assert by_id["WD-NET-001"].status == Status.MANUAL.value
 
-    def test_config_reading_emitters_warn_on_boom_config(self):
+    def test_config_reading_emitters_error_on_boom_config(self):
         # A config whose .get raises breaks the three config-reading emitters;
-        # each degrades to WARNING and the run still returns all five rows.
+        # each degrades to ERROR and the run still returns all five rows.
         results = wx.run_workday_extension_checks(_Runner(config=_BoomConfig()))
         by_id = _by_id(results)
 
         assert len(results) == 5
         for cp in ("WD-REST-001", "WD-REST-002", "WD-NET-001"):
-            assert by_id[cp].status == Status.WARNING.value
+            assert by_id[cp].status == Status.ERROR.value
             assert f"Unable to run {cp}" in by_id[cp].result

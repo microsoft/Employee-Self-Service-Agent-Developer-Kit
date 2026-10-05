@@ -13,6 +13,7 @@ retry them — a correctness bug.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -62,20 +63,6 @@ class TestParseOnlyGlobs:
         globs = push.parse_only_globs(
             ["--only", "topics/A.mcs.yml", "--only-from", str(manifest)])
         assert globs == ["topics/A.mcs.yml", "topics/B.mcs.yml"]
-
-
-def test_da_push_stops_before_dataverse_configuration(
-    monkeypatch,
-    capsys,
-):
-    monkeypatch.setattr(push, "is_connect_ready", lambda: True)
-    monkeypatch.setattr("sys.argv", ["push.py"])
-
-    with pytest.raises(SystemExit) as error:
-        push.main()
-
-    assert error.value.code == 1
-    assert "no Dataverse request was attempted" in capsys.readouterr().out
 
 
 class TestMatchesOnly:
@@ -243,3 +230,55 @@ class TestVerifyBotExists:
         with pytest.raises(_FakeHTTPError):
             push._verify_bot_exists(
                 _FakeAuth(), "https://x.crm.dynamics.com", "any")
+
+
+def _selected_agent(tmp_path):
+    agent = tmp_path / "agent"
+    folder = agent / "evaluations" / "selected"
+    folder.mkdir(parents=True)
+    (folder / "parent.mcs.yml").write_text(
+        "kind: EvaluationSet\ngraders:\n  - kind: CompareMeaningGrader\n",
+        encoding="utf-8",
+    )
+    (folder / "case.mcs.yml").write_text(
+        "kind: EvaluationData\nrows:\n  - input: Question\n    expectedOutput: Answer\n",
+        encoding="utf-8",
+    )
+    (agent / ".baseline").mkdir()
+    (agent / ".component-map.json").write_text(json.dumps({}), encoding="utf-8")
+    config = {
+        "agent": {"folder": str(agent), "botId": "bot", "schemaName": "test"},
+        "dataverseEndpoint": "https://example.crm.dynamics.com",
+    }
+    return agent, folder, config
+
+
+def test_selected_invalid_method_blocked_before_no_change(tmp_path, monkeypatch):
+    agent, folder, config = _selected_agent(tmp_path)
+    parent = folder / "parent.mcs.yml"
+    parent.write_text(parent.read_text().replace("CompareMeaningGrader", "UnsupportedGrader"))
+    push.update_baseline_scoped(str(agent), ["evaluations/selected/*"])
+    monkeypatch.setattr(push, "authenticate", lambda *a: pytest.fail("Must not authenticate"))
+    result = push.main(["--only", "evaluations/selected/*", "--yes"], config=config)
+    assert result["status"] == "blocked"
+    assert "Compare Meaning only" in result["error"]
+
+
+def test_dataverse_cancel_is_not_success(tmp_path, monkeypatch):
+    _, _, config = _selected_agent(tmp_path)
+    monkeypatch.setattr("builtins.input", lambda *a: "no")
+    monkeypatch.setattr(push, "authenticate", lambda *a: pytest.fail("Must not authenticate"))
+    result = push.main(["--only", "evaluations/selected/*"], config=config)
+    assert result["status"] == "cancelled"
+
+
+def test_structured_no_change_requires_verifier(tmp_path):
+    agent, _, config = _selected_agent(tmp_path)
+    push.update_baseline_scoped(str(agent), ["evaluations/selected/*"])
+    seen = []
+    result = push.main(
+        ["--only", "evaluations/selected/*"], config=config,
+        verify=lambda component_map: seen.append(component_map),
+    )
+    assert result["status"] == "up_to_date"
+    assert seen == [{}]

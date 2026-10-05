@@ -21,10 +21,14 @@ files. Do not attempt any customization work. Do not answer questions about ESS.
 Do not list your capabilities. Do not greet the user with a menu of options.
 Do not say "hello" or introduce yourself.
 
-Respond with ONLY this exact message and nothing else:
+Use this setup-required Message block and finish the request:
 
-> Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+**Message:**
+
+Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up your
+environment. Type `/setup` to get started — it only takes a couple minutes.
+
+**End message.**
 
 **Exceptions:**
 
@@ -46,16 +50,145 @@ Respond with ONLY this exact message and nothing else:
   requests such as "edit the testsets" and "change an expected response." That
   skill discovers workspace-level sets without setup and agent-owned sets when
   configuration is available. Deleting deployed sets still requires setup.
-- If the user typed `/flightcheck`, read `.local/config.json`. If it has
-  `flightCheckOnly: true`, proceed with `src/skills/flightcheck/SKILL.md`.
-  This exception applies only to `/flightcheck`; every other command remains
-  gated.
+- If the user typed `/flightcheck` or explicitly asked to validate setup or
+  environment readiness, follow the **FlightCheck entry contract** below.
+- If the user typed `/connect` or `/connect-workday`, allow the command after
+  **local workspace materialization**, even when runtime `connect_ready` is
+  false. Require
+  `schema_version: 4`, resolve `.local/config.json` `activeAgent` to the
+  canonical agent whose `agent.workspace_slug` matches, and require canonical
+  workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
+  is intentionally not a prerequisite because `/connect` is the workflow that
+  resolves product-extension connection gaps. If materialization is incomplete,
+  use the setup-required Message block above and finish the request.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready, and the user didn't say `/setup`,
-show ONLY the welcome message above. No other text. No capabilities list. No greeting.
+If foundation setup isn't ready and no exception above applies,
+use the setup-required Message block above and finish the request.
+
+#### FlightCheck entry contract
+
+Read `.local/config.json` and resolve its `activeAgent` to the canonical agent
+whose `agent.workspace_slug` matches. Apply the first matching state:
+Message blocks contain the exact maker-facing copy. Replace their template
+values with resolved evidence and render only the block contents.
+
+1. **Standalone FlightCheck:** local config has `flightCheckOnly: true`.
+   Proceed with `src/skills/flightcheck/SKILL.md`.
+2. **Canonical setup ready:** canonical state has `schema_version: 4`, the
+   matching agent exists, and its `connect_ready` is `true`. Proceed with
+   `src/skills/flightcheck/SKILL.md`.
+3. **Setup readiness outstanding:** canonical state has `schema_version: 4`,
+   the matching agent has `workspace.folder`, `workspace.agent_path`, and
+   `steps.SETUP-07.state: "done"`, and canonical readiness is outstanding
+   (`connect_ready` is false or absent). Build `{READINESS_ISSUES}` from
+   canonical setup evidence and use the readiness-outstanding Message block
+   below.
+4. **Workspace preparation required:** use the workspace-preparation Message
+   block below for every remaining state.
+
+Build `{READINESS_ISSUES}` as follows:
+
+1. Collect every non-empty `failure_causes` entry from every step whose `state`
+   is `blocked`, combining exact duplicates.
+2. Preserve the recorded service or readiness check, exception cause, status,
+   error code, request ID, and supported remediation. Translate
+   implementation-specific exception names into plain language while retaining
+   their diagnostic meaning.
+3. Map each step to its maker-facing label:
+   - `SETUP-01` — **Target environment**
+   - `SETUP-02.1` — **Agent access**
+   - `SETUP-02.2` — **Environment capacity**
+   - `SETUP-03` — **Editable Dev agent**
+   - `SETUP-05` — **Connections**
+   - `SETUP-06` — **Agent content**
+   - `SETUP-07` — **Local workspace**
+   Present the bold labels in maker-facing text and keep the canonical setup
+   IDs internal.
+4. Render each collected cause with this readiness issue template:
+
+   - **{READINESS_ITEM}:** {READINESS_DETAIL}
+
+5. When the recorded blocked-cause collection is empty, render one line for
+   the first incomplete step. Set `{READINESS_DETAIL}` to
+   `/setup` will run this readiness check.
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Some setup items still
+require attention:
+
+{READINESS_ISSUES}
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to return to Setup now?",
+    "options": [
+      {
+        "label": "Return to Setup",
+        "description": "Continue Setup and work through these readiness items",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Use the following Message block for workspace preparation:
+
+**Message:**
+
+Running FlightCheck requires Setup to be complete. Setup needs to prepare the
+local agent workspace.
+
+**End message.**
+
+Then use `vscode_askQuestions` with this exact question:
+
+```json
+[
+  {
+    "header": "Setup",
+    "question": "Would you like to run Setup now?",
+    "options": [
+      {
+        "label": "Run Setup",
+        "description": "Prepare the local agent workspace",
+        "recommended": true
+      },
+      {
+        "label": "Not now",
+        "description": "Close this request and keep the current setup state"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+When the maker selects **Return to Setup** or **Run Setup**, treat the selection
+as a `/setup` invocation and read `src/skills/foundation-setup/SKILL.md`. The
+selection already confirms setup intent. Carry forward the active agent,
+environment, and canonical setup state resolved by this contract. Do not ask
+the maker to select **Resume setup for this agent** or otherwise reconfirm the
+same known target. Start at the first setup decision or operation not already
+established by that context. If no usable target identity was resolved, follow
+the normal target-selection flow. When the maker selects **Not now** or
+dismisses the question, finish the request with canonical setup state
+unchanged.
 
 ### If canonical setup is ready
 
@@ -77,10 +210,11 @@ After canonical DA setup is complete:
 
 - local authoring, review, scan, and browser-based topic driving remain
   available;
-- never run Dataverse push, publish, deletion, or server-backed validation
-  instructions; explain that DA-GA deployment is not yet available;
-- `/connect` and integration troubleshooting require the corresponding DA-GA
-  product extension guidance, which is not yet available;
+- Dataverse push and server-backed validation are permitted in this
+  workspace; run the push pipeline when the maker asks to push local changes;
+- `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
+  unsupported products or agent verticals must stop at their explicit routing
+  boundary;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
 - `/flightcheck` may run only its local-files scope.
@@ -197,7 +331,7 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 - Review and scan supported local agent components
 
 ### What requires admin/portal access
-- Applying and publishing local changes while native DA-GA deployment is unavailable
+- Publishing the agent to make changes live in the portal
 - Adding new connector types or configuring authentication
 - Managing knowledge sources
 - Changing AI settings or authentication mode
@@ -246,9 +380,9 @@ When helping a customer, match their request to one of these patterns:
 
 | Customer says... | Pattern | What to create |
 |-----------------|---------|---------------|
-| "I need to look up X from ServiceNow/Workday" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to create a ticket/case/request" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
-| "I need to show the user their X data" | Product extension required | Explain that DA-GA extension setup guidance is not yet available |
+| "I need to look up X from ServiceNow/Workday" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to create a ticket/case/request" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
+| "I need to show the user their X data" | Product extension required | Route connection/setup requests through `src/skills/connect/SKILL.md`; create topics only after the supported integration is connected |
 | "I need to call a non-ESS system (Jira, custom API)" | Standalone Topic + Workflow | Topic + new cloud flow (only for connectors without a shared orchestrator) |
 | "I need to add a step to an existing flow" | Modify topic | Edit the existing topic YAML |
 | "I need to change how the agent responds to X" | Modify topic | Update trigger phrases, messages, or conditions |
@@ -288,16 +422,15 @@ pipeline:
 | 2. Local edit | Create, modify, or delete files in `workspace/agents/{slug}/` | File tools |
 | 3. Scan | Check for compile errors | Diagnostics tool on agent folder |
 
-Always state clearly that local authoring does not change the live agent.
-DA-GA deployment is not yet available in this release; do not run the retired
-Dataverse mutation pipeline as a fallback.
+Always state clearly that local authoring does not change the live agent until
+pushed. Run the push pipeline when the maker asks to push local changes.
 
 ### Skill routing for CRUD operations
 
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
-| Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
+| Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`) | `src/skills/connect/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
@@ -385,14 +518,14 @@ If the subagent or its detector scripts cannot run, say the review was skipped
 and continue.
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
-component, ALWAYS load and follow the corresponding skill file.** For DA-GA,
-the supported pipeline ends after the local scan. Do not improvise a
-Dataverse deployment.
+component, ALWAYS load and follow the corresponding skill file.** The
+supported pipeline includes pushing local changes via the push pipeline
+after the local scan.
 
 ## Testing and Deployment
 
 1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors.
-2. **State the boundary**: Explain that the local files are ready, but DA-GA deployment is not yet available in this release.
+2. **Push when asked**: When the maker asks to push, run the push pipeline to upsert local changes to the agent.
 3. **Test existing runtime behavior**: Browser-based topic driving may test the currently deployed agent, but it does not include unpublished local changes.
 
 ## Code Quality Rules
@@ -433,6 +566,32 @@ doc_link=f"{DOC_BASE}/manage-knowledge-sources",  # this page doesn't exist!
 
 This rule exists because fabricated links erode customer trust and create
 support burden when they 404. A missing link is always better than a broken one.
+
+### Telemetry impact review
+
+Before opening a PR, ask:
+
+1. Does this change add a CLI entry point (`--profile`, `--scope`, or a
+   subcommand)? Wire `emit_flightcheck_telemetry(...)` and the `adk.*` emitters
+   into the new path. An entry point that does not emit is invisible to Aria.
+2. Does this change add a status, verdict, or outcome bucket such as
+   `Status.BLOCKED`? Add the counter to `_run_data`, update
+   `derive_run_outcome`, and pass the enum value through check-level emission.
+3. Does this change add a stable per-item field such as severity, remediation
+   ID, automation type, connector, or profile? Thread it through `_run_data` or
+   `_check_data` in
+   `scripts/flightcheck/telemetry.py` and add the corresponding Aria cube
+   dimension. Fields that exist only in `results.json` do not reach dashboards.
+4. Does this change alter a scope, category, or dimension whose Aria projection
+   depends on string shape, such as
+   `scope="profile:workday-da:post-connection"`? Update the derivation in
+   `scripts/flightcheck/telemetry.py` and check the additive emitters in
+   `scripts/adk_telemetry.py`.
+
+If none applies, note "no telemetry impact" in the PR description. If telemetry
+work is deliberately deferred, link the follow-up work item. Never add a
+capability without either wiring telemetry or explicitly documenting the
+deferral.
 
 ## User Config
 

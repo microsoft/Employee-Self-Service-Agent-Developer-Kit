@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
 from typing import Any, Iterable
 
 import responses
@@ -20,6 +23,13 @@ MOCK_ENV_ID = "00000000-0000-0000-0000-000000001111"
 MOCK_AGENT_ID = "00000000-0000-0000-0000-000000002222"
 MOCK_FAMILY_ID = "00000000-0000-0000-0000-000000003333"
 MOCK_CONNECTION_ID = "mock-servicenow-connection"
+MOCK_WORKDAY_CONNECTION_ID = "mock-workday-connection"
+# The GRS commit pin captured in the validated ALM configure response
+# (agentbuilder_readiness.yaml line 82). ENV-004-GRS pins on ``commitSha``;
+# ESS-SOLN-001 tests reference the same value via ``MOCK_COMMIT_SHA``.
+COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
+MOCK_COMMIT_SHA = COMMIT_SHA
+MOCK_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 MOCK_AGENTBUILDER_BASE = (
     "https://00000000000000000000000000000000."
     "0.environment.api.test.powerplatform.com"
@@ -35,12 +45,29 @@ def agent() -> dict[str, Any]:
     }
 
 
-def configuration() -> dict[str, Any]:
+def configuration(*, commit_sha: str = COMMIT_SHA) -> dict[str, Any]:
+    """The minimalBots ALM ``configure`` response (realm Dev).
+
+    ``commitSha`` is the GRS commit pin ``ENV-004-GRS`` reads; ``schemaName``
+    and ``grsRepositoryId`` are what ``ESS-SOLN-001`` reads.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/environment.py
+        (ENV-004-GRS)
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/solution.py
+        (ESS-SOLN-001)
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml line 82
+      (``realm``/``cdsBotId``/``schemaName``/``grsRepositoryId``/``commitSha``);
+      ``schemaName`` is ``gptagent_copilotforemployeeselfservicehr``.
+    """
     return {
         "realm": "Dev",
         "cdsBotId": MOCK_AGENT_ID,
-        "schemaName": "gptagent_mockemployeeselfservice",
-        "grsRepositoryId": MOCK_FAMILY_ID,
+        "schemaName": MOCK_SCHEMA_NAME,
+        "grsRepositoryId": MOCK_ENV_ID,
+        "commitSha": commit_sha,
     }
 
 
@@ -73,6 +100,191 @@ def components() -> dict[str, Any]:
                 },
             }
         ],
+    }
+
+
+def dialog_component_change(
+    *,
+    schema_name: str,
+    dialog: dict[str, Any] | None = None,
+    status: str = "Active",
+) -> dict[str, Any]:
+    """Build one live ``DialogComponent`` change.
+
+    Source (validated):
+      tests/fixtures/cassettes/agentbuilder_readiness.yaml lines 140-149.
+      The captured minimalBots component response uses
+      ``botComponentChanges[].component`` with ``$kind=DialogComponent``,
+      ``status``, ``schemaName``, and an inline ``dialog`` object.
+    """
+    return {
+        "$kind": "BotComponentInsert",
+        "component": {
+            "$kind": "DialogComponent",
+            "id": schema_name,
+            "schemaName": schema_name,
+            "status": status,
+            "state": "mc",
+            "dialog": dialog or {"$kind": "AdaptiveDialog"},
+        },
+    }
+
+
+def dialog_components(
+    changes: Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the validated minimalBots component-response envelope."""
+    return {"botComponentChanges": list(changes)}
+
+
+def connection_reference_change(
+    *,
+    connector: str,
+    connection_id: str | None,
+    logical_name: str | None = None,
+    shared_connection_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One ``connectionReferenceChanges`` entry in the validated minimalBots
+    components shape (cassette ``agentbuilder_readiness.yaml``; the same shape
+    the shipped native ``DA-CONN-001`` check consumes). Only the ``connectorId``
+    value varies from the captured ServiceNow reference, so this is
+    same-endpoint value variance and needs no new cassette (see
+    ``scripts/flightcheck/AGENTS.md``). ``connection_id=None`` models an unbound
+    reference.
+    """
+    reference = {
+        "connectionReferenceLogicalName": (
+            logical_name
+            or f"gptagent_mockemployeeselfservice.{connector}"
+        ),
+        "connectorId": (
+            f"/providers/Microsoft.PowerApps/apis/{connector}"
+        ),
+        "connectionId": connection_id,
+    }
+    if shared_connection_parameters is not None:
+        reference["sharedConnectionParameters"] = (
+            shared_connection_parameters
+        )
+    return {
+        "changeType": "Insert",
+        "connectionReference": reference,
+    }
+
+
+def workday_connection_reference(
+    *,
+    connection_id: str | None = MOCK_WORKDAY_CONNECTION_ID,
+    logical_name: str | None = None,
+    shared_connection_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The Workday SOAP (``shared_workdaysoap``) connection-reference variant
+    that ``DV-CONN-001`` filters on."""
+    return connection_reference_change(
+        connector="shared_workdaysoap",
+        connection_id=connection_id,
+        logical_name=logical_name,
+        shared_connection_parameters=shared_connection_parameters,
+    )
+
+
+def shared_connection_parameters(
+    *,
+    rest_base_uri: str | None = "https://wd.example.com/ccx/api",
+    tenant_name: str | None = "mocktenant",
+    resource_uri: str | None = "https://wd.example.com",
+    token_uri: str | None = "https://wd.example.com/ccx/oauth2/mocktenant/token",
+    client_id: str | None = "mock-client-id",
+) -> dict[str, Any]:
+    """Workday ``sharedConnectionParameters`` from documented sources.
+
+    Source (documented):
+      ``tools/ess-ca-to-da/reference/hr/agent.yml`` captures a real
+      ServiceNow ``sharedConnectionParameters`` entry using the nested
+      ``values.<key>.value`` wrapper shape. The Workday-specific fields mirror
+      the public Workday connector definition documented at
+      ``https://learn.microsoft.com/connectors/workdaysoap/``:
+      ``restBaseUri``, ``tenantName``, ``token:ResourceUri``,
+      ``token:WorkdayTokenUri``, and ``token:WorkdayClientId``. These
+      Workday-specific keys are not yet captured from a live AgentBuilder
+      components response.
+    """
+    values: dict[str, dict[str, str]] = {}
+    for key, value in (
+        ("restBaseUri", rest_base_uri),
+        ("tenantName", tenant_name),
+        ("token:ResourceUri", resource_uri),
+        ("token:WorkdayTokenUri", token_uri),
+        ("token:WorkdayClientId", client_id),
+    ):
+        if value is not None:
+            values[key] = {"value": value}
+    return {"values": values}
+
+
+def shared_connection_parameters_json_string(**kwargs: Any) -> str:
+    """``sharedConnectionParameters`` as the JSON string the live AgentBuilder
+    components response returns, rather than a nested object.
+
+    Source (documented): a live ServiceNow connection reference encodes
+    ``sharedConnectionParameters`` as a JSON string, so checks must parse it
+    before reading ``values``.
+    """
+    return json.dumps(shared_connection_parameters(**kwargs))
+
+
+def components_with_references(
+    *,
+    references: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """``components()`` with its ``connectionReferenceChanges`` replaced by the
+    given references (``None`` -> an empty list, modelling an agent with no
+    connection references)."""
+    payload = components()
+    payload["connectionReferenceChanges"] = (
+        [] if references is None else list(references)
+    )
+    return payload
+
+
+def export_package_bytes(
+    *,
+    filename: str = "agent/manifest.json",
+    content: bytes = b'{"schemaName":"gptagent_mockemployeeselfservice"}',
+) -> bytes:
+    """Real in-memory zip archive for AgentBuilder ALM export tests.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/publishing.py
+
+    Source (validated):
+      AgentBuilder ALM export is implemented by
+      AgentBuilderClient.export_package, which streams the response from
+      POST /copilotstudio/minimalBots/alm/{agent_id}/export into a caller-owned
+      .zip path. The route, method, and binary package contract are pinned by
+      tests/scripts/test_agentbuilder.py::test_realm_discovery_configuration_and_export_use_native_alm_requests.
+      The FlightCheck check validates the archive by reading the zip central
+      directory and running testzip() CRC validation, so this builder returns
+      an actual zipfile archive rather than a magic-byte stub.
+    """
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(filename, content)
+    return stream.getvalue()
+
+
+def import_package_result(
+    *,
+    agent_id: str = MOCK_AGENT_ID,
+    schema_name: str = "gptagent_mockemployeeselfservice_imported",
+) -> dict[str, Any]:
+    """Successful AgentBuilderClient.import_package result shape."""
+    return {
+        "responseStatus": "valid",
+        "result": {
+            "cdsBotId": agent_id,
+            "schemaName": schema_name,
+        },
     }
 
 

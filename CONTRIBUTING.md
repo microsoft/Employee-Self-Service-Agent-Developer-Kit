@@ -39,7 +39,7 @@ then maintainers **must file a new release request** in the [Open Source Portal]
 
 This toolkit:
 
-- **Collects pseudonymous usage telemetry** (enabled by default) to help us understand which capabilities are used and where they fail, so we can improve the product. What is emitted is a random per-install `instance_id`, the tenant GUID and organization display name (OII, not developer identity), capability names (e.g. `setup`, `connect`, `topic_create`), FlightCheck run outcomes, latency, and scrubbed error codes. **No developer/user identifier, agent content, credentials, prompts, or personal data is collected.** See [Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy) for the full data model and event catalog.
+- **Collects pseudonymous usage telemetry** (enabled by default) to help us understand which capabilities are used and where they fail, so we can improve the product. What is emitted is a random per-install `instance_id`, the tenant GUID and organization display name (OII, not developer identity), capability names (e.g. `setup`, `connect`, `topic_create`), FlightCheck run outcomes, latency, scrubbed error codes, and a short git SHA plus a bounded branch classification (`main` / `main-ca` / `detached` / `other` / `unknown`) so we can attribute usage to a specific build without emitting free-form branch names. **No developer/user identifier, agent content, credentials, prompts, or personal data is collected.** See [Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy) for the full data model and event catalog.
 - **Opt out any time** via either of:
   - `python scripts/adk_telemetry.py off` (from `solutions/ess-maker-skills`), or
     - the `ESS_ADK_TELEMETRY` environment variable set to `off` (or `0` / `false`). Set it in your shell before running any ADK command — e.g. `export ESS_ADK_TELEMETRY=off` (bash/zsh), `$env:ESS_ADK_TELEMETRY = "off"` (PowerShell), or `set ESS_ADK_TELEMETRY=off` (cmd.exe). Adding it to your shell profile (`~/.bashrc`, `~/.zshrc`, PowerShell `$PROFILE`) or to your CI environment makes it persist. The env-var overrides the config-file setting.
@@ -125,3 +125,14 @@ Before committing, **always review what's staged** to avoid accidentally includi
 - If an accidental file slips through, remove it in the same PR — don't leave orphan files for others to clean up
 
 Accidental commits pollute history, can leak internal workflows, and waste reviewer time on irrelevant diffs.
+
+### 8. Telemetry impact review
+
+Before opening a PR, ask:
+
+1. Does this change add a CLI entry point (`--profile`, `--scope`, or a subcommand)? Wire `emit_flightcheck_telemetry(...)` and the `adk.*` emitters into the new path.
+2. Does this change add a status, verdict, or outcome bucket such as `Status.BLOCKED`? Add the counter to `_run_data`, update `derive_run_outcome`, and pass the enum value through check-level emission.
+3. Does this change add a stable per-item field such as severity, remediation ID, automation type, connector, or profile? Thread it through [`flightcheck/telemetry.py`](solutions/ess-maker-skills/scripts/flightcheck/telemetry.py) and add the corresponding Aria cube dimension. Fields that exist only in `results.json` do not reach dashboards.
+4. Does this change alter a scope, category, or dimension whose Aria projection depends on string shape, such as `scope="profile:workday-da:post-connection"`? Update the derivation in [`flightcheck/telemetry.py`](solutions/ess-maker-skills/scripts/flightcheck/telemetry.py) and check the additive emitters in [`adk_telemetry.py`](solutions/ess-maker-skills/scripts/adk_telemetry.py).
+
+If none applies, note **no telemetry impact** in the PR description. If telemetry work is deliberately deferred, link the follow-up work item. Never add a capability without either wiring telemetry or explicitly documenting the deferral.

@@ -76,3 +76,29 @@ def keep_target_instructions(base: str, ours: str, theirs: str) -> str:
     model.
     """
     return theirs
+
+
+class InstructionReconciliationSkipped(RuntimeError):
+    """Signals that instruction reconciliation was deliberately not performed.
+
+    Distinct from :class:`essmig.llm.LlmUnavailable` (the model *could not* be
+    reached): here the maker opted out with ``--keep-instructions``. Either way the
+    caller keeps the DA's wording and leaves the edit as a conflict, but the reason —
+    and therefore the message shown to the maker — differs.
+    """
+
+
+def skip_instruction_reconciliation(base: str, ours: str, theirs: str) -> str:
+    """An offline :data:`InstructionMerger` for ``--keep-instructions``.
+
+    Unlike :func:`keep_target_instructions` (a dry-run *prediction* that the edit can
+    migrate), this is used in a real migration where the maker chose not to call the
+    model. It must not masquerade as a successful merge: it raises
+    :class:`InstructionReconciliationSkipped` so the edit is reported as a conflict
+    for hand re-application, per DEV_DESIGN §5.3.
+    """
+    raise InstructionReconciliationSkipped(
+        "instruction edits were kept as a conflict because --keep-instructions was "
+        "set; re-apply them by hand, or re-run without --keep-instructions to let the "
+        "model reconcile them onto the DA's wording."
+    )

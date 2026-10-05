@@ -1,0 +1,356 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Contract tests for the canonical Declarative Agent connection-reference
+reader (``checks/_da_connection_refs.py``), the single shared module that
+``DV-CONN-001`` (active agent), ``ENV-004`` (environment-wide, de-duped) and the
+Workday shared-parameter checks all read through.
+
+These are pure-logic tests: a duck-typed fake AgentBuilder client returns
+minimalBots components payloads built from
+``tests.mocks.agentbuilder_connectivity`` (``MOCK_STATUS == "validated"``), so
+no network replay or cassette is needed (same inline-fake approach as
+``test_agent_handoff.py``). Every component shape traces to the validated
+``components()`` builder or its documented ``sharedConnectionParameters``
+variant; none is invented here.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from flightcheck.checks import _da_connection_refs as reader
+from tests.mocks import agentbuilder_connectivity as ab
+
+
+class _FakeClient:
+    """AgentBuilder stand-in: ``fetch_components(bot_id)`` returns the payload
+    registered for that bot id (empty ``{}`` when none is registered)."""
+
+    def __init__(self, payload_by_bot: dict[str, dict[str, Any]]):
+        self._payload_by_bot = payload_by_bot
+
+    def fetch_components(self, bot_id: str) -> dict[str, Any]:
+        return self._payload_by_bot.get(bot_id, {})
+
+
+class _FakeRunner:
+    def __init__(
+        self,
+        client: _FakeClient | None,
+        config: dict[str, Any],
+        agent_slug: str = "",
+    ):
+        self.agentbuilder = client
+        self.config = config
+        self.agent_slug = agent_slug
+
+
+# --------------------------------------------------------------------------
+# agent_bot_ids
+# --------------------------------------------------------------------------
+
+def test_agent_bot_ids_unions_multi_and_single_and_dedups_casefold():
+    config = {
+        "agents": [{"botId": "Agent-A"}, {"botId": "Agent-B"}, {"botId": "agent-a"}],
+        "agent": {"botId": "Agent-B"},
+    }
+    # agent-a folds onto Agent-A (dup); single Agent-B folds onto Agent-B (dup).
+    assert reader.agent_bot_ids(config) == ["Agent-A", "Agent-B"]
+
+
+def test_agent_bot_ids_single_only():
+    assert reader.agent_bot_ids({"agent": {"botId": "SOLO"}}) == ["SOLO"]
+
+
+def test_agent_bot_ids_ignores_blank_and_non_string():
+    config = {"agents": [{"botId": ""}, {"botId": None}, {"botId": "  X  "}]}
+    assert reader.agent_bot_ids(config) == ["X"]
+
+
+# --------------------------------------------------------------------------
+# read_active_agent_connection_references (DV-CONN-001 surface)
+# --------------------------------------------------------------------------
+
+def test_read_active_none_when_no_client():
+    runner = _FakeRunner(None, {"agent": {"botId": "BOT"}})
+    assert reader.read_active_agent_connection_references(runner) is None
+
+
+def test_read_active_none_when_no_active_bot_id():
+    runner = _FakeRunner(
+        _FakeClient({}),
+        {"agents": [{"slug": "known", "botId": "BOT"}]},
+        agent_slug="missing",
+    )
+    assert reader.read_active_agent_connection_references(runner) is None
+
+
+def test_read_active_honors_explicit_selected_slug():
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id="selected")]
+    )
+    runner = _FakeRunner(
+        _FakeClient({"BOT-SELECTED": payload}),
+        {
+            "activeAgent": "other",
+            "agents": [
+                {"slug": "other", "botId": "BOT-OTHER"},
+                {"slug": "selected", "botId": "BOT-SELECTED"},
+            ],
+        },
+        agent_slug="selected",
+    )
+
+    rows = reader.read_active_agent_connection_references(runner)
+
+    assert rows is not None
+    assert rows[0]["botid"] == "BOT-SELECTED"
+
+
+def test_read_active_normalizes_workday_row():
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id="wd-conn-1")]
+    )
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    rows = reader.read_active_agent_connection_references(runner)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["botid"] == "BOT"
+    assert row["connectorid"].endswith("/apis/shared_workdaysoap")
+    assert row["connectionid"] == "wd-conn-1"
+
+
+def test_read_active_missing_change_set_is_empty_not_none():
+    runner = _FakeRunner(_FakeClient({"BOT": {}}), {"agent": {"botId": "BOT"}})
+    assert reader.read_active_agent_connection_references(runner) == []
+
+
+def test_read_active_malformed_change_set_raises():
+    runner = _FakeRunner(
+        _FakeClient({"BOT": {"connectionReferenceChanges": "not-a-list"}}),
+        {"agent": {"botId": "BOT"}},
+    )
+    with pytest.raises(ValueError):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_non_dict_change_entry_raises():
+    # An individual change that is not an object is surfaced, not skipped.
+    runner = _FakeRunner(
+        _FakeClient({"BOT": {"connectionReferenceChanges": ["oops"]}}),
+        {"agent": {"botId": "BOT"}},
+    )
+    with pytest.raises(ValueError):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_malformed_individual_reference_raises():
+    # connectionReference present but not an object -> surfaced, not "not found".
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": "not-an-object"}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_change_without_reference_is_tolerated():
+    # A change carrying no (or null) connectionReference is a non-connection
+    # change: skipped, not raised.
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Delete"},
+            {"changeType": "Insert", "connectionReference": None},
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    assert reader.read_active_agent_connection_references(runner) == []
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        # connectionReferenceLogicalName absent entirely.
+        {"connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"},
+        # connectionReferenceLogicalName null.
+        {
+            "connectionReferenceLogicalName": None,
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+        # connectionReferenceLogicalName blank / whitespace-only.
+        {
+            "connectionReferenceLogicalName": "   ",
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+        # connectionReferenceLogicalName not a string.
+        {
+            "connectionReferenceLogicalName": 123,
+            "connectorId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        },
+    ],
+)
+def test_read_active_missing_logical_name_raises(reference):
+    # A dict that parses but lacks a usable connectionReferenceLogicalName is
+    # malformed (PR #304 review F-1): surfaced, not appended as a row that a
+    # downstream consumer would silently drop as "not found".
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": reference}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError, match="connectionReferenceLogicalName"):
+        reader.read_active_agent_connection_references(runner)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        # connectorId absent entirely.
+        {"connectionReferenceLogicalName": "ns.shared_workdaysoap"},
+        # connectorId null.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": None,
+        },
+        # connectorId blank / whitespace-only.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": "  ",
+        },
+        # connectorId not a string.
+        {
+            "connectionReferenceLogicalName": "ns.shared_workdaysoap",
+            "connectorId": ["/providers/Microsoft.PowerApps/apis/shared_workdaysoap"],
+        },
+    ],
+)
+def test_read_active_missing_connector_id_raises(reference):
+    # Same F-1 hardening for connectorId: a present-but-blank connector id is a
+    # malformed reference, not a legitimate absence.
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": reference}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError, match="connectorId"):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_null_connection_id_is_preserved():
+    # connectionId is the one identity field that may legitimately be null (an
+    # unbound reference); the row is still emitted with both required fields.
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id=None)]
+    )
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    rows = reader.read_active_agent_connection_references(runner)
+    assert len(rows) == 1
+    assert rows[0]["connectionid"] is None
+    assert rows[0]["connectionreferencelogicalname"]
+    assert rows[0]["connectorid"].endswith("/apis/shared_workdaysoap")
+
+
+# --------------------------------------------------------------------------
+# read_all_agents_connection_references (ENV-004 surface: env-wide, de-duped)
+# --------------------------------------------------------------------------
+
+def test_read_all_none_when_no_client():
+    runner = _FakeRunner(None, {"agents": [{"botId": "A"}]})
+    assert reader.read_all_agents_connection_references(runner) is None
+
+
+def test_read_all_dedups_by_logical_name_first_wins():
+    ref_a = ab.workday_connection_reference(
+        connection_id="c1", logical_name="ns.shared_workdaysoap"
+    )
+    ref_b = ab.workday_connection_reference(
+        connection_id="c2", logical_name="ns.shared_workdaysoap"
+    )
+    client = _FakeClient(
+        {
+            "A": ab.components_with_references(references=[ref_a]),
+            "B": ab.components_with_references(references=[ref_b]),
+        }
+    )
+    runner = _FakeRunner(client, {"agents": [{"botId": "A"}, {"botId": "B"}]})
+    rows = reader.read_all_agents_connection_references(runner)
+    assert len(rows) == 1
+    assert rows[0]["connectionid"] == "c1"
+
+
+# --------------------------------------------------------------------------
+# shared_connection_parameter_values
+# --------------------------------------------------------------------------
+
+def test_scp_values_parsed_from_json_string():
+    ref = {
+        "sharedconnectionparameters": ab.shared_connection_parameters_json_string(
+            rest_base_uri="https://wd.example.com/ccx/api"
+        )
+    }
+    values = reader.shared_connection_parameter_values(ref)
+    assert values["restBaseUri"] == "https://wd.example.com/ccx/api"
+
+
+def test_scp_values_parsed_from_nested_object():
+    ref = {"sharedconnectionparameters": ab.shared_connection_parameters(tenant_name="mocktenant")}
+    values = reader.shared_connection_parameter_values(ref)
+    assert values["tenantName"] == "mocktenant"
+
+
+def test_scp_values_missing_is_empty_map():
+    assert reader.shared_connection_parameter_values({}) == {}
+
+
+def test_scp_values_malformed_json_string_raises():
+    ref = {"sharedconnectionparameters": "{not valid json"}
+    with pytest.raises(ValueError):
+        reader.shared_connection_parameter_values(ref)
+
+
+# --------------------------------------------------------------------------
+# workday_shared_connection_parameters (WD-ENV-001 / WD-REST-001 surface)
+# --------------------------------------------------------------------------
+
+def test_wscp_found_with_values():
+    ref = ab.workday_connection_reference(
+        shared_connection_parameters=ab.shared_connection_parameters_json_string()
+    )
+    payload = ab.components_with_references(references=[ref])
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    values, message = reader.workday_shared_connection_parameters(runner)
+    assert message == ""
+    assert values["tenantName"] == "mocktenant"
+
+
+def test_wscp_found_but_missing_values():
+    ref = ab.workday_connection_reference(shared_connection_parameters=None)
+    payload = ab.components_with_references(references=[ref])
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    values, message = reader.workday_shared_connection_parameters(runner)
+    assert values == {}
+    assert "missing" in message.lower()
+
+
+def test_wscp_workday_reference_not_found():
+    # components() carries only the ServiceNow reference, no Workday one.
+    runner = _FakeRunner(
+        _FakeClient({"BOT": ab.components()}), {"agent": {"botId": "BOT"}}
+    )
+    values, message = reader.workday_shared_connection_parameters(runner)
+    assert values == {}
+    assert "not found" in message.lower()
+
+
+def test_wscp_none_when_client_unavailable():
+    runner = _FakeRunner(None, {"agent": {"botId": "BOT"}})
+    values, message = reader.workday_shared_connection_parameters(runner)
+    assert values is None
+    assert message

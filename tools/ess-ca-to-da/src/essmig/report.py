@@ -143,6 +143,14 @@ def render_markdown(
         for result in conflicted:
             lines += ["", f"### {result.display_name or result.suffix}", ""]
             lines.append(f"`{result.schemaname}`")
+            if result.customer_state:
+                verb = "disabled" if result.customer_state == "Inactive" else "enabled"
+                lines += [
+                    "",
+                    f"> ⚠️ You had **{verb}** this topic. Because of the conflict the ESS "
+                    "version was kept and that setting was **not** applied — re-apply it "
+                    "by hand after import.",
+                ]
             for conflict in result.conflicts:
                 lines += [
                     "",
@@ -158,6 +166,17 @@ def render_markdown(
                     "",
                     "```yaml",
                     _snippet(conflict.theirs),
+                    "```",
+                ]
+            if result.customer_version:
+                lines += [
+                    "",
+                    "Your complete version of this topic (so every edit — including any "
+                    "that merged cleanly and is not listed as a conflict above — is on "
+                    "record for manual re-application):",
+                    "",
+                    "```yaml",
+                    _snippet(result.customer_version),
                     "```",
                 ]
 

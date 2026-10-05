@@ -52,7 +52,7 @@ _FULL_CONFIG = {
     "tenant": "acme_dpt1",
     "restBaseUrl": "https://wd2-impl-services1.workday.com/ccx/api",
     "soapBaseUrl": "https://wd2-impl-services1.workday.com/ccx/service",
-    "appIdUri": "api://11111111-1111-1111-1111-111111111111",
+    "workdaySamlEntityId": "http://www.workday.com/acme_dpt1",
 }
 
 
@@ -98,7 +98,7 @@ class TestConfigPresentEchoesValues:
         # Remediation names the Workday screens and the ordering rule.
         assert "Register API Client" in api.remediation
         assert "View API Client" in api.remediation
-        assert "BEFORE" in api.remediation
+        assert "signed-in employee setup" in api.remediation
 
     def test_tenant_echoes_connection_fields(self):
         by_id = _by_id(
@@ -109,12 +109,25 @@ class TestConfigPresentEchoesValues:
             "acme_dpt1",
             _FULL_CONFIG["restBaseUrl"],
             _FULL_CONFIG["soapBaseUrl"],
-            _FULL_CONFIG["appIdUri"],
+            _FULL_CONFIG["workdaySamlEntityId"],
         ):
             assert value in tenant.result
         assert "Service Provider ID" in tenant.result
+        assert "api://" not in tenant.result
         assert "Tenant Setup - Security" in tenant.remediation
-        assert "Activate All Pending" in tenant.remediation
+        assert "intended employees" in tenant.remediation
+        assert "Do not invent an OAuth-client condition" in tenant.remediation
+        assert "no policy change or activation is required" in tenant.result
+
+    def test_api_client_rejects_legacy_isu_guidance_for_signed_in_setup(self):
+        by_id = _by_id(
+            run_workday_tenant_checks(_MinimalRunner(config=_FULL_CONFIG))
+        )
+        api = by_id["WD-API-CLIENT-001"]
+
+        assert "does not use an ISU" in api.result
+        assert "RaaS" in api.result
+        assert "integration-system security-group domain mapping" in api.result
 
 
 class TestConfigAbsentStaysManual:

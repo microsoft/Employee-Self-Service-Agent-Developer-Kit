@@ -14,7 +14,8 @@ Here's what I can help you with:
 | Command | What it does |
 |---------|-------------|
 | `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
-| `/connect` | Show the DA-GA product extension requirement |
+| `/connect-workday` | Connect the active ESS HR agent to Workday |
+| `/connect` | Choose an available integration |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Show DA-GA deletion availability |

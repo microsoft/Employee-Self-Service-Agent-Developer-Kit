@@ -98,6 +98,64 @@ of what needs a human — is as much the deliverable as the package is.
 
 ## Install
 
+### Clean machine, one command
+
+On a machine with **nothing installed** — no Git, no Python, no clone of this
+repo — a single command fetches the tool and leaves you ready to run it. It
+ensures Git, shallow-clones the repository (which brings the tool and its
+vendored reference data), and drops you in the tool folder with the exact
+command to run next. It does **not** start a migration for you.
+
+```powershell
+# Windows (PowerShell) — leaves you in the tool folder, ready to run
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/tools/ess-ca-to-da/bootstrap.ps1)
+```
+
+```bash
+# macOS / Linux — prints the `cd` command to copy (a piped script can't move your shell)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/tools/ess-ca-to-da/bootstrap.sh)"
+```
+
+The repository is cloned to `~/Employee-Self-Service-Agent-Developer-Kit` by
+default. Override with `ESS_CA_TO_DA_ROOT`, pick a branch with `ESS_ADK_BRANCH`,
+or a fork with `ESS_ADK_SOURCE_URL`. From there, `run.ps1` / `run.sh` (below)
+takes care of Python and the tool itself.
+
+### Already have the repo
+
+The quickest path needs **nothing installed first** — not even Python. A launcher
+resolves (and, if missing, installs) Python 3.11+, creates a private `.venv`, and
+installs the tool into it on first run, then forwards your arguments straight to
+`essmig`:
+
+```powershell
+# Windows
+cd tools\ess-ca-to-da
+.\run.ps1 migrate --environment-url https://contoso.crm.dynamics.com --out out
+```
+
+```bash
+# macOS / Linux
+cd tools/ess-ca-to-da
+./run.sh migrate --environment-url https://contoso.crm.dynamics.com --out out
+```
+
+Every command below that starts with `python -m essmig ...` can be run as
+`.\run.ps1 ...` / `./run.sh ...` instead. On Windows the launcher auto-installs
+Python via `winget`; on macOS via Homebrew. Force the tool to reinstall into the
+`.venv` after a code change with `.\run.ps1 -Reinstall` (or `ESSMIG_REINSTALL=1
+./run.sh`).
+
+> **Windows "running scripts is disabled on this system"?** A clean Windows
+> client blocks `.ps1` files by default. The one-command bootstrap above relaxes
+> this for you. If you cloned manually, either allow local scripts once —
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` — or run the launcher
+> without changing anything:
+> `powershell -ExecutionPolicy Bypass -File .\run.ps1 inspect --environment-url ...`.
+
+
+If you would rather manage Python yourself:
+
 ```powershell
 cd tools\ess-ca-to-da
 python -m pip install -e ".[dev]"
@@ -223,6 +281,13 @@ evaluations (test cases) and skills cannot ride in the package, but they are no
 longer dropped silently: every one is **detected and reported** under *Re-create
 these in the agent's settings* (with its configuration reproduced) or, where the DA
 has no equivalent yet, as *not supported yet*.
+
+**Connected agents** (the hub's `TaskDialog` delegations to the HR/IT/Facilities
+agents — CA type-9 `InvokeConnectedAgentTaskAction`) are handled the same way. The
+DA wires connected agents up in the agent's *Agents* settings, not in the importable
+package, so the tool reports each delegation as a reconnect task that **names the
+target agent** (and its DA schema name when the agent ships in this release) rather
+than crashing or dropping it.
 
 The agent's own **display name and description** migrate too. If the customer
 renamed or re-described the agent on the CA, the new name is written to the emitted

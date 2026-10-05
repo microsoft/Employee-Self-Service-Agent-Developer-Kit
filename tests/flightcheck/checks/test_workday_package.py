@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import responses
+from unittest.mock import patch
 
 from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
@@ -128,6 +129,33 @@ class TestPackageFlavorDetection:
         assert runner._workday_package_flavor == "full"
         assert "full / legacy" in r.result
         assert len(runner._workday_connection_refs) == 3
+
+    @responses.activate
+    def test_duplicate_known_role_does_not_match_a_valid_fingerprint(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        duplicate = dv.workday_connection_refs_simplified()[0]
+        duplicate = {
+            **duplicate,
+            "connectionreferenceid": (
+                "00000000-0000-0000-0000-000000009999"
+            ),
+        }
+        _register_connection_refs(
+            base_url=fake_dataverse_url,
+            refs=[
+                *dv.workday_connection_refs_simplified(),
+                duplicate,
+            ],
+        )
+
+        results = _check_package_flavor(runner, wd_flows=[])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Warning"
+        assert runner._workday_package_flavor == "unknown"
 
     @responses.activate
     def test_runtime_install_uses_simplified_behavior(
@@ -355,6 +383,32 @@ class TestPackageConnectionCompleteness:
 
         assert r.status == "Passed"
         assert "Workday Runtime (OBO)" in r.result
+
+    def test_runtime_detection_ignores_agent_scoped_refs(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        refs = dv.workday_connection_refs_runtime()
+        refs.append({
+            "connectionreferencelogicalname": (
+                "gptagent_copilotforemployeeselfservicehr."
+                "3164dae9-3a2b-5843-98dd-e62bb5123324.shared_workdaysoap"
+            ),
+            "connectionreferencedisplayname": "Agent Workday Runtime",
+            "connectorid": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+            "connectionid": "agent-connection",
+            "statuscode": 1,
+        })
+        runner._workday_connection_refs = refs
+
+        with patch("auth.query_all", return_value=refs):
+            results = _check_package_flavor(runner, wd_flows=[{"name": "runtime"}])
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Passed"
+        assert runner._workday_package_flavor == "simplified"
+        assert len(runner._workday_connection_refs) == 1
 
     def test_runtime_unbound_fails(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_package_connection_completeness

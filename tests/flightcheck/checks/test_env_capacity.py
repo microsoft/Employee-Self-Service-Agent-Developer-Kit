@@ -50,8 +50,18 @@ def _mcs(allocated: int) -> list[dict]:
     return [{"currencyType": "MCSMessages", "allocated": allocated}]
 
 
-def _runner(*, powerplatform, payg=None, env_id="env-guid"):
-    runner = SimpleNamespace(powerplatform=powerplatform, env_id=env_id)
+def _runner(
+    *,
+    powerplatform,
+    payg=None,
+    env_id="env-guid",
+    ring="prod",
+):
+    runner = SimpleNamespace(
+        powerplatform=powerplatform,
+        env_id=env_id,
+        ring=ring,
+    )
     if payg is not None:
         runner._payg_configured = payg
     return runner
@@ -75,40 +85,73 @@ def test_passed_when_capacity_allocated():
     assert "25000" in r.result
 
 
-def test_failed_when_zero_capacity_no_payg():
+def test_warns_when_zero_capacity_no_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=False))
-    assert r.status == "Failed"
-    assert "runtime" in r.result.lower()
+    assert r.status == "Warning"
+    assert "not configured" in r.result
+    assert "no message capacity" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_with_payg():
+def test_warns_when_zero_capacity_with_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=True))
-    assert r.status == "Failed"
-    assert "does not satisfy" in r.result
+    assert r.status == "Warning"
+    assert "Pay-as-you-go billing is configured" in r.result
+    assert "will be billed through Azure Pay-as-you-go" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_unknown_payg():
+def test_warns_when_zero_capacity_unknown_payg():
     # No _payg_configured on the runner (PRE-005 did not run this scope).
     r = _run(_runner(powerplatform=_FakePP([])))
-    assert r.status == "Failed"
+    assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "cannot continue" in r.remediation.lower()
+    assert "message capacity is not confirmed" in r.remediation
+    assert "Setup can continue with this risk recorded" in r.remediation
 
 
-def test_fails_when_no_powerplatform_client():
+def test_requires_manual_confirmation_when_no_powerplatform_client():
     r = _run(_runner(powerplatform=None, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
     assert "Manage capacity" in r.remediation
+    assert "explicitly attest" in r.remediation
 
 
-def test_fails_when_allocation_read_denied():
+def test_requires_manual_confirmation_when_allocation_read_denied():
     pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
     r = _run(_runner(powerplatform=pp_denied, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
+
+
+@pytest.mark.parametrize(
+    ("ring", "expected_origin"),
+    [
+        ("prod", "https://admin.powerplatform.microsoft.com"),
+        ("preprod", "https://admin.preprod.powerplatform.microsoft.com"),
+        ("test", "https://admin.test.powerplatform.microsoft.com"),
+    ],
+)
+def test_capacity_remediation_uses_ring_admin_center(
+    ring: str,
+    expected_origin: str,
+) -> None:
+    r = _run(_runner(powerplatform=None, ring=ring))
+    assert expected_origin in r.remediation
+
+
+def test_capacity_remediation_falls_back_when_ring_unresolved():
+    # Targeted --checkpoint runs never resolve the BAP ring, so runner.ring is
+    # None. The capacity row must still be produced (no crash) with a
+    # ring-agnostic production Admin Center link, rather than raising.
+    r = _run(_runner(powerplatform=None, ring=None))
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
+    assert "https://admin.powerplatform.microsoft.com" in r.remediation
+    assert "Manage capacity" in r.remediation
 
 
 def test_fails_when_no_env_id():

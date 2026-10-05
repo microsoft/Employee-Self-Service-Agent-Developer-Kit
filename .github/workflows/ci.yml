@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "release/**" ]
+    branches: [ "main", "main-ca", "release/**" ]
   pull_request:
-    branches: [ "main", "release/**" ]
+    branches: [ "main", "main-ca", "release/**" ]
     types: [ "opened", "synchronize", "reopened", "edited" ]
 
 permissions:

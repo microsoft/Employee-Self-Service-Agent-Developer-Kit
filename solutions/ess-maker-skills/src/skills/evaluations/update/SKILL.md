@@ -2,15 +2,11 @@
 
 Update evaluation test sets from either the workspace-level catalogue output or
 a configured agent. Keep `.mcs.yml` and CSV representations synchronized.
-Any updated set can be offered for push; a workspace-level set is copied into
-the configured agent only after the user confirms the push. After a successful
-push, the temporary workspace-level source is removed so the configured-agent
-copy becomes the single local source of truth.
-
-Complete the checkpoint, local edit, and validation, but skip every push or
-deployment-verification instruction. Finish by saying the local files are
-ready
-and DA-GA evaluation deployment is not yet available.
+Read `src/skills/evaluations/experience-contract.md` for shared presentation,
+method admission, quality copy, and four maker actions. Run and Request Review
+include required scoped deployment through
+`src/skills/evaluations/deployment-flow.md`. Explicit standalone evaluation push
+remains available. Local editing never automatically deploys.
 
 ## Evaluation locations
 
@@ -33,8 +29,9 @@ and DA-GA evaluation deployment is not yet available.
   is automatic and mandatory for every change.
 - Run quality validation before completing either a local update or an
   agent-owned update.
-- Never push until the user explicitly chooses to push.
-- Promote a workspace-level set only after the user chooses to push it. Promotion
+- Never deploy until the user selects Run, Request Review, explicit push, or
+  reviewer completion and the required scope/side-effect approvals are obtained.
+- Promote a workspace-level set only for that selected action. Promotion
   stages a copy under the configured agent. Remove the workspace source and its
   matching workspace CSV only after the push succeeds; preserve both if
   promotion or push fails.
@@ -48,9 +45,9 @@ and DA-GA evaluation deployment is not yet available.
   available structured question control with named choices (dropdown, buttons,
   or multi-select as appropriate). Do not rely on an open-text question when
   the choices are already known.
-- Never finish immediately after displaying test cases. Makers must receive an
-  explicit choice to edit the set themselves, send it to a judge or SME for
-  feedback, or keep it unchanged. Reviewers must receive an explicit choice to
+- Never finish immediately after displaying test cases. Makers receive the
+  shared four actions; the Edit experience visibly includes adding cases.
+  Keep/cancel remains a no-op. Reviewers must receive an explicit choice to
   provide feedback, suggestions, or recommendations, or complete review
   without feedback.
 
@@ -58,14 +55,20 @@ and DA-GA evaluation deployment is not yet available.
 
 Before the normal update flow, inspect the user's intent:
 
-- **Tag for review / send for review** → follow **Flow R1** below.
+- **Tag for review / send for review / Mark this test set ready for review** → follow **Flow R1** below.
 - **Review assigned test sets / act as judge or SME** → follow **Flow R2**.
+- **Run this test set in Copilot Studio** -> hand exact selected context to
+  `src/skills/evaluations/run/SKILL.md` Flow A; do not tag or push here as well.
+- **Run another quality review** -> select the exact set if needed, then follow
+  Step 5 and return to the shared maker actions without mutation or deployment.
+- **Explicitly push an evaluation set** -> discover/select the exact set and
+  continue through Step 7 with helper action `push`, preserving review state.
 - Otherwise continue with Step 1.
 
 Review state and review activity are separate:
 
-- `review_requested` means the set is tagged to become available for review
-  after a successful push.
+- `review_requested` records review intent. Dataverse publishes the marker
+  through the existing push; native MinimalBot retains it locally only.
 - It does not prove that another user has received, opened, or reviewed the
   set.
 - `review_completed` is valid only after the user explicitly enters Flow R2,
@@ -82,20 +85,30 @@ Before showing any review-related next action, run
 
 - `localStatus` - the desired working change.
 - `deployedStatus` - the latest pulled or successfully pushed Copilot Studio
-  status from the configured agent baseline.
+  status from the configured agent baseline on Dataverse. Native review
+  sidecars are not copied into the deployed `.baseline`; its server review
+  status remains absent.
 
-Use `nextAction` from the command:
+Use `nextAction` from the command. The remote-state meanings below apply to
+Dataverse; for native label review state as local and do not infer a remotely
+published tag or cross-user discovery:
 
 | Next action | Meaning | User-facing action |
 |---|---|---|
-| `push_review_request` | Local tag is requested, but Copilot Studio is untagged or the set is not deployed | Offer to push the review request |
+| `push_review_request` | Local tag is requested, but Copilot Studio is untagged or the set is not deployed | Resume Request Review and its required deployment |
 | `review` | Local and deployed status are both `review_requested` | Offer the reviewer feedback/completion workflow |
-| `push_review_completion` | Review was completed locally but Copilot Studio still has the requested tag | Offer to push the completed-review marker |
+| `push_review_completion` | Review was completed locally but Copilot Studio still has the requested tag | Resume the confirmed review-completion deployment |
 | `run_or_view_results` | Local and deployed status are both `review_completed` | Offer run or result-history actions |
 
-Never derive these actions from `localStatus` alone. If another user may have
+Never derive these actions from `localStatus` alone on Dataverse. If another user may have
 changed the set since the last pull, refresh first; the baseline must represent
 the latest retrieved Copilot Studio state before entering Flow R2.
+For native, preserve the existing local review workflow and pending-review Run
+gate; `deployedReviewStatus=null` does not erase local intent or prove completion.
+Use the selected local `review.json` for an explicitly entered native R2 review,
+not a remote `nextAction=review` requirement. A local requested marker keeps
+Run blocked; explicit local completion can proceed through verified YAML
+push/reuse. Do not repeatedly push to obtain an unsupported shared marker.
 
 ### Flow R1 — Tag selected test sets for review
 
@@ -104,7 +117,9 @@ Before asking the user to tag a set, explain:
 > **Mark for review** indicates that the test set is ready for another
 > reviewer, judge, or SME to inspect and provide feedback, suggestions, or
 > recommendations. The maker remains responsible for editing the test set. The
-> tag must be pushed to Copilot Studio before it is shared with other users.
+> tag must be pushed to Copilot Studio before it is shared with other users on
+> Dataverse. Native push uploads the test-set YAML but retains review status
+> locally; it does not publish shared review metadata.
 
 1. For a generic request such as **"tag testsets for review"**, run:
 
@@ -121,16 +136,42 @@ Before asking the user to tag a set, explain:
    generated set, or the active agent. A set is preselected only when the user
    explicitly names it (for example, "tag Compensation") or answers the
    create flow's scoped question about the generated sets.
-5. For each selected set, run:
+5. Follow `src/skills/evaluations/deployment-flow.md` before remote mutation.
+   Native MinimalBot uses the existing insert API, with new-copy/old-copy
+   behavior and its local-only review warning reported after deployment. The
+   selected Request Review action authorizes the required non-destructive push;
+   do not ask for another confirmation. Stop for approval only if the preview
+   reveals destructive Dataverse deletions or replacement of different local
+   files. Do not add a native review-persistence or in-place-update prerequisite.
+6. Continue Step 7 with helper action `request-review` in the same workflow. The
+   deployment owner persists `review_requested` using the existing
+   `evaluation_review.py --set-folder "{set-folder}" --status review_requested`
+   operation. Dataverse includes review-only changes and verifies the deployed
+   marker; native preserves the sidecar locally and pushes/reuses YAML without
+   serializing shared review metadata.
+   If already `review_requested`, do not ask again or change it to completed.
+   Do not ask an independent "push now?" question or require another command.
+7. After verified Dataverse success with `reviewMetadataPersisted=true` say:
 
-   ```text
-   python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_requested
-   ```
+   > **{set name} is ready for review in the connected agent.** Share the set name
+   > with an authorized reviewer so they can open the evaluation review flow.
+   > This has not run the evaluation or sent a reviewer notification.
 
-6. Explain that the tag is local until pushed. Continue through the normal
-   configuration check, promotion when needed, dry run, and push flow.
+   For native success with `reviewMetadataPersisted=false`, say instead:
 
-The pushed parent description contains:
+   > **{set name} was uploaded/reused as {actual deployed ID}.** Review is
+   > requested locally. Native push uploads YAML only; shared review state was
+   > not published. {reviewWarning} This has not run the evaluation or sent a
+   > reviewer notification.
+
+   Use the actual `deploymentBehavior`, not the literal "uploaded/reused"
+   alternative, and state that the old remote copy remains for a new copy.
+
+On failure/cancellation, say the review request is local/pending synchronization
+only if it was actually saved; report the actual failure and preserve files.
+Do not infer remote availability from `review.json`, staging, or a dry run.
+
+On Dataverse, the pushed parent description contains:
 
 ```text
 [ADK-REVIEW status=review_requested]
@@ -138,9 +179,14 @@ The pushed parent description contains:
 
 ### Flow R2 — Review assigned test sets
 
-When a user asks to review test sets, automatically refresh the configured
-agent before discovery unless `fetch_and_setup.py --refresh` already completed
-successfully in the current turn:
+When a user asks to review test sets, follow the existing discovery workflow.
+Native review sidecars can support the local workflow; they do not establish
+cross-user availability. Explain that distinction rather than blocking review
+or inventing remote metadata. Use `src/skills/evaluations/deployment-flow.md`
+for backend-specific outcome copy.
+
+For a Dataverse configured agent, automatically refresh before discovery
+unless `fetch_and_setup.py --refresh` already completed successfully in the current turn:
 
 ```text
 python scripts/fetch_and_setup.py --refresh
@@ -151,14 +197,22 @@ baseline from the latest Copilot Studio state. Do not ask the reviewer to pull
 manually or require an extra `/setup --refresh` step. If the refresh fails,
 report the actual error and stop rather than reviewing stale local data.
 
-After a successful refresh, run:
+After a successful Dataverse refresh, run:
 
 ```text
 python scripts/evaluation_review.py --list --status review_requested
 ```
 
-Use its JSON output to list pending sets from both workspace-level evaluations
-and every configured agent. Do not substitute an ad hoc `review.json` glob.
+Use its JSON output to list eligible requested sets for workspace/current-agent
+discovery. Do not substitute an ad hoc `review.json` glob or widen to other agents.
+Local-only requests are not proof of deployed review availability.
+For native local review, use `python scripts/evaluation_review.py --list-all`
+and select returned rows with `localStatus=review_requested`. Do not require a
+remote review refresh or a matching baseline marker: the sidecar is retained
+only in the local/promoted folder and is not copied into deployed `.baseline`.
+Label those rows **Review requested locally**. An empty local review list is
+not evidence that no remote colleague requested review; the existing API does
+not publish that shared state. Do not promise cross-user discovery.
 
 **Hard entry gate:** display the tagged-set table and wait for the user to
 select a set before reading all category files or invoking quality validation.
@@ -169,8 +223,10 @@ test set..." in the user-facing question.
 
 For each selected set:
 
-1. Regenerate the current CSV from the authoritative YAML, then show its
-   downloadable link before displaying any prompts or expected responses.
+1. Validate the method and regenerate the current CSV through the strict
+   `evaluation_csv.py` command in the shared **CSV synchronization** contract
+   (which uses `generate_set_csv`), then show its actual downloadable link before
+   displaying any prompts or expected responses.
    Immediately below the link, state:
 
    > The CSV file is for preview purposes only. Tell me which prompts,
@@ -189,22 +245,20 @@ For each selected set:
 
    The reviewer does not edit the test-case source files in this flow. Capture
    and clearly summarize proposed prompt or expected-response changes in the
-   conversation. State that the maker remains responsible for applying the
+   conversation, retaining all earlier feedback for this same selected set.
+   State that the maker remains responsible for applying the
    official changes, validating them, pushing the set, and running it. Do not
    claim that conversational recommendations were automatically written to the
    test-set description or source files.
-4. Follow **Step 6a: Review completion gate**. Do not ask about pushing before
-   this gate is resolved.
-5. When the user confirms completion, run:
+4. Follow **Step 6a: Review completion gate**. Ask whether to provide more
+   feedback or finish; never silently complete review after receiving feedback.
+5. Explicit completion continues through Step 7 as reviewer completion
+   in the same workflow, preserving scoped approval and deployment verification.
+   Dataverse completion becomes shared after the marker is pushed. Native
+   completion remains local after YAML deployment; retain and explain the
+   returned review warning rather than claiming shared completion.
 
-   ```text
-   python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_completed
-   ```
-
-6. Show the dry run, ask for push confirmation, and push. A completed review
-   is not visible to the maker until the description change is pushed.
-
-The push replaces only the ADK marker with:
+On Dataverse, the existing push replaces only the ADK marker with:
 
 ```text
 [ADK-REVIEW status=review_completed]
@@ -214,6 +268,11 @@ The human-authored description remains unchanged. Completed sets no longer
 appear in the pending-review list.
 
 ## Step 1: Discover all evaluation sets
+
+If the current user explicitly selected an exact folder/source in generation
+or the shared maker menu, retain that selected context and go to Step 2. Do not
+rediscover by display name and accidentally switch to a same-name set. Confirm
+again if the target/context has changed.
 
 If the user explicitly names a test set, run:
 
@@ -244,8 +303,8 @@ Present one combined table:
 
 > | # | Test set | Source | Test cases | Result after update |
 > |---|---|---|---|---|
-> | 1 | Compensation | Workspace | 8 | Local YAML + CSV; push offered after update |
-> | 2 | Topic Triggering | Configured agent | 24 | YAML + CSV; push offered after update |
+> | 1 | Compensation | Workspace | 8 | Local YAML + CSV; choose next action after update |
+> | 2 | Topic Triggering | Configured agent | 24 | YAML + CSV; choose next action after update |
 
 If the same set name exists in both locations, include both rows and their full
 source labels. If no sets are found, explain that there is nothing to update and
@@ -256,8 +315,18 @@ control. Each option must include the test-set name, source, and case count.
 
 ## Step 2: Identify the requested changes
 
-For each selected set, regenerate its CSV from the authoritative YAML and show
-the downloadable CSV link first:
+Reject an unsupported method-change request before applying any mutation, using
+the shared Compare Meaning-only error copy. Preserve the parent and threshold;
+never silently translate a requested method into another method.
+
+For each supported selected set, use the strict export CLI:
+
+```text
+python scripts/evaluation_csv.py --evaluation-folder "{set-folder}" --exports-folder "{exports-folder}"
+```
+
+It calls `evaluation_csv.generate_set_csv`. Regenerate from the authoritative
+YAML and show the downloadable CSV link first, using the JSON `csv` path:
 
 > Here's the current evaluation set for **{set name}**:
 >
@@ -266,6 +335,12 @@ the downloadable CSV link first:
 > The CSV file is for preview purposes only. Tell me which prompts, scenarios,
 > or rows you want to modify; changes are made to the source evaluation files
 > and automatically reflected in the CSV.
+
+If admission fails, report the exact invalid/missing field and preserve the last
+valid CSV; do not link it as a freshly synchronized preview. A requested
+prompt/assertion correction may continue by reading the affected YAML directly
+and validating the complete proposed result before saving. An unsupported
+method is not silently converted, and no invalid set is advertised as runnable.
 
 Then continue with the existing detailed edit experience and show its cases:
 
@@ -276,21 +351,16 @@ Then continue with the existing detailed edit experience and show its cases:
 Read both `input` and `expectedOutput` from every EvaluationData file before
 presenting the cases. The expected response is required context, not optional.
 
-Unless the user already supplied a specific edit, follow the case display with
-this mandatory structured question:
+If this is an explicit edit/add handoff, show structured editing choices:
 
-> How would you like to continue with **{set name}**?
-
-Offer:
-
-1. **Edit the test set myself**
-2. **Send it to a judge or SME for feedback**
+1. **Edit existing prompts or expected responses**
+2. **Add test cases to this set**
 3. **Keep it unchanged**
 
-If the maker chooses to edit, continue with the normal update flow. If they
-choose judge or SME feedback, enter Flow R1 and explain that the set must be
-pushed before another user can review it. If they keep it unchanged, do not
-mutate or push anything without a separate explicit request.
+Otherwise show **Four maker actions** from the shared experience contract.
+**Edit this test set** opens these editing choices. Keep/cancel does not mutate
+or deploy. An add request does not require selecting an old case to overwrite.
+Gather each new prompt and meaningful expected response before Step 3.
 
 When using a checkbox or multiple-choice UI, every case option must use this
 shape:
@@ -315,7 +385,19 @@ Support:
 | Replace placeholders | Update `<placeholder>` values |
 | Remove a case | Delegate to the evaluation delete skill |
 
+Removal retains the delete skill's existing restrictions; do not implement
+deletion or Excel ingestion here. Case identity is file plus row index, never
+input text alone. Preserve duplicate inputs with distinct assertions.
+
+If adding would exceed 100 cases, stop before writes and explain the limit.
+Offer an explicitly chosen separate set/split, not automatic replacement,
+truncation, or movement of old cases. For model-generated additional coverage,
+show the shared pre-generation explanation before generating new cases.
+
 Keep selection and editing as separate questions:
+
+These existing-row selection steps do not apply to adding cases. For an add
+request, collect only the new prompt and meaningful expected response.
 
 1. Ask which case or cases the user wants to change.
 2. After selection, ask whether to change the prompt, expected response, or
@@ -354,7 +436,7 @@ For workspace-only updates, do not require an agent checkpoint.
 Record anonymous usage telemetry on a best-effort basis:
 
 ```text
-python scripts/emit_capability.py evaluations
+python scripts/emit_capability.py evaluation_update
 ```
 
 Telemetry failure must not block the update.
@@ -374,21 +456,37 @@ extensionData:
   displayOrder: "{timestamp}"
 ```
 
-For a new case, create `{set-name}-{short-slug}.mcs.yml` in the selected set
-folder and assign a new epoch-milliseconds `displayOrder`.
+Before saving an edit, validate the proposed parent and complete case documents
+with `validate_evaluation_documents` from `evaluation_method_policy`. Preserve
+parent identity, valid threshold, review metadata, untouched files, and rows.
+On validation failure, report the specific error without changing valid files.
+
+For a new case, use the append helper rather than constructing a possibly
+colliding filename:
+
+```text
+python scripts/evaluation_authoring.py add --evaluation-folder "{set-folder}" --input "{new prompt}" --expected-output "{new expected response}"
+```
+
+Pass user values as literal subprocess arguments, never executable shell text.
+The helper checks all cases/capacity before writes, chooses a unique filename,
+and appends a stable display order. It returns the actual case file and CSV.
+If it reports the case saved but CSV synchronization failed, fix that error and
+regenerate the CSV; do not add the same case again.
 
 After all YAML edits, regenerate that set's CSV from its complete final
 EvaluationData list:
 
 - Workspace set: `workspace/evaluations/exports/`.
 - Agent set: `{agent.folder}/evaluations/exports/`.
-- Write `{YYYYMMDD}_{Evaluation_Set_Display_Name}.csv`, with spaces and
-  punctuation in the display name replaced by underscores. Overwrite that
-  day's file and remove an older export for the same set so the user sees one
-  current preview file.
-- Use the grader and threshold from the parent EvaluationSet.
-- Use an RFC-4180 CSV writer.
-- Prefix cells beginning with `=`, `+`, `-`, or `@` with an apostrophe.
+- Call `evaluation_csv.generate_set_csv` for the complete set. It owns
+  `{YYYYMMDD}_{Evaluation_Set_Display_Name}.csv` naming, collisions, RFC-4180,
+  formula protection, and validation before replacing an old export.
+- Use the strict export CLI above for this synchronization; never use
+  historical interoperability as a permissive feature fallback.
+- Use the returned CSV path, not an independently reconstructed name.
+- Keep only the allowed CompareMeaning method and preserve the parent's
+  threshold. Do not create an independent CSV writer or General Quality fallback.
 
 The YAML files are authoritative. Never update a CSV independently.
 Do not ask for confirmation before synchronizing the CSV; perform it as part of
@@ -399,7 +497,9 @@ the same edit operation.
 Invoke the evaluation validate subagent with every `.mcs.yml` file in each
 affected set, plus the set name and source folder.
 
-Display the complete quality report directly to the user. Follow
+Display the exact compact **Post-generation quality report** scorecard from
+`src/skills/evaluations/experience-contract.md` directly to the user without a
+separate preamble, table, filename callout, or summary. Follow
 `src/skills/evaluations/quality-fix-flow.md`; the "review step" referenced
 there is Step 6 below.
 
@@ -408,13 +508,18 @@ continuing.
 
 ## Step 6: Review
 
-Show a source-aware summary:
+For an edit/add, show a source-aware summary:
 
 > | Set | Source | File | Field | Before | After |
 > |---|---|---|---|---|---|
 > | Compensation | Workspace | `base-pay.mcs.yml` | input | "salary" | "What is my base compensation?" |
 
-Ask whether the user wants to review the complete files or apply the update.
+For an edit/add, the local update has already been saved; do not ask to "apply"
+it again. For a quality-only request with no fixes, do not claim files changed.
+Render changed final cases/current CSV with the shared preview, then offer
+**Four maker actions** from `src/skills/evaluations/experience-contract.md`.
+If this was an explicit repeat quality review with no edits, avoid repeating
+unchanged tables. Neither displaying the menu nor choosing Edit deploys.
 
 ## Step 6a: Review completion gate
 
@@ -422,8 +527,10 @@ Enter this gate only when the current interaction originated from **Flow R2**
 or the user explicitly asked to complete an active review. Do not enter it
 during Flow R1, a normal update, a normal push, or a resumed push.
 
-In an active Flow R2 review, require `nextAction=review`. Then inspect the
-selected set's `review.json`. If its status is `review_requested`, ask:
+In an active Dataverse Flow R2 review, require `nextAction=review`. For native
+local review, require explicit selection from the local requested rows instead;
+do not require a remote or baseline review marker. Then inspect the selected
+set's `review.json`. If its status is `review_requested`, ask:
 
 > This test set is currently marked for review. What would you like to do?
 
@@ -443,14 +550,12 @@ Do not show or ask the push question until the user resolves this review gate.
 
 ### Mark review complete
 
-Run:
-
-```text
-python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_completed
-```
-
-Confirm the local status is now `review_completed`, then continue to Step 7 and
-ask whether to push the updated files and completed-review marker together.
+Continue to Step 7 as reviewer completion. The deployment owner first
+validates the method and selected target, then uses the existing marker operation:
+`evaluation_review.py --set-folder "{set-folder}" --status review_completed`.
+Continue the same scoped push workflow: verify the Dataverse remote marker,
+or report native local completion and actual YAML deployment without a shared
+completion claim. Do not add another independent push menu.
 
 ### Provide feedback or recommendations for the maker
 
@@ -460,7 +565,17 @@ statement:
 
 > Your recommendations are ready to hand back to the maker. The maker should apply the official test-case changes, push the updated set, and then run the evaluation. Recommendations alone do not modify the test-set files.
 
-Then return to the completion gate. Do not silently mark the review complete.
+Then ask using the structured choice control:
+
+> Would you like to provide more feedback, or is your feedback complete and
+> ready for the maker to run this test set?
+
+- **Provide more feedback**: append recommendations for the same set; retain
+  earlier feedback without overwriting it.
+- **Mark review complete**: explicitly enter the completion path above.
+
+Do not silently mark the review complete. Conversation feedback is not a
+persisted source edit or a reviewer notification.
 
 Outside Flow R2, preserve `review_requested` and skip this gate. If a workspace
 set was tagged and the user cancelled before promotion or push, a later
@@ -468,7 +583,8 @@ set was tagged and the user cancelled before promotion or push, a later
 Say:
 
 > **{set name}** is already marked for review locally. I’ll keep that status
-> and continue the push so it becomes available to reviewers.
+> and continue the existing push. Dataverse publishes the review marker; native
+> push retains review status locally and uploads the YAML only.
 
 Do not offer **Mark review complete** in that resumed-maker flow.
 
@@ -476,185 +592,46 @@ If `review.json` is absent or already has `review_completed`, skip this gate and
 continue normally. Never infer completion merely because edits passed quality
 validation; completion requires the user's explicit choice in an active review.
 
-## Step 7: Ask whether to push
+## Step 7: Continue the selected deployment action
 
-Only after the update, CSV synchronization, validation, file review, and any
-required Step 6a review-completion gate are complete, ask for every selected
-set:
+Enter only for Request Review, explicit evaluation push, or confirmed reviewer
+completion. Run delegates to `run/SKILL.md` instead and owns its own deployment;
+do not run the same push from both skills.
 
-> The **{set name}** evaluation set is updated locally. Would you like to
-> **push it to Copilot Studio now**?
+Read `src/skills/evaluations/deployment-flow.md` and follow it with the exact
+selected folder/source and intended action. It owns setup/backend admission,
+review reconciliation, promotion collisions, scoped dry-run visibility,
+action-aware authorization, verified push/no-op, and success-only cleanup.
+Flow R1 pushes immediately without another confirmation; never use an unscoped
+push or skip destructive replacement/deletion approval.
 
-Ask this even for workspace-level sets and even when no agent is currently
-configured. Do not inspect or report agent configuration until the user answers.
+For Flow R1, continue Request Review without another typed push command.
+For Flow R2, preserve the user's explicit completion choice and persist it in
+the same workflow. An ordinary or resumed explicit push preserves existing
+review state; it must not create a request or mark review complete.
 
-### If the user declines
+If configuration is missing, preserve all files, explain the prerequisite, and
+resume the same selected action after setup. Do not require setup for local
+editing, displaying choices, or keeping a set.
 
-Confirm the local locations and finish without checking setup:
+## Step 8: Final summary
 
-- `.mcs.yml`: the selected set folder.
-- CSV: that source's `evaluations/exports/` folder.
+Report the selected set, actual local/deployed state, changes, and current CSV
+link. Use the shared local-only reminder after failure/cancellation or when
+files remain local. Remove it only after verified successful deployment; a
+staging copy and dry run do not make a set available to authorized reviewers.
 
-### If the user chooses push
+For successful Flow R1 use its backend-specific reviewer handoff with no notification/run claim.
+When this push records `review_completed` on Dataverse and verifies it, say:
 
-Only now read `.local/config.json` and check that:
-
-1. `setup` is `"complete"`;
-2. `agent.folder` exists;
-3. the agent folder has a `.baseline`; and
-4. the required agent identity fields are present.
-
-If configuration is missing or incomplete, do not attempt a push. Say:
-
-> This test set is updated and saved locally, but an agent is not configured
-> yet. Run `/setup` to connect the target agent, then ask me to push the
-> **{set name}** evaluation set.
-
-Keep all generated files unchanged so the user can resume after setup.
-
-Before preparing the push, ask:
-
-> Would you like to tag any selected test sets for review?
-
-If yes, run the Flow R1 metadata command for each selected set before the dry
-run. If the current request already followed Flow R1 or the selected set is
-already `review_requested`, do not ask again. Preserve its existing status and
-continue the push.
-
-## Step 8: Prepare the selected set for push
-
-### Set already owned by the configured agent
-
-Continue with its existing `{agent.folder}/evaluations/{set}/` files.
-
-### Workspace-level set
-
-Promote it using copy-then-cleanup:
-
-1. Run `python scripts/checkpoint.py "pre-push-workspace-evaluation"`.
-2. Check both:
-   - `{agent.folder}/evaluations/{set}/`
-   - `{agent.folder}/.baseline/evaluations/{set}/`
-
-   If either exists, explain that the set already exists locally or in the
-   deployed baseline. Show any baseline case files that are absent from the
-   workspace set; pushing a replacement will delete those cases from Copilot
-   Studio. Ask whether to replace the existing set or cancel. Never overwrite
-   or delete existing cases silently.
-3. Promote with:
-
-   ```text
-   python scripts/evaluation_promotion.py promote --set-name "{set}" --agent-folder "{agent.folder}"
-   ```
-
-   After explicit replacement approval, add `--replace`. This script copies
-   the YAML and `review.json`, regenerates the agent CSV, and deliberately
-   preserves the workspace source until the push succeeds.
-
-If the same workspace source and an identical configured-agent staging copy
-already exist while no deployed baseline exists, treat this as a resumed
-promotion from a cancelled or failed push. Run the same
-`evaluation_promotion.py promote` command; it returns `"resumed": true` and
-reuses the staged copy. Continue to the scoped dry run; do not ask to mark the
-review complete and do not describe the staging copy as proof that review
-occurred.
-
-The agent-folder copy becomes the source for `push.py`. Keep the workspace set
-unchanged until the push reports full success.
-
-## Step 9: Dry run and push
-
-Build one scope argument for every selected set:
-
-```text
---only "evaluations/{set}/*"
-```
-
-Run the scoped preview:
-
-```text
-python scripts/push.py --only "evaluations/{set}/*" --dry-run
-```
-
-For multiple selected sets, repeat `--only` once per set. Never use an unscoped
-`push.py` command from the evaluation update, tagging, review, or promotion
-flow. Unscoped push can include unrelated pending topic or workflow changes.
-
-Show the output and get confirmation. Clearly identify any deletions within
-the selected evaluation set as replacement of deployed cases.
-
-If the scoped preview contains deletions, require one explicit confirmation:
-
-> Replacing **{set name}** will delete these deployed test cases: {files}.
-> Continue with the replacement?
-
-The replacement choice in Step 8 counts as this confirmation only when it
-listed the same files. After confirmation, run the scoped push with
-`--force-delete` so `push.py` does not ask for the same deletion approval
-again:
-
-```text
-python scripts/push.py --only "evaluations/{set}/*" --yes --force-delete
-```
-
-If the scoped preview has no deletions, omit `--force-delete`:
-
-```text
-python scripts/push.py --only "evaluations/{set}/*" --yes
-```
-
-Use `--yes` only after the user explicitly confirms the push in Step 7. Use
-`--force-delete` only after the exact selected-set deletions have been shown
-and approved. The scope ensures unrelated local topic or workflow deletions
-remain untouched for a later push.
-
-If the push fails, show the error and offer retry or checkpoint revert.
-
-### Successful workspace promotion cleanup
-
-   Only when `push.py --yes` exits successfully:
-
-   Run:
-
-   ```text
-   python scripts/evaluation_promotion.py cleanup --set-name "{set}" --agent-folder "{agent.folder}"
-   ```
-
-   The script verifies the promoted agent copy before deleting only the exact
-   workspace source and its matching workspace CSV files. Do not manually delete
-   promotion paths. If cleanup refuses to run, preserve everything and report the
-   error instead of guessing.
-
-If the push fails, is cancelled, or only the dry run completes, do not perform
-cleanup. The workspace source remains available for retry.
-
-## Step 10: Final summary
-
-Report each updated set, its source, changed-case count, CSV location, and
-whether it was:
-
-- Kept local by user choice.
-- Waiting for `/setup`.
-- Promoted from the workspace, pushed, and removed from workspace staging.
-- Updated and pushed from the configured agent folder.
-
-For every set that was kept local, is waiting for `/setup`, had only a dry run,
-or whose push failed/cancelled, end with this mandatory reminder:
-
-> ⚠️ To make this test set available to an authorized judge or SME, it must be
-> promoted to the configured agent and successfully pushed to Copilot Studio.
-> The CSV and local evaluation files are not shared yet. Say
-> **"push {set name}"** when you are ready.
-
-Do not stop showing the reminder merely because the set now exists inside the
-configured agent's local `evaluations/` folder. Remove it only after
-`push.py --yes` completes successfully. For a successful push, state:
-
-> ✅ This test set is now available in Copilot Studio for authorized judges and
-> SMEs.
-
-Exception: when this push records `review_completed`, do not mention judges or
-SMEs. Instead state:
-
-> ✅ Review completed and pushed successfully. You can now run this test set or
+> Review completed and pushed successfully. You can now run this test set or
 > view its evaluation run history.
+
+For native success, report the actual deployed ID and local completion with
+`reviewMetadataPersisted=false`, `deployedReviewStatus=null`, and `reviewWarning`.
+Do not say completion was published to other users. Run still checks the
+existing pending-review, method, target, and connection requirements.
+
+If completion deployment fails, state it is local/pending synchronization, not
+ready to run. For ordinary maker completion, return to the shared four actions;
+for reviewer feedback, preserve the more-feedback/completion loop instead.

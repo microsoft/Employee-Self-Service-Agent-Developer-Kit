@@ -19,6 +19,8 @@ Contracts pinned:
   * plan producing a PASSED row               -> SystemExit code 0
   * plan producing a FAILED row               -> SystemExit code 1
   * plan producing an ERROR row                -> SystemExit code 1
+  * plan producing only SKIPPED/NOT_CONFIGURED -> SystemExit code 1
+  * plan producing a MANUAL row                -> READY_WITH_WARNINGS / 0
   * exact checkpoint producing no row          -> SystemExit code 1
 """
 
@@ -39,18 +41,24 @@ def _args(
     tmp_path: Path,
     environment_url: str | None = None,
     environment_id: str | None = None,
+    connect_config: str | None = None,
+    agent_slug: str | None = None,
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
+    ring: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
         environment_url=environment_url,
         environment_id=environment_id,
+        connect_config=connect_config,
+        agent_slug=agent_slug,
         output=str(tmp_path / "out"),
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
+        ring=ring,
     )
 
 
@@ -65,6 +73,112 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
     )
 
 
+class _FakeRunResult:
+    """Minimal stand-in exposing only the counts ``_run_exit_code`` reads."""
+
+    def __init__(self, *, failed: int = 0, blocked: int = 0, errors: int = 0):
+        self.failed = failed
+        self.blocked = blocked
+        self.errors = errors
+
+
+@pytest.mark.parametrize(
+    ("failed", "blocked", "errors", "expected"),
+    [
+        (0, 0, 0, 0),   # clean run -> ready
+        (1, 0, 0, 1),   # failed row -> not ready
+        (0, 0, 1, 1),   # errored row -> not ready
+        (0, 1, 0, 1),   # BLOCKED-only run must NOT exit 0 (hard release gate)
+        (0, 2, 0, 1),   # multiple blocked rows -> not ready
+        (1, 1, 1, 1),   # all three -> not ready
+    ],
+)
+def test_run_exit_code_treats_blocked_as_not_ready(
+    failed: int, blocked: int, errors: int, expected: int
+) -> None:
+    # BLOCKED forces overall = NOT_READY; the exit code must mirror that so a
+    # CI/Connect caller keying on it can't read a blocked essential capability
+    # as success. Regression guard for the checkpoint/full-run exit paths that
+    # previously omitted result.blocked.
+    result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
+    assert cli._run_exit_code(result) == expected
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["employee@example.com", "attempt label", "../attempt", "x" * 129],
+)
+def test_runtime_evidence_label_rejects_free_form_or_sensitive_text(
+    tmp_path: Path,
+    label: str,
+) -> None:
+    args = _args("WD-DA-RUN-001", tmp_path)
+    args.runtime_evidence_attempt_id = label
+
+    with pytest.raises(ValueError, match="opaque label"):
+        cli._runtime_evidence_values(args)
+
+
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "expected"),
+    [
+        ({}, "test", "test"),
+        (
+            {
+                "ring": "preprod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.preprod.powerplatform.com"
+                ),
+            },
+            None,
+            "preprod",
+        ),
+    ],
+)
+def test_resolve_environment_ring(
+    config: dict,
+    explicit_ring: str | None,
+    expected: str,
+) -> None:
+    assert (
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "message"),
+    [
+        ({}, None, "ring is unavailable"),
+        (
+            {
+                "ring": "prod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.test.powerplatform.com"
+                ),
+            },
+            None,
+            "do not identify the same",
+        ),
+    ],
+)
+def test_resolve_environment_ring_rejects_inconclusive_state(
+    config: dict,
+    explicit_ring: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
+
+
 @pytest.fixture
 def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the summary printer and results writer so the run-reaching tests
@@ -75,6 +189,226 @@ def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestGates:
+    def test_connect_config_overlay_preserves_foundation_identity(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            '{"entraAppId":"app-123","tenant":"acme","status":"in-progress"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {
+                "dataverseEndpoint": "https://example.crm.dynamics.com",
+                "agent": {"slug": "ess-hr"},
+                "status": "complete",
+            },
+            str(overlay),
+        )
+
+        assert merged["dataverseEndpoint"] == "https://example.crm.dynamics.com"
+        assert merged["agent"] == {"slug": "ess-hr"}
+        assert merged["entraAppId"] == "app-123"
+        assert merged["tenant"] == "acme"
+        assert merged["status"] == "complete"
+        assert merged["_connectConfigPath"] == str(overlay)
+
+    def test_connect_config_overlay_preserves_foundation_connections(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            '{"connections":{"Workday":{"tenant":"wrong"}}}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"connections": {"Workday": {"tenant": "foundation"}}},
+            str(overlay),
+        )
+
+        assert merged["connections"]["Workday"]["tenant"] == "foundation"
+
+    def test_connect_config_only_merges_provider_owned_fields(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            json.dumps({
+                "tenant": "provider-tenant",
+                "releaseLine": "legacy",
+                "powerPlatformApiEndpoint": "https://wrong.example",
+                "workdayProbe": {"url": "https://wrong.example"},
+            }),
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {
+                "releaseLine": "da",
+                "powerPlatformApiEndpoint": "https://api.powerplatform.com",
+                "workdayProbe": {"url": "https://foundation.example"},
+            },
+            str(overlay),
+        )
+
+        assert merged["tenant"] == "provider-tenant"
+        assert merged["releaseLine"] == "da"
+        assert (
+            merged["powerPlatformApiEndpoint"]
+            == "https://api.powerplatform.com"
+        )
+        assert merged["workdayProbe"] == {
+            "url": "https://foundation.example"
+        }
+
+    @pytest.mark.parametrize("schema_version", [2, 3, 4, 5, 6, 7])
+    def test_connect_config_flattens_workday_state(
+        self, tmp_path: Path, schema_version: int
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": schema_version,
+                    "scope": {
+                        "workdayTenant": "acme_impl",
+                        "entraTenantId": "tenant-id",
+                        "dataverseUrl": "https://acme.crm.dynamics.com",
+                    },
+                    "identifiers": {
+                        "entraAppId": "app-id",
+                        "entraAppIdUri": "api://app-id",
+                        "workdaySamlEntityId": (
+                            "http://www.workday.com/acme_impl"
+                        ),
+                    },
+                    "endpoints": {
+                        "restBaseUrl": (
+                            "https://wd2-impl-services1.workday.com/ccx/api"
+                        ),
+                        "oauthTokenUrl": (
+                            "https://wd2-impl-services1.workday.com/"
+                            "ccx/oauth2/acme_impl/token"
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["tenantId"] == "tenant-id"
+        assert merged["dataverseEndpoint"] == (
+            "https://acme.crm.dynamics.com"
+        )
+        assert merged["entraAppId"] == "app-id"
+        assert merged["appIdUri"] == "api://app-id"
+        assert merged["workdaySamlEntityId"] == (
+            "http://www.workday.com/acme_impl"
+        )
+        assert merged["tokenEndpoint"] == (
+            "https://wd2-impl-services1.workday.com/"
+            "ccx/oauth2/acme_impl/token"
+        )
+
+    @pytest.mark.parametrize(
+        "agent_slug",
+            (
+                ".",
+                "..",
+                "../other-agent",
+                r"..\other-agent",
+                "/tmp/agent",
+                "C:other-agent",
+                "other agent",
+            ),
+    )
+    def test_single_checkpoint_rejects_unsafe_explicit_agent_slug(
+        self,
+        tmp_path: Path,
+        agent_slug: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args("FAKE-001", tmp_path, agent_slug=agent_slug)
+            )
+
+        assert exc.value.code == 2
+        assert "ERROR: Invalid --agent-slug:" in capsys.readouterr().out
+
+    def test_connect_config_supplies_sidecar_dataverse(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            '{"sidecarDataverseEndpoint":'
+            '"https://sidecar.crm.dynamics.com"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"powerPlatformApiEndpoint": "https://api.powerplatform.com"},
+            str(overlay),
+        )
+
+        assert (
+            merged["dataverseEndpoint"]
+            == "https://sidecar.crm.dynamics.com"
+        )
+        assert (
+            merged["powerPlatformApiEndpoint"]
+            == "https://api.powerplatform.com"
+        )
+
+    def test_foundation_dataverse_wins_over_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text(
+            '{"sidecarDataverseEndpoint":'
+            '"https://sidecar.crm.dynamics.com"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"dataverseEndpoint": "https://foundation.crm.dynamics.com"},
+            str(overlay),
+        )
+
+        assert (
+            merged["dataverseEndpoint"]
+            == "https://foundation.crm.dynamics.com"
+        )
+
+    def test_connect_config_overlay_rejects_non_object(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "invalid.json"
+        overlay.write_text('["not", "an", "object"]', encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must contain a JSON object"):
+            cli._merge_connect_config({}, str(overlay))
+
+    @pytest.mark.parametrize("field", ["scope", "identifiers", "endpoints"])
+    def test_connect_config_rejects_non_object_versioned_sections(
+        self,
+        tmp_path: Path,
+        field: str,
+    ) -> None:
+        overlay = tmp_path / "invalid-section.json"
+        overlay.write_text(
+            json.dumps({"schemaVersion": 7, field: []}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match=f"field '{field}'.*JSON object"):
+            cli._merge_connect_config({}, str(overlay))
+
     def test_environment_checkpoints_accept_explicit_foundation_context(
         self,
     ) -> None:
@@ -113,24 +447,6 @@ class TestGates:
             cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
         assert exc.value.code == 1
 
-    def test_missing_dataverse_endpoint_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Config present (so the config gate passes) but no dataverseEndpoint,
-        # and ESS-SOLN-001 requires one -> the endpoint gate fires, still
-        # before any auth.
-        plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert plan.requires_dataverse_endpoint, (
-            "test assumes ESS-SOLN-001 requires a Dataverse endpoint"
-        )
-        local = tmp_path / ".local"
-        local.mkdir()
-        (local / "config.json").write_text("{}", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
-        assert exc.value.code == 1
-
     def test_capacity_uses_explicit_environment_id_without_dataverse(
         self,
         tmp_path: Path,
@@ -163,6 +479,7 @@ class TestGates:
                     environment_id=(
                         "00000000-0000-4000-8000-000000001111"
                     ),
+                    ring="prod",
                 )
             )
 
@@ -182,6 +499,11 @@ class TestGates:
                     "releaseLine": "da",
                     "environmentId": (
                         "00000000-0000-4000-8000-000000001111"
+                    ),
+                    "ring": "test",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000000000000000000000000.0."
+                        "environment.api.test.powerplatform.com"
                     ),
                 }
             ),
@@ -211,6 +533,35 @@ class TestGates:
             )
 
         assert exc.value.code == 0
+
+    def test_capacity_requires_ring_when_setup_state_is_inconclusive(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "PowerPlatformClient",
+            lambda _tenant_id: pytest.fail(
+                "ring validation must complete before authentication"
+            ),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 1
+        assert "Confirm whether the environment uses" in capsys.readouterr().out
 
 
 class TestHermeticRun:
@@ -254,6 +605,217 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 0
 
+    def test_assigns_explicit_agent_slug_and_connect_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text('{"tenant":"acme"}', encoding="utf-8")
+        captured = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [("Fake", self._fn)]
+
+            @staticmethod
+            def _fn(runner):
+                captured["agent_slug"] = runner.agent_slug
+                captured["config"] = runner.config
+                return [_row("FAKE-001", Status.PASSED.value)]
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry, "transitive_requirements", lambda target: _Plan()
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    connect_config=str(overlay),
+                    agent_slug="active-agent",
+                )
+            )
+
+        assert exc.value.code == 0
+        assert captured["agent_slug"] == "active-agent"
+        assert captured["config"]["tenant"] == "acme"
+        assert captured["config"]["_connectConfigPath"] == str(overlay)
+
+    def test_preferred_account_is_propagated_and_verified_for_graph(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+            }),
+            encoding="utf-8",
+        )
+        observed = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.PASSED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = "maker@example.com"
+
+            def __init__(self, tenant_id: str) -> None:
+                observed["tenant_id"] = tenant_id
+
+            def authenticate(self, preferred_username=None):
+                observed["preferred_username"] = preferred_username
+                return "token"
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+        args = _args("FAKE-001", tmp_path)
+        args.preferred_username = "maker@example.com"
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(args)
+
+        assert exc.value.code == 0
+        assert observed == {
+            "tenant_id": "00000000-0000-0000-0000-000000001111",
+            "preferred_username": "maker@example.com",
+        }
+
+    def test_required_client_auth_failure_blocks_checkpoint(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local = tmp_path / ".local"
+        local.mkdir()
+        (local / "config.json").write_text(
+            json.dumps({
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+            }),
+            encoding="utf-8",
+        )
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+            requires_config = True
+
+        class _Plan:
+            clients = frozenset({registry.GRAPH})
+            requires_config = True
+            requires_dataverse_endpoint = False
+            ordered_fns = [(
+                "Fake",
+                lambda _runner: [_row("FAKE-001", Status.SKIPPED.value)],
+            )]
+
+        class _Graph:
+            signed_in_username = None
+
+            def __init__(self, _tenant_id: str) -> None:
+                pass
+
+            def authenticate(self, preferred_username=None):
+                raise RuntimeError("sign-in failed")
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.setattr(cli, "GraphClient", _Graph)
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 1
+
+    def test_runtime_evidence_arguments_reach_single_checkpoint_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        captured = {}
+
+        def _check(runner):
+            captured["label"] = runner.runtime_evidence_attempt_id
+            captured["start"] = runner.runtime_evidence_start
+            captured["end"] = runner.runtime_evidence_end
+            captured["flow_ids"] = runner.runtime_evidence_flow_ids
+            return [_row("WD-DA-RUN-001", Status.PASSED.value)]
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            ordered_fns = [("Fake", _check)]
+
+        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda _target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+        args = _args("WD-DA-RUN-001", tmp_path)
+        args.runtime_evidence_attempt_id = "attempt-001"
+        args.runtime_evidence_start = "2026-01-01T00:00:00Z"
+        args.runtime_evidence_end = "2026-01-01T00:05:00Z"
+        args.runtime_evidence_flow_id = ["flow-1", "flow-2"]
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(args)
+
+        assert exc.value.code == 0
+        assert captured == {
+            "label": "attempt-001",
+            "start": "2026-01-01T00:00:00Z",
+            "end": "2026-01-01T00:05:00Z",
+            "flow_ids": ("flow-1", "flow-2"),
+        }
+
     def test_failed_row_exits_1(
         self,
         tmp_path: Path,
@@ -280,6 +842,54 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-ERR", tmp_path))
         assert exc.value.code == 1
+
+    @pytest.mark.parametrize(
+        "status",
+        [Status.SKIPPED.value, Status.NOT_CONFIGURED.value],
+    )
+    def test_unresolved_row_exits_1(
+        self,
+        status: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-001", status)],
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+        assert exc.value.code == 1
+
+    def test_manual_row_adds_guided_warning_and_exits_0(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-001", Status.MANUAL.value)],
+        )
+        captured = {}
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, _output: captured.setdefault("result", result),
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
+
+        assert exc.value.code == 0
+        assert captured["result"].overall == "READY_WITH_WARNINGS"
+        assert any(
+            row.checkpoint_id == "CHECKPOINT-CONTRACT-GUIDED"
+            for row in captured["result"].results
+        )
 
     def test_exact_checkpoint_without_result_exits_1(
         self,
@@ -402,6 +1012,7 @@ class TestCheckpointTelemetry:
             )
         assert captured["called"] is False
 
+
     def test_tenant_name_falls_back_to_cache_when_graph_unavailable(
         self,
         tmp_path: Path,
@@ -480,3 +1091,93 @@ class TestCheckpointTelemetry:
         # consulted so a previously-seen tenant still gets its display name.
         assert captured["kwargs"]["tenant_name"] == "Contoso Cached"
         assert captured["kwargs"]["tenant_id"] == cached_tid
+
+
+class TestCheckpointAdkConnector:
+    """Single-checkpoint runs on the CLI runtime path must derive the
+    connector from the owning check's category and forward it to the ADK
+    ``emit_flightcheck_run`` / ``emit_flightcheck_result`` calls (ADO 7943641
+    review, finding 1). Without this, only the legacy
+    ``ESSMakerKit.FlightCheck.*`` events were attributed and the ADK
+    ``adk.flightcheck.*`` event family emitted an empty connector for real
+    runs even though the standalone helper tests exercised the kwarg.
+    """
+
+    @staticmethod
+    def _row_with_category(
+        checkpoint_id: str, category: str, status: str = Status.PASSED.value
+    ) -> CheckResult:
+        return CheckResult(
+            checkpoint_id=checkpoint_id,
+            category=category,
+            priority=Priority.MEDIUM.value,
+            status=status,
+            description="fake",
+            result="fake",
+        )
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> dict:
+        from flightcheck import telemetry as _tele_mod
+        import adk_telemetry as _adk_mod
+
+        captured: dict = {"run_kwargs": None, "result_kwargs": None}
+
+        def _fake_run(**kwargs):
+            captured["run_kwargs"] = kwargs
+
+        def _fake_result(**kwargs):
+            captured["result_kwargs"] = kwargs
+
+        monkeypatch.setattr(
+            _tele_mod,
+            "emit_flightcheck_telemetry",
+            lambda *_a, **_k: {"sent": False, "events": 0, "status": None,
+                               "env": "dev", "reason": "test"},
+        )
+        monkeypatch.setattr(_adk_mod, "set_identity", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "next_run_index", lambda *a, **k: 1)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_run", _fake_run)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_result", _fake_result)
+        monkeypatch.setattr(_adk_mod, "flush", lambda *a, **k: None)
+        return captured
+
+    def test_workday_category_row_forwards_workday_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("WD-CFG-001", "Workday")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("WD-CFG-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"] is not None
+        assert captured["run_kwargs"]["connector"] == "workday"
+        assert captured["result_kwargs"]["connector"] == "workday"
+
+    def test_servicenow_subcategory_row_forwards_servicenow_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("SN-HRSD-001", "ServiceNow HRSD")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("SN-HRSD-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == "servicenow"
+        assert captured["result_kwargs"]["connector"] == "servicenow"
+
+    def test_cross_cutting_category_row_forwards_empty_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("ENV-001", "Environment")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("ENV-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == ""
+        assert captured["result_kwargs"]["connector"] == ""

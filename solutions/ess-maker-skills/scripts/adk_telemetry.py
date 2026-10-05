@@ -74,7 +74,15 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.1.0: added derived ``tenant_class`` (internal vs customer) — ADO 7558661.
 # 1.3.0: defines the Vorpal bridge schema-v2 ``client_*`` field projection,
 #        including batch, source chronology, host context, and operation IDs.
-SCHEMA_VERSION = "1.3.0"
+# 1.4.0: added ``toolkit_git_sha`` + ``toolkit_git_branch`` common
+#        dimensions for precise upgrade-posture reporting and CA-vs-DA
+#        attribution — ADO 7943642.
+# 1.5.0: added derived ``connector`` (workday|servicenow|"") on
+#        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
+# 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
+# 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
+#        declarative_agent | unknown) — ADO 7830949.
+SCHEMA_VERSION = "1.7.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -92,6 +100,7 @@ EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
+EVENT_CONNECT_LIFECYCLE = "adk.connect.lifecycle"
 EVENT_CLIENT = "adk.client.event"
 
 CLIENT_EVENTS_SCHEMA_VERSION = 2
@@ -143,12 +152,23 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
-# Type" donut value-list are all kept in sync with it. When you add a
-# capability here, also add it to that Aria cube dimension value-list (see the
-# telemetry dashboards story, ADO #7532631) so the new slice renders.
+# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage
+# by Type" donut are all kept in sync with it.
 #
-# One capability per real maker-facing ADK skill / entry point:
+# The Aria "Capability Usage by Type" tiles filter the ``adk Capability``
+# dimension with ``not in <blank>``, so every value emitted from here shows
+# up on the donut automatically — no dashboard change is required when a
+# new capability is added below. (Historical: the tiles used to pin an
+# explicit ``in {value-list}`` filter, which meant new capabilities would
+# silently drop off the donut until the filter was updated. The
+# ``not in <blank>`` change landed 2026-09-22; see the telemetry dashboards
+# story, ADO #7532631, for context.)
+#
+# One capability per real maker-facing ADK skill / entry point. The taxonomy
+# is intentionally granular: every distinct command a maker can run has its
+# own donut slice, so we can see which specific action drove a change in
+# usage. Umbrella labels (a single "evaluations" or "publishing" wedge
+# covering multiple commands) hide that signal, so we split them apart.
 #   setup                   -> first-run environment setup + discovery
 #                              (discover / list_environments are sub-steps of
 #                              this flow and do NOT emit their own capability;
@@ -156,14 +176,25 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #                              tracked separately by the "Agents Created" KPI and
 #                              is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
-#   topic_*                 -> topic authoring (create / update / delete)
-#   workflow_*              -> workflow authoring (create / update / delete)
-#   evaluations             -> eval test-set authoring + validation runs
+#   topic_create            -> author a new topic
+#   topic_update            -> modify an existing topic
+#   topic_delete            -> delete a topic
+#   topic_review            -> advisory conformance review of a topic
+#   topic_test              -> debug-and-validate loop for a topic
+#   workflow_create         -> author a new workflow
+#   workflow_update         -> modify an existing workflow
+#   workflow_delete         -> delete a workflow
+#   workflow_test           -> debug a workflow via run history
+#   evaluation_create       -> author eval test cases
+#   evaluation_update       -> modify eval test cases
+#   evaluation_delete       -> delete eval test cases
+#   evaluation_validate     -> quality-score generated eval sets
 #   cleanup                 -> error scan / fix pass
 #   troubleshoot            -> connectivity / auth diagnosis
 #   backup_template_configs -> Workday template-config backup
 #   restore_template_configs-> Workday template-config restore
-#   publishing              -> push / deploy to Copilot Studio
+#   push                    -> upload local changes to Dataverse (staging)
+#   publishing              -> publish so pushed changes go live in runtime
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
     "setup",
@@ -171,14 +202,22 @@ ADK_CAPABILITIES = (
     "topic_create",
     "topic_update",
     "topic_delete",
+    "topic_review",
+    "topic_test",
     "workflow_create",
     "workflow_update",
     "workflow_delete",
-    "evaluations",
+    "workflow_test",
+    "evaluation_create",
+    "evaluation_update",
+    "evaluation_delete",
+    "evaluation_validate",
     "cleanup",
     "troubleshoot",
     "backup_template_configs",
     "restore_template_configs",
+    "analytics",
+    "push",
     "publishing",
     "flightcheck",
 )
@@ -202,6 +241,143 @@ def normalize_capability(capability: str) -> str:
         return ""
     c = str(capability).strip().lower()
     return c if c in _CAPABILITY_SET else CAPABILITY_UNKNOWN
+
+
+# --- Connector taxonomy (ADO 7943641) -------------------------------------
+# Attribute Connect + FlightCheck usage to the specific backend HR system so
+# Workday vs ServiceNow adoption / reliability can be reported separately
+# instead of collapsed under a single generic "connect" wedge. Bounded enum
+# keeps the dashboard dimension controlled (cardinality never grows).
+#
+# Values:
+#   workday    -> Workday connect flow, Workday-scope FlightCheck runs,
+#                 checks in the Workday / Workday Tenant / Workday Extension
+#                 categories.
+#   servicenow -> ServiceNow connect flow, ServiceNow-scope FlightCheck runs,
+#                 checks in the ServiceNow category.
+#   legacy     -> Explicit label for older events that emitted the generic
+#                 "connect" capability WITHOUT a connector arg. Emitted by
+#                 emit_capability.py when the caller passed no --connector
+#                 flag AND the capability is one that a future maker MIGHT
+#                 have connector context for (today: "connect"). Keeps the
+#                 pre-attribution corpus queryable as its own bucket rather
+#                 than double-counted against a real connector.
+#   unknown    -> Out-of-taxonomy value provided by the caller (typo,
+#                 future-connector name not yet in the enum).
+#   ""         -> Legitimately not connector-scoped (most capabilities,
+#                 checks in Environment / Authentication / Prerequisites /
+#                 Local Files categories, "full"-scope FlightCheck runs
+#                 that span multiple connectors).
+CONNECTORS = ("workday", "servicenow")
+_CONNECTOR_SET = frozenset(CONNECTORS)
+CONNECTOR_LEGACY = "legacy"
+CONNECTOR_UNKNOWN = "unknown"
+
+CONNECT_LIFECYCLE_EVENTS = (
+    "invoked",
+    "plan_generated",
+    "roles_attested",
+    "phase_started",
+    "phase_paused",
+    "phase_resumed",
+    "phase_completed",
+    "blocked",
+    "completed",
+    "abandoned",
+)
+_CONNECT_LIFECYCLE_EVENT_SET = frozenset(CONNECT_LIFECYCLE_EVENTS)
+CONNECT_LIFECYCLE_EVENT_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_OUTCOMES = (
+    "success",
+    "blocked",
+    "failure",
+    "cancelled",
+)
+_CONNECT_LIFECYCLE_OUTCOME_SET = frozenset(CONNECT_LIFECYCLE_OUTCOMES)
+CONNECT_LIFECYCLE_OUTCOME_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_PHASES = (
+    "preflight",
+    "entra",
+    "workday_admin",
+    "connections",
+    "runtime",
+    "employee_validation",
+)
+_CONNECT_LIFECYCLE_PHASE_SET = frozenset(CONNECT_LIFECYCLE_PHASES)
+CONNECT_LIFECYCLE_PHASE_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_BLOCKER_CATEGORIES = (
+    "auth",
+    "permissions",
+    "connection",
+    "runtime",
+    "validation",
+    "state",
+    "timeout",
+    "platform",
+    "unknown",
+)
+_CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET = frozenset(
+    CONNECT_LIFECYCLE_BLOCKER_CATEGORIES
+)
+_CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_CONNECT_LIFECYCLE_REMEDIATION_RE = re.compile(r"^WD-E2E-\d{3}$")
+
+
+def normalize_connector(connector: str) -> str:
+    """Normalize a ``connector`` value to the canonical enum.
+
+    Empty stays empty (event is not connector-scoped).
+    Non-empty inputs are lower-cased / stripped and mapped to themselves if
+    they are in :data:`CONNECTORS`, to :data:`CONNECTOR_LEGACY` if the caller
+    explicitly passed that sentinel, else to :data:`CONNECTOR_UNKNOWN`.
+    """
+    if not connector:
+        return ""
+    c = str(connector).strip().lower()
+    if c in _CONNECTOR_SET:
+        return c
+    if c == CONNECTOR_LEGACY:
+        return CONNECTOR_LEGACY
+    return CONNECTOR_UNKNOWN
+
+
+def normalize_connect_lifecycle_event(event: str) -> str:
+    normalized = str(event or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_EVENT_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_EVENT_UNKNOWN
+
+
+def normalize_connect_lifecycle_outcome(outcome: str) -> str:
+    normalized = str(outcome or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_OUTCOME_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_OUTCOME_UNKNOWN
+
+
+def normalize_connect_lifecycle_phase(phase: str) -> str:
+    normalized = str(phase or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_PHASE_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_PHASE_UNKNOWN
+
+
+def normalize_connect_lifecycle_blocker_category(category: str) -> str:
+    normalized = str(category or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET:
+        return normalized
+    return "unknown"
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -536,8 +712,18 @@ def common_dimensions(
         "session_id": session_id,
         "surface": surface,
         "adk_version": _fc.get_adk_version(),
+        "toolkit_git_sha": _fc.get_toolkit_git_sha(),
+        "toolkit_git_branch": _fc.get_toolkit_git_branch(),
+        "agent_type": _fc.classify_agent_type(_fc.get_toolkit_git_branch()),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
+
+
+# Re-export the closed taxonomy for scripts and tests that import this module.
+AGENT_TYPE_CUSTOM = _fc.AGENT_TYPE_CUSTOM
+AGENT_TYPE_DECLARATIVE = _fc.AGENT_TYPE_DECLARATIVE
+AGENT_TYPE_UNKNOWN = _fc.AGENT_TYPE_UNKNOWN
+AGENT_TYPES = _fc.AGENT_TYPES
 
 
 def _scrub(text: str, limit: int = 200) -> str:
@@ -1237,18 +1423,77 @@ def emit_api_call(
 
 
 def emit_capability_use(
-    adk_capability: str, *, surface: str = SURFACE_CLI, block: bool = False
+    adk_capability: str,
+    *,
+    connector: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
     data["adk_capability"] = normalize_capability(adk_capability)
+    data["connector"] = normalize_connector(connector)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
+
+
+def emit_connect_lifecycle(
+    lifecycle_event: str,
+    *,
+    connector: str = "",
+    phase: str = "",
+    outcome: str = "",
+    duration_ms: int = 0,
+    retry_count: int = 0,
+    resume_count: int = 0,
+    blocker_category: str = "",
+    remediation_id: str = "",
+    correlation_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    normalized_correlation = str(correlation_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_correlation):
+        normalized_correlation = ""
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_agent_id):
+        normalized_agent_id = ""
+    normalized_remediation_id = str(remediation_id or "").strip().upper()
+    if not _CONNECT_LIFECYCLE_REMEDIATION_RE.fullmatch(
+        normalized_remediation_id
+    ):
+        normalized_remediation_id = ""
+    data.update(
+        {
+            "agent_id": normalized_agent_id,
+            "connector": normalize_connector(connector),
+            "lifecycle_event": normalize_connect_lifecycle_event(
+                lifecycle_event
+            ),
+            "phase": normalize_connect_lifecycle_phase(phase),
+            "outcome": normalize_connect_lifecycle_outcome(outcome),
+            "duration_ms": max(0, int(duration_ms)),
+            "retry_count": max(0, int(retry_count)),
+            "resume_count": max(0, int(resume_count)),
+            "blocker_category": (
+                normalize_connect_lifecycle_blocker_category(
+                    blocker_category
+                )
+            ),
+            "remediation_id": normalized_remediation_id,
+            "correlation_id": normalized_correlation,
+        }
+    )
+    return _emit(EVENT_CONNECT_LIFECYCLE, data, block=block)
 
 
 def emit_flightcheck_run(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     surface: str = SURFACE_CLI,
     block: bool = False,
@@ -1258,6 +1503,7 @@ def emit_flightcheck_run(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
     })
     return _emit(EVENT_FLIGHTCHECK_RUN, data, block=block)
@@ -1267,6 +1513,7 @@ def emit_flightcheck_result(
     *,
     agent_id: str = "",
     adk_capability: str = "flightcheck",
+    connector: str = "",
     run_index: int = 0,
     result: str = "pass",
     duration_ms: int = 0,
@@ -1278,6 +1525,7 @@ def emit_flightcheck_result(
     data.update({
         "agent_id": agent_id,
         "adk_capability": normalize_capability(adk_capability),
+        "connector": normalize_connector(connector),
         "run_index": int(run_index),
         "result": result,
         "duration_ms": int(duration_ms),
@@ -1288,6 +1536,7 @@ def emit_flightcheck_result(
 def emit_flightcheck_error(
     *,
     agent_id: str = "",
+    connector: str = "",
     error_code: str = "",
     error_category: str = "runtime",
     error_message: str = "",
@@ -1296,7 +1545,10 @@ def emit_flightcheck_error(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data.update({"agent_id": agent_id})
+    data.update({
+        "agent_id": agent_id,
+        "connector": normalize_connector(connector),
+    })
     _apply_error_fields(data, "server_error", error_code, error_message, error_category)
     return _emit(EVENT_FLIGHTCHECK_ERROR, data, block=block)
 

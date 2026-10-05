@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "products": {
+    "cea": {
+      "repository": "microsoft/Employee-Self-Service-Agent-Developer-Kit",
+      "releaseTag": "cea-v1.0.0-rc.1",
+      "installRoot": "source-cea"
+    }
+  }
+}

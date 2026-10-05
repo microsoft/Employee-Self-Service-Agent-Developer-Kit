@@ -78,7 +78,7 @@ class PowerPlatformClient:
         self._token: str | None = None
         self.signed_in_username: str | None = None
 
-    def authenticate(self) -> str:
+    def authenticate(self, preferred_username: str | None = None) -> str:
         """Acquire a Power Platform API access token.
 
         Uses the shared MSAL cache so the operator's existing sign-in is
@@ -98,7 +98,15 @@ class PowerPlatformClient:
 
         accounts = app.get_accounts()
         result = None
-        selected_account = accounts[0] if accounts else None
+        preferred = str(preferred_username or "").casefold()
+        selected_account = next(
+            (
+                account
+                for account in accounts
+                if str(account.get("username") or "").casefold() == preferred
+            ),
+            accounts[0] if accounts and not preferred else None,
+        )
         if selected_account:
             result = app.acquire_token_silent(
                 [PP_API_SCOPE],
@@ -107,8 +115,14 @@ class PowerPlatformClient:
         if not result or "access_token" not in result:
             print("Opening browser for Power Platform API sign-in...")
             selected_account = None
+            interactive_options = (
+                {"login_hint": preferred_username}
+                if preferred_username
+                else {"prompt": "select_account"}
+            )
             result = app.acquire_token_interactive(
-                [PP_API_SCOPE], prompt="select_account"
+                [PP_API_SCOPE],
+                **interactive_options,
             )
         if "access_token" not in result:
             # Don't echo error_description - it can include tenant IDs and

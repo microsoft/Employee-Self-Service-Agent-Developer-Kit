@@ -95,6 +95,43 @@ CONFIGURED_ON_AGENT: dict[int, str] = {
     ),
 }
 
+# A type-9 (Topic V2) botcomponent is overloaded: it holds ordinary
+# ``AdaptiveDialog`` topics *and* ``TaskDialog`` actions that invoke a *connected
+# agent*. The latter is how the Core hub delegates to the HR/IT/Facilities agents.
+# A connected agent is not an ``agent.yml`` component — the Declarative Agent wires
+# connected agents up in the agent's **Agents** settings, not in the importable
+# package (the GA DA template ships none). So a connected-agent TaskDialog migrates
+# by hand, exactly like the :data:`CONFIGURED_ON_AGENT` types, rather than being
+# carried in the package or — the old, broken behaviour — crashing the projector
+# with a "kind TaskDialog but type 9 implies AdaptiveDialog" mismatch.
+_TASK_DIALOG_KIND = "TaskDialog"
+_CONNECTED_AGENT_ACTION_KIND = "InvokeConnectedAgentTaskAction"
+
+# CA agent schema name -> friendly vertical bucket, for naming the connected target.
+_CA_BUCKET_BY_SCHEMANAME = {schema: bucket for bucket, schema in CA_AGENT_SCHEMANAMES.items()}
+
+
+@dataclass(frozen=True)
+class ConnectedAgentLink:
+    """A connected-agent delegation the customer configured on the hub agent.
+
+    Describes one ``TaskDialog`` whose ``action`` is an
+    ``InvokeConnectedAgentTaskAction`` — i.e. "when routing here, hand off to
+    another agent". It carries everything the report needs to tell the customer
+    which agent to re-connect in the DA's Agents settings after import.
+    """
+
+    display_name: str
+    """The connected agent's display name (e.g. ``Employee Self-Service HR``)."""
+
+    ca_bot_schemaname: str
+    """The connected agent's CA schema name (``msdyn_...``), as authored."""
+
+    da_bot_schemaname: str | None
+    """The connected agent's DA schema name (``gptagent_...``) when it is one of the
+    agents this ESS release ships; ``None`` for an agent outside this release."""
+
+
 _EMPTY_GUID = "00000000-0000-0000-0000-000000000000"
 
 
@@ -353,10 +390,74 @@ def _schema_safe(name: str) -> str:
     return "".join(ch for ch in name if ch.isalnum())
 
 
+def connected_agent_link(component: CaComponent) -> ConnectedAgentLink | None:
+    """Describe ``component`` as a connected-agent delegation, or ``None``.
+
+    Returns a :class:`ConnectedAgentLink` when the component is a type-9
+    ``TaskDialog`` whose ``action`` invokes a connected agent; ``None`` for an
+    ordinary topic or anything that cannot be read as one. Detection is cheap first
+    (a substring guard) so the parse only runs for the handful of components that
+    could be connected-agent actions.
+    """
+    if component.component_type != 9:
+        return None
+    data = component.data or ""
+    if _CONNECTED_AGENT_ACTION_KIND not in data:
+        return None
+    try:
+        tree = parse_ca_data(data, "")
+    except ProjectionError:
+        return None
+    if not isinstance(tree, dict) or tree.get("kind") != _TASK_DIALOG_KIND:
+        return None
+    action = tree.get("action")
+    if not isinstance(action, dict) or action.get("kind") != _CONNECTED_AGENT_ACTION_KIND:
+        return None
+
+    ca_schema = action.get("botSchemaName")
+    ca_schema = ca_schema.strip() if isinstance(ca_schema, str) else ""
+    display = tree.get("modelDisplayName")
+    display = display.strip() if isinstance(display, str) and display.strip() else ca_schema
+    bucket = _CA_BUCKET_BY_SCHEMANAME.get(ca_schema)
+    da_schema = DA_SCHEMANAME_BY_VERTICAL.get(bucket) if bucket is not None else None
+    return ConnectedAgentLink(
+        display_name=display or "a connected agent",
+        ca_bot_schemaname=ca_schema,
+        da_bot_schemaname=da_schema,
+    )
+
+
+def connected_agent_message(link: ConnectedAgentLink) -> str:
+    """The re-create-in-settings instruction for one connected-agent delegation."""
+    target = f"'{link.display_name}'"
+    if link.da_bot_schemaname:
+        target = f"{target} (`{link.da_bot_schemaname}`)"
+        home = (
+            "one of the agents this ESS Declarative Agent release ships, so after "
+            "importing, open the Declarative Agent's Agents settings and add it as a "
+            "connected agent."
+        )
+    else:
+        home = (
+            "not one of the agents this ESS Declarative Agent release ships. Confirm "
+            "the agent exists in the target environment, then add it as a connected "
+            "agent in the Declarative Agent's Agents settings after importing."
+        )
+    return (
+        f"Connects this hub agent to the {target} agent. Connected agents are wired "
+        "up in the agent's Agents settings, not carried in the package, so this "
+        f"delegation cannot ride along in the import. It is {home} Its configuration "
+        "is reproduced below."
+    )
+
+
 def shape_for(component: CaComponent) -> DaShape:
     component_type = component.component_type
     if component_type in CONFIGURED_ON_AGENT:
         raise ManualConfigurationRequired(CONFIGURED_ON_AGENT[component_type])
+    link = connected_agent_link(component)
+    if link is not None:
+        raise ManualConfigurationRequired(connected_agent_message(link))
     shape = DA_SHAPE_BY_COMPONENT_TYPE.get(component_type) if component_type is not None else None
     if shape is None:
         raise ProjectionError(
@@ -403,12 +504,20 @@ def load_fragment(text: str) -> Any:
     return _yaml().load(text)
 
 
-def _state_of(component: CaComponent) -> str:
-    """Map the CA ``statecode`` (0 = active, 1 = inactive) onto the DA state string."""
+def _state_of(component: CaComponent) -> str | None:
+    """Map the CA ``statecode`` (0 = active, 1 = inactive) onto the DA state string.
+
+    Returns ``None`` when the source records no usable ``statecode``: an absent state
+    is *unknown*, not a decision to enable, so callers must not treat it as one.
+    """
     statecode = component.statecode
     if isinstance(statecode, dict):
         statecode = statecode.get("Value")
-    return "Inactive" if statecode == 1 else "Active"
+    if statecode == 1:
+        return "Inactive"
+    if statecode == 0:
+        return "Active"
+    return None
 
 
 def _display_name_from(payload: Any) -> str:

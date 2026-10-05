@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
+import requests
+
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
 # the public internet via WS-Security; treat every response as untrusted, even
 # the success path. defusedxml.ElementTree.ParseError is a subclass of stdlib
@@ -37,8 +39,10 @@ from xml.sax.saxutils import escape as xml_escape
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
+from agentbuilder import AgentBuilderError
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
+from ..agent_scope import resolve_agent_directory
 from .infrastructure import (
     _infra_003_directive,
     _infra_003_probe_layer_note,
@@ -114,6 +118,13 @@ WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 # Trailing `_<5-hex>` suffix on `connectionreferencelogicalname`
 # (e.g. `new_sharedworkdaysoap_ff0df` -> "ff0df").
 _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
+# Package fingerprinting excludes per-agent references, whose logical names
+# embed a GUID between dots. WD-CONN-013 no longer uses this heuristic; it
+# scopes through the selected agent's minimalBots component payload.
+_AGENT_CONNECTION_REF_RE = re.compile(
+    r"\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.",
+    re.I,
+)
 
 # Per-flavor fingerprint suffixes. A row in either set carries the
 # stable Microsoft-shipped role identifier:
@@ -398,6 +409,19 @@ def _ref_key_label(key: str) -> str:
     return _WD_REF_KEY_LABELS.get(key, key)
 
 
+def _runner_agent_slug(runner) -> str:
+    """Resolve the agent selected for this FlightCheck invocation."""
+    config = getattr(runner, "config", {}) or {}
+    agents = config.get("agents") or []
+    return str(
+        getattr(runner, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or (agents[0].get("slug") if agents else "")
+        or ""
+    )
+
+
 def _extract_requested_reference_keys(topic_data: str) -> set[str]:
     """Reference keys a topic actually REQUESTS from GetReferenceData — the
     literal ``referenceDataKey: KEY`` input it passes on each call."""
@@ -419,14 +443,7 @@ def _wd_studio_link(runner) -> str:
     """
     try:
         from .local_files import _studio_link_md
-        config = getattr(runner, "config", {}) or {}
-        agents = config.get("agents") or []
-        slug = (
-            config.get("activeAgent")
-            or (config.get("agent") or {}).get("slug")
-            or (agents[0].get("slug") if agents else "")
-            or ""
-        )
+        slug = _runner_agent_slug(runner)
         return _studio_link_md(runner, slug, "the agent in Copilot Studio")
     except Exception:  # noqa: BLE001 — never let link-building break the check
         return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
@@ -617,6 +634,69 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     wd_flows = getattr(runner, "_workday_flows", [])
+    targeted = getattr(runner, "_target_matcher", None) is not None
+
+    def requested(checkpoint_id: str) -> bool:
+        return not targeted or runner.should_execute(checkpoint_id)
+
+    def requested_family(family: str) -> bool:
+        if not targeted:
+            return True
+        from flightcheck import registry
+
+        targets = tuple(getattr(runner, "execution_targets", ()))
+        scope = str(getattr(runner, "scope", "") or "")
+        if not targets and scope.startswith("checkpoint:"):
+            targets = (scope.split(":", 1)[1],)
+        for target in targets:
+            spec = registry.resolve(target)
+            if spec is not None and spec.key == family:
+                return True
+        return False
+
+    if targeted:
+        needs_package = any((
+            requested("WD-PKG-001"),
+            requested("WD-CONN-012"),
+            requested("WD-SEC-003"),
+        ))
+        if needs_package:
+            results.extend(
+                _check_package_flavor(runner, wd_flows=wd_flows)
+            )
+        if requested("WD-CONN-102"):
+            results.extend(_check_saml_certificate_health(runner))
+        if requested("WD-CONN-010"):
+            results.extend(
+                _check_entra_workday_federation_alignment(runner)
+            )
+        if requested_family("WD-ENV"):
+            results.extend(_check_env_vars(runner))
+            results.extend(_check_isu_username_format(runner))
+        if requested_family("WD-CONN"):
+            results.extend(_check_connections(runner))
+            results.extend(_check_connection_token_health(runner))
+        if requested("WD-CONN-013"):
+            results.extend(_check_workday_connection_obo_sharing(runner))
+        if requested_family("WD-FLOW"):
+            results.extend(_check_flow_status(runner, wd_flows))
+        if requested("WD-RUN-001"):
+            results.extend(_check_workday_run_health(runner))
+        if requested_family("WD-WF"):
+            results.extend(_check_workflows(runner))
+            results.extend(_check_custom_workflow_inventory(runner))
+        if requested("WD-REF-001"):
+            results.extend(_check_workday_reference_data(runner))
+        if requested("WD-SEC-003"):
+            results.extend(_check_personal_data_write_permission(runner))
+        if requested("WD-CONN-012"):
+            results.extend(
+                _check_package_connection_completeness(runner)
+            )
+        return _suppress_manual_conn_sec_when_runs_healthy(
+            results,
+            runner,
+        )
 
     # WD-PKG-001 — runs whenever Dataverse is available, independent
     # of flow detection. Sets runner._workday_package_flavor and
@@ -661,6 +741,11 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # invocations non-interactive. Full-scope runs authenticate Dataverse, so
     # `flavor` is never `"skipped"` there and this branch is a no-op for them.
     if not wd_flows and flavor in (None, "none", "skipped"):
+        if (
+            getattr(runner, "_target_matcher", None) is not None
+            and runner.should_execute("WD-SEC-003")
+        ):
+            results.extend(_check_personal_data_write_permission(runner))
         return results
 
     print("\n  Running Workday deep validation...")
@@ -770,6 +855,9 @@ def _suppress_manual_conn_sec_when_runs_healthy(
        pure template/config break). Rather than leave the operator with zero
        guidance, fail safe and show *all* of them.
     """
+    if getattr(runner, "preserve_workday_manual_rows", False):
+        return results
+
     run_health = next(
         (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
     )
@@ -1179,12 +1267,19 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    workday_refs = [r for r in refs if _is_workday_soap_connector(r.get("connectorid"))]
+    workday_refs = [
+        r
+        for r in refs
+        if _is_workday_soap_connector(r.get("connectorid"))
+        and not _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
     runner._workday_connection_refs = workday_refs
 
     # Classify each Workday row's suffix (some may not match the
     # _<5hex> pattern — surface those rather than silently dropping them).
-    known_suffixes: set[str] = set()
+    known_suffix_counts: dict[str, int] = {}
     runtime_refs: list[dict] = []
     unknown_format_names: list[str] = []
     unknown_suffixes: set[str] = set()
@@ -1200,9 +1295,15 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         if suffix is None:
             unknown_format_names.append(logical or "<missing>")
         elif suffix in LEGACY_REF_SUFFIXES:
-            known_suffixes.add(suffix)
+            known_suffix_counts[suffix] = (
+                known_suffix_counts.get(suffix, 0) + 1
+            )
         else:
             unknown_suffixes.add(suffix)
+    known_suffixes = set(known_suffix_counts)
+    unique_known_suffixes = all(
+        count == 1 for count in known_suffix_counts.values()
+    )
 
     # 1. No Workday integration at all.
     if not workday_refs:
@@ -1250,7 +1351,13 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         return results
 
     # 3. Exact simplified match.
-    if known_suffixes == SIMPLIFIED_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
+    if (
+        not runtime_refs
+        and unique_known_suffixes
+        and known_suffixes == SIMPLIFIED_REF_SUFFIXES
+        and not unknown_suffixes
+        and not unknown_format_names
+    ):
         runner._workday_package_flavor = "simplified"
         # The `{ff0df}` suffix is shared between simplified and full
         # installs, so a 1-ref shape COULD also be a failed full
@@ -1278,7 +1385,13 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         return results
 
     # 4. Exact full / legacy match.
-    if known_suffixes == LEGACY_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
+    if (
+        not runtime_refs
+        and unique_known_suffixes
+        and known_suffixes == LEGACY_REF_SUFFIXES
+        and not unknown_suffixes
+        and not unknown_format_names
+    ):
         runner._workday_package_flavor = "full"
         flow_note = ""
         if not wd_flows:
@@ -1299,8 +1412,14 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         return results
 
     # 5. Strict non-empty subset of legacy suffixes -> partial install.
-    if not runtime_refs and known_suffixes and not unknown_suffixes and not unknown_format_names \
-            and known_suffixes < LEGACY_REF_SUFFIXES:
+    if (
+        not runtime_refs
+        and unique_known_suffixes
+        and known_suffixes
+        and not unknown_suffixes
+        and not unknown_format_names
+        and known_suffixes < LEGACY_REF_SUFFIXES
+    ):
         runner._workday_package_flavor = "partial"
         missing = LEGACY_REF_SUFFIXES - known_suffixes
         observed_roles = ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
@@ -1513,30 +1632,16 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
 #   assignments are a different, unrelated sharing surface.)
 #
 # Which references count as "the agent's connections":
-#   Copilot Studio creates the agent's own connection references with a logical
-#   name of the form ``{schema}.{guid}.{connectorName}`` — e.g.
-#   ``msdyn_copilotforemployeeselfservicehr.<guid>.shared_workdaysoap`` — i.e. a
-#   GUID delimited by dots (the connector is the final segment). Those are the
-#   rows the toggle writes to, for EVERY connector the agent uses (Workday SOAP,
-#   Dataverse, etc.). The solution-template references shipped by the install
-#   (``new_sharedworkdaysoap_ff0df``, ``msdyn_sharedcommondataserviceforapps_92b66``)
-#   are bound but are NOT the agent's Connection-Settings connections; their
-#   underscore-only logical names carry no ``.{guid}.`` segment, so they're
-#   excluded. (We match on this structural format rather than the agent schema
-#   name from config: the reference prefix is the *product* bot schema, which
-#   does not necessarily equal the published agent's ``config.agent.schemaName``.)
+#   The selected agent's minimalBots components payload is authoritative. Its
+#   ``connectionReferenceChanges`` rows provide the exact logical names for
+#   that bot. The check joins those names to Dataverse rather than scanning for
+#   every agent-shaped reference in the environment, so sibling agents cannot
+#   satisfy or fail this checkpoint.
 #
 # Data source: the same documented-tier Dataverse ``connectionreferences`` query
 # WD-PKG-001 already makes, with two extra columns
 # (``connectionparametersetconfig`` / ``connectionparametersconfig``). No new
 # endpoint, no cassette.
-
-
-# An agent's own connection reference logical name embeds a GUID between dots:
-# ``{schema}.{guid}.{connector}``. Solution-template refs (``new_x_y``) don't.
-_AGENT_CONNECTION_REF_RE = re.compile(
-    r"\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.", re.I
-)
 
 
 def _connection_label(ref: dict) -> str:
@@ -1552,10 +1657,10 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
     ("Allow permission to share parameters") enabled, so end users invoke the
     backing services without a first-use connection prompt.
 
-    Scopes to the agent's own connection references (logical name of the form
-    ``{schema}.{guid}.{connector}``, any connector) and requires
-    ``connectionparametersetconfig`` to be populated on each. See the module
-    comment for why this column / scoping is correct.
+    Scopes to the exact selected-agent references returned by the validated
+    minimalBots components API and requires ``connectionparametersetconfig`` to
+    be populated on each. See the module comment for why this column / scoping
+    is correct.
     """
     cp_id = "WD-CONN-013"
     desc = "Agent connection OBO parameter sharing"
@@ -1572,6 +1677,80 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
         )]
 
     try:
+        from ._da_connection_refs import (
+            read_active_agent_connection_references,
+        )
+
+        selected_refs = read_active_agent_connection_references(runner)
+    except ValueError as e:
+        return [CheckResult(
+            roles=roles,
+            checkpoint_id=cp_id,
+            category="Workday",
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=desc,
+            result=f"Unable to read selected-agent connection references: {e}.",
+            remediation=(
+                "Refresh the selected agent components and rerun this "
+                "checkpoint."
+            ),
+        )]
+    except (AgentBuilderError, requests.RequestException):
+        return [CheckResult(
+            roles=roles,
+            checkpoint_id=cp_id,
+            category="Workday",
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=desc,
+            result=(
+                "Unable to read selected-agent connection references from "
+                "AgentBuilder."
+            ),
+            remediation=(
+                "Refresh AgentBuilder authentication, confirm access to the "
+                "selected agent, and rerun this checkpoint."
+            ),
+        )]
+    if selected_refs is None:
+        return [CheckResult(
+            roles=roles,
+            checkpoint_id=cp_id,
+            category="Workday",
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=desc,
+            result=(
+                "Selected-agent connection references are unavailable because "
+                "AgentBuilder access or the selected bot ID is missing."
+            ),
+            remediation=(
+                "Authenticate to AgentBuilder for the selected agent and "
+                "rerun this checkpoint."
+            ),
+        )]
+    selected_names = {
+        str(ref.get("connectionreferencelogicalname") or "").casefold()
+        for ref in selected_refs
+        if str(ref.get("connectionreferencelogicalname") or "").strip()
+    }
+    if not selected_names:
+        return [CheckResult(
+            roles=roles,
+            checkpoint_id=cp_id,
+            category="Workday",
+            priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description=desc,
+            result=(
+                "The selected agent exposes no connection references to "
+                "evaluate for OBO parameter sharing."
+            ),
+            doc_link=doc_link,
+        )]
+
+    try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
         from auth import query_all
 
@@ -1583,7 +1762,7 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
         )
     except Exception as e:
         return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            priority=Priority.HIGH.value, status=Status.ERROR.value,
             description=desc,
             result=f"Unable to read Dataverse connection references: {e}.",
             remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
@@ -1592,18 +1771,29 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
     agent_refs = [
         r for r in refs
         if r.get("connectionid")
-        and _AGENT_CONNECTION_REF_RE.search(
+        and str(
             r.get("connectionreferencelogicalname") or ""
-        )
+        ).casefold() in selected_names
     ]
 
-    if not agent_refs:
+    observed_names = {
+        str(ref.get("connectionreferencelogicalname") or "").casefold()
+        for ref in agent_refs
+    }
+    missing_names = selected_names - observed_names
+    if missing_names:
         return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
-            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=desc,
             result=(
-                "No agent connection references found — nothing to evaluate for "
-                "OBO parameter sharing."
+                "Dataverse is missing or has not bound selected-agent "
+                "connection references: "
+                + ", ".join(sorted(missing_names))
+                + "."
+            ),
+            remediation=(
+                "Open the selected agent's Connection Settings, bind every "
+                "listed reference, and rerun this checkpoint."
             ),
             doc_link=doc_link,
         )]
@@ -2753,9 +2943,27 @@ def _select_active_workday_cert(
     return (active, others)
 
 
-def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+def _format_preferred_thumbprint(preferred_thumbprint: str | None) -> str | None:
+    """Format Graph's colon-free SHA-1 preferred signing thumbprint."""
+    normalized = (preferred_thumbprint or "").strip().replace(":", "")
+    if not re.fullmatch(r"[0-9A-Fa-f]{40}", normalized):
+        return None
+    return ":".join(
+        normalized[index:index + 2].upper()
+        for index in range(0, len(normalized), 2)
+    )
+
+
+def _format_cert_detail_line(
+    cert: dict,
+    now: datetime,
+    *,
+    thumbprint_override: str | None = None,
+) -> str:
     """Render one cert group as a one-line summary for result text."""
-    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    display = thumbprint_override
+    if display is None:
+        display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
     end = cert["end"]
     if end is None:
         expiry_str = "NotAfter=(unknown)"
@@ -3009,7 +3217,19 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             (c["end"] is not None and c["end"] < now) for c in cert_groups
         )
 
-        cert_line = _format_cert_detail_line(active, now)
+        preferred_display = _format_preferred_thumbprint(
+            sp.get("preferredTokenSigningKeyThumbprint")
+        )
+        # Graph tenants can surface a non-SHA-1 customKeyIdentifier even though
+        # preferredTokenSigningKeyThumbprint is the authoritative SHA-1 value.
+        # With one logical certificate there is no ambiguity, so show the
+        # preferred thumbprint rather than incorrectly calling the key malformed.
+        active_thumbprint = preferred_display if len(cert_groups) == 1 else None
+        cert_line = _format_cert_detail_line(
+            active,
+            now,
+            thumbprint_override=active_thumbprint,
+        )
         rollover_lines = [
             f"      rollover: {_format_cert_detail_line(c, now)}"
             for c in others
@@ -3535,7 +3755,12 @@ def _workday_probe_config(runner) -> tuple[str | None, dict[str, Any], str | Non
 
 
 def _with_wd_run_passive_context(
-    results: list[CheckResult], *, reason: str, probe_reached: bool = False
+    results: list[CheckResult],
+    *,
+    reason: str,
+    probe_reached: bool = False,
+    inconclusive_hypotheses: str = "",
+    inconclusive_checks: str = "",
 ) -> list[CheckResult]:
     # The passive fallback only truly assessed run history when it reached a
     # PASSED/FAILED verdict. When it came back SKIPPED / NOT_CONFIGURED it could
@@ -3584,6 +3809,18 @@ def _with_wd_run_passive_context(
             )
         if suffix not in row.result:
             row.result += suffix
+        if probe_reached and inconclusive_hypotheses:
+            # This is a narrow, intentional exception to the result/remediation
+            # split: PASSED remediation is suppressed, while WD-RUN-001 requires
+            # visible neutral guidance for the inconclusive probe. Actionable
+            # rows keep the troubleshooting steps in remediation.
+            if row.status == Status.PASSED.value:
+                if inconclusive_hypotheses not in row.result:
+                    row.result += f"\n\n{inconclusive_hypotheses}"
+            elif inconclusive_checks:
+                row.remediation = (
+                    f"{row.remediation}\n\n{inconclusive_checks}".strip()
+                )
     return results
 
 
@@ -3752,7 +3989,7 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
     action = live_egress_probe.ConnectorProbeAction(
         connector_api_id=_WD_CONNECTOR_API_ID,
         connection_id=connection_id,
-        operation_id=operation_id or _WD_DEFAULT_READ_OPERATION,
+        operation_id=operation_id,
         parameters=params,
         action_name=_WD_PROBE_ACTION_NAME,
         connection_ref_key=_WD_CONNECTOR_NAME,
@@ -3800,6 +4037,34 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             status_text = (
                 f"HTTP {res.status_code}" if res.status_code else "HTTP 400"
             )
+            # This guidance describes the user-context contract specifically;
+            # custom read operations retain the generic indeterminate fallback.
+            get_worker_me_probe = (
+                operation_id.lower()
+                == _WD_DEFAULT_READ_OPERATION.lower()
+            )
+            hypotheses = ""
+            checks = ""
+            if get_worker_me_probe:
+                hypotheses = (
+                    "For this inconclusive GetWorkerMe HTTP 400, missing "
+                    "Workday resource permissions are one possible hypothesis, "
+                    "not a confirmed cause. Other possible causes include a "
+                    "malformed request, wrong endpoint or operation, invalid "
+                    "identifiers or missing worker context, authentication or "
+                    "connector configuration, Workday business validation, "
+                    "and other Workday rejections."
+                )
+                checks = (
+                    "Troubleshooting checks for the inconclusive GetWorkerMe "
+                    "HTTP 400: verify the Workday resource permissions granted "
+                    "to the calling identity, and inspect the transient probe "
+                    "run for a malformed request, wrong endpoint or operation, "
+                    "invalid identifiers or missing worker context, "
+                    "authentication or connector configuration, Workday "
+                    "business validation, or another rejection. HTTP 400 alone "
+                    "does not confirm any of these causes."
+                )
             return _with_wd_run_passive_context(
                 _check_workday_run_health_passive(runner),
                 reason=(
@@ -3811,6 +4076,8 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
                     "transient probe run in Power Automate for the exact message"
                 ),
                 probe_reached=True,
+                inconclusive_hypotheses=hypotheses,
+                inconclusive_checks=checks,
             )
         return _workday_probe_failure_result(res, connection_label)
     return _with_wd_run_passive_context(
@@ -4615,15 +4882,23 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     doc_link = WD_SEC_003_DOC_LINK
 
     flavor = getattr(runner, "_workday_package_flavor", None)
-    if flavor == "simplified":
+    da_profile = bool(getattr(runner, "workday_da_profile", False))
+    if flavor == "simplified" or da_profile:
+        install_context = (
+            "This Workday DA profile validates the signed-in employee "
+            "delegated path."
+            if da_profile
+            else (
+                "WD-PKG-001 detected the simplified Workday install "
+                "shape (1 connection reference, OBO/OAuthUser)."
+            )
+        )
         return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
             result=(
-                "WD-PKG-001 detected the simplified Workday install "
-                "shape (1 connection reference, OBO/OAuthUser). On "
-                "the simplified install, ESS personal-contact write "
+                f"{install_context} On this path, ESS personal-contact write "
                 "topics execute as the signed-in employee against "
                 "their own Workday identity — there is no ISU "
                 "service account to probe from FlightCheck. The "
@@ -5089,16 +5364,23 @@ def _scan_topic_for_workday_refs(
 
 def _discover_customer_workday_scenarios(
     workspace_root: Path = Path("workspace/agents"),
+    agent_slug: str = "",
 ) -> list[dict]:
-    """Walk every agent under workspace_root and return all Workday
-    scenario references (Pattern A + Pattern B). Returns [] when the
-    workspace doesn't exist (callers should treat that as SKIPPED, not
-    PASSED — see _check_custom_workflow_inventory).
+    """Return Workday scenario references for the selected agent.
+
+    Without an agent slug, retain the broad inventory behavior and walk every
+    agent. Returns [] when the workspace or selected agent doesn't exist
+    (callers should treat that as SKIPPED, not PASSED — see
+    _check_custom_workflow_inventory).
     """
     if not workspace_root.exists():
         return []
+    if agent_slug:
+        agent_dirs = [resolve_agent_directory(workspace_root, agent_slug)]
+    else:
+        agent_dirs = sorted(workspace_root.iterdir())
     discovered: list[dict] = []
-    for agent_dir in sorted(workspace_root.iterdir()):
+    for agent_dir in agent_dirs:
         if not agent_dir.is_dir() or agent_dir.name.startswith("."):
             continue
         topics_dir = agent_dir / "topics"
@@ -5135,7 +5417,10 @@ def _get_unknown_workday_scenarios(runner) -> list[dict]:
     if cached is not None:
         return cached
     workspace_root_str = "workspace/agents"
-    discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
+    discovered = _discover_customer_workday_scenarios(
+        Path(workspace_root_str),
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
     if not discovered:
         runner._workday_unknown_scenarios = []
@@ -5289,7 +5574,10 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     # Discover Workday refs from topics first — no catalog needed for
     # this step. If there are none, we can SKIP cleanly without even
     # touching Dataverse.
-    discovered = _discover_customer_workday_scenarios(workspace_root)
+    discovered = _discover_customer_workday_scenarios(
+        workspace_root,
+        _runner_agent_slug(runner),
+    )
     runner._workday_discovered_scenarios = discovered
 
     if not discovered:

@@ -70,6 +70,64 @@ def test_extract_components_groups_evaluation_cases_by_parent(tmp_path):
     ]
 
 
+def test_write_config_persists_environment_id_per_active_agent(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    setup_script.write_config(
+        {
+            "name": "Mock Agent",
+            "botId": "bot-id",
+            "schema": "mspva_mock",
+            "managed": False,
+            "url": "https://example.crm.dynamics.com",
+            "environmentId": "environment-id",
+        },
+        "mock-agent",
+        "workspace/agents/mock-agent",
+        False,
+    )
+
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["environmentId"] == "environment-id"
+    assert config["agent"]["environmentId"] == "environment-id"
+    assert config["agents"][0]["environmentId"] == "environment-id"
+
+
+def test_write_config_preserves_existing_environment_id_when_omitted(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    local_dir = tmp_path / ".local"
+    local_dir.mkdir()
+    (local_dir / "config.json").write_text(
+        json.dumps({"environmentId": "existing-environment-id"}),
+        encoding="utf-8",
+    )
+
+    setup_script.write_config(
+        {
+            "name": "Mock Agent",
+            "botId": "bot-id",
+            "schema": "mspva_mock",
+            "managed": False,
+            "url": "https://example.crm.dynamics.com",
+        },
+        "mock-agent",
+        "workspace/agents/mock-agent",
+        False,
+    )
+
+    config = json.loads(
+        (local_dir / "config.json").read_text(encoding="utf-8")
+    )
+    assert config["environmentId"] == "existing-environment-id"
+
+
 def test_extract_components_writes_review_metadata_for_tagged_parent(tmp_path):
     parent_id = "00000000-0000-0000-0000-000000000021"
     components = [{

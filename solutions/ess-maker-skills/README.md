@@ -113,10 +113,39 @@ artifacts from the same test cases.
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
 Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
-agent sets live under the agent's `evaluations/` folder. The lifecycle supports
-quality validation, optional SME review, promotion into the configured agent,
-scoped push, execution, run history, and results analysis. Run `/evaluate` to
-create or manage sets, and `/run` to execute a pushed set or inspect results.
+agent sets live under the agent's `evaluations/` folder. New evaluation sets
+use **Compare Meaning** only and require an expected response for every prompt.
+Multi-turn generation is not supported by this single-response feature.
+
+Generated previews show full prompts and expected responses, with separate
+in-scope and out-of-scope sections and a downloadable CSV. Returning to an
+existing set offers editing or adding cases without replacing the original.
+Quality review assesses the authored test set; it does not prove that the
+deployed agent passes the tests in your tenant.
+
+After quality review, choose to request human review, run in Copilot Studio,
+edit the set, or run another quality review. **Run** and **Request Review**
+include their required scoped deployment, with confirmation and the existing
+review/connection prerequisites. A separate push command is not required;
+explicit evaluation push remains available outside this menu. Successful run
+initiation includes the current run's Copilot Studio link.
+
+These flows use the existing push APIs. Dataverse push stores `review.json`
+metadata in the evaluation-parent description. New or changed native MinimalBot
+YAML uploads a **new copy with a new deployed ID**, retaining the old remote copy;
+unchanged YAML, including local review-only changes, reuses its verified copy. The preview explains
+this before consent. Removing cases from a new native copy does not delete
+them from the old remote set.
+
+Native push uploads YAML only: review status is retained locally but is **not
+published as shared review metadata** or copied into the deployed baseline.
+Request Review and reviewer completion
+still perform the existing push in the same flow and report this limitation;
+they do not claim another user can discover the local review marker. New native
+in-place-update APIs and cross-user-review parity are not part of this change.
+Files are retained when preparation or deployment cannot complete. Run
+`/evaluate` to create or manage sets and `/run` to prepare a selected set for
+execution or inspect its history/results.
 
 ### 🚀 Local-First Authoring
 
@@ -126,9 +155,11 @@ Every supported change follows the same safe local pipeline:
 Checkpoint (backup) → Local edit → Error scan
 ```
 
-The `/push` command remains discoverable but reports that native DA-GA
-deployment is not yet available. It does not fall back to the retired
-Dataverse mutation path.
+For topics and workflows, `/push` reports that native DA-GA deployment is not
+yet available; it does not fall back to the retired Dataverse mutation path.
+Explicit evaluation push uses its separate selected-set deployment flow and
+the existing evaluation APIs, including the native new-copy behavior described
+above. It does not add new native update/delete or review-metadata endpoints.
 
 ### ✈️ FlightCheck — Pre-Deployment Readiness Validation
 
@@ -245,6 +276,9 @@ Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog i
 
 Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
 
+For Declarative Agents, this release supports the **ESS HR Agent**. Workday
+integration with the ESS IT Agent is not supported in this release.
+
 **Two supported install paths** — the kit detects which one applies and routes automatically:
 
 - **Simplified** (Microsoft's default for new installs) — just one Workday connection (OAuthUser via Entra ID) plus Dataverse. No ISU service accounts, security groups, or custom reports. User context comes from the Workday REST `/workers/me` endpoint.
@@ -267,6 +301,27 @@ Connect your agent to Workday for employee data, compensation, time off, and org
 | Basic auth | Legacy path's ISU connections (`d6081`, `0786a`) |
 
 **Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. On the legacy path, if ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
+
+**Test and production deployment:** `/connect workday` is the development
+environment experience. After the ESS DA HR agent and Workday package are
+deployed to Test or Production, an administrator runs the post-deployment
+Dataverse authorization script for that target environment. See
+[`scripts/alm/README.md`](scripts/alm/README.md) for the required parameters,
+safe preview, execution, and verification procedure.
+
+For ESS DA HR in development, `/connect workday` also guides the maker through
+the OAuthUser and Dataverse references, shared connection parameters,
+stale-connection recovery, flow enablement, bot-to-flow authorization, V2
+employee context, topic selection, firewall readiness, and a signed-in
+end-to-end Workday scenario. Settings without a reliable DA-scoped API require
+explicit maker or administrator confirmation rather than being reported as
+automatically verified.
+
+At the beginning of the experience, the skill presents the complete setup plan
+and identifies when an Entra administrator, Workday administrator, Power
+Platform/Dataverse administrator, InfoSec administrator, or Workday test user
+is required. This lets the maker arrange the required participants before the
+setup reaches a permission-dependent step.
 
 **What you can build after connecting:**
 - Look up employee information, compensation, service anniversary, cost center
@@ -358,10 +413,10 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/review` | Review local topics or evaluation test sets tagged for review |
 | `/evaluate` | Generate evaluation test sets for your agent |
-| `/run` | Run pushed evaluation test sets and inspect history or results |
+| `/run` | Prepare and run selected evaluation sets, or inspect history and results |
 | `/test` | Drive topics in the currently deployed agent; DA-GA workflow diagnostics are not yet available |
 | `/flightcheck` | Validate local agent files; standalone FlightCheck retains its full mode |
-| `/push` | Report that native DA-GA deployment is not yet available |
+| `/push` | Push explicitly selected evaluation sets where supported; other native DA-GA deployment remains unavailable |
 | `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
 | `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
 | `/menu` | See all available commands |
@@ -433,6 +488,13 @@ capabilities are used and where they fail, so we can improve the product. It is
   lower sensitivity than the tenant ID it is derived from.
 - Non-identifying context: ADK version, surface, session ID, event name, and
   per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
+- A short **toolkit git SHA** (7-char) and a **toolkit branch classification** —
+  System Metadata that lets us distinguish "install is on latest bits" from
+  "install is on an older tree at the same extension version". The SHA is
+  validated as hex before emission (non-SHA overrides become `unknown`). The
+  branch is collapsed to a **bounded set** — one of `main`, `main-ca`, `detached`,
+  `other`, or `unknown` — so raw branch names (which could otherwise carry
+  personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an

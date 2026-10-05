@@ -41,6 +41,35 @@ def test_flightcheck_scopes_are_read_only_and_ring_specific() -> None:
     )
 
 
+def test_agent_inventory_scopes_are_read_only_and_ring_specific() -> None:
+    assert agentbuilder.agent_inventory_read_scopes("test") == (
+        "https://api.test.powerplatform.com/"
+        "CopilotStudio.MakerOperations.Read",
+        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+    assert all(
+        "ReadWrite" not in scope
+        for scope in agentbuilder.agent_inventory_read_scopes("test")
+    )
+
+
+def test_flightcheck_scopes_request_write_only_when_explicitly_enabled() -> None:
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        allow_write=True,
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/"
+        "CopilotStudio.MinimalBot.ReadWrite",
+    )
+    assert agentbuilder.flightcheck_scopes(
+        "test",
+        include_connectivity=False,
+    ) == (
+        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read",
+    )
+
+
 @responses.activate
 def test_native_readiness_clients_follow_validated_contract() -> None:
     responses.add(**native.get_agent())
@@ -58,7 +87,7 @@ def test_native_readiness_clients_follow_validated_contract() -> None:
     assert agent_client.get_agent(native.MOCK_AGENT_ID)["realm"] == "dev"
     assert (
         agent_client.get_dev_configuration(native.MOCK_AGENT_ID)["schemaName"]
-        == "gptagent_mockemployeeselfservice"
+        == native.MOCK_SCHEMA_NAME
     )
     assert (
         agent_client.fetch_components(native.MOCK_AGENT_ID)[
@@ -212,6 +241,28 @@ def test_host_derivation_probes_primary_split_first() -> None:
     assert len(attempted) == 1
 
 
+@pytest.mark.parametrize(
+    ("ring", "host"),
+    [
+        (
+            "prod",
+            "https://000000000000400080000000000011."
+            "11.environment.api.powerplatform.com",
+        ),
+        (
+            "test",
+            "https://0000000000004000800000000000111."
+            "1.environment.api.test.powerplatform.com",
+        ),
+    ],
+)
+def test_environment_id_from_host_accepts_real_dns_splits(
+    ring: str,
+    host: str,
+) -> None:
+    assert agentbuilder.environment_id_from_host(host, ring) == ENVIRONMENT_ID
+
+
 def test_explicit_host_rejects_cross_ring_and_paths() -> None:
     with pytest.raises(ValueError, match="environment host"):
         agentbuilder.validate_environment_host(
@@ -223,7 +274,7 @@ def test_explicit_host_rejects_cross_ring_and_paths() -> None:
 def test_client_uses_only_configured_environment_host() -> None:
     session = FakeSession(
         [
-            FakeResponse([]),
+            FakeResponse({"Entities": [], "ContinuationToken": ""}),
             FakeResponse({"botId": AGENT_ID}),
             FakeResponse({"routeRealm": 0}),
             FakeResponse(
@@ -270,6 +321,106 @@ def test_client_uses_only_configured_environment_host() -> None:
         "Content-Type": "application/json",
         "x-ms-client-name": "CopilotStudio",
     }
+
+
+def test_agent_listing_pages_live_and_documented_response_shapes() -> None:
+    first_agent = {
+        "cdsBotId": AGENT_ID,
+        "displayName": "Employee Self-Service",
+        "publishedOn": None,
+    }
+    second_agent = {
+        "cdsBotId": "00000000-0000-4000-8000-000000003333",
+        "displayName": "Employee Self-Service HR",
+        "publishedOn": None,
+    }
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "Entities": [first_agent],
+                    "ContinuationToken": "next-page",
+                }
+            ),
+            FakeResponse(
+                {
+                    "Entities": [second_agent],
+                    "ContinuationToken": "",
+                }
+            ),
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    assert client.list_agents() == [first_agent, second_agent]
+    assert session.calls[0]["url"] == f"{HOST}/copilotstudio/agents"
+    assert session.calls[0]["params"] == {"api-version": "2024-10-01"}
+    assert session.calls[1]["params"] == {
+        "api-version": "2024-10-01",
+        "continuationToken": "next-page",
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        [],
+        {"entities": [], "continuationToken": ""},
+        {"Entities": None, "ContinuationToken": ""},
+        {"Entities": ["not-an-object"], "ContinuationToken": ""},
+        {"Entities": [], "ContinuationToken": None},
+        {"Entities": [], "ContinuationToken": 123},
+        {"Entities": []},
+    ),
+)
+def test_agent_listing_rejects_invalid_collection_shape(body: Any) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(body)]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="Agent listing"):
+        client.list_agents()
+
+
+def test_agent_listing_rejects_repeated_continuation() -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [
+                FakeResponse(
+                    {
+                        "Entities": [],
+                        "ContinuationToken": "same-page",
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "Entities": [],
+                        "ContinuationToken": "same-page",
+                    }
+                ),
+            ]
+        ),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="repeated a continuation token",
+    ):
+        client.list_agents()
 
 
 def test_realm_configuration_rejects_unknown_realm() -> None:
@@ -523,6 +674,54 @@ def test_import_package_classifies_invalid_success_shape(
         "responseStatus": "invalid",
         "reason": "invalid-agent-identity",
     }
+
+
+def test_delete_agent_issues_native_minimalbots_delete() -> None:
+    session = FakeSession([FakeResponse({}, status_code=204)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    call = session.calls[0]
+    assert call["method"] == "DELETE"
+    assert call["url"] == f"{HOST}/copilotstudio/minimalBots/api/{AGENT_ID}"
+    assert call["params"] == {"api-version": agentbuilder.DEFAULT_API_VERSION}
+    assert call["allow_redirects"] is False
+
+
+def test_delete_agent_treats_missing_agent_as_idempotent_success() -> None:
+    session = FakeSession([FakeResponse({}, status_code=404)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.delete_agent(AGENT_ID)
+
+    assert len(session.calls) == 1
+
+
+def test_delete_agent_raises_on_unexpected_status() -> None:
+    session = FakeSession([FakeResponse({}, status_code=403)])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError, match="HTTP 403"):
+        client.delete_agent(AGENT_ID)
 
 
 def test_lists_ring_environments_with_agentbuilder_token() -> None:
@@ -1020,6 +1219,7 @@ def test_agentbuilder_rejects_unreadable_token_tenant() -> None:
 def test_first_run_authentication_returns_selected_token_tenant(
     tmp_path,
     monkeypatch,
+    capsys,
 ) -> None:
     tenant_id = "00000000-0000-4000-8000-000000009999"
     payload = base64.urlsafe_b64encode(
@@ -1040,7 +1240,12 @@ def test_first_run_authentication_returns_selected_token_tenant(
         def acquire_token_interactive(self, *, scopes, prompt):
             observed["scopes"] = scopes
             observed["prompt"] = prompt
-            return {"access_token": token}
+            return {
+                "access_token": token,
+                "id_token_claims": {
+                    "preferred_username": "maker@example.test",
+                },
+            }
 
     monkeypatch.setattr(
         agentbuilder.msal,
@@ -1060,11 +1265,17 @@ def test_first_run_authentication_returns_selected_token_tenant(
         "https://api.powerplatform.com/"
         "CopilotStudio.MinimalBot.ReadWrite"
     ]
+    assert (
+        "DA_AGENTBUILDER_AUTH_JSON:"
+        '{"account": "maker@example.test"}'
+        in capsys.readouterr().out
+    )
 
 
 def test_selected_tenant_authentication_reuses_one_cached_account(
     tmp_path,
     monkeypatch,
+    capsys,
 ) -> None:
     tenant_id = "00000000-0000-4000-8000-000000009999"
     payload = base64.urlsafe_b64encode(
@@ -1103,6 +1314,54 @@ def test_selected_tenant_authentication_reuses_one_cached_account(
 
     assert result == (token, tenant_id)
     assert observed["account"] is account
+    assert (
+        "DA_AGENTBUILDER_AUTH_JSON:"
+        '{"account": "maker@example.test"}'
+        in capsys.readouterr().out
+    )
+
+
+def test_flightcheck_authentication_returns_identity_without_emitting_it(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": tenant_id}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    token = f"header.{payload}.signature"
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "access_token": token,
+                "id_token_claims": {
+                    "preferred_username": "maker@example.test",
+                },
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate_flightcheck(
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert result == (token, tenant_id, "maker@example.test")
+    assert "maker@example.test" not in capsys.readouterr().out
 
 
 def test_cached_account_names_are_distinct_and_sorted(
@@ -1255,6 +1514,97 @@ def test_account_hint_prepopulates_interactive_selection(
     assert result == "test-token"
     assert observed["interactive"]["login_hint"] == "test.user@example.test"
     assert "prompt" not in observed["interactive"]
+
+
+def test_interactive_fallback_reports_interactive_account_not_stale_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cached = {"username": "cached@example.test"}
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return [cached]
+
+        def acquire_token_silent(self, _scopes, *, account):
+            assert account is cached
+            return {"error": "interaction_required"}
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "access_token": "interactive-token",
+                "id_token_claims": {
+                    "preferred_username": "interactive@example.test",
+                },
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    token, username = agentbuilder._acquire_token(
+        authority=(
+            "https://login.microsoftonline.com/"
+            "00000000-0000-4000-8000-000000009999"
+        ),
+        ring="prod",
+        cache_path=tmp_path / "token-cache.bin",
+        force_account_selection=False,
+        account_hint="cached@example.test",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert token == "interactive-token"
+    assert username == "interactive@example.test"
+
+
+def test_interactive_fallback_without_identity_does_not_use_stale_cache(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    cached = {"username": "cached@example.test"}
+
+    class FakeApp:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_accounts(self):
+            return [cached]
+
+        def acquire_token_silent(self, _scopes, *, account):
+            assert account is cached
+            return {"error": "interaction_required"}
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {"access_token": "interactive-token"}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    token, username = agentbuilder._acquire_token(
+        authority=(
+            "https://login.microsoftonline.com/"
+            "00000000-0000-4000-8000-000000009999"
+        ),
+        ring="prod",
+        cache_path=tmp_path / "token-cache.bin",
+        force_account_selection=False,
+        account_hint="cached@example.test",
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+
+    assert token == "interactive-token"
+    assert username is None
 
 
 def test_account_hint_preserves_interactive_authentication_error(

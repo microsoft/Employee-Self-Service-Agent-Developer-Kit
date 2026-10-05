@@ -14,7 +14,9 @@ At the first interactive setup surface in a turn, write the complete
 maker-facing progress checklist below using the latest canonical setup state
 and results observed in that invocation. Use the exact ordinary Markdown shape
 defined in the foundation skill: one single-level bullet and one leading
-status emoji per stage.
+status emoji per stage. Begin every snapshot with:
+
+Here's your ESS agent setup:
 
 - {marker} Choose the starting point and target environment
 - {marker} Verify access and agent identity
@@ -31,14 +33,21 @@ continues to its next render point without another progress snapshot.
 
 Run setup commands from the current ESS Maker Skills workspace folder.
 
-Using the resolved launcher in place of `{PYTHON}`, run this command without
-showing it to the user:
+Using the resolved launcher in place of `{PYTHON}`, run:
 
 ```powershell
 {PYTHON} -m pip install -r scripts/requirements.txt
 ```
 
-Check the Microsoft Object Model converter dependencies:
+When the current request or canonical local state already selects an exact
+agent, complete the foundation skill's account selection and product-line
+reconciliation now. If reconciliation stops this setup path, complete its
+kit-switch handoff and do not install or validate the Microsoft Object Model
+converter.
+
+Only after reconciliation allows DA-GA setup to continue, or when no exact
+agent has been selected yet, check the Microsoft Object Model converter
+dependencies:
 
 ```powershell
 {PYTHON} -c "import sys;
@@ -56,8 +65,9 @@ If the check fails, run:
 Then rerun the check.
 
 After successful runtime, dependency, and converter checks, run the next setup
-operation. When a check requires maker action, state the observed failure and
-its single recovery action.
+operation. If an exact agent is selected later, complete product-line
+reconciliation before the next DA-GA-only operation. When a check requires
+maker action, state the observed failure and its single recovery action.
 
 For any command failure, follow the **Command runtime** recovery guidance.
 

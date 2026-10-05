@@ -80,6 +80,10 @@ consistent visual shape:
 Keep the full ordered list in every snapshot. The Markdown list is the
 maker-facing progress surface.
 
+Send each progress snapshot as its own complete chat message. Finish that
+message before opening the next question or interactive control. The next
+control begins with its own decision prompt, explanation, and choices.
+
 ## Authoring pattern
 
 Compose UI guidance from the runtime context rather than copying a stored

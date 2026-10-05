@@ -1,0 +1,297 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Canonical reader for Declarative Agent connection references (minimalBots
+components API), shared so the DA connection checks cannot drift apart.
+
+Intended consumers (this reader ships ahead of them; the wiring lands in the
+stacked DA re-point PRs, so nothing in this branch imports it yet):
+  * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
+    Workday SOAP reference, via ``read_active_agent_connection_references``.
+  * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
+    environment-wide and de-duped by logical name, via
+    ``read_all_agents_connection_references``.
+  * The Workday shared-parameter checks (checks/workday.py) -> per-agent Workday
+    ``sharedConnectionParameters`` via ``workday_shared_connection_parameters``.
+
+Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
+``agentbuilder_readiness.yaml``, the same endpoint + shape the shipped native
+``DA-CONN-001`` check consumes).
+
+Fail-loudly contract:
+  * a missing ``connectionReferenceChanges`` key means genuine absence -> ``[]``;
+  * a present-but-malformed shape raises ``ValueError``; how to surface it is
+    the consuming check's decision (catch and report a WARNING, or let it
+    propagate so the runner records an ERROR) - this reader's only contract is
+    "do not swallow it." No consumer imports this reader on this branch yet, so
+    the runner's uncaught-raise -> ERROR mapping is documented runner behavior,
+    not exercised here;
+  * a read that cannot be attempted at all (no AgentBuilder client, or no
+    configured agent botId) returns ``None`` so the caller SKIPs.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from ..agent_scope import active_agent_bot_id
+
+
+WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
+
+
+def agent_bot_ids(config: dict[str, Any]) -> list[str]:
+    """Return configured bot IDs from multi-agent and single-agent config."""
+    bot_ids: list[str] = []
+    for agent in config.get("agents", []) or []:
+        bid = (agent or {}).get("botId")
+        if isinstance(bid, str) and bid.strip():
+            bot_ids.append(bid.strip())
+    single = (config.get("agent") or {}).get("botId")
+    if isinstance(single, str) and single.strip():
+        bot_ids.append(single.strip())
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for bot_id in bot_ids:
+        folded = bot_id.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            ordered.append(bot_id)
+    return ordered
+
+
+def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
+    """Fetch + normalize one agent's connection references from the minimalBots
+    components API.
+
+    Raises ``ValueError`` for a malformed ``connectionReferenceChanges`` shape
+    so the owning check can surface it (as a WARNING, or an uncaught raise the
+    runner records as ERROR) instead of overclaiming; that choice belongs to
+    the consumer.
+    """
+    changeset = client.fetch_components(bot_id) or {}
+    changes = changeset.get("connectionReferenceChanges")
+    if changes is None:
+        return []
+    if not isinstance(changes, list):
+        raise ValueError(
+            "Component fetch returned invalid connectionReferenceChanges."
+        )
+
+    refs: list[dict[str, Any]] = []
+    for change in changes:
+        # Surface a malformed individual entry instead of silently skipping it
+        # (PR #304 review): a non-dict change, or a ``connectionReference`` that
+        # is present but not an object, no longer matches the validated
+        # contract, so raise and let the owning check decide how to surface it.
+        # An absent or null ``connectionReference`` is tolerated (a
+        # non-connection change) and skipped - ``.get`` returns ``None`` for
+        # both the missing-key and explicit-null cases.
+        if not isinstance(change, dict):
+            raise ValueError(
+                "Component fetch returned a malformed "
+                "connectionReferenceChanges entry."
+            )
+        item = change.get("connectionReference")
+        if item is None:
+            continue
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Component fetch returned a malformed connectionReference entry."
+            )
+        # A dict that parses but lacks its identity fields is just as
+        # misleading as a non-dict (PR #304 review F-1): a row with a
+        # null/blank connectionReferenceLogicalName or connectorId gets
+        # silently skipped or misclassified by downstream consumers,
+        # recreating the confident "not found" verdict this reader exists to
+        # prevent. The validated payload always supplies both as non-empty
+        # strings; only connectionId may legitimately be null (an unbound
+        # reference), so require the two identity fields and raise on absence.
+        logical_name = _require_identity_field(
+            item.get("connectionReferenceLogicalName"),
+            "connectionReferenceLogicalName",
+        )
+        connector_id = _require_identity_field(
+            item.get("connectorId"), "connectorId"
+        )
+        refs.append(
+            {
+                "botid": bot_id,
+                "connectionreferencelogicalname": logical_name,
+                "connectorid": connector_id,
+                "connectionid": item.get("connectionId"),
+                "sharedconnectionparameters": item.get(
+                    "sharedConnectionParameters"
+                ),
+            }
+        )
+    return refs
+
+
+def _require_identity_field(value: Any, field_name: str) -> str:
+    """Return ``value`` as a non-empty string, or raise ``ValueError``.
+
+    A connection reference's identity fields (``connectionReferenceLogicalName``,
+    ``connectorId``) must be present and non-blank; a null/blank/non-string
+    value is a malformed payload, not a legitimate absence.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"Component fetch returned a connectionReference with a missing or "
+            f"malformed {field_name}."
+        )
+    return value
+
+
+def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:
+    """The single active agent's DA connection references (config
+    ``agent.botId``), or ``None`` when the AgentBuilder client or the
+    selected-agent botId is unavailable.
+
+    Intended for ``DV-CONN-001`` (checks/workday_extension.py), which validates
+    the Workday SOAP connection reference on the agent under check. Scoping this
+    to the active agent — not every configured agent — keeps the check from
+    reporting on a Workday reference that belongs to a different agent.
+    Raises ``ValueError`` for malformed components payloads.
+    """
+    client = getattr(runner, "agentbuilder", None)
+    config = getattr(runner, "config", None) or {}
+    agent_id = active_agent_bot_id(
+        config,
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
+    if client is None or not agent_id:
+        return None
+    return _bot_connection_references(client, agent_id)
+
+
+def _all_agents_connection_references(runner) -> list[dict[str, Any]] | None:
+    """Every configured agent's DA connection references (multi-agent and
+    single-agent config), preserving per-agent rows, or ``None`` when the
+    AgentBuilder client is unavailable or no agent botId is configured.
+
+    Intended for the Workday shared-parameter sweep, which must inspect each
+    configured agent's own Workday reference rather than only the active one.
+    Raises ``ValueError`` for malformed components payloads.
+    """
+    client = getattr(runner, "agentbuilder", None)
+    config = getattr(runner, "config", None) or {}
+    bot_ids = agent_bot_ids(config)
+    if client is None or not bot_ids:
+        return None
+
+    refs: list[dict[str, Any]] = []
+    for bot_id in bot_ids:
+        refs.extend(_bot_connection_references(client, bot_id))
+    return refs
+
+
+def read_all_agents_connection_references(
+    runner,
+) -> list[dict[str, Any]] | None:
+    """Every configured agent's references, de-duped by connection-reference
+    logical name (first occurrence wins, order preserved), or ``None`` when the
+    AgentBuilder client is unavailable or no agent botId is configured.
+
+    Intended for ``ENV-004`` (checks/environment.py), which is environment-wide
+    across every agent under check and reports one row per distinct logical
+    name. The per-agent (non-de-duped) view is ``_all_agents_connection_references``,
+    which the Workday shared-parameter sweep uses instead.
+    """
+    refs = _all_agents_connection_references(runner)
+    if refs is None:
+        return None
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for ref in refs:
+        key = (ref.get("connectionreferencelogicalname") or "").casefold()
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        deduped.append(ref)
+    return deduped
+
+
+def _shared_parameter_value(raw_value: Any) -> str:
+    if isinstance(raw_value, dict):
+        raw_value = raw_value.get("value")
+    if raw_value is None:
+        return ""
+    return str(raw_value).strip()
+
+
+def shared_connection_parameter_values(ref: dict[str, Any]) -> dict[str, str]:
+    """Return ``sharedConnectionParameters.values`` as a string map.
+
+    A present-but-malformed shape raises ``ValueError`` because the components
+    payload no longer matches the validated contract.
+    """
+    params = ref.get("sharedconnectionparameters")
+    if params is None:
+        return {}
+    # Live AgentBuilder returns sharedConnectionParameters as a JSON string,
+    # not a nested object (observed on a live connection reference), so parse
+    # the string before validating the shape.
+    if isinstance(params, str):
+        text = params.strip()
+        if not text:
+            return {}
+        try:
+            params = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(
+                "Component fetch returned invalid sharedConnectionParameters."
+            ) from exc
+    if not isinstance(params, dict):
+        raise ValueError(
+            "Component fetch returned invalid sharedConnectionParameters."
+        )
+    raw_values = params.get("values")
+    if raw_values is None:
+        return {}
+    if not isinstance(raw_values, dict):
+        raise ValueError(
+            "Component fetch returned invalid sharedConnectionParameters.values."
+        )
+    return {
+        str(key): value
+        for key, raw_value in raw_values.items()
+        if isinstance(key, str)
+        if (value := _shared_parameter_value(raw_value))
+    }
+
+
+def workday_shared_connection_parameters(
+    runner,
+) -> tuple[dict[str, str] | None, str]:
+    """Return Workday ``sharedConnectionParameters.values`` from components.
+
+    ``values is None`` means the check could not run because AgentBuilder or a
+    botId is unavailable. ``values == {}`` means the check ran and observed a
+    missing Workday reference or missing shared parameters.
+    """
+    refs = _all_agents_connection_references(runner)
+    if refs is None:
+        return None, (
+            "AgentBuilder client or a configured agent botId not available"
+        )
+
+    found_workday_ref = False
+    for ref in refs:
+        connector_id = str(ref.get("connectorid") or "").casefold().rstrip("/")
+        if connector_id.endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX):
+            found_workday_ref = True
+            values = shared_connection_parameter_values(ref)
+            if values:
+                return values, ""
+
+    if found_workday_ref:
+        return {}, (
+            "Workday connection reference is missing "
+            "sharedConnectionParameters.values"
+        )
+
+    return {}, "Workday connection reference was not found"
