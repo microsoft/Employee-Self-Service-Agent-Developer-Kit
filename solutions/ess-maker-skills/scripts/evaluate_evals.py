@@ -279,6 +279,15 @@ def get_gh_credential() -> GitHubCredential:
             "GitHub credential discovery timed out.",
             environment_override=environment_override,
         ) from exc
+    return GitHubCredential(
+        token=token,
+        account=None,
+        environment_override=environment_override,
+    )
+
+
+def _effective_github_account() -> str | None:
+    """Resolve the effective account only when authentication recovery needs it."""
     try:
         identity = subprocess.run(
             ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
@@ -286,16 +295,24 @@ def get_gh_credential() -> GitHubCredential:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         identity = None
-    account = (
+    return (
         identity.stdout.strip()
         if identity is not None and identity.returncode == 0
         and identity.stdout.strip()
         else None
     )
-    return GitHubCredential(
-        token=token,
-        account=account,
-        environment_override=environment_override,
+
+
+def _is_rate_limited(error: urllib.error.HTTPError) -> bool:
+    """Recognize standard GitHub primary and secondary rate-limit responses."""
+    if error.code == 429:
+        return True
+    if error.code != 403:
+        return False
+    headers = error.headers or {}
+    return (
+        str(headers.get("Retry-After") or "").strip() != ""
+        or str(headers.get("X-RateLimit-Remaining") or "").strip() == "0"
     )
 
 
@@ -346,17 +363,7 @@ def call_judge(
             return choice["message"]["content"]
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
-        if e.code in (401, 403):
-            raise EvaluationAuthenticationError(
-                "copilot_unauthorized",
-                "The effective GitHub account could not access the GitHub "
-                "Copilot API. The credential may be stale, belong to the wrong "
-                "account, lack a Copilot entitlement, or be restricted by "
-                "organization policy.",
-                account=credential.account,
-                environment_override=credential.environment_override,
-            )
-        elif e.code == 429:
+        if _is_rate_limited(e):
             if _retry:
                 import time
                 print("\nRate limited — waiting 10 seconds before retrying...", file=sys.stderr)
@@ -364,9 +371,18 @@ def call_judge(
                 return call_judge(prompt, credential, _retry=False)
             print("\nERROR: Rate limited by Copilot API. Wait a moment and retry.", file=sys.stderr)
             sys.exit(1)
-        else:
-            print(f"\nERROR: Copilot API returned {e.code}: {err_body}", file=sys.stderr)
-            sys.exit(1)
+        if e.code in (401, 403):
+            raise EvaluationAuthenticationError(
+                "copilot_unauthorized",
+                "The effective GitHub account could not access the GitHub "
+                "Copilot API. The credential may be stale, belong to the wrong "
+                "account, lack a Copilot entitlement, or be restricted by "
+                "organization policy.",
+                account=credential.account or _effective_github_account(),
+                environment_override=credential.environment_override,
+            )
+        print(f"\nERROR: Copilot API returned {e.code}: {err_body}", file=sys.stderr)
+        sys.exit(1)
     except urllib.error.URLError as e:
         print(f"\nERROR: Could not reach Copilot API: {e.reason}", file=sys.stderr)
         sys.exit(1)
@@ -793,6 +809,14 @@ def main():
 
 
 def cli() -> int:
+    if sys.stdout.isatty():
+        try:
+            main()
+        except EvaluationAuthenticationError as exc:
+            print(json.dumps(exc.as_result()))
+            return AUTHENTICATION_REQUIRED_EXIT
+        return 0
+
     output = StringIO()
     try:
         with redirect_stdout(output):

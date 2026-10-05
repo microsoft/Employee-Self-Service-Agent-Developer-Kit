@@ -83,28 +83,23 @@ def _process(returncode=0, stdout="", stderr=""):
     )
 
 
-def test_credential_reports_effective_account_and_environment_override(monkeypatch):
+def test_credential_defers_account_lookup_on_happy_path(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "do-not-print-this-token")
     commands = []
-    calls = iter([
-        _process(stdout="secret-token\n"),
-        _process(stdout="licensed-user\n"),
-    ])
 
     def run(command, **kwargs):
         commands.append(command)
-        return next(calls)
+        return _process(stdout="secret-token\n")
 
     monkeypatch.setattr(evaluate_evals.subprocess, "run", run)
 
     credential = evaluate_evals.get_gh_credential()
 
-    assert credential.account == "licensed-user"
+    assert credential.account is None
     assert credential.environment_override == "GH_TOKEN"
     assert credential.token == "secret-token"
     assert commands == [
         ["gh", "auth", "token", "--hostname", "github.com"],
-        ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
     ]
 
 
@@ -137,12 +132,9 @@ def test_credential_classifies_missing_github_auth(monkeypatch, failure, reason)
 
 
 def test_identity_lookup_failure_does_not_block_copilot_credential(monkeypatch):
-    calls = iter([
-        _process(stdout="secret-token\n"),
-        _process(returncode=1, stderr="Bad credentials"),
-    ])
     monkeypatch.setattr(
-        evaluate_evals.subprocess, "run", lambda *args, **kwargs: next(calls),
+        evaluate_evals.subprocess, "run",
+        lambda *args, **kwargs: _process(stdout="secret-token\n"),
     )
 
     credential = evaluate_evals.get_gh_credential()
@@ -150,6 +142,36 @@ def test_identity_lookup_failure_does_not_block_copilot_credential(monkeypatch):
     assert credential.account is None
     assert credential.environment_override is None
     assert "secret-token" not in repr(credential)
+
+
+def test_copilot_auth_failure_resolves_account_lazily(monkeypatch):
+    credential = evaluate_evals.GitHubCredential(
+        token="secret-token", account=None, environment_override="GH_TOKEN",
+    )
+    error = urllib.error.HTTPError(
+        evaluate_evals.MODELS_API_URL, 401, "Unauthorized", {}, BytesIO(b"denied"),
+    )
+    commands = []
+
+    monkeypatch.setattr(
+        evaluate_evals.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return _process(stdout="licensed-user\n")
+
+    monkeypatch.setattr(evaluate_evals.subprocess, "run", run)
+
+    with pytest.raises(evaluate_evals.EvaluationAuthenticationError) as caught:
+        evaluate_evals.call_judge("score this", credential)
+
+    assert caught.value.account == "licensed-user"
+    assert commands == [
+        ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+    ]
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -191,6 +213,47 @@ def test_copilot_auth_failure_returns_authentication_required_without_token(
         "environmentOverride": "GITHUB_TOKEN",
     }
     assert "secret-token" not in json.dumps(result)
+
+
+def test_rate_limited_403_retries_without_authentication_recovery(monkeypatch):
+    credential = evaluate_evals.GitHubCredential(
+        token="secret-token", account=None, environment_override=None,
+    )
+    rate_limit = urllib.error.HTTPError(
+        evaluate_evals.MODELS_API_URL,
+        403,
+        "Forbidden",
+        {"X-RateLimit-Remaining": "0"},
+        BytesIO(b"rate limited"),
+    )
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": '{"overall": 5}'},
+                }],
+            }).encode()
+
+    responses = iter([rate_limit, Response()])
+
+    def urlopen(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(evaluate_evals.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr("time.sleep", lambda *args: None)
+
+    assert evaluate_evals.call_judge("score this", credential) == '{"overall": 5}'
 
 
 def test_non_auth_http_failure_does_not_request_authentication(monkeypatch):
@@ -321,3 +384,12 @@ def test_cli_discards_progress_before_copilot_auth_failure(
     assert "Loading eval test cases" not in streams.out
     assert "sending 1 to quality evaluator" not in streams.out
     assert "secret-token" not in streams.out
+
+
+def test_cli_streams_progress_for_interactive_terminal(monkeypatch):
+    calls = []
+    monkeypatch.setattr(evaluate_evals.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(evaluate_evals, "main", lambda: calls.append("main"))
+
+    assert evaluate_evals.cli() == 0
+    assert calls == ["main"]
