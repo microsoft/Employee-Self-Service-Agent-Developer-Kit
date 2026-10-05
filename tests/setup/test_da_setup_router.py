@@ -1674,6 +1674,15 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "- **Finish for now**" not in completion_choices
     assert "Set exactly one recommendation suffix to ` (Recommended)`" in normalized
     assert (
+        "product-specific evidence from that route affirmatively establishes that "
+        "its integration is not configured"
+    ) in normalized
+    assert (
+        "Do not treat **Connections: Not required**, an absent aggregate "
+        "diagnostic row, or the absence of native logical connector references "
+        "as evidence that an integration is not configured."
+    ) in normalized
+    assert (
         "I recommend {recommended choice} because {reason grounded in the current "
         "request, starting point, and supported routes}."
     ) in normalized

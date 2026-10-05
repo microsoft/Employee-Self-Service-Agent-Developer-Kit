@@ -415,7 +415,18 @@ post-setup action:
    as the supported next goal, recommend that action.
 2. Otherwise, for a newly created agent with an authoritative supported
    connection route, recommend **Add or change an integration**.
-3. Otherwise, recommend **Configure landing page**.
+3. Otherwise, recommend **Add or change an integration** when the active
+   agent's authoritative product identity exposes a supported connection route
+   and product-specific evidence from that route affirmatively establishes that
+   its integration is not configured.
+4. Otherwise, recommend **Configure landing page**.
+
+Do not treat **Connections: Not required**, an absent aggregate diagnostic row,
+or the absence of native logical connector references as evidence that an
+integration is not configured. Those observations establish only that the
+foundation registry did not require a connection or that the broad diagnostic
+found no applicable native reference. Use only evidence whose owning
+integration route defines the checked configuration surface.
 
 Before the choice control, say **I recommend {recommended choice} because
 {reason grounded in the current request, starting point, and supported
