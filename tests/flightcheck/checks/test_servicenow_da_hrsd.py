@@ -688,11 +688,6 @@ def test_oidc_checkpoint_rejects_legacy_mapping_details(
     [
         ("", Status.NOT_CONFIGURED.value, "does not contain"),
         (
-            "https://dev123.service-now.com",
-            Status.NOT_CONFIGURED.value,
-            "does not contain",
-        ),
-        (
             "https://other.service-now.com/sp",
             Status.FAILED.value,
             "different ServiceNow instance",
@@ -727,6 +722,54 @@ def test_portal_checkpoint_fails_closed_on_invalid_configuration(
     assert result.status == expected_status
     assert expected_phrase in result.result
     assert result.remediation
+
+
+def test_portal_checkpoint_requires_explicit_root_url_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    components["botComponentChanges"][1]["component"]["dialog"][
+        "beginDialog"
+    ]["actions"][0]["value"]["literalValue"] = (
+        "https://dev123.service-now.com"
+    )
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+
+    unconfirmed = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert unconfirmed.status == Status.NOT_CONFIGURED.value
+    assert "no evidence" in unconfirmed.result
+
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["transactions"] = {
+        "portal": {
+            "operation-root": {
+                "preparedAt": "2026-10-05T18:00:00Z",
+                "status": "rolled-back",
+                "requestedPortalUrl": "https://dev123.service-now.com",
+            }
+        }
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    rolled_back = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert rolled_back.status == Status.NOT_CONFIGURED.value
+
+    state["transactions"]["portal"]["operation-root"]["status"] = "committed"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    confirmed = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert confirmed.status == Status.PASSED.value
+    assert "confirmed ServiceNow instance" in confirmed.result
 
 
 def test_test_checkpoint_requires_current_portal_configuration(

@@ -278,11 +278,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "--selection-key" in credential
     assert "inspect-portal-url" in portal
     assert "--expected-portal-url <full-url>" in portal
+    assert "Use the instance root only when the administrator explicitly" in (
+        portal
+    )
     assert "different same-instance HTTPS portal path is not sufficient" in (
         portal_normalized
     )
     assert "set-portal-url" in portal
-    assert "must never be inferred as `/sp`, `/esc`" in portal
+    assert "Never infer `/sp`, `/esc`" in portal
     assert "Topics -> ServiceNow HRSD Setup Configurations" in portal
     assert "Set ServiceNow Portal BaseURI" in portal
     assert "Do not publish the agent in this phase" in portal

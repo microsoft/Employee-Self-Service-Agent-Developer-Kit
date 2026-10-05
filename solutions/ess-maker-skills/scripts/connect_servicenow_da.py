@@ -1108,11 +1108,6 @@ def normalize_portal_url(
             "ServiceNow portal URL must use the confirmed ServiceNow instance."
         )
     path = parsed.path.rstrip("/")
-    if not path or path == "/":
-        raise ServiceNowConnectError(
-            "ServiceNow portal URL must include the administrator-confirmed "
-            "portal path; it cannot be inferred from the instance origin."
-        )
     return f"https://{expected_host}{path}"
 
 
@@ -1184,7 +1179,7 @@ def portal_configuration_summary(
         if parsed.scheme and parsed.hostname
         else None
     )
-    summary["path"] = parsed.path or None
+    summary["path"] = parsed.path or "/"
     summary["configured"] = True
     if (
         parsed.scheme.casefold() != "https"
@@ -1202,9 +1197,6 @@ def portal_configuration_summary(
         != f"{expected_instance_name}.service-now.com".casefold()
     ):
         summary["reason"] = "wrong-instance"
-        return summary
-    if not parsed.path.rstrip("/") or parsed.path.rstrip("/") == "/":
-        summary["reason"] = "missing-portal-path"
         return summary
     summary["valid"] = True
     summary["reason"] = "valid"
@@ -2366,14 +2358,23 @@ def inspect_portal_configuration(
             else None
         ),
     )
+    verification_url = expected_portal_url
+    explicit_root_confirmed = True
+    if (
+        summary["valid"]
+        and summary["path"] == "/"
+        and verification_url is None
+    ):
+        verification_url = _latest_requested_portal_url(state)
+        explicit_root_confirmed = verification_url is not None
     expected_match: bool | None = None
-    if expected_portal_url is not None:
+    if verification_url is not None:
         if not isinstance(expected_instance, str) or not expected_instance:
             raise ServiceNowConnectError(
                 "The lifecycle has no confirmed ServiceNow instance."
             )
         expected = normalize_portal_url(
-            expected_portal_url,
+            verification_url,
             expected_instance_name=expected_instance,
         )
         current = (
@@ -2385,7 +2386,11 @@ def inspect_portal_configuration(
             else None
         )
         expected_match = current == expected
-    configured = summary["valid"] and expected_match is not False
+    configured = (
+        summary["valid"]
+        and expected_match is not False
+        and explicit_root_confirmed
+    )
     return {
         "status": "configured" if configured else "input-required",
         "mode": "offline" if offline else "live",
@@ -2399,17 +2404,48 @@ def inspect_portal_configuration(
             else {
                 "field": "portalUrl",
                 "description": (
+                    "Explicit administrator confirmation of this exact root "
+                    "ServiceNow URL for the employee portal."
+                    if not explicit_root_confirmed
+                    else (
                     "The exact administrator-confirmed full ServiceNow "
                     "employee portal URL supplied for this phase."
                     if expected_match is False
                     else (
                         "Administrator-confirmed full ServiceNow employee "
-                        "portal URL including its actual portal path."
+                        "portal URL. Use a root URL only when the administrator "
+                        "explicitly confirms that exact value."
+                    )
                     )
                 ),
             }
         ),
     }
+
+
+def _latest_requested_portal_url(state: dict[str, Any]) -> str | None:
+    transactions = state.get("transactions")
+    transactions = transactions if isinstance(transactions, dict) else {}
+    portal_transactions = transactions.get("portal")
+    portal_transactions = (
+        portal_transactions if isinstance(portal_transactions, dict) else {}
+    )
+    candidates = [
+        transaction
+        for transaction in portal_transactions.values()
+        if isinstance(transaction, dict)
+        and transaction.get("status")
+        in {"committed", "failed-unchanged", "reconciliation-required"}
+        and isinstance(transaction.get("requestedPortalUrl"), str)
+        and transaction["requestedPortalUrl"]
+    ]
+    if not candidates:
+        return None
+    latest = max(
+        candidates,
+        key=lambda transaction: str(transaction.get("preparedAt") or ""),
+    )
+    return str(latest["requestedPortalUrl"])
 
 
 def prepare_manual_connection(

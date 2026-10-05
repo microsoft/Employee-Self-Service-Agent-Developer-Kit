@@ -460,8 +460,6 @@ def test_portal_url_payload_updates_only_exact_literal_node() -> None:
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        ("https://dev123.service-now.com", "portal path"),
-        ("https://dev123.service-now.com/", "portal path"),
         ("https://other.service-now.com/sp", "confirmed ServiceNow instance"),
         ("http://dev123.service-now.com/sp", "plain HTTPS"),
         ("https://dev123.service-now.com/sp?x=1", "plain HTTPS"),
@@ -514,6 +512,20 @@ def test_portal_payload_rejects_zero_or_multiple_target_nodes() -> None:
             "https://dev123.service-now.com/hrportal",
             expected_instance_name="dev123",
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://dev123.service-now.com",
+        "https://dev123.service-now.com/",
+    ],
+)
+def test_portal_url_validation_accepts_explicit_root(value: str) -> None:
+    assert snow.normalize_portal_url(
+        value,
+        expected_instance_name="dev123",
+    ) == "https://dev123.service-now.com"
 
 
 def test_portal_summary_never_echoes_url_credentials() -> None:
@@ -1961,6 +1973,40 @@ def test_inspect_portal_url_requires_expected_maker_value(
     assert mismatch["expectedPortalUrlMatch"] is False
     assert mismatch["portal"]["path"] == "/employee"
     assert "exact administrator-confirmed" in mismatch["input"]["description"]
+
+
+def test_inspect_portal_url_requires_explicit_root_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    components = _portal_components()
+    snow._portal_value_node(
+        components["botComponentChanges"][1]["component"]
+    )["value"]["literalValue"] = "https://dev123.service-now.com"
+    _write_foundation_context(tmp_path, components=components)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(["inspect-portal-url", "--offline"]) == 0
+    unconfirmed = json.loads(capsys.readouterr().out)
+    assert unconfirmed["status"] == "input-required"
+    assert unconfirmed["expectedPortalUrlMatch"] is None
+    assert "Explicit administrator confirmation" in (
+        unconfirmed["input"]["description"]
+    )
+
+    assert snow.main(
+        [
+            "inspect-portal-url",
+            "--offline",
+            "--expected-portal-url",
+            "https://dev123.service-now.com",
+        ]
+    ) == 0
+    confirmed = json.loads(capsys.readouterr().out)
+    assert confirmed["status"] == "configured"
+    assert confirmed["expectedPortalUrlMatch"] is True
 
 
 @pytest.mark.parametrize(

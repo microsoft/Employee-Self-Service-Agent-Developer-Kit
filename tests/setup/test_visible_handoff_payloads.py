@@ -321,6 +321,7 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
             "Owner:",
             "{SERVICENOW_INSTANCE_ORIGIN}",
             "complete HTTPS employee portal URL",
+            "Use the instance root only when the administrator explicitly",
             "will not infer `/sp`, `/esc`",
             "Set ServiceNow Portal BaseURI",
             "guarded native component update",

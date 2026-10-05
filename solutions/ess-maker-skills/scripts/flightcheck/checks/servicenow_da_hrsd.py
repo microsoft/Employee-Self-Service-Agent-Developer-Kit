@@ -1053,6 +1053,17 @@ def _portal_result(
             ),
         )
     expected_url = _latest_requested_portal_url(state)
+    if portal["valid"] and portal["path"] == "/" and not expected_url:
+        return _result(
+            "SN-DA-HRSD-PORTAL-001",
+            Status.NOT_CONFIGURED.value,
+            "ServiceNow HRSD employee portal Base URI",
+            "The Portal BaseURI is the ServiceNow instance root, but the "
+            "lifecycle has no evidence that the administrator explicitly "
+            "confirmed that exact root URL for the employee portal.",
+            "Confirm the exact root URL through the portal phase before "
+            "recording completion.",
+        )
     if portal["valid"] and expected_url:
         try:
             actual_url = normalize_portal_url(
@@ -1111,11 +1122,12 @@ def _portal_result(
         status = Status.NOT_CONFIGURED.value
         result = (
             "The exact Setup Configurations topic does not contain an "
-            "administrator-confirmed employee portal path."
+            "administrator-confirmed employee portal URL."
         )
         remediation = (
-            "Provide the full employee portal URL, including its real portal "
-            "path; do not infer /sp or /esc from the instance origin."
+            "Provide the exact employee portal URL. A root instance URL is "
+            "allowed only when the administrator explicitly supplies it; "
+            "never infer /sp or /esc."
         )
     return _result(
         "SN-DA-HRSD-PORTAL-001",
@@ -1137,6 +1149,8 @@ def _latest_requested_portal_url(state: dict[str, Any]) -> str | None:
         transaction
         for transaction in portal_transactions.values()
         if isinstance(transaction, dict)
+        and transaction.get("status")
+        in {"committed", "failed-unchanged", "reconciliation-required"}
         and isinstance(transaction.get("requestedPortalUrl"), str)
         and transaction["requestedPortalUrl"]
     ]

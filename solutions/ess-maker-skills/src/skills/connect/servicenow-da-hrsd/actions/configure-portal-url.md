@@ -1,9 +1,9 @@
 # Configure the ServiceNow employee portal Base URI
 
 Treat the HR employee portal URL as one complete high-level step. The instance
-origin is already known from preflight, but the portal path is administrator
-configuration and must never be inferred as `/sp`, `/esc`, or any other
-example.
+origin is already known from preflight, but only the administrator can confirm
+whether the employee portal is that exact root URL or uses a separate path.
+Never infer `/sp`, `/esc`, or any other example.
 
 Run:
 
@@ -12,9 +12,8 @@ python scripts/connect_servicenow_da.py inspect-portal-url
 ```
 
 If the exact `ServiceNow HRSD Setup Configurations` topic already contains one
-valid HTTPS Portal BaseURI on the confirmed ServiceNow instance and includes a
-non-root portal path, return `ACTION_RESULT = "applied"` without a question or
-mutation.
+valid administrator-confirmed HTTPS Portal BaseURI on the confirmed ServiceNow
+instance, return `ACTION_RESULT = "applied"` without a question or mutation.
 
 Otherwise ask for the administrator-confirmed full employee portal URL. The
 question body must show the known instance origin, current value
@@ -26,7 +25,7 @@ answer and do not ask for credentials.
 [
   {
     "header": "ServiceNow employee portal",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: configure the HR agent's employee portal link in the exact `ServiceNow HRSD Setup Configurations` topic.\n\nOwner: ServiceNow / ESS administrator who knows the real employee portal entry point.\n\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal BaseURI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nProvide the complete HTTPS employee portal URL on this same instance, including the administrator-confirmed portal path. The instance origin alone is not enough, and the skill will not infer `/sp`, `/esc`, or any example path.\n\nThe skill will first try a guarded native component update of only the `Set ServiceNow Portal BaseURI` node. It uses a fresh change token, full topic preimage, readback verification, and conflict-safe rollback. If that API path is unsupported or permission denied without mutating the topic, use the manual fallback: Copilot Studio -> Topics -> ServiceNow HRSD Setup Configurations -> Set ServiceNow Portal BaseURI -> To -> enter this exact URL -> Save.\n\nWhat is the complete ServiceNow employee portal URL?",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: configure the HR agent's employee portal link in the exact `ServiceNow HRSD Setup Configurations` topic.\n\nOwner: ServiceNow / ESS administrator who knows the real employee portal entry point.\n\nKnown ServiceNow instance origin: `{SERVICENOW_INSTANCE_ORIGIN}`\nCurrent Portal BaseURI: {CURRENT_PORTAL_VALUE_CLASSIFICATION}\n\nProvide the complete HTTPS employee portal URL on this same instance. Use the instance root only when the administrator explicitly confirms that exact root URL is intended; otherwise include the administrator-confirmed path. The skill will not infer `/sp`, `/esc`, or any example path.\n\nThe skill will first try a guarded native component update of only the `Set ServiceNow Portal BaseURI` node. It uses a fresh change token, full topic preimage, readback verification, and conflict-safe rollback. If that API path is unsupported or permission denied without mutating the topic, use the manual fallback: Copilot Studio -> Topics -> ServiceNow HRSD Setup Configurations -> Set ServiceNow Portal BaseURI -> To -> enter this exact URL -> Save.\n\nWhat is the complete ServiceNow employee portal URL?",
     "allowFreeformInput": true
   }
 ]
@@ -36,7 +35,7 @@ Validate that the answer:
 
 - is HTTPS;
 - uses the confirmed `{instance}.service-now.com` host;
-- includes a non-root portal path;
+- is exactly the administrator-supplied root or path URL, without inference;
 - has no credentials, query, or fragment.
 
 Then run:
