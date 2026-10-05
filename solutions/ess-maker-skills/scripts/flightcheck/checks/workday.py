@@ -3609,10 +3609,10 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # since-broken connection/permission, and it does not prove the LIVE Copilot →
 # Workday path still works today. When no terminal run falls inside the window,
 # the verdict is a guided NOT_CONFIGURED asking the operator to perform a fresh
-# run (not a FAILED — a stale history is not evidence of breakage). As a
-# defensive fallback, if NO run carries a parseable timestamp we evaluate the
-# recent window as before rather than forcing a manual re-run on a format
-# regression.
+# run (not a FAILED — a stale history is not evidence of breakage). If NO run
+# carries a parseable timestamp we cannot prove any run is fresh; since a PASS
+# requires a proven-fresh success, the check returns NOT_CONFIGURED and asks for
+# a fresh run rather than risk a stale PASS on an unverifiable timestamp.
 #
 # Known limitations (documented, not silently swallowed):
 #   * A fully-broken/unconfigured connection makes Copilot Studio prompt
@@ -3649,6 +3649,15 @@ _WD_TEMPLATE_RETRIEVAL_RESPONSE = "Respond_to_Copilot_with_TemplateRetrievalFail
 # (Cancelled / Skipped and unknown states are intentionally NOT here — they are
 # inconclusive and treated as non-scoring 'pending' in _classify_run.)
 _RUN_FAILURE_STATUSES = {"Failed", "TimedOut", "Faulted", "Aborted"}
+
+# In-flight (non-terminal) run statuses. A run in one of these has not finished,
+# so it is neither a success nor a failure yet. Its PRESENCE still matters: a
+# just-triggered run that is still executing must be reported as "in progress"
+# (wait and re-run) rather than collapsed into "no runs at all", which would
+# wrongly steer the operator to trigger yet another scenario. Cancelled/Skipped
+# and unknown terminal-but-inconclusive states are intentionally NOT here — they
+# stay non-scoring 'pending' in _classify_run and carry no "still running" signal.
+_RUN_INFLIGHT_STATUSES = {"Running", "Waiting", "Paused", "Suspended"}
 
 # WD-RUN-001 evaluates only the most recent N terminal runs (newest first,
 # across all Workday flows). The check is a litmus test for a *deterministic*
@@ -4284,6 +4293,7 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
         )]
 
     terminal: list[dict] = []
+    inflight: list[dict] = []
     api_error: str | None = None
 
     for f in wd_flows:
@@ -4296,10 +4306,20 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             api_error = runs["_error"]
             continue
         for run in runs:
+            props = run.get("properties", {}) or {}
             kind = _classify_run(run)
             if kind == "pending":
+                # Non-scoring. Record only the truly in-flight ones so a
+                # just-triggered run that is still executing is reported as
+                # "in progress" rather than "no runs". Cancelled/Skipped/unknown
+                # carry no "still running" signal and are ignored.
+                if props.get("status") in _RUN_INFLIGHT_STATUSES:
+                    inflight.append({
+                        "start_dt": _parse_run_start(props.get("startTime") or ""),
+                        "flow": fname,
+                        "run": run.get("name"),
+                    })
                 continue
-            props = run.get("properties", {}) or {}
             start_raw = props.get("startTime") or ""
             terminal.append({
                 "start": start_raw,
@@ -4309,6 +4329,41 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
                 "run": run.get("name"),
                 "resp": ((props.get("response") or {}).get("name")) or "?",
             })
+
+    import datetime as _dt
+    _now = _dt.datetime.now(_dt.timezone.utc)
+    _cutoff = _now - _dt.timedelta(minutes=_WD_FRESH_WINDOW_MINUTES)
+
+    def _inflight_context() -> str:
+        """Human note when runs are still executing, else empty string.
+
+        A just-triggered run is frequently still ``Running`` when the operator
+        re-runs /flightcheck, so we steer them to wait for it rather than fire
+        off another scenario. If the in-flight run is older than the freshness
+        window it is likely stuck, so we say so instead of "just wait".
+        """
+        if not inflight:
+            return ""
+        dated = [r for r in inflight if r["start_dt"] is not None]
+        if dated:
+            dated.sort(key=lambda r: r["start_dt"], reverse=True)
+            age_min = int((_now - dated[0]["start_dt"]).total_seconds() // 60)
+            note = (
+                f" A Workday flow run is currently in progress (started about "
+                f"{age_min} minute(s) ago); wait for it to finish, then re-run "
+                "/flightcheck to grade it."
+            )
+            if dated[0]["start_dt"] < _cutoff:
+                note += (
+                    f" It has been running longer than {_WD_FRESH_WINDOW_MINUTES} "
+                    "minutes, which is unusual \u2014 if it never completes, open "
+                    "it in Power Automate (make.powerautomate.com) to investigate."
+                )
+            return note
+        return (
+            f" {len(inflight)} Workday flow run(s) are currently in progress; wait "
+            "for them to finish, then re-run /flightcheck to grade them."
+        )
 
     if not terminal:
         if api_error:
@@ -4321,6 +4376,21 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
                             "Re-run as a user who owns the flows, or check it manually in "
                             "Power Automate (make.powerautomate.com).",
                 roles=[Role.POWER_PLATFORM_ADMIN.value],
+            )]
+        inflight_note = _inflight_context()
+        if inflight_note:
+            return [CheckResult(
+                checkpoint_id="WD-RUN-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+                description="Workday flow run health",
+                result="No completed Workday flow runs yet to evaluate." + inflight_note,
+                remediation=(
+                    "Re-run /flightcheck once the in-progress run completes. If it "
+                    "fails or never finishes, open it in Power Automate "
+                    "(make.powerautomate.com) to read the Workday error."
+                ),
+                doc_link=f"{DOC_BASE}/workday",
+                roles=roles,
             )]
         return [CheckResult(
             checkpoint_id="WD-RUN-001", category="Workday",
@@ -4337,20 +4407,12 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             roles=roles,
         )]
 
-    # Evaluate only the most recent window (newest first). A deterministic
-    # break = NO success among the recent runs. Scattered failures alongside
-    # recent successes do NOT fail readiness.
-    terminal.sort(key=lambda r: r["start"], reverse=True)
-
     # Freshness gate (user-assisted E2E). A run only counts toward a PASS if it
     # started within _WD_FRESH_WINDOW_MINUTES — an older success can mask a
     # since-broken connection and does not prove the LIVE Copilot → Workday path
-    # still works. Defensive fallback: if NO run has a parseable timestamp we
-    # cannot assess freshness, so evaluate the recent window as before rather
-    # than forcing a manual re-run on a timestamp-format regression.
-    import datetime as _dt
-    _now = _dt.datetime.now(_dt.timezone.utc)
-    _cutoff = _now - _dt.timedelta(minutes=_WD_FRESH_WINDOW_MINUTES)
+    # still works. If NO terminal run has a parseable timestamp we cannot prove
+    # any of them is fresh; since PASS requires a proven-fresh success, we refuse
+    # to grade and ask for a fresh run rather than risk a stale PASS.
     parseable = [r for r in terminal if r["start_dt"] is not None]
     # Order by the parsed timestamp, not the raw ISO string: Power Automate's
     # 7-digit fractional seconds make a lexicographic sort fragile when the
@@ -4373,6 +4435,7 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             )
             if had_success:
                 stale_result += " Older successes are not counted as a PASS."
+            stale_result += _inflight_context()
             return [CheckResult(
                 checkpoint_id="WD-RUN-001", category="Workday",
                 priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
@@ -4384,9 +4447,25 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             )]
         window = fresh[:_WD_RECENT_WINDOW]
     else:
-        window = terminal[:_WD_RECENT_WINDOW]
-    n = len(window)
+        # Terminal runs exist but NONE has a parseable startTime, so their
+        # freshness cannot be verified. PASS requires a proven-fresh success, so
+        # refuse to grade on unprovable freshness rather than fall back to a
+        # stale-tolerant window that could PASS on an unproven-fresh run.
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description="Workday flow run health",
+            result=(
+                f"Found {len(terminal)} Workday flow run(s) but could not read a usable "
+                "timestamp on any of them, so their freshness cannot be verified. A run "
+                "must be proven recent to count as a live PASS." + _inflight_context()
+            ),
+            remediation=_WD_GUIDED_E2E_REMEDIATION,
+            doc_link=f"{DOC_BASE}/workday",
+            roles=roles,
+        )]
     win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
+    n = len(window)
     win_success = n - len(win_fail)
 
     # Stash the classified failure signal so _suppress_manual_conn_sec_when_runs_healthy
@@ -4425,14 +4504,22 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
         )]
 
     # No recent success → deterministically broken.
+    if n == 1:
+        headline = (
+            "The most recent Workday flow run FAILED and no fresh run succeeded"
+        )
+    else:
+        headline = (
+            f"All {n} most recent Workday flow run(s) FAILED — the Workday integration "
+            "appears deterministically broken"
+        )
     return [CheckResult(
         checkpoint_id="WD-RUN-001", category="Workday",
         priority=Priority.HIGH.value, status=Status.FAILED.value,
         description="Workday flow run health",
         result=(
-            f"All {n} most recent Workday flow run(s) FAILED — the Workday integration "
-            f"appears deterministically broken. Note: run status alone shows 'Succeeded' "
-            f"for caught Workday failures, so this is based on the flow's response branch.\n"
+            f"{headline}. Note: run status alone shows 'Succeeded' for caught Workday "
+            f"failures, so this is based on the flow's response branch.\n"
             f"{_sample_lines(win_fail)}"
         ),
         remediation=(

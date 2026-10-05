@@ -178,7 +178,7 @@ class TestBadState:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Failed"
-        assert "All 1 most recent Workday flow run(s) FAILED" in r.result
+        assert "The most recent Workday flow run FAILED and no fresh run succeeded" in r.result
         assert "flow run Failed" in r.result
 
 
@@ -206,7 +206,9 @@ class TestEdgeCases:
     @responses.activate
     def test_running_state_is_ignored(self, runner: _MinimalRunner) -> None:
         """An in-flight run (status=Running) is not scored as success or
-        failure — only terminal runs count."""
+        failure — only terminal runs count. With no terminal run to grade, the
+        check reports the run as in-progress (steer the operator to wait and
+        re-run) rather than claiming no runtime traffic."""
         from flightcheck.checks.workday import _check_workday_run_health
 
         responses.add(**pp.list_flow_runs(
@@ -216,7 +218,30 @@ class TestEdgeCases:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "NotConfigured"
-        assert "No recent Workday flow runs found" in r.result
+        assert r.status != "Passed" and r.status != "Failed"
+        assert "No completed Workday flow runs yet to evaluate" in r.result
+        assert "currently in progress" in r.result
+        assert "Re-run /flightcheck once the in-progress run completes" in r.remediation
+
+    @responses.activate
+    def test_running_run_alongside_fresh_success_still_passes(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """An in-flight (Running) run must not suppress a genuine fresh success:
+        the terminal success is graded and PASSES; the Running run is ignored."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="live", flow_id=_FLOW_ID, status="Running"),
+                pp.flow_run(run_id="ok", flow_id=_FLOW_ID, status="Succeeded"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+        assert "1 most recent Workday flow run(s) succeeded" in r.result
 
     @responses.activate
     def test_cancelled_only_window_is_not_a_misleading_pass(
@@ -271,7 +296,7 @@ class TestEdgeCases:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Failed"
-        assert "All 1 most recent Workday flow run(s) FAILED" in r.result
+        assert "The most recent Workday flow run FAILED and no fresh run succeeded" in r.result
 
     @responses.activate
     def test_403_is_skipped_with_permission_note(self, runner: _MinimalRunner) -> None:
@@ -403,12 +428,13 @@ class TestFreshness:
         assert r.status == "Failed"
 
     @responses.activate
-    def test_unparseable_timestamps_fall_back_to_window(
+    def test_unparseable_timestamps_is_guided_not_configured(
         self, runner: _MinimalRunner
     ) -> None:
-        """Defensive fallback: if NO run has a parseable startTime we cannot
-        assess freshness, so evaluate the recent window as before rather than
-        forcing a manual re-run on a timestamp-format regression."""
+        """If terminal runs exist but NONE has a parseable startTime, freshness
+        cannot be proven. PASS requires a proven-fresh success, so the check
+        refuses to grade (guided NOT_CONFIGURED) rather than fall back to a
+        stale-tolerant window that could PASS on an unproven-fresh run."""
         from flightcheck.checks.workday import _check_workday_run_health
 
         responses.add(**pp.list_flow_runs(
@@ -420,7 +446,12 @@ class TestFreshness:
         ))
 
         r = _only(_check_workday_run_health(runner))
-        assert r.status == "Passed"
+        assert r.status == "NotConfigured"
+        assert r.status != "Passed"
+        assert "could not read a usable timestamp" in r.result
+        assert "freshness cannot be verified" in r.result
+        assert "sign in to ESS Copilot" in r.remediation.lower() or \
+            "sign in to ess copilot" in r.remediation.lower()
 
 
 class TestManualConnSecSuppression:

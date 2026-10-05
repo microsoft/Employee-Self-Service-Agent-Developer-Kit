@@ -276,7 +276,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner(pp_client=_PP(runs=[failed_run])))
 
         assert row.status == Status.FAILED.value
-        assert "All 1 most recent Workday flow run(s) FAILED" in row.result
+        assert "The most recent Workday flow run FAILED and no fresh run succeeded" in row.result
         assert "inconclusive" in row.result
         assert "HTTP 400" in row.result
         assert "one possible hypothesis" not in row.result
