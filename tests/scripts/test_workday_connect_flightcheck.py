@@ -370,6 +370,44 @@ def test_external_profile_reconciles_manual_rows_from_controller_evidence():
     assert len(summary["acceptedSuppressions"]) == 4
 
 
+def test_external_profile_keeps_entra_failure_in_started_workday_phase():
+    from workday_connect_flightcheck import (
+        PROFILE_POLICIES,
+        WorkdayConnectFlightCheckError,
+        evaluate_contract,
+    )
+
+    profile = "workday-da:external-prerequisites"
+    checkpoints = PROFILE_POLICIES[profile].checkpoints
+    state = _state()
+    state["phases"]["entra"]["status"] = "complete"
+    state["phases"]["workday-admin"]["status"] = "active"
+    contract = _contract(profile=profile)
+    contract["overall"] = "NOT_READY"
+    contract["results"] = [
+        {
+            "checkpointId": checkpoint,
+            "status": (
+                "Failed"
+                if checkpoint == "WD-ENTRA-SIGNOPT-001"
+                else "Passed"
+            ),
+            "severity": "Blocking",
+            "automationType": "Automated",
+            "remediationId": "",
+            "evidence": {},
+        }
+        for checkpoint in checkpoints
+    ]
+
+    with pytest.raises(WorkdayConnectFlightCheckError) as raised:
+        evaluate_contract(contract, state, profile)
+
+    assert raised.value.phase_id == "workday-admin"
+    assert "Workday administrator" in raised.value.customer_remediation
+    assert "Entra administrator" not in raised.value.customer_remediation
+
+
 def test_lifecycle_profiles_defer_privileged_graph_checks():
     from flightcheck import registry
     from workday_connect_flightcheck import PROFILE_POLICIES

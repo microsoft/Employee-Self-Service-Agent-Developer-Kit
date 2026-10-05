@@ -149,6 +149,11 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         in " ".join(tenant.split())
     )
     assert "Have you looped in the Workday administrator" in tenant
+    assert "## One-way administrator handoff" in skill
+    assert "Microsoft Entra sign-off must finish first" in skill
+    assert "Only then may the Workday administrator phase begin" in skill
+    assert "must not ask the maker to\n   reopen Entra" in skill
+    assert "different\npeople" in skill
 
 
 def test_entra_waiting_boundary_follows_guided_handoff() -> None:
@@ -524,6 +529,7 @@ def test_connections_are_proven_before_runtime_apply() -> None:
 
 def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
 
     packet = text.index("workday_connect.py workday-admin-packet")
     provider_question = text.index("`identityProviderQuestion` from the packet")
@@ -542,12 +548,23 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     assert unsupported_stop < capture_table < existing_handoff < greenfield_handoff
     assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
-    assert "Do not show the completion question\n  or response form" in text
+    assert (
+        "Do not reopen Entra, re-engage the Entra administrator, show the "
+        "completion question, or show the response form"
+    ) in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
     assert "share this whole section" in text
     assert "both the capture guide and\nthe return worksheet" in text
     assert "Leave every cell in **Your\ntenant values** blank" in text
     assert "do not repeat an **Information to return to the maker**" in text
+    assert "This phase starts only after Microsoft Entra sign-off is complete" in text
+    assert "Do not direct the maker back to the Entra" in text
+    assert "already delivered through the approved customer channel" in text
+    assert "Do not open Entra or request another" in text
+    assert "Do not return to the Entra phase" in text
+    assert "In Entra, open" not in text
+    assert "Workday and identity administrators" not in text
+    assert "identity administrator to identify" not in text
     assert "--substage handoff-presented" in text
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text

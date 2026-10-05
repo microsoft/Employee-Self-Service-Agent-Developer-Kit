@@ -118,6 +118,9 @@ def parse_workday_admin_return_worksheet(
         values,
         "Certificate",
         {
+            (
+                "The certificate transferred from the completed Entra handoff"
+            ): "verified",
             "The new certificate created from the Entra Base64 file": "verified",
         },
     )
@@ -405,7 +408,7 @@ def build_workday_admin_packet(
                 "Entra SAML row in Workday?"
             ),
             "options": [
-                "The new certificate created from the Entra Base64 file",
+                "The certificate transferred from the completed Entra handoff",
                 "A different existing Workday certificate",
                 "No certificate is selected",
                 "I'm not sure",
@@ -439,9 +442,10 @@ def build_workday_admin_packet(
         "actions": [
             "Identify which sign-in provider the enabled Workday SAML row "
             "uses before changing it",
-            "Create a Workday X.509 Public Key from the active Entra SAML "
-            "signing certificate, select it on the Microsoft Entra SAML row, "
-            "and compare its expiration date",
+            "Create a Workday X.509 Public Key from the certificate file "
+            "already transferred during the completed Entra handoff, select "
+            "it on the Microsoft Entra SAML row, and compare its expiration "
+            "date",
             f"Set the Workday Service Provider ID to {entity_id}",
             "Enable OAuth 2.0 Clients and SAML in Tenant Setup - Security",
             "Reuse an approved signed-in employee API client when it already "
@@ -484,10 +488,12 @@ def build_workday_admin_packet(
                     "Microsoft Entra row -> X509 Certificate"
                 ),
                 "instruction": (
-                    "Record which certificate is selected on the enabled row."
+                    "Select the Workday public key created from the certificate "
+                    "file transferred during the completed Entra handoff."
                 ),
                 "exampleValue": (
-                    "The new certificate created from the Entra Base64 file"
+                    "The certificate transferred from the completed Entra "
+                    "handoff"
                 ),
             },
             {
@@ -687,7 +693,8 @@ def build_workday_admin_packet(
             "Enabled identity provider, exact Issuer, Service Provider ID, "
             "IdP SSO service URL, and sign-on redirect URL",
             "Confirmation that the Entra-derived certificate is selected and "
-            "its displayed expiration date matches",
+            "its displayed expiration date matches the completed Entra "
+            "handoff",
             "Workday OAuth client ID, token URL, REST base URL, SOAP base URL, "
             "and tenant name",
             "API-client grant type, required functional areas, and Include "

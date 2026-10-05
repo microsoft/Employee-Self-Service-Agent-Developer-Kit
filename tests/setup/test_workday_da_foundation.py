@@ -158,7 +158,10 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "I'm not sure" in tenant
     assert "Do not infer a match from the provider choice alone" in normalized
     assert "certificateSelectionQuestion" in tenant
-    assert "The new certificate created from the Entra Base64 file" in tenant
+    assert (
+        "The certificate transferred from the completed Entra handoff"
+        in tenant
+    )
     assert "A different existing Workday certificate" in tenant
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant

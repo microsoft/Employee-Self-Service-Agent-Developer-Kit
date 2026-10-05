@@ -1232,6 +1232,39 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
     assert state["identifiers"]["oauthClientId"] == "rotated-client-id"
 
 
+def test_workday_administrator_commands_require_completed_entra(
+    tmp_path: Path,
+) -> None:
+    import pytest
+    import workday_connect
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _complete_preflight(store)
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Complete the Microsoft Entra administrator sign-off",
+    ):
+        workday_connect._workday_admin_packet(
+            SimpleNamespace(),
+            store,
+        )
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Complete the Microsoft Entra administrator sign-off",
+    ):
+        workday_connect._record_workday_admin(
+            SimpleNamespace(response_file=None, response_json="{}"),
+            store,
+        )
+
+
 def test_controller_surfaces_blocker_persistence_failure(
     tmp_path: Path,
     monkeypatch,

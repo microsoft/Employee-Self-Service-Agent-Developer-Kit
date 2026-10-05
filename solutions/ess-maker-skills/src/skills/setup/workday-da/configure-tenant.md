@@ -7,6 +7,13 @@ the administrator's non-secret response, derives deterministic endpoints, and
 records evidence. All Workday tenant changes are performed by the Workday
 administrator.
 
+This phase starts only after Microsoft Entra sign-off is complete. Treat the
+recorded Entra identifiers, certificate metadata, and already transferred
+Base64 certificate as fixed inputs. Do not direct the maker back to the Entra
+administrator, ask that administrator to repeat a task, or require access to
+the Entra portal from this phase. A Workday-side mismatch remains a Workday
+phase blocker unless the controller independently reports Entra target drift.
+
 Generate one administrator handoff:
 
 ```powershell
@@ -39,16 +46,18 @@ administrator finished configuration.
   Microsoft Entra federation** and the greenfield handoff below.
 - For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
   showing certificate, tenant-security, or API-client changes. Explain that the
-  enabled row belongs to an existing federation and must not be replaced. Ask
-  the Workday and identity administrators to decide whether a separate
-  Microsoft Entra row can be added safely. Do not show the completion question
-  or response form. Preserve the current phase.
+  enabled row belongs to an existing federation and must not be replaced. The
+  Workday administrator must determine, through the customer's Workday
+  governance process, whether a separate Microsoft Entra row can be added
+  safely for the target environment. Do not reopen Entra, re-engage the Entra
+  administrator, show the completion question, or show the response form.
+  Preserve the current Workday phase.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
   contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
   `pingidentity.com`, or an organization-specific Ping host. Stop and ask the
-  identity administrator to identify the enabled row; do not render either
-  mutation handoff, the completion question, or the evidence form.
+  Workday administrator to identify the enabled row in Workday; do not render
+  either mutation handoff, the completion question, or the evidence form.
 
 If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
@@ -93,12 +102,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Providers** row whose **Used for Environments** value matches the employee
    environment being connected. Confirm that it is the intended Microsoft
    Entra row. Do not replace another provider's row.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
-   **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Return to the enabled
-   Microsoft Entra row and select that key in its **X509 Certificate** field.
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered through the approved customer channel during the
+   completed Entra handoff. In Workday, run **Create x509 Public Key**, paste
+   that public certificate, give it a customer-chosen recognizable name, and
+   save it. Return to the enabled Microsoft Entra row and select that key in
+   its **X509 Certificate** field. Do not open Entra or request another
+   certificate transfer.
 
    Use `certificateSelectionQuestion` and `certificateValidityQuestion` from
    the packet to populate the corresponding fields in the consolidated form.
@@ -107,16 +117,17 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Certificate.”
 
    Handle the answer as follows:
-   - **The new certificate created from the Entra Base64 file** - record
+   - **The certificate transferred from the completed Entra handoff** - record
      `certificateSelectionOutcome` as
      `entra-signing-certificate-selected`. If the displayed expiration date
      exactly matches the verified Entra expiration date shown in the form,
      record
      `certificateValidityOutcome` as
      `matches-verified-entra-certificate`.
-   - **A different existing Workday certificate** - stop. Do not replace or
-     reuse it until the Workday and identity administrators confirm it is the
-     same active Entra signing certificate.
+   - **A different existing Workday certificate** - stop. Do not reuse it.
+     Select the Workday public key created from the transferred certificate,
+     or keep the Workday phase blocked while the Workday administrator resolves
+     the mismatch.
    - **No certificate is selected** - ask the administrator to select the new
      Workday public key created from the Entra Base64 certificate, then return
      to this question.
@@ -174,12 +185,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    confirm there is no enabled SAML identity-provider row for the employee
    environment being connected. Do not modify a row owned by another
    federation.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. In Workday, run
    **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Never collect the
-   certificate body in chat.
+   customer-chosen recognizable name, and save it. Do not open Entra, request
+   another certificate transfer, or collect the certificate body in chat.
 3. **Create the Microsoft Entra row.** Add a SAML identity-provider row for the
    employee environment. Set its Issuer to the packet's exact expected
    Microsoft Entra issuer, select the newly created public key in **X509
@@ -241,8 +251,9 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 ```
 
 If the administrator reports that the provider state changed from the branch
-selected above, return to provider discovery instead of forcing the current
-form.
+selected above, repeat provider discovery within this Workday phase using the
+same recorded Entra reference values. Do not return to the Entra phase or ask
+the Entra administrator to participate again.
 
 Collect the completed five-column table in one response. Do not ask for these
 values as a sequence of separate chat or form questions. The table retains all
@@ -294,7 +305,7 @@ and verified certificate expiration date when building the table:
     "header": "Certificate",
     "question": "Which certificate is selected on the enabled Microsoft Entra SAML row in Workday?",
     "options": [
-      { "label": "The new certificate created from the Entra Base64 file" },
+      { "label": "The certificate transferred from the completed Entra handoff" },
       { "label": "A different existing Workday certificate" },
       { "label": "No certificate is selected" },
       { "label": "I'm not sure" }
@@ -493,7 +504,7 @@ time component.
 - a different or uncertain Issuer, Service Provider ID, SSO service URL, or
   sign-on redirect URL -> stop for administrator remediation instead of
   submitting successful evidence;
-- **The new certificate created from the Entra Base64 file** ->
+- **The certificate transferred from the completed Entra handoff** ->
   `certificateSelectionOutcome: entra-signing-certificate-selected`;
 - matching certificate expiration date ->
   `certificateValidityOutcome: matches-verified-entra-certificate`;

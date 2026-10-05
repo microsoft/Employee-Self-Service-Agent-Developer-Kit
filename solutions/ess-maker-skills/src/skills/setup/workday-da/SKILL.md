@@ -113,6 +113,25 @@ deployment work.
   the affected remediation step instead of making the user repeat healthy
   configuration.
 
+## One-way administrator handoff
+
+Treat the two administrator phases as a one-way relay between different
+people:
+
+1. Microsoft Entra sign-off must finish first, including transfer of the
+   active Base64 signing certificate through the customer's approved channel.
+2. Only then may the Workday administrator phase begin.
+3. The Workday handoff consumes the recorded Entra identifiers, certificate
+   metadata, and transferred certificate file. It must not ask the maker to
+   reopen Entra, re-engage the Entra administrator, or repeat an Entra task.
+4. A Workday-side mismatch or uncertainty remains blocked in the Workday phase
+   and is resolved through the customer's Workday governance path. The only
+   exception is an explicit controller-detected change to the selected Entra
+   target, which invalidates downstream evidence before a new phase continues.
+
+Do not combine both administrator guides into one conversation handoff. Each
+administrator receives only the standalone section for their phase.
+
 ## Start or resume
 
 Before running status, show this readiness briefing on every invocation. A

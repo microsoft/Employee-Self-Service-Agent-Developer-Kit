@@ -683,6 +683,11 @@ def _workday_admin_packet(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra administrator sign-off before "
+            "starting the Workday administrator handoff."
+        )
     administrator = state["phases"]["workday-admin"]["administrator"]
     packet = build_workday_admin_packet(state)
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
@@ -700,6 +705,11 @@ def _record_workday_admin(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra administrator sign-off before "
+            "recording Workday administrator evidence."
+        )
     _require_administrator_completion(state, "workday-admin")
     response = {
         **dict(

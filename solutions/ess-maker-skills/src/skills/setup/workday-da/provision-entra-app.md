@@ -177,28 +177,35 @@ by display name alone.
    Record the exact **Reply URL**. Confirm the displayed **Microsoft Entra
    Identifier** and **Login URL** match the expected values shown in this
    handoff; the maker does not need to transcribe those derived values.
-3. **Keep the two identifiers distinct.** The Workday SAML Service Provider ID
+3. **Complete the certificate handoff before signing off.** From the active
+   **SAML Signing Certificate** row, download **Certificate (Base64)** and
+   transfer that public certificate through the customer's approved
+   collaboration channel to the person who will complete the Workday
+   administrator handoff. Confirm that person has the file plus the displayed
+   thumbprint and expiration date. Do not paste the certificate into agent
+   chat. The Entra phase is not complete until this transfer is confirmed.
+4. **Keep the two identifiers distinct.** The Workday SAML Service Provider ID
    is `http://www.workday.com/{workdayTenant}`. The Entra application ID URI is
    `api://{entraAppId}`. Never copy one into the other field.
-4. **Confirm the application pairing.** Match the enterprise application to
+5. **Confirm the application pairing.** Match the enterprise application to
    its app registration by the same Application ID. Do not pair by display
    name. Stop on no match or more than one matching app registration.
-5. **Expose the connector scope without replacing existing configuration.**
+6. **Expose the connector scope without replacing existing configuration.**
    Open **App registrations -> the exact Workday application -> Expose an API**.
    Preserve every unrelated existing scope and authorized client. Set
    the Application ID URI to `api://{entraAppId}`, add or repair only the
    `user_impersonation` scope, then add authorized client application
    `4e4707ca-5f53-46a6-a819-f7765446e6ff` for that scope.
-6. **Add delegated permissions.** Open **App registrations -> the exact
+7. **Add delegated permissions.** Open **App registrations -> the exact
    Workday application -> API permissions -> Add a permission -> Microsoft
    Graph -> Delegated permissions**. Add `openid`, `profile`, and `User.Read`,
    preserving unrelated existing permissions. Then select **Grant admin
    consent** using a consent-capable administrator.
-7. **Configure assignment.** Open **Enterprise applications -> the exact
+8. **Configure assignment.** Open **Enterprise applications -> the exact
    Workday application -> Users and groups**. If assignment is required,
    assign the intended ESS employee security group; prefer a maintained group
    over individual users.
-8. **Configure NameID.** Open **Enterprise applications -> the exact Workday
+9. **Configure NameID.** Open **Enterprise applications -> the exact Workday
    application -> Single sign-on -> Attributes & Claims**. Edit **Unique User
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
@@ -206,6 +213,11 @@ by display name alone.
 End the shareable handoff after the numbered tasks. Do not repeat an
 **Information to return to the maker** checklist: the five-column table already
 contains every required value, location, instruction, and allowed example.
+
+After `record-entra` succeeds, the Entra administrator sign-off is complete.
+The next phase must consume the recorded identifiers and transferred
+certificate without asking the maker to re-engage the Entra administrator.
+Only an explicit controller-detected Entra target change may reopen this phase.
 
 After the worksheet, ask exactly:
 

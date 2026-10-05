@@ -229,7 +229,7 @@ Existing configuration: Preserved without changes
 
 def _workday_worksheet() -> str:
     return """SAML row settings: Yes, all four values match exactly
-Certificate: The new certificate created from the Entra Base64 file
+Certificate: The certificate transferred from the completed Entra handoff
 Certificate expiration: Yes, the expiration date matches exactly
 OAuth client ID: safe-client-id
 API client: An existing approved client was verified
@@ -827,7 +827,7 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     certificate_question = packet["certificateSelectionQuestion"]
     assert "Which certificate is selected" in certificate_question["question"]
     assert (
-        "The new certificate created from the Entra Base64 file"
+        "The certificate transferred from the completed Entra handoff"
         in certificate_question["options"]
     )
     assert (
@@ -849,6 +849,10 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
         "Identify which sign-in provider the enabled Workday SAML row"
     )
     assert any("REST and SOAP hosts" in action for action in packet["actions"])
+    assert any(
+        "already transferred during the completed Entra handoff" in action
+        for action in packet["actions"]
+    )
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
     assert packet["responseForm"]["collection"]["mode"] == (
@@ -865,6 +869,22 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert packet["completionQuestion"].startswith("Has the Workday")
     assert any(
         "OAuth client ID" in item for item in packet["informationToReturn"]
+    )
+
+
+def test_workday_legacy_certificate_choice_remains_accepted() -> None:
+    worksheet = _workday_worksheet().replace(
+        "The certificate transferred from the completed Entra handoff",
+        "The new certificate created from the Entra Base64 file",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["certificateSelectionOutcome"] == (
+        "entra-signing-certificate-selected"
     )
 
 

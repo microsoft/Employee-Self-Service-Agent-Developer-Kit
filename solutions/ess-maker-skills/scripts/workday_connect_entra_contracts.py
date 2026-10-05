@@ -311,7 +311,9 @@ def build_entra_handoff(
             "already established; otherwise follow the Microsoft Learn "
             "Workday SSO tutorial to add Workday from the application gallery",
             "Configure and verify every setting in the administrator guide, "
-            "then return the complete labeled worksheet",
+            "download the active Base64 signing certificate and transfer it "
+            "through the approved customer channel for the Workday phase, "
+            "then return the completed table",
         ]
     elif app is None:
         actions = [
@@ -497,8 +499,10 @@ def build_entra_handoff(
                     "Certificate"
                 ),
                 "instruction": (
-                    "Confirm the active Base64 certificate was transferred "
-                    "through the approved customer channel. Do not return it."
+                    "Confirm the active Base64 certificate was downloaded and "
+                    "transferred through the approved customer channel to the "
+                    "person completing the Workday handoff. Do not return the "
+                    "certificate in chat."
                 ),
                 "exampleValue": "Yes, confirmed",
             },

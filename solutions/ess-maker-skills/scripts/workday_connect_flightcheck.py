@@ -74,6 +74,22 @@ def _checkpoint_phase(checkpoint_id: str, fallback: str) -> str:
     return checkpoint_phase(checkpoint_id, fallback)
 
 
+def _administrator_handoff_phase(
+    state: Mapping[str, Any],
+    phase_id: str,
+) -> str:
+    workday_status = _text(
+        ((state.get("phases") or {}).get("workday-admin") or {}).get("status")
+    )
+    if phase_id == "entra" and workday_status in {
+        "active",
+        "blocked",
+        "complete",
+    }:
+        return "workday-admin"
+    return phase_id
+
+
 def _customer_remediation(phase_id: str, error_type: str) -> str:
     if error_type in {
         "flightcheck-timeout",
@@ -538,12 +554,15 @@ def _validate_results(
         elif checkpoint_id not in rows or checkpoint_id not in emitted:
             missing.append(checkpoint_id)
     if missing:
-        owning_phase = min(
-            (
-                _checkpoint_phase(checkpoint_id, policy.phase_id)
-                for checkpoint_id in missing
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    _checkpoint_phase(checkpoint_id, policy.phase_id)
+                    for checkpoint_id in missing
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Required readiness evidence is incomplete.",
@@ -603,15 +622,18 @@ def _validate_results(
         rejected.append("profile-overall")
 
     if rejected:
-        owning_phase = min(
-            (
-                _checkpoint_phase(
-                    value.split("=", maxsplit=1)[0],
-                    policy.phase_id,
-                )
-                for value in rejected
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    _checkpoint_phase(
+                        value.split("=", maxsplit=1)[0],
+                        policy.phase_id,
+                    )
+                    for value in rejected
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Workday readiness checks need remediation: "
@@ -663,13 +685,21 @@ def evaluate_contract(
             for row in parsed["executionErrors"]
             if isinstance(row, Mapping)
         ]
-        raise WorkdayConnectFlightCheckError(
-            "FlightCheck reported execution errors.",
-            error_type="flightcheck-execution-error",
-            phase_id=(
+        owning_phase = _administrator_handoff_phase(
+            state,
+            (
                 min(execution_phases, key=_PHASE_ORDER.index)
                 if execution_phases
                 else PROFILE_POLICIES[profile_name].phase_id
+            ),
+        )
+        raise WorkdayConnectFlightCheckError(
+            "FlightCheck reported execution errors.",
+            error_type="flightcheck-execution-error",
+            phase_id=owning_phase,
+            customer_remediation=_customer_remediation(
+                owning_phase,
+                "flightcheck-execution-error",
             ),
         )
     checkpoint_statuses, suppressions, remediation_ids = _validate_results(
@@ -683,12 +713,15 @@ def evaluate_contract(
             "graph": "entra",
             "connectivity": "runtime",
         }
-        owning_phase = min(
-            (
-                client_phases.get(client, policy.phase_id)
-                for client in failed_clients
+        owning_phase = _administrator_handoff_phase(
+            state,
+            min(
+                (
+                    client_phases.get(client, policy.phase_id)
+                    for client in failed_clients
+                ),
+                key=_PHASE_ORDER.index,
             ),
-            key=_PHASE_ORDER.index,
         )
         raise WorkdayConnectFlightCheckError(
             "Required authenticated readiness clients are unavailable: "
