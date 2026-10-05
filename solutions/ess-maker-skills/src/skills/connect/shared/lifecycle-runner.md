@@ -5,7 +5,8 @@ connect lifecycle from its contract file. A provider (Workday, ServiceNow, any
 future ISV) supplies a contract (`lifecycle-contract-schema.md`) plus its own
 action fragments for mutating phases; this file contains zero
 integration-specific logic. Adding a new provider never requires changing this
-file — only authoring a new contract + action fragments.
+file when its needs fit the documented contract; shared backward-compatible
+contract evolution belongs here rather than in provider-specific branches.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling
@@ -31,6 +32,13 @@ path, or the word "checkpoint"/"contract"/"state file" to the user.
 Read `src/skills/connect/{PROVIDER}/contract.json`. If it does not exist,
 **stop and report** — the calling file named a provider with no contract.
 
+Resolve `contractRevision` as the positive integer in the contract, defaulting
+to `1`. If the canonical state file already exists and the contract has
+`stateMigrationCommand`, run that exact checked-in command before reading the
+state. A migration failure is blocking; do not discard or recreate the state.
+Do not run a migration command on a first run, because the plan must be
+accepted before the initial state file is written.
+
 If the contract has `connectConfig` and that file exists, add
 `--connect-config "{connectConfig}"` to every FlightCheck command in this
 runner. If it does not exist, omit the argument; do not substitute another
@@ -40,43 +48,63 @@ If `AGENT_SLUG` is empty, stop and ask the user to run `/setup`; agent-specific
 mutation and validation must never fall back to scanning every local agent.
 
 Read `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json`. If it
-does not exist, this is a first run: initialize it in memory with
-`agentSlug: AGENT_SLUG`, `attested: false`, and every phase from the contract
-at `status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
-(write only after the plan is shown, in L.1).
+does not exist, this is a first run. Do not write a state file before the plan
+is accepted. For plan rendering only, treat every contract phase as pending
+and `attested` as false. If the contract has `stateInitializationCommand`,
+the provider owns the complete canonical initial state; do not construct or
+persist a generic substitute. Providers without that command retain the
+generic first-run state described in L.1.
+
+If existing state identifies a different provider or agent slug, stop instead
+of reusing it. Never copy plan or role attestation across provider/agent
+identity.
+
+For backward compatibility, treat a missing `roleAttestations` object in an
+older state file as `{}`. Do not infer an attestation from `attested`,
+`attestedAt`, a completed phase, or a prior action.
+
+Merge contract evolution without deleting provider-owned state: for every
+contract phase absent from `phases`, add
+`{status: "pending", checkpointResults: {}}`. Preserve every existing phase,
+evidence object, transaction, admin-operation record, and unknown
+forward-compatible key. The runner owns only generic lifecycle keys beneath
+`phases`; provider commands own their evidence and operation state.
+
+Initialize an invocation-local empty set named `executedActionPhases`. Add a
+phase ID after its action returns `applied` or `recorded`; this prevents an
+`every-invocation` action from running twice during L.2 and L.4 of the same
+invocation.
 
 ---
 
-## L.1 — Show the plan and get attestation (first run only)
+## L.1 — Show the plan and get attestation
 
-Skip this section entirely if the state file already has `attested: true`.
+Skip this section only when the state file has `attested: true` and
+`acceptedContractRevision` equals the current contract revision. A contract
+revision change must show the new complete plan before a newly introduced
+phase runs.
 
 Build the plan from the contract, in phase order:
 - One line per phase using its `label` verbatim.
 - Collect the **union** of `requiredRole` across every `mutates: true` phase,
   de-duplicated, in the order phases appear.
+- Append the contract's optional display-only `planRoles`, de-duplicated.
+  These roles explain external admin ownership; they do not create a role gate
+  and must never be treated as authorization for an action.
 
-**Message:**
+Do not rely on a separate ordinary assistant message to make the plan visible.
+Some host execution paths display the question tool but omit preceding
+assistant commentary. The `question` field itself must contain the complete
+numbered plan, roles, progress promise, and final confirmation prompt.
 
-Here's what I'll do to connect this agent to {displayName}:
+Use the `vscode_askQuestions` tool with this rendered payload:
 
-{numbered list of phase labels, in contract order}
-
-This needs someone with the following access: {comma-separated required
-roles, or omit this sentence entirely if no phase mutates}.
-
-I'll check as I go and stop to tell you if something needs attention. Ready
-to start?
-
-**End message.**
-
-Use the `vscode_askQuestions` tool:
-
+<!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Start connection",
-    "question": "Ready to start?",
+    "question": "Here's what I'll do to connect this agent to {displayName}:\n\n{numbered list of every phase label, in contract order}\n\nAccess needed: {comma-separated required and display-only plan roles}.\n\nI'll check as I go and stop to explain anything that needs attention.\n\nReady to start?",
     "options": [
       { "label": "Yes, let's go", "recommended": true },
       { "label": "Not now" }
@@ -86,13 +114,41 @@ Use the `vscode_askQuestions` tool:
 ]
 ```
 
-**If "Not now":** Stop here. Do not write the state file — the next
-invocation should show this same plan again.
+Before calling the question tool, render every placeholder and verify that the
+question contains every contract phase exactly once and all plan roles. If the
+rendered question is incomplete, stop instead of asking or accepting an
+answer. A separate plan message may also be shown, but it never substitutes
+for the complete question body.
 
-**If "Yes, let's go":** Write
-`.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` now with
-`agentSlug: AGENT_SLUG`, `attested: true`, `attestedAt` = current UTC
-timestamp, and every phase at `status: "pending"`. Continue to L.2.
+**If "Not now":** Stop here. On a first run, do not write the state file. On a
+contract-revision re-attestation, preserve the existing state unchanged. The
+next invocation should show this same plan again.
+
+**If "Yes, let's go" on a first run:** If the contract has
+`stateInitializationCommand`, replace `{contractRevision}` in that exact
+checked-in command and run it now. Require exit code `0` and a structured
+success result. Then read the canonical state file and verify its provider,
+profile when present, agent slug, agent ID and environment ID when present,
+`attested: true`, and exact `acceptedContractRevision`. Verify every contract
+phase exists at `status: "pending"` with empty checkpoint results. Any command
+failure, missing file, malformed schema, identity mismatch, missing phase, or
+non-pending phase blocks the lifecycle; never write a generic fallback and
+never silently repair an existing file.
+
+If the contract has no initialization command, write the historical generic
+state now with `provider: PROVIDER`, `agentSlug: AGENT_SLUG`,
+`attested: true`, `attestedAt` = current UTC timestamp,
+`acceptedContractRevision: contractRevision`, `roleAttestations: {}`, and
+every phase at `status: "pending"` with empty checkpoint results.
+
+**If "Yes, let's go" after a contract revision changed:** update only
+`attested`, `attestedAt`, and `acceptedContractRevision`, plus missing phases
+initialized in L.0. Do not reset or delete existing phase status, action
+receipts, evidence, transactions, role attestations, or provider-owned admin
+progress.
+
+Continue to L.2. Accepting the plan does not claim a
+role; the first required role gate remains explicit.
 
 ---
 
@@ -106,33 +162,60 @@ drift — a connection can be removed, a topic redirect can be reverted outside
 this tool — and trusting a stale checkbox has already caused a real bug in
 this family of skills once; do not reintroduce it.
 
-For every phase the state file marks `done`, in contract order, before doing
-anything else:
+Walk the phases in contract order and re-verify only the contiguous prefix
+whose state is `done`. Stop the prefix scan at the first non-`done` phase;
+never re-run a later phase's action or checkpoints across that gap.
 
-1. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
+For every phase in that contiguous `done` prefix:
+
+1. If the phase has `actionExecution: "every-invocation"`, execute its
+   `actionDoc` first using L.4a without re-showing the plan. Run each such
+   action at most once per invocation. If its gate stops, the action is
+   cancelled, or the action fails, set this phase to `in-progress`, reset
+   every later phase to `pending`, clear
+   `actionApplied`/`lastActionAt`/`rollbackPushGlob` on the current and later
+   phases, persist, and stop. `applied` or `recorded`
+   updates `actionApplied` and `lastActionAt` but does not complete the phase.
+2. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
    steps — reuse that exact mechanism here, silently, without re-showing the
    up-front plan).
-2. If every checkpoint still resolves to a status allowed by that phase's
+3. If every checkpoint still resolves to a status allowed by that phase's
    `completionStatuses`, and every `Manual`/`Warning` result has a matching
    persisted `checkpointAcknowledgements` entry for that checkpoint and
-   status, update `lastVerifiedAt` and leave the phase `done`. Do **not**
+   status, update `lastVerifiedAt` and leave the phase `done`. For an
+   acknowledgement whose source is `matching-action-evidence`, also re-resolve
+   the configured safe evidence path and require the current evidence kind and
+   `recordedAt` to equal the acknowledgement provenance. If they differ or the
+   evidence disappeared, remove that acknowledgement and treat the result as
+   unacknowledged. Do **not**
    re-render the U.0 table for a phase that was already `done` and stays
    `done` on resume — only surface output for phases that change state or that
    are not yet done.
-3. If any checkpoint resolves to a status **outside** that phase's
+4. If any checkpoint resolves to a status **outside** that phase's
    `completionStatuses`, **or** an allowed `Manual`/`Warning` result lacks a
    persisted acknowledgement matching the checkpoint and current status, the
    cached completion has regressed. This includes `Warning`, `Skipped`,
    `NotConfigured`, and unacknowledged `Manual`/`Warning` results — not only
-   `Failed`/`Error`. Set the phase to `blocked` for `Failed`/`Error`, otherwise
-   set it to `in-progress`, and set **every phase after it** back to `pending`
-   (later phases may have depended on this one still holding). Persist the
-   current checkpoint results, render the result using L.4b, and stop. Do not
-   re-run L.4a's mutating action merely because a live re-check regressed;
-   mutation requires a fresh gate and rollback checkpoint.
+   `Failed`/`Error`. Set **every phase after it** back to `pending` (later
+   phases may have depended on this one still holding). Clear `actionApplied`,
+   `lastActionAt`, and `rollbackPushGlob` on this phase and every later phase
+   so a `"once"` action can run again through a fresh gate
+   and fresh rollback checkpoint. A rollback checkpoint from an earlier
+   invocation must never be reused after drift.
 
-Once every previously-`done` phase is confirmed (or the loop stopped early on
-a regression), continue to L.3.
+   - For `Failed`/`Error`, set the phase to `blocked`, persist the current
+     checkpoint results, render the result without executing L.4b rollback,
+     and stop for remediation.
+   - For every other regression, set the phase to `in-progress`, persist the
+     current checkpoint results, and render the result without executing L.4b
+     rollback. End the completed-prefix scan and continue to L.3 in this same
+     invocation. L.4 must run the reset phase's provider action before its
+     checkpoints, including any interactive question in the action document;
+     do not end the turn merely because the cached completion regressed.
+
+Once every previously-`done` phase is confirmed, or the prefix scan ends on a
+non-fatal regression, continue to L.3. A `Failed`/`Error` regression already
+stopped above.
 
 ---
 
@@ -148,24 +231,58 @@ whose `status` is not `done`.
 
 ## L.4 — Run the current phase
 
-### L.4a — Mutating phases: gate, then act
+### L.4a — Run the provider action
 
-If the current phase has `mutates: true` and `actionApplied` is not yet
-`true` in its state entry:
+If the current phase has an `actionDoc`, execute it when:
 
-Apply `permission-gate.md` (from `src/skills/setup/shared/permission-gate.md`)
-with `REQUIRED_ROLE` = the phase's `requiredRole`. Use the phase's `gateMode`
-(default `"attested"` if the contract omits it); if `gateMode` is
-`"programmatic"`, pass the phase's `roleQuery` as `ROLE_QUERY` verbatim, and
-treat the query as a pass only if it returns one of `roleQueryPassNames` — the
-runner never invents its own role query or pass condition.
+- `actionExecution` is `"every-invocation"` and this phase's action has not
+  run during this invocation; or
+- `actionExecution` is omitted/`"once"` and `actionApplied` is not yet `true`.
+
+For a phase with `mutates: true`, resolve its `gateMode` (default
+`"attested"`).
+
+**Programmatic mode:** always apply `permission-gate.md` with
+`REQUIRED_ROLE` = the phase's `requiredRole`, `GATE_MODE = "programmatic"`,
+and the phase's `roleQuery`. Treat the query as a pass only if it returns one
+of `roleQueryPassNames`. Never reuse `roleAttestations` for this mode,
+including after resume.
+
+**Attested mode with historical/default phase scope:** apply
+`permission-gate.md` for this phase as before.
+
+**Attested mode with `attestedRoleScope: "lifecycle"`:** inspect
+`roleAttestations.{requiredRole}`. Reuse it only when all are true:
+
+- `verifiedBy` is `"attested"`;
+- `provider` exactly equals `PROVIDER`;
+- `agentSlug` exactly equals `AGENT_SLUG`;
+- the map key exactly equals the phase's `requiredRole`.
+
+When valid, set `GATE_RESULT = "pass"` without asking again. When absent or
+invalid, apply the normal attested `permission-gate.md`. On pass, persist:
+
+```json
+{
+  "verifiedBy": "attested",
+  "provider": "{PROVIDER}",
+  "agentSlug": "{AGENT_SLUG}",
+  "attestedAt": "<current UTC timestamp>",
+  "note": "<GATE_EVIDENCE.note>"
+}
+```
+
+under `roleAttestations.{requiredRole}` and write the lifecycle state before
+executing the action. Non-mutating actions do not run a role gate.
 
 **If the gate returns `"stop"`:** stop here. Leave the phase `in-progress` in
-the state file (write it now) so the next invocation resumes at this same
-gate rather than re-showing the whole plan.
+the state file, clear its `actionApplied`, `lastActionAt`, and
+`rollbackPushGlob`, and write it now so the next invocation resumes at this
+same gate rather than re-showing the whole plan. Keep valid lifecycle-scoped
+role attestations unchanged.
 
-**If the gate returns `"pass"`:** if the phase names a `rollbackLabel`, save a
-checkpoint first:
+**If the gate returns `"pass"` (or the action is non-mutating):** if the phase
+names a `rollbackLabel`, save a checkpoint first:
 
 ```
 python scripts/checkpoint.py "{rollbackLabel}"
@@ -175,8 +292,37 @@ Then read the phase's `actionDoc` file and follow it completely — it contains
 its own Message blocks and tool calls and must return an explicit
 `ACTION_RESULT`:
 
-- **`"applied"`** — the mutation was observed to complete successfully. Set
-  `phases.{id}.actionApplied = true`. If the phase has
+An admin-owned high-level phase has exactly one pause boundary per attempt.
+Its action must present the phase purpose, responsible role, complete bundled
+instructions, completion criteria, and requested non-secret evidence before
+asking one completion question. It must not persist or ask separate questions
+for checklist items inside that phase. On resume, accept the one phase return,
+run the phase's complete verification set, and only then advance.
+
+For every interactive provider action, the question tool body is the durable
+visible handoff. Read the action document's
+`<!-- visible-handoff-question:v1 -->` JSON payload, render its placeholders,
+and use that supported `header`/`question`/`options`/`allowFreeformInput`
+shape exactly. `{CURRENT_PROGRESS}` must be replaced with every plan or
+checkpoint result produced in this invocation but not yet shown inside a
+prior question body. Include checkpoint status, description, result, and
+remediation when non-empty.
+
+`{CURRENT_PROGRESS}` is bounded FlightCheck/lifecycle display content only.
+Never insert tokens, raw prompts or responses, employee/case data, full config
+or component payloads, or secret-bearing tool output into a question.
+
+Do not call the question tool if the payload is missing, malformed, truncated,
+still contains placeholders, omits the action owner/instructions/completion
+evidence, or references "above" content that is not in the question itself.
+Stop and report the visible-handoff contract error instead of accepting
+confirmation without current instructions. Ordinary assistant messages remain
+useful, but are never the only copy of content required to answer a question.
+A completed phase on quiet resume does not redisplay its runbook; this rule
+applies only when the action genuinely needs a new interactive pause.
+
+- **`"applied"`** — the mutation or verified no-op completed successfully.
+  Set `phases.{id}.actionApplied = true`. If the phase has
   `rollbackPushGlobFromAction: true`, require the action to return
   `ACTION_ROLLBACK_PUSH_GLOB` as one normalized relative path beneath
   `topics/`, with no `..` segment and no wildcard characters; persist it as
@@ -185,29 +331,94 @@ its own Message blocks and tool calls and must return an explicit
   manual attention; the live mutation may already have happened and must not
   be repeated without a known exact rollback scope. With a valid path, write
   the state file immediately.
+- **`"recorded"`** — a non-mutating evidence action completed successfully.
+  Set `phases.{id}.actionApplied = true`; this preserves the default
+  `"once"` execution contract without creating rollback state.
+
+  For either successful result, set `phases.{id}.lastActionAt` = now, mark the
+  phase action as executed in the invocation-local set, and write the state
+  file immediately. This does not complete the phase; continue to its
+  checkpoints.
+- **`"waiting"`** — a delegated administrator operation or interactive
+  question is still pending. Keep `actionApplied = false`, leave the phase
+  `in-progress`, preserve all provider-owned question, discovery, decision,
+  and operation evidence exactly, write the state file, and stop. This is a
+  resumable pause, not cancellation, failure, or completion. An unanswered
+  question remains pending and is not cancellation.
 - **`"cancelled"`** — the user declined before mutation. Keep
-  `actionApplied = false`, leave the phase `in-progress`, write the state
-  file, and stop. Do not run the phase checkpoints.
+  `actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, leave
+  the phase `in-progress`, write the state file, and stop. Do not run the phase
+  checkpoints.
 
 Any missing, unknown, or failure result is not success: keep
-`actionApplied = false`, report the action failure, and stop.
+`actionApplied = false`, remove `lastActionAt` and `rollbackPushGlob`, report
+the action failure, write the state file, and stop.
 
 ### L.4b — Run the phase's checkpoints
 
-For each checkpoint ID the current phase lists, run:
+For each checkpoint target the current phase lists, run:
 
 ```
-python scripts/flightcheck/cli.py --checkpoint {ID}
+python scripts/flightcheck/cli.py --checkpoint {TARGET}
 ```
+
+If the contract sets `checkpointResultMode: "compact-stdout-v1"`, generate a
+new opaque `CHECKPOINT_INVOCATION_ID` for this command and instead run:
+
+```
+python scripts/flightcheck/cli.py --checkpoint {TARGET} --compact-result --invocation-id "{CHECKPOINT_INVOCATION_ID}" --quiet-auth
+```
+
+Capture stdout exactly. It must contain one JSON object and no surrounding
+text. Parse and validate it fail closed before rendering or writing lifecycle
+state:
+
+- `schemaVersion` is exactly `flightcheck.lifecycle-checkpoint.v1`;
+- `kind` is exactly `checkpoint-result` (a `checkpoint-error` object is a
+  failure, never an empty/default result);
+- `target` exactly equals `{TARGET}`;
+- `targetKind` is exactly `fixed` or `family` as declared by the registered
+  target;
+- `identity.provider`, `identity.profile`, `identity.agentSlug`,
+  `identity.agentId`, and `identity.environmentId` exactly match the accepted
+  contract and current provider state;
+- `invocation.id` exactly equals `CHECKPOINT_INVOCATION_ID`,
+  `invocation.source` is non-empty, and `invocation.started` is non-empty;
+- `results` is a non-empty array; an exact target emits only that checkpoint,
+  and a family target emits only members of that family;
+- every row contains the versioned checkpoint fields including
+  `checkpointId`, `status`, `description`, `result`, `remediation`, links,
+  roles, bounded evidence, severity, automation type, and remediation ID;
+- statuses are known FlightCheck statuses, `overall` agrees with the rows, and
+  `exitCode` is 1 exactly when a row is `Failed`, `Blocked`, or `Error`.
+
+Malformed, truncated, empty, extra-text, unsupported-version, wrong-target,
+wrong-identity, wrong-invocation, zero-row, or internally inconsistent output
+blocks the phase. Report the typed stderr/`checkpoint-error` condition; never
+invent a success-shaped default and never fall back to an older result file.
+This compact path writes no per-step `results.json`, history HTML, or latest
+HTML. Render the validated rows directly with the same U.0/U.0a content and
+status rules below. The contract must never contain tokens, raw prompts,
+configuration/component payloads, employee data, or other secrets; preserve
+only the bounded row evidence already approved for FlightCheck results.
+
+If `checkpointResultMode` is absent, use the command and persisted report path
+shown above and below unchanged.
+
+When `TARGET` is a registered family/wildcard, start exactly one CLI process,
+consume and render every matching emitted row, and persist each result under
+its actual checkpoint ID. Do not invoke family members again as separate
+processes. A family that emits zero matching rows blocks the phase.
 
 If the contract has `connectConfig` and that file exists, add
-`--connect-config "{connectConfig}"`. For agent-local checkpoints, also add
-`--agent-slug "{AGENT_SLUG}"`. Use the same arguments when re-verifying
-completed phases in L.2.
+`--connect-config "{connectConfig}"`. For agent-local checkpoints or profiles,
+also add `--agent-slug "{AGENT_SLUG}"`. Use the same target and arguments when
+re-verifying completed phases in L.2.
 
 After each run, render the result using the exact U.0 and U.0a routines from
 `src/skills/setup/shared/checklist-updater.md` (read that file's U.0/U.0a
-sections and apply them verbatim against `workspace/flightcheck/results.json`
+sections and apply them verbatim against the validated compact rows, or against
+`workspace/flightcheck/results.json` for a provider using the legacy transport
 — do not re-implement or paraphrase that rendering logic here).
 
 Aggregate the phase's outcome using the phase's `completionStatuses`
@@ -217,6 +428,33 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 - **All checkpoints "count toward done"** (after any needed attestation for
   `Manual`/`Warning` results — ask the same style of yes/no confirmation
   `checklist-updater.md`'s U.2 uses when a result needs acknowledgement):
+  before asking for a `Manual` row, inspect the phase's optional
+  `manualAcknowledgementEvidence`. Skip the second generic question only
+  when the action returned `applied` or `recorded` in this invocation, the
+  current checkpoint status is exactly `Manual`, its safe `path` (with
+  `{phaseId}` resolved to the current phase) points to a provider-owned object
+  whose `status` is in `acceptedRecordStatuses`. Resolve its safe
+  `evidenceObjectPath` beneath that record, or use the record itself when the
+  configured value is `""`; that evidence object must have `kind` equal to
+  `requiredEvidenceKind` plus a non-empty `recordedAt`. Require every
+  configured `requiredValues` entry to match the evidence object exactly. For
+  each configured `bindings` entry, resolve the
+  safe relative `evidencePath` under that evidence object and safe provider-state
+  `statePath`; both must exist and be equal. Reject paths with arrays, `..`,
+  slashes, file syntax, unresolved placeholders, or non-scalar comparisons.
+  Persist the acknowledgement with
+  `source: "matching-action-evidence"`, the evidence path, kind, and evidence
+  timestamp plus the compared binding values.
+  Otherwise use the normal acknowledgement question. Its `question` field must
+  include the complete just-rendered Manual/Warning row: status, description,
+  result, remediation/manual steps, and final acknowledgement prompt. Do not
+  rely on the preceding U.0/U.0a assistant message as the only visible copy.
+  Never reuse this shortcut
+  for an older action, unrelated phase evidence, `Warning`, or mismatched
+  status/kind/timestamp. A persisted matching-evidence acknowledgement may be
+  reused on resume only while the checkpoint remains `Manual` and the current
+  evidence `recordedAt`, kind, required values, and all binding values still
+  match; otherwise remove it and ask.
   set `phases.{id}.status = "done"`, `lastVerifiedAt` = now, record each
   checkpoint's status in `checkpointResults`. For each acknowledged
   `Manual`/`Warning` result, also record
@@ -238,10 +476,11 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
   python scripts/push.py --only "{ROLLBACK_PUSH_GLOB}" --yes
   ```
 
-  If all three commands succeed, set `actionApplied = false`, keep the phase
-  `in-progress`, record `rolledBackAt` = now, and write the state file. This
-  lets a later invocation re-run the gated action instead of skipping an
-  action that was undone. If any rollback command fails, leave
+  If all three commands succeed, set `actionApplied = false`, remove
+  `rollbackPushGlob`, keep the phase `in-progress`, record `rolledBackAt` =
+  now, and write the state file. This lets a later invocation re-run the gated
+  action instead of skipping an action that was undone. If any rollback
+  command fails, leave
   `actionApplied = true`, keep the phase `blocked`, and report that both the
   phase and rollback need manual attention.
 

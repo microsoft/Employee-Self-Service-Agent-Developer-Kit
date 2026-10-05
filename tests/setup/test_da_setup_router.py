@@ -493,13 +493,17 @@ def test_public_setup_does_not_configure_mcp() -> None:
     assert "materialize-defaults" not in prompt
 
 
-def test_global_and_command_gates_require_canonical_da_completion() -> None:
+def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "`agents` entry matching `.local/config.json`" in instructions
-    assert "`connect_ready` equal to `true`" in instructions
+    assert "`authoring_ready` equal to `true`" in instructions
+    assert "let the invoked command resolve" in instructions
+    assert "This is the only readiness marker" in instructions
+    assert "Ignore `connect_ready`" in instructions
+    assert "sync-authoring-readiness --kit-root ." in instructions
+    assert "missing marker in an older schema-v4 file" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
     gated_prompts = (
@@ -507,7 +511,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
         "run.prompt.md",
@@ -533,7 +536,11 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         ), path
 
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert ".local/setup/config.json" in connect_prompt
     assert "schema_version: 4" in connect_prompt
+    assert "`authoring_ready: true`" in connect_prompt
+    assert "sync-authoring-readiness --kit-root ." in connect_prompt
+    assert "`connect_ready`" in connect_prompt
     assert 'steps.SETUP-07.state: "done"' in connect_prompt
     assert "Do not require\n`connect_ready: true`" in connect_prompt
     assert "workspace evidence" in connect_prompt
@@ -541,11 +548,10 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     flightcheck_prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(
         encoding="utf-8"
     )
-    assert "FlightCheck entry contract" in flightcheck_prompt
-    assert "Standalone FlightCheck" in flightcheck_prompt
-    assert "Canonical setup ready" in flightcheck_prompt
-
-    assert "`.local/config.json`'s" in instructions
+    normalized_flightcheck_prompt = " ".join(flightcheck_prompt.split())
+    assert "FlightCheck entry contract" in normalized_flightcheck_prompt
+    assert "Standalone FlightCheck" in normalized_flightcheck_prompt
+    assert "Canonical setup ready" in normalized_flightcheck_prompt
 
 
 def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:

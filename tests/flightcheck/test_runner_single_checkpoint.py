@@ -61,6 +61,24 @@ def _fn_raising(message: str = "boom"):
 
 
 class TestTargetMatcherFiltering:
+    def test_runner_exposes_exact_checkpoint_target_to_provider(self) -> None:
+        captured = {}
+        runner = FlightCheckRunner(
+            scope="checkpoint:SN-DA-HRSD-TEST-001",
+            target_matcher=lambda cid: cid == "SN-DA-HRSD-TEST-001",
+            checkpoint_target="SN-DA-HRSD-TEST-001",
+        )
+
+        def _capture(current):
+            captured["target"] = current.checkpoint_target
+            return [_row("SN-DA-HRSD-TEST-001", "ServiceNow DA HRSD")]
+
+        runner.register("ServiceNow DA HRSD", _capture)
+
+        runner.run()
+
+        assert captured["target"] == "SN-DA-HRSD-TEST-001"
+
     def test_family_matcher_keeps_only_family_rows(self) -> None:
         runner = FlightCheckRunner(
             scope="checkpoint:WD-FLOW",

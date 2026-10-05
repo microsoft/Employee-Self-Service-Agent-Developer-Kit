@@ -9,13 +9,23 @@ from pathlib import Path
 import pytest
 
 import reconcile_setup_agent as reconcile
-from agentbuilder import AgentBuilderError, AgentBuilderHTTPError
+from agentbuilder import AgentBuilderError, AgentBuilderHTTPError, RING_CONFIG
 from http_errors import APIError
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 DATAVERSE_URL = "https://example.crm.dynamics.com"
+
+
+def _environment_host(ring: str = "prod") -> str:
+    compact = ENVIRONMENT_ID.replace("-", "")
+    config = RING_CONFIG[ring]
+    split = int(config["primary_split"])
+    return (
+        f"https://{compact[:split]}.{compact[split:]}."
+        f"{config['host_suffix']}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -371,6 +381,422 @@ def test_native_probe_rejects_mismatched_component_identity(
         result["error"]["causes"][0]["message"]
         == "Component fetch returned identity for a different agent."
     )
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    [
+        "gptagent_copilotforemployeeselfservicehr",
+        "gptagent_copilotforemployeeselfserviceit",
+    ],
+)
+def test_native_probe_completes_missing_schema_from_dev_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    schema_name: str,
+) -> None:
+    observed: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            observed.append(("agent", agent_id))
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service",
+                "realm": "Dev",
+                "managedProperties": {"isManaged": True},
+            }
+
+        def get_dev_configuration(self, agent_id: str) -> dict:
+            observed.append(("config", agent_id))
+            return {
+                "cdsBotId": agent_id,
+                "realm": "Dev",
+                "schemaName": schema_name,
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert observed == [("agent", AGENT_ID), ("config", AGENT_ID)]
+    assert result["outcome"] == "found"
+    assert result["productFamily"] == "da-ga"
+    assert result["identity"]["schemaName"] == schema_name
+    assert result["identity"]["displayName"] == "Employee Self-Service"
+
+
+def test_native_direct_schema_skips_configuration_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+                "realm": "Dev",
+                "schemaName": "gptagent_copilotforemployeeselfservicehr",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            pytest.fail("Configuration lookup is unnecessary with direct schema.")
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "found"
+    assert result["productFamily"] == "da-ga"
+
+
+@pytest.mark.parametrize("config_result", [{}, {"schemaName": ""}])
+def test_native_probe_missing_configuration_schema_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_result: dict,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+                "realm": "Dev",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            return {
+                "cdsBotId": AGENT_ID,
+                "realm": "Dev",
+                **config_result,
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "productFamily" not in result
+    assert "identity" not in result
+
+
+def test_native_probe_configuration_failure_is_uncertain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+                "realm": "Dev",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            raise AgentBuilderError("Dev configuration unavailable")
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert result["error"]["causes"][0]["type"] == "NativeIdentityIncomplete"
+    assert result["error"]["causes"][1]["type"] == "AgentBuilderError"
+
+
+@pytest.mark.parametrize(
+    "agent",
+    [
+        {
+            "botId": "00000000-0000-4000-8000-000000009999",
+            "realm": "Dev",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+        {
+            "botId": AGENT_ID,
+            "realm": "Prod",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+        {
+            "realm": "Dev",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+    ],
+)
+def test_native_direct_schema_requires_exact_dev_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    agent: dict,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, _agent_id: str) -> dict:
+            return agent
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            pytest.fail("Direct schema path must not call Dev configuration.")
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "productFamily" not in result
+
+
+@pytest.mark.parametrize("schema_name", [{"bad": "shape"}, ["bad"], 42])
+def test_native_direct_schema_rejects_non_string_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    schema_name: object,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "realm": "Dev",
+                "schemaName": schema_name,
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "invalid schema-name shape" in result["error"]["causes"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {
+            "cdsBotId": "00000000-0000-4000-8000-000000009999",
+            "realm": "Dev",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+        {
+            "cdsBotId": AGENT_ID,
+            "realm": "Prod",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+        {
+            "realm": "Dev",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+        {
+            "cdsBotId": "not-a-guid",
+            "realm": "Dev",
+            "schemaName": "gptagent_copilotforemployeeselfservicehr",
+        },
+    ],
+)
+def test_native_configuration_schema_requires_exact_dev_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    configuration: dict,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "fullBotName": "Employee Self-Service (HR)",
+                "realm": "Dev",
+            }
+
+        def get_dev_configuration(self, _agent_id: str) -> dict:
+            return configuration
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "productFamily" not in result
+
+
+@pytest.mark.parametrize("schema_name", [{"bad": "shape"}, ["bad"], 42])
+def test_native_configuration_rejects_non_string_schema(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    schema_name: object,
+) -> None:
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def get_agent(self, agent_id: str) -> dict:
+            return {
+                "botId": agent_id,
+                "realm": "Dev",
+                "fullBotName": "Employee Self-Service",
+            }
+
+        def get_dev_configuration(self, agent_id: str) -> dict:
+            return {
+                "cdsBotId": agent_id,
+                "realm": "Dev",
+                "schemaName": schema_name,
+            }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(reconcile, "AgentBuilderClient", FakeClient)
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=_environment_host(),
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "invalid schema-name shape" in result["error"]["causes"][0]["message"]
+
+
+def test_native_probe_rejects_host_for_different_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    other_environment = "00000000-0000-4000-8000-000000009999"
+    compact = other_environment.replace("-", "")
+    config = RING_CONFIG["prod"]
+    split = int(config["primary_split"])
+    wrong_host = (
+        f"https://{compact[:split]}.{compact[split:]}."
+        f"{config['host_suffix']}"
+    )
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "AgentBuilderClient",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Mismatched environment host must be rejected before probing."
+        ),
+    )
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="prod",
+        kit_root=tmp_path,
+        host=wrong_host,
+    )
+
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "identity-completion"
+    assert "does not match" in result["error"]["causes"][0]["message"]
 
 
 @pytest.mark.parametrize(

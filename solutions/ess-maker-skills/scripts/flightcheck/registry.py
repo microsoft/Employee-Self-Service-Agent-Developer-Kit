@@ -24,19 +24,17 @@ family) it records:
   first to hydrate shared state.
 
 ``cli.py`` reads this registry to (a) implement ``--list-checkpoints``
-without any broad run, and (b) for ``--checkpoint <ID>``, initialise only
-the clients the target's transitive prerequisite closure declares, run the
+without any broad run, and (b) for ``--checkpoint <ID>``, initialise the
+effective clients declared by the target and its prerequisite policy, run the
 owning functions in canonical order, then filter results down to the
 target.
 
-**Scope:** the ESS + Workday *setup* checkpoints only — not the entire
-FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` row stay
-validated by the existing ``--scope`` runs and are deliberately out of
-registry scope. ``ENV-004`` was re-pointed to the Declarative Agent
-minimalBots components + ALM API and is now registered here (clients
-``AGENTBUILDER``) so it can run via the plan/``--checkpoint`` path like the
-other DA checks. See
+**Scope:** setup-owned ESS/Workday checkpoints plus provider-owned lifecycle
+checkpoints that must support exact ``--checkpoint`` execution, including
+``SN-DA-HRSD-*``. Legacy generic ServiceNow ``SN-*``, graph connector
+``EXT-*``, and ``SAP-*`` remain validated by their existing ``--scope`` runs.
+``ENV-004`` is registered here after moving to the Declarative Agent
+minimalBots components + ALM API (client ``AGENTBUILDER``). See
 ``plans/workday-setup/flightcheck-single-checkpoint.md``.
 """
 
@@ -53,6 +51,9 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.servicenow_da_hrsd import (
+    run_servicenow_da_hrsd_checks,
+)
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -102,6 +103,7 @@ CATEGORY_ORDER = [
     "Infrastructure",
     "Environment",
     "Native Agent",
+    "ServiceNow DA HRSD",
     "Solution",
     "Authentication",
     "Entra App",
@@ -129,6 +131,10 @@ class CheckpointSpec:
     checkpoints whose exact IDs cannot be enumerated ahead of time
     (``WD-FLOW-001``, ``WD-FLOW-002``, ...). When ``is_family`` is True the
     key matches any emitted ID of the form ``"{key}-..."``.
+
+    ``inherit_prereq_clients`` defaults to the historical transitive union.
+    Providers that evaluate genuine prerequisites inside their target row may
+    opt out and initialize only the target's declared clients.
     """
 
     key: str
@@ -142,6 +148,10 @@ class CheckpointSpec:
     priority: str = Priority.HIGH.value
     roles: tuple = ()
     is_family: bool = False
+    inherit_prereq_clients: bool = True
+    provider: str = ""
+    profile: str = ""
+    family_key: str = ""
     # listable=False registers a checkpoint so it can satisfy another
     # checkpoint's prerequisite resolution, while hiding it from
     # --list-checkpoints (it belongs to another scope's surface — e.g.
@@ -252,6 +262,256 @@ _SPECS: list[CheckpointSpec] = [
             Role.POWER_PLATFORM_ADMIN.value,
         ),
         is_family=True,
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PKG-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ADMIN-PREFLIGHT-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PKG-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PLUGIN-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ADMIN-PREFLIGHT-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PLUGIN-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        is_family=True,
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-APP-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-PLUGIN-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-CLAIMS-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-APP-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-SCOPE-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-CLAIMS-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-PREAUTH-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-SCOPE-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-PERMISSIONS-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-PREAUTH-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-ENTRA-CONSENT-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-PERMISSIONS-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+        family_key="SN-DA-HRSD-ENTRA",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-OIDC-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-ENTRA-CONSENT-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.SERVICENOW_ADMIN.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TOPICS-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-CREDENTIAL-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-CREDENTIAL-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-OIDC-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PORTAL-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-TOPICS-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-AGENT-CONNECTION-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=(
+            "SN-DA-HRSD-CREDENTIAL-001",
+            "SN-DA-HRSD-PORTAL-001",
+        ),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-TEST-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER, CONNECTIVITY}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=(
+            "SN-DA-HRSD-TOPICS-001",
+            "SN-DA-HRSD-AGENT-CONNECTION-001",
+        ),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
+    ),
+    CheckpointSpec(
+        key="SN-DA-HRSD-PUBLISH-001",
+        category_fn=run_servicenow_da_hrsd_checks,
+        category_label="ServiceNow DA HRSD",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("SN-DA-HRSD-TEST-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+        inherit_prereq_clients=False,
+        provider="servicenow-da-hrsd",
+        profile="hrsd",
     ),
     CheckpointSpec(
         key="PUB-001",
@@ -930,6 +1190,7 @@ OWNED_PREFIXES: tuple = (
     "PUB",
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
+    "SN-DA-HRSD",
 )
 
 
@@ -1025,15 +1286,24 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     target_spec = _resolve_or_raise(checkpoint_id)
     closure = _closure(checkpoint_id)
 
-    clients: frozenset = frozenset()
-    pp_admin_flow_required = False
+    clients: frozenset = (
+        frozenset()
+        if target_spec.inherit_prereq_clients
+        else target_spec.clients
+    )
+    pp_admin_flow_required = (
+        False
+        if target_spec.inherit_prereq_clients
+        else target_spec.pp_admin_flow_required
+    )
     requires_config = False
     requires_dataverse_endpoint = False
     for spec in closure:
-        clients = clients | spec.clients
-        pp_admin_flow_required = (
-            pp_admin_flow_required or spec.pp_admin_flow_required
-        )
+        if target_spec.inherit_prereq_clients:
+            clients = clients | spec.clients
+            pp_admin_flow_required = (
+                pp_admin_flow_required or spec.pp_admin_flow_required
+            )
         requires_config = requires_config or spec.requires_config
         requires_dataverse_endpoint = (
             requires_dataverse_endpoint or spec.requires_dataverse_endpoint
@@ -1181,6 +1451,7 @@ def matches(target: str, emitted_id: str) -> bool:
             emitted_spec is not None
             and not emitted_spec.is_family
             and emitted_spec.key != fam_key
+            and emitted_spec.family_key != fam_key
         ):
             return False
         return emitted_id == fam_key or emitted_id.startswith(fam_key + "-")

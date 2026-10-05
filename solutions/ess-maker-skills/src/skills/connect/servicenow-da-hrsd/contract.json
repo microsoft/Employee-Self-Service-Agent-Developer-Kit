@@ -1,0 +1,246 @@
+{
+  "contractRevision": 6,
+  "provider": "servicenow-da-hrsd",
+  "displayName": "ServiceNow HRSD",
+  "profile": "hrsd",
+  "checkpointResultMode": "compact-stdout-v1",
+  "attestedRoleScope": "lifecycle",
+  "planRoles": [
+    "ESS Maker / Agent Developer",
+    "ServiceNow Admin / security_admin",
+    "Microsoft Entra Application Administrator or higher",
+    "Power Platform Maker / Admin"
+  ],
+  "stateMigrationCommand": "python scripts/connect_servicenow_da.py migrate-state",
+  "stateInitializationCommand": "python scripts/connect_servicenow_da.py initialize-state --contract-revision {contractRevision}",
+  "detect": {
+    "checkpoint": "SN-DA-HRSD-PKG-001",
+    "meansInstalled": "Passed",
+    "meansNotInstalled": "NotConfigured"
+  },
+  "phases": [
+    {
+      "id": "preflight",
+      "label": "Discover existing ServiceNow admin setup and identify missing or unhealthy items",
+      "checkpoints": ["SN-DA-HRSD-ADMIN-PREFLIGHT-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/admin-preflight.md",
+      "actionExecution": "every-invocation",
+      "mutates": false
+    },
+    {
+      "id": "plugin-prerequisites",
+      "label": "Confirm HR Service Delivery Core is installed and Active",
+      "checkpoints": ["SN-DA-HRSD-PLUGIN-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/verify-plugin-prerequisites.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation"
+      },
+      "mutates": false
+    },
+    {
+      "id": "entra-registration",
+      "label": "Guide and verify the Microsoft Entra User Login application setup",
+      "checkpoints": ["SN-DA-HRSD-ENTRA-*"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-entra-registration.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation"
+      },
+      "mutates": false
+    },
+    {
+      "id": "servicenow-oidc",
+      "label": "Guide the ServiceNow OIDC provider and active-user mapping setup",
+      "checkpoints": ["SN-DA-HRSD-OIDC-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/guide-servicenow-oidc.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "adminSetup.phaseHandoffs.{phaseId}",
+        "evidenceObjectPath": "evidence",
+        "acceptedRecordStatuses": ["completed", "reused"],
+        "requiredEvidenceKind": "structured-admin-attestation",
+        "requiredValues": {
+          "oidcCapabilityConfirmed": true,
+          "runbookCompleted": true,
+          "mappingDetailsCollected": false
+        }
+      },
+      "mutates": false
+    },
+    {
+      "id": "credential",
+      "label": "Create or explicitly reuse the exact ServiceNow physical connection",
+      "checkpoints": ["SN-DA-HRSD-CREDENTIAL-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-credential.md",
+      "actionExecution": "once",
+      "mutates": false
+    },
+    {
+      "id": "topics",
+      "label": "Prepare the ServiceNow HRSD topics for this agent",
+      "checkpoints": ["SN-DA-HRSD-TOPICS-001"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/prepare-topics.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.topics",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["recorded"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "customerChoice": "keep-current",
+          "makerAttested": true
+        },
+        "bindings": [
+          {
+            "evidencePath": "boundComponentHash",
+            "statePath": "componentHash"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "portal-url",
+      "label": "Configure the ServiceNow employee portal Base URI",
+      "checkpoints": ["SN-DA-HRSD-PORTAL-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-portal-url.md",
+      "actionExecution": "once",
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "agent-connection",
+      "label": "Connect the selected ServiceNow credential to this agent",
+      "checkpoints": ["SN-DA-HRSD-AGENT-CONNECTION-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/connect-agent.md",
+      "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.agentConnection",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["completed"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "makerAttested": true,
+          "physicalStatus": "Connected",
+          "authMode": "entraIDUserLogin"
+        },
+        "bindings": [
+          {"evidencePath": "binding.provider", "statePath": "provider"},
+          {"evidencePath": "binding.profile", "statePath": "profile"},
+          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
+          {"evidencePath": "binding.agentId", "statePath": "agentId"},
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "connectionId",
+            "statePath": "evidence.credential.connectionId"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "test",
+      "label": "Confirm a ServiceNow HRSD request works in the Test pane",
+      "checkpoints": ["SN-DA-HRSD-TEST-001"],
+      "completionStatuses": ["Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/test-connection.md",
+      "actionExecution": "every-invocation",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.test",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["completed"],
+        "requiredEvidenceKind": "maker-attestation",
+        "requiredValues": {
+          "promptCategory": "list-my-open-hr-cases",
+          "result": "pass",
+          "failureCategory": null
+        },
+        "bindings": [
+          {"evidencePath": "binding.provider", "statePath": "provider"},
+          {"evidencePath": "binding.profile", "statePath": "profile"},
+          {"evidencePath": "binding.agentSlug", "statePath": "agentSlug"},
+          {"evidencePath": "binding.agentId", "statePath": "agentId"},
+          {
+            "evidencePath": "binding.environmentId",
+            "statePath": "environmentId"
+          },
+          {
+            "evidencePath": "binding.connectionId",
+            "statePath": "evidence.credential.connectionId"
+          },
+          {
+            "evidencePath": "binding.draftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "binding.connectionBindingHash",
+            "statePath": "connectionBindingHash"
+          }
+        ]
+      },
+      "mutates": false
+    },
+    {
+      "id": "publish",
+      "label": "Publish the tested ServiceNow HRSD agent revision",
+      "checkpoints": ["SN-DA-HRSD-PUBLISH-001"],
+      "completionStatuses": ["Passed", "Manual"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/publish-agent.md",
+      "actionExecution": "once",
+      "manualAcknowledgementEvidence": {
+        "path": "evidence.publish",
+        "evidenceObjectPath": "",
+        "acceptedRecordStatuses": ["confirmation-required"],
+        "requiredEvidenceKind": "maker-attestation",
+        "bindings": [
+          {
+            "evidencePath": "publishedComponentHash",
+            "statePath": "componentHash"
+          },
+          {
+            "evidencePath": "testedDraftSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "publishedSemanticHash",
+            "statePath": "draftSemanticHash"
+          },
+          {
+            "evidencePath": "connectionBindingHash",
+            "statePath": "connectionBindingHash"
+          }
+        ]
+      },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    }
+  ]
+}

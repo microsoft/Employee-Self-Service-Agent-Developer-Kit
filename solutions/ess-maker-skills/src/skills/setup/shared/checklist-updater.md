@@ -195,11 +195,12 @@ If the row is `manual`/`attest` and `ACK` is `false`, before leaving the row
 manual verification steps — U.0a — for this row's checkpoint must already have been
 rendered in chat. If they were not, show them now, then ask.)
 
+<!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Confirm step",
-    "question": "Have you completed this step and is the evidence captured?",
+    "question": "Status: {CHECKPOINT_RESULT}\n\n{checkpoint description}\n\nResult: {checkpoint result}\n\nRequired action: {remediation and U.0a manual steps}\n\nHave you completed this step and is the evidence captured?",
     "options": [
       { "label": "Yes, it's done", "recommended": true },
       { "label": "Not yet" }
@@ -208,6 +209,11 @@ rendered in chat. If they were not, show them now, then ask.)
   }
 ]
 ```
+
+Render every placeholder in the `question` field before the tool call. If
+status, description, result, or required action/manual steps are omitted or
+still placeholders, stop instead of asking for acknowledgement. A preceding
+U.0/U.0a message is not sufficient by itself.
 
 Only treat the row as acknowledged (`ACK = true`) on an explicit "Yes, it's
 done". Never infer acknowledgement from a flightcheck pass.

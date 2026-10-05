@@ -96,21 +96,16 @@ recording `note` = the query error.
 Use when `GATE_MODE` is `"attested"` (Workday Administrator, InfoSec/IT), or as
 the fallback when a programmatic query errored.
 
-**Message:**
+Use the `vscode_askQuestions` tool. Do not rely on a preceding Message block;
+the question body itself contains the role requirement and why confirmation
+is needed:
 
-This step requires the **{REQUIRED_ROLE}** role. I can't verify that
-automatically for this system, so I need you to confirm you (or the person
-doing this step) hold that role before we continue.
-
-**End message.**
-
-Use the `vscode_askQuestions` tool:
-
+<!-- visible-handoff-question:v1 -->
 ```json
 [
   {
     "header": "Confirm role",
-    "question": "Do you have the {REQUIRED_ROLE} role to perform this step?",
+    "question": "This step requires the **{REQUIRED_ROLE}** role. I can't verify that automatically for this system, so I need you to confirm you (or the person doing this step) hold that role before we continue.\n\nDo you have the {REQUIRED_ROLE} role to perform this step?",
     "options": [
       { "label": "Yes, I have this role", "recommended": true },
       { "label": "No / not sure" }

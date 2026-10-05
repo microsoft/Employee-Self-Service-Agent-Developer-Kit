@@ -30,10 +30,12 @@ Scopes:
 """
 
 import argparse
+from contextlib import redirect_stdout
 import json
 import os
 import re
 import sys
+import traceback
 import uuid
 import webbrowser
 from pathlib import Path
@@ -54,6 +56,8 @@ from flightcheck.runner import (
     BUCKET_ACTION,
     BUCKET_MANUAL,
     BUCKET_PASSED,
+    compact_checkpoint_error_to_dict,
+    compact_checkpoint_result_to_dict,
 )
 from flightcheck.agent_scope import active_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
@@ -1170,14 +1174,15 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
         pass
 
 
-def _run_single_checkpoint(args):
+def _run_single_checkpoint(args, *, compact_stream=None):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
-    Resolves the target via the registry, initialises ONLY the clients/config
-    its transitive prerequisite closure declares (so an Entra-only checkpoint
-    runs with no Dataverse endpoint configured), registers the prerequisite +
-    owning category functions in canonical order to hydrate shared state, then
-    relies on the runner's target filter to keep just the requested rows.
+    Resolves the target via the registry, initialises ONLY the effective
+    clients/config selected by its prerequisite policy (so an Entra-only
+    checkpoint runs with no Dataverse endpoint configured), registers the
+    prerequisite + owning category functions in canonical order to hydrate
+    shared state, then relies on target-aware evaluation and the runner's
+    filter to keep just the requested rows.
 
     Always calls sys.exit(): 0 when the checkpoint passes or requires guided
     verification, 1 when it fails, is blocked, errors, or cannot be evaluated,
@@ -1563,6 +1568,7 @@ def _run_single_checkpoint(args):
                     native_token,
                     ring=native_ring,
                     api_version=api_version,
+                    environment_host=native_host,
                 )
                 mark_available(registry.CONNECTIVITY)
             if registry.AGENTBUILDER in needed:
@@ -1627,6 +1633,7 @@ def _run_single_checkpoint(args):
             or cid.startswith("CHECKPOINT-CLIENT-")
             or cid.startswith("CHECKPOINT-CONTRACT-")
         ),
+        checkpoint_target=target,
     )
     runner.execution_targets = (target,)
     runner.config = config
@@ -1673,17 +1680,22 @@ def _run_single_checkpoint(args):
         print("\nRunning checkpoint...\n")
     result = runner.run()
 
-    _print_prioritized_summary(result, verbose_manual=True)
-    save_results(result, args.output)
+    if compact_stream is None:
+        _print_prioritized_summary(result, verbose_manual=True)
+        save_results(result, args.output)
 
-    if not result.results:
+    target_rows = [
+        row for row in result.results if registry.matches(target, row.checkpoint_id)
+    ]
+    if not target_rows:
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
         sys.exit(1)
 
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
-    # Single-checkpoint mode never auto-opens the HTML report; results.json /
-    # report.html are still written to args.output for anyone who wants them.
+    # Single-checkpoint mode never auto-opens the HTML report. The default
+    # path still writes results.json / report.html; compact lifecycle mode
+    # emits its versioned stdout contract without per-step report files.
     # Single-checkpoint runs are the "connect" invocation source: incremental
     # FlightChecks that gate individual setup/connect steps (ADO 7587431).
     # Without this, checkpoint runs were invisible to the Aria dashboards even
@@ -1695,7 +1707,86 @@ def _run_single_checkpoint(args):
     # BLOCKED is a hard release gate (forces overall = NOT_READY), so it must
     # fail the exit code just like FAILED/ERROR — otherwise a CI/Connect caller
     # keying on the exit code reads a blocked essential capability as success.
-    sys.exit(_run_exit_code(result))
+    exit_code = _run_exit_code(result)
+    if compact_stream is not None:
+        active_agent = next(
+            (
+                agent
+                for agent in config.get("agents", [])
+                if isinstance(agent, dict)
+                and agent.get("slug") == runner.agent_slug
+            ),
+            config.get("agent") or {},
+        )
+        payload = compact_checkpoint_result_to_dict(
+            result,
+            target=target,
+            provider=spec.provider,
+            profile=spec.profile,
+            agent_slug=runner.agent_slug,
+            agent_id=str(
+                active_agent.get("botId") or active_agent.get("id") or ""
+            ),
+            environment_id=str(runner.env_id or ""),
+            invocation_id=args.invocation_id,
+            invocation_source=args.invocation_source or "connect",
+            exit_code=exit_code,
+            target_is_family=spec.is_family,
+        )
+        print(
+            json.dumps(payload, separators=(",", ":")),
+            file=compact_stream,
+            flush=True,
+        )
+        args._compact_contract_emitted = True
+    sys.exit(exit_code)
+
+
+def _run_compact_checkpoint(args):
+    """Keep stdout machine-only while routing all ordinary output to stderr."""
+    stream = sys.stdout
+    args._compact_contract_emitted = False
+    with redirect_stdout(sys.stderr):
+        try:
+            _run_single_checkpoint(args, compact_stream=stream)
+        except SystemExit as exc:
+            if not args._compact_contract_emitted:
+                reported_code = exc.code if isinstance(exc.code, int) else 1
+                exit_code = reported_code if reported_code != 0 else 1
+                payload = compact_checkpoint_error_to_dict(
+                    target=args.checkpoint,
+                    error_type="checkpoint-execution",
+                    message=(
+                        "Checkpoint execution ended before a result contract "
+                        "was produced. Review stderr."
+                    ),
+                    exit_code=exit_code,
+                )
+                print(
+                    json.dumps(payload, separators=(",", ":")),
+                    file=stream,
+                    flush=True,
+                )
+                if exit_code != reported_code:
+                    raise SystemExit(exit_code) from exc
+            raise
+        except Exception as exc:
+            traceback.print_exc(file=sys.stderr)
+            payload = compact_checkpoint_error_to_dict(
+                target=args.checkpoint,
+                error_type=type(exc).__name__,
+                message=(
+                    "Checkpoint execution failed before a result contract "
+                    "was produced. Review stderr."
+                ),
+                exit_code=1,
+            )
+            print(
+                json.dumps(payload, separators=(",", ":")),
+                file=stream,
+                flush=True,
+            )
+            raise SystemExit(1) from exc
 
 
 def _single_checkpoint_contract_check(target: str):
@@ -2603,8 +2694,26 @@ def main():
         "--checkpoint",
         help="Run exactly one checkpoint (or a family, e.g. WD-FLOW-*) by ID and "
              "report only its result. Hydrates the checkpoint's declared "
-             "prerequisites and initialises only the clients it needs. Mutually "
-             "exclusive with --scope/--profile.",
+             "prerequisites under its registered client policy and initialises "
+             "only the clients it needs. Mutually exclusive with "
+             "--scope/--profile.",
+    )
+    parser.add_argument(
+        "--compact-result",
+        action="store_true",
+        help=(
+            "Emit one versioned lifecycle checkpoint JSON object on stdout "
+            "without writing results.json or HTML. Valid only with "
+            "--checkpoint and --invocation-id."
+        ),
+    )
+    parser.add_argument(
+        "--invocation-id",
+        default=None,
+        help=(
+            "Opaque current-invocation identifier copied into "
+            "--compact-result output."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -2777,6 +2886,12 @@ def main():
             validate_agent_slug(args.agent_slug)
         except ValueError as e:
             parser.error(f"invalid --agent-slug: {e}")
+    if args.compact_result and not args.checkpoint:
+        parser.error("--compact-result requires --checkpoint.")
+    if args.compact_result and not args.invocation_id:
+        parser.error("--compact-result requires --invocation-id.")
+    if args.invocation_id and not args.compact_result:
+        parser.error("--invocation-id requires --compact-result.")
 
     # --- Targeted modes (additive; leave --scope behavior intact) ---
     if args.list_checkpoints:
@@ -2794,7 +2909,10 @@ def main():
         if args.scope is not None or args.profile:
             print("ERROR: --checkpoint is mutually exclusive with --scope/--profile.")
             sys.exit(2)
-        _run_single_checkpoint(args)
+        if args.compact_result:
+            _run_compact_checkpoint(args)
+        else:
+            _run_single_checkpoint(args)
         return  # _run_single_checkpoint always exits; defensive only.
 
     if args.profile:
@@ -3024,6 +3142,7 @@ def main():
                 token,
                 ring=ring,
                 api_version=api_version,
+                environment_host=environment_host,
             )
             print("  AgentBuilder and connection inventory: OK")
         else:
