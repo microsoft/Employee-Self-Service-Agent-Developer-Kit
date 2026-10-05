@@ -1336,14 +1336,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
         PhaseStatus.COMPLETE.value: "Complete",
     }
     current_phase = next_phase_id(state)
-    current_index = next(
-        (
-            index
-            for index, definition in enumerate(PHASE_DEFINITIONS)
-            if definition.identifier.value == current_phase
-        ),
-        None,
-    )
     rows = [
         "### Workday connection progress",
         "",
@@ -1352,7 +1344,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
     ]
     for index, definition in enumerate(PHASE_DEFINITIONS, start=1):
         status = state["phases"][definition.identifier.value]["status"]
-        phase_index = index - 1
         if status == PhaseStatus.COMPLETE.value:
             label = labels[status]
         elif definition.identifier.value == current_phase:
@@ -1361,11 +1352,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
                 if status == PhaseStatus.BLOCKED.value
                 else "Current"
             )
-        elif (
-            current_index is not None
-            and phase_index == current_index + 1
-        ):
-            label = "Next"
         else:
             label = "Pending"
         rows.append(f"| {index} | {definition.title} | {label} |")

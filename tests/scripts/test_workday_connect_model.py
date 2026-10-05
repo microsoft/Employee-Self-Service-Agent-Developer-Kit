@@ -140,7 +140,7 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "|---:|---|---|\n"
         "| 1 | Preflight | Complete |\n"
         "| 2 | Microsoft Entra | Current |\n"
-        "| 3 | Workday administrator | Next |\n"
+        "| 3 | Workday administrator | Pending |\n"
         "| 4 | Connections | Pending |\n"
         "| 5 | Runtime configuration | Pending |\n"
         "| 6 | Employee validation | Pending |"
@@ -162,14 +162,14 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
     }
 
 
-def test_pending_current_phase_and_following_phase_are_distinct() -> None:
+def test_pending_current_phase_and_following_phases_are_pending() -> None:
     import workday_connect_model as model
 
     state = model.default_state()
 
     progress = model.progress_text(state)
     assert "| 1 | Preflight | Current |" in progress
-    assert "| 2 | Microsoft Entra | Next |" in progress
+    assert "| 2 | Microsoft Entra | Pending |" in progress
 
 
 def test_blocked_current_phase_is_marked_as_needing_attention() -> None:
@@ -186,7 +186,7 @@ def test_blocked_current_phase_is_marked_as_needing_attention() -> None:
 
     progress = model.progress_text(state)
     assert "| 1 | Preflight | Current - needs attention |" in progress
-    assert "| 2 | Microsoft Entra | Next |" in progress
+    assert "| 2 | Microsoft Entra | Pending |" in progress
 
 
 def test_blocked_phase_requires_complete_blocker_evidence() -> None:

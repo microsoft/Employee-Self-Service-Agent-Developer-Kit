@@ -1037,7 +1037,7 @@ def test_status_returns_progress_roadmap_and_next_phase_summary(
     assert status["nextPhaseId"] == "entra"
     assert "| 1 | Preflight | Complete |" in status["progressText"]
     assert "| 2 | Microsoft Entra | Current |" in status["progressText"]
-    assert "| 3 | Workday administrator | Next |" in status["progressText"]
+    assert "| 3 | Workday administrator | Pending |" in status["progressText"]
     assert status["nextPhaseSummary"]["title"] == "Microsoft Entra"
     assert len(status["nextPhaseSummary"]["whatHappens"]) == 3
     assert len(status["phases"]) == 6
