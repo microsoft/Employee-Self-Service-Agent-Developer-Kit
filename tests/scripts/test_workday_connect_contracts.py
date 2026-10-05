@@ -159,6 +159,9 @@ def _workday_state():
     state["identifiers"]["workdaySamlEntityId"] = (
         "http://www.workday.com/contoso_impl"
     )
+    state["identifiers"]["entraAppIdUri"] = (
+        "api://44444444-4444-4444-4444-444444444444"
+    )
     state["identifiers"]["signingCertificate"] = {
         "thumbprint": "AA11",
         "validFrom": "2026-01-01T00:00:00Z",
@@ -248,6 +251,58 @@ Remediated domain:
 Remediation scenario:
 Authorization retest:
 """
+
+
+def _worksheet_table(packet: dict, worksheet: str) -> str:
+    values = {}
+    current_label = None
+    expected_labels = packet["responseForm"]["collection"]["labels"]
+    for raw_line in worksheet.splitlines():
+        if not raw_line:
+            continue
+        matched = next(
+            (
+                label
+                for label in expected_labels
+                if raw_line.startswith(label + ":")
+            ),
+            None,
+        )
+        if matched is not None:
+            values[matched] = raw_line[len(matched) + 1 :].strip()
+            current_label = matched
+        elif current_label == "Additional domain mappings":
+            values[current_label] += "\n" + raw_line.strip()
+        else:
+            raise AssertionError(f"Unexpected worksheet line: {raw_line}")
+
+    def cell(value: str) -> str:
+        return value.replace("|", "\\|").replace("\n", "<br>")
+
+    lines = [
+        (
+            "| Information to capture | Where to find it | What to record | "
+            "Example value | Your tenant values |"
+        ),
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for instruction in packet["captureInstructions"]:
+        information = instruction["information"]
+        lines.append(
+            "| "
+            + " | ".join(
+                cell(value)
+                for value in (
+                    information,
+                    instruction["portalLocation"],
+                    instruction["instruction"],
+                    instruction["exampleValue"],
+                    values[information],
+                )
+            )
+            + " |"
+        )
+    return "\n".join(lines)
 
 
 def test_entra_handoff_selects_only_exact_service_provider_id():
@@ -359,7 +414,13 @@ def test_entra_handoff_can_request_explicit_creation():
     assert handoff["responseForm"]["collection"]["validator"] == (
         "parse_entra_return_worksheet"
     )
-    assert "completed administrator worksheet" in handoff["responseForm"]["note"]
+    assert handoff["responseForm"]["collection"]["acceptedFormats"] == [
+        "five-column-markdown-table",
+        "labeled-worksheet",
+    ]
+    assert "completed five-column administrator table" in (
+        handoff["responseForm"]["note"]
+    )
     assert "Basic SAML Configuration" in capture_by_field[
         "replyUrl"
     ]["portalLocation"]
@@ -389,6 +450,24 @@ def test_entra_labeled_worksheet_parses_to_validated_evidence() -> None:
         "outcome": "confirmed",
         "provenance": "administrator-attestation",
     }
+
+
+def test_entra_completed_capture_table_parses_to_validated_evidence() -> None:
+    packet = build_entra_handoff(_state())
+    assert [
+        row["information"] for row in packet["captureInstructions"]
+    ] == packet["responseForm"]["collection"]["labels"]
+    assert all(row["exampleValue"] for row in packet["captureInstructions"])
+
+    parsed = parse_entra_return_worksheet(
+        _state(),
+        _worksheet_table(packet, _entra_worksheet()),
+    )
+
+    result = validate_entra_verification(_state(), parsed)
+    assert result["identifiers"]["entraAppId"] == (
+        "44444444-4444-4444-4444-444444444444"
+    )
 
 
 @pytest.mark.parametrize(
@@ -748,6 +827,10 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert packet["responseForm"]["collection"]["validator"] == (
         "parse_workday_admin_return_worksheet"
     )
+    assert packet["responseForm"]["collection"]["acceptedFormats"] == [
+        "five-column-markdown-table",
+        "labeled-worksheet",
+    ]
     assert packet["engagementQuestion"].startswith("Have you looped in")
     assert packet["completionQuestion"].startswith("Has the Workday")
     assert any(
@@ -768,6 +851,22 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["evidence"]["optionalDomains"] == []
 
 
+def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    assert [
+        row["information"] for row in packet["captureInstructions"]
+    ] == packet["responseForm"]["collection"]["labels"]
+    assert all(row["exampleValue"] for row in packet["captureInstructions"])
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _worksheet_table(packet, _workday_worksheet()),
+    )
+
+    result = validate_workday_admin_response(_workday_state(), parsed)
+    assert result["identifiers"]["oauthClientId"] == "safe-client-id"
+
+
 def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
         "Optional domains: No additional domains are required\n"
@@ -780,6 +879,33 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     parsed = parse_workday_admin_return_worksheet(
         _workday_state(),
         worksheet,
+    )
+
+    assert parsed["optionalDomains"] == [
+        {
+            "domain": "Worker Data",
+            "scenario": "custom worker lookup",
+        },
+        {
+            "domain": "Absence",
+            "scenario": "custom leave lookup",
+        },
+    ]
+
+
+def test_workday_capture_table_parses_multiline_optional_domains() -> None:
+    worksheet = _workday_worksheet().replace(
+        "Optional domains: No additional domains are required\n"
+        "Additional domain mappings:\n",
+        "Optional domains: Yes, additional supported scenarios require domains\n"
+        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Absence | custom leave lookup\n",
+    )
+    packet = build_workday_admin_packet(_workday_state())
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _worksheet_table(packet, worksheet),
     )
 
     assert parsed["optionalDomains"] == [

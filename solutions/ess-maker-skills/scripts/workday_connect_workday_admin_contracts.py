@@ -460,6 +460,229 @@ def build_workday_admin_packet(
             "Confirm the returned Workday REST and SOAP hosts are reachable "
             "or approved by the organization network policy",
         ],
+        "captureInstructions": [
+            {
+                "information": "SAML row settings",
+                "fields": [
+                    "identityProviderOutcome",
+                    "enabledServiceProviderId",
+                    "identityProviderSsoServiceUrl",
+                    "signOnRedirectUrl",
+                ],
+                "portalLocation": "Edit Tenant Setup - Security -> SAML Setup",
+                "instruction": (
+                    "Compare the enabled Microsoft Entra row with the Issuer, "
+                    "Service Provider ID, SSO URL, and redirect URL in this handoff."
+                ),
+                "exampleValue": "Yes, all four values match exactly",
+            },
+            {
+                "information": "Certificate",
+                "fields": ["certificateSelectionOutcome"],
+                "portalLocation": (
+                    "Edit Tenant Setup - Security -> SAML Setup -> enabled "
+                    "Microsoft Entra row -> X509 Certificate"
+                ),
+                "instruction": (
+                    "Record which certificate is selected on the enabled row."
+                ),
+                "exampleValue": (
+                    "The new certificate created from the Entra Base64 file"
+                ),
+            },
+            {
+                "information": "Certificate expiration",
+                "fields": ["certificateValidityOutcome"],
+                "portalLocation": (
+                    "View the selected Workday X.509 public key details"
+                ),
+                "instruction": (
+                    "Compare its expiration date with the verified Entra date "
+                    f"{certificate_valid_to}."
+                ),
+                "exampleValue": "Yes, the expiration date matches exactly",
+            },
+            {
+                "information": "OAuth client ID",
+                "fields": ["oauthClientId"],
+                "portalLocation": "View API Client -> Client ID",
+                "instruction": "Record the non-secret OAuth client ID.",
+                "exampleValue": "safe-client-id",
+            },
+            {
+                "information": "API client",
+                "fields": ["apiClientOutcome"],
+                "portalLocation": "View API Client or Register API Client",
+                "instruction": (
+                    "Record whether an approved client was reused or a new "
+                    "client was registered."
+                ),
+                "exampleValue": "An existing approved client was verified",
+            },
+            {
+                "information": "Client grant type",
+                "fields": ["clientGrantType"],
+                "portalLocation": "View API Client -> Client Grant Type",
+                "instruction": "Record the configured grant type.",
+                "exampleValue": "SAML Bearer",
+            },
+            {
+                "information": "Workday owned scope",
+                "fields": ["includeWorkdayOwnedScope"],
+                "portalLocation": "View API Client -> Include Workday Owned Scope",
+                "instruction": "Record whether the setting is enabled.",
+                "exampleValue": "Yes",
+            },
+            {
+                "information": "OAuth token URL",
+                "fields": ["oauthTokenUrl"],
+                "portalLocation": "View API Client -> Token Endpoint",
+                "instruction": "Record the complete HTTPS token endpoint.",
+                "exampleValue": (
+                    "https://wd5.myworkday.com/ccx/oauth2/contoso/token"
+                ),
+            },
+            {
+                "information": "REST base URL",
+                "fields": ["restBaseUrl"],
+                "portalLocation": "Workday REST service endpoint",
+                "instruction": "Record the base URL ending at /ccx/api.",
+                "exampleValue": "https://wd5.myworkday.com/ccx/api",
+            },
+            {
+                "information": "SOAP base URL",
+                "fields": ["soapBaseUrl"],
+                "portalLocation": "Workday SOAP service endpoint",
+                "instruction": (
+                    "Record the base URL ending at /ccx/service without the "
+                    "tenant name."
+                ),
+                "exampleValue": "https://wd5.myworkday.com/ccx/service",
+            },
+            {
+                "information": "Authentication policy",
+                "fields": ["authenticationPolicyOutcome"],
+                "portalLocation": (
+                    "Manage Authentication Policies -> employee environment"
+                ),
+                "instruction": (
+                    "Record whether an existing SAML rule is active or a "
+                    "reviewed policy was activated."
+                ),
+                "exampleValue": "An existing active policy allows SAML",
+            },
+            {
+                "information": "Network readiness",
+                "fields": ["networkReadinessOutcome"],
+                "portalLocation": "Customer network policy for the REST and SOAP hosts",
+                "instruction": (
+                    "Record whether both hosts are allowed or no firewall "
+                    "change is required."
+                ),
+                "exampleValue": "Both Workday hosts are allowed",
+            },
+            {
+                "information": "Rollout",
+                "fields": ["rolloutType"],
+                "portalLocation": "Workday employee security group assignment",
+                "instruction": "Record the configured employee population.",
+                "exampleValue": (
+                    "Limited or test population - the intended Workday "
+                    "security group and test employee access are configured"
+                ),
+            },
+            {
+                "information": "Public worker reports",
+                "fields": ["publicWorkerReportsOutcome"],
+                "portalLocation": (
+                    "Domain Security Policies for Functional Area -> Worker "
+                    "Data: Public Worker Reports"
+                ),
+                "instruction": "Confirm Get permission is granted.",
+                "exampleValue": "Yes, Get permission is verified",
+            },
+            {
+                "information": "Integration permissions",
+                "fields": ["integrationPermissionsGetOutcome"],
+                "portalLocation": (
+                    "Domain Security Policies for Functional Area -> "
+                    "Integration Permissions"
+                ),
+                "instruction": "Confirm Get permission is granted.",
+                "exampleValue": "Yes, Get permission is verified",
+            },
+            {
+                "information": "Functional-area scopes",
+                "fields": ["functionalAreaScopes"],
+                "portalLocation": "View API Client -> Functional Areas",
+                "instruction": (
+                    "Confirm Core Payroll, Organizations and Roles, Staffing, "
+                    "and Time Off and Leave are all present."
+                ),
+                "exampleValue": (
+                    "Yes, all four required functional areas are present"
+                ),
+            },
+            {
+                "information": "Optional domains",
+                "fields": ["optionalDomains"],
+                "portalLocation": "Additional domain security policy review",
+                "instruction": (
+                    "Record whether custom scenarios require extra domains."
+                ),
+                "exampleValue": "No additional domains are required",
+            },
+            {
+                "information": "Additional domain mappings",
+                "fields": ["optionalDomains"],
+                "portalLocation": "Additional domain security policy review",
+                "instruction": (
+                    "When required, enter one mapping per line as Domain | "
+                    "supported scenario; otherwise leave blank."
+                ),
+                "exampleValue": (
+                    "Worker Data | custom worker lookup<br>"
+                    "Absence | custom leave lookup"
+                ),
+            },
+            {
+                "information": "Authorization",
+                "fields": ["authorizationOutcome"],
+                "portalLocation": "Signed-in employee authorization retest",
+                "instruction": "Record the final authorization result.",
+                "exampleValue": "Verified without an authorization error",
+            },
+            {
+                "information": "Remediated domain",
+                "fields": ["authorizationRemediationDomain"],
+                "portalLocation": "Affected Workday domain security policy",
+                "instruction": (
+                    "When Task not authorized was remediated, record the "
+                    "affected domain; otherwise leave blank."
+                ),
+                "exampleValue": "Worker Data: Public Worker Reports",
+            },
+            {
+                "information": "Remediation scenario",
+                "fields": ["authorizationRemediationScenario"],
+                "portalLocation": "Signed-in employee authorization retest",
+                "instruction": (
+                    "When remediation was required, record the supported "
+                    "scenario used for the retest; otherwise leave blank."
+                ),
+                "exampleValue": "Check vacation balance",
+            },
+            {
+                "information": "Authorization retest",
+                "fields": ["authorizationRetestOutcome"],
+                "portalLocation": "Signed-in employee authorization retest",
+                "instruction": (
+                    "When remediation was required, record the retest outcome; "
+                    "otherwise leave blank."
+                ),
+                "exampleValue": "Verified after remediation",
+            },
+        ],
         "informationToReturn": [
             "Enabled identity provider, exact Issuer, Service Provider ID, "
             "IdP SSO service URL, and sign-on redirect URL",
@@ -501,13 +724,18 @@ def build_workday_admin_packet(
             ],
             "collection": {
                 "mode": "labeled-worksheet",
+                "acceptedFormats": [
+                    "five-column-markdown-table",
+                    "labeled-worksheet",
+                ],
                 "labels": list(WORKDAY_ADMIN_WORKSHEET_LABELS),
                 "duplicateLabels": "reject",
                 "unknownLabels": "reject",
                 "validator": "parse_workday_admin_return_worksheet",
             },
             "note": (
-                "Return the completed worksheet in one response. Do not paste "
+                "Return the completed five-column table in one response. The "
+                "legacy labeled worksheet remains accepted. Do not paste "
                 "passwords, client secrets, tokens, cookies, certificate "
                 "contents, or private keys. For missing or invalid values, "
                 "show one mini-worksheet with only those fields and their "

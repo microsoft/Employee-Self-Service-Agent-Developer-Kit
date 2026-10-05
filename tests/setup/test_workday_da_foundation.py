@@ -95,17 +95,20 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     )
     assert "captureInstructions" in entra
     assert "python scripts/workday_connect.py entra-handoff" in entra
-    assert "Microsoft Entra administrator return\nworksheet" in entra
+    assert "Information to capture" in entra
+    assert "Where to find it" in entra
+    assert "What to record" in entra
+    assert "Example value" in entra
+    assert "Your tenant values" in entra
+    normalized_entra = " ".join(entra.split())
+    assert "both the capture guide and the return worksheet" in normalized_entra
     assert (
-        "before the administrator starts the numbered tasks"
-        in " ".join(entra.split())
+        "Before the numbered tasks" in entra
     )
     assert "renders an array of questions as a sequential wizard" in entra
     assert "containing exactly one free-form question" in entra
     assert "Do not replay the full worksheet" in entra
-    assert '"header": "Entra return worksheet"' in entra
-    assert "every line is required" in entra
-    assert "Certificate expiration date (active certificate row):" in entra
+    assert '"header": "Entra return table"' in entra
     assert "Certificate valid from" not in entra
     assert "Do not\nsay only \"paste a revised worksheet\"" in entra
     for removed_header in (
@@ -119,10 +122,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         "Scope ID",
     ):
         assert f'"header": "{removed_header}"' not in entra
-    assert (
-        "Do not ask for a field after completion unless the shareable"
-        in entra
-    )
+    assert "Do not ask for a\nfield after completion unless it appeared" in entra
 
 
 def test_preflight_explains_silent_auth_and_current_phase() -> None:
@@ -144,10 +144,11 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     normalized = " ".join(tenant.split())
 
     assert "one administrator handoff" in tenant
-    assert "Workday administrator return worksheet" in tenant
-    assert "one copyable worksheet" in tenant
+    assert "Workday administrator return table" in tenant
+    assert "both the capture guide and the return worksheet" in normalized
     assert "share this whole section" in tenant
-    assert "Information to return to the maker" in tenant
+    assert "Your tenant values" in tenant
+    assert "do not repeat an **Information to return to the maker**" in tenant
     assert "identityProviderQuestion" in tenant
     assert "Microsoft Entra ID" in tenant
     assert "Okta" in tenant
@@ -163,14 +164,14 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert '"header": "Certificate name"' not in tenant
     assert "containing exactly one free-form question" in tenant
-    assert '"header": "Workday administrator return worksheet"' in tenant
+    assert '"header": "Workday administrator return table"' in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
     assert "Do not add `recommended`" in tenant
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
-    assert "strict labeled worksheet" in tenant
+    assert "strict five-column table" in tenant
     assert "rejects missing, duplicate, or unknown labels" in normalized
     assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant

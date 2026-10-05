@@ -530,21 +530,24 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     unsupported_stop = text.index(
         "For **Okta**, **Ping Identity**, or **Another sign-in provider**"
     )
+    capture_table = text.index("Before the numbered tasks")
     existing_handoff = text.index("### Existing Microsoft Entra federation handoff")
     greenfield_handoff = text.index("### New Microsoft Entra federation handoff")
     completion = text.index(
         "Has the Workday administrator completed every applicable task"
     )
-    return_information = text.index("Information to return to the maker")
     form = text.index('"header": "SAML row settings"')
 
     assert packet < provider_question < unsupported_stop
-    assert unsupported_stop < existing_handoff < greenfield_handoff
-    assert greenfield_handoff < return_information < completion < form
+    assert unsupported_stop < capture_table < existing_handoff < greenfield_handoff
+    assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
     assert "Do not show the completion question\n  or response form" in text
     assert "Only after **Yes**\nmay the skill collect evidence" in text
     assert "share this whole section" in text
+    assert "both the capture guide and\nthe return worksheet" in text
+    assert "Leave every cell in **Your\ntenant values** blank" in text
+    assert "do not repeat an **Information to return to the maker**" in text
     assert "--substage handoff-presented" in text
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text

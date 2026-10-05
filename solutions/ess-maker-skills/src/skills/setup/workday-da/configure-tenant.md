@@ -56,9 +56,27 @@ before the completion question and preserve the current phase.
 Render the selected branch as one standalone section titled **Workday
 administrator handoff - share this whole section**. It must contain the
 administrator role, exact Workday tenant and environment, packet reference
-values, every applicable numbered task, and the packet's
-`informationToReturn` checklist. The maker must be able to forward that one
-section without copying values from earlier chat messages.
+values, one capture table, and every applicable numbered task. The maker must
+be able to forward that one section without copying values from earlier chat
+messages.
+
+Before the numbered tasks, render every entry from the packet's
+`captureInstructions` as one table with these exact columns:
+
+| Information to capture | Where to find it | What to record | Example value | Your tenant values |
+| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
+
+Use each entry's `information`, `portalLocation`, `instruction`, and
+`exampleValue` values for the first four columns. Leave every cell in **Your
+tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
+line break inside a cell. Tell the administrator to complete that final column
+and return the whole table to the maker, who will paste it into the agent chat.
+Never render internal `fields` names. This table is both the capture guide and
+the return worksheet. Do not render the packet's `informationToReturn` list or
+a second worksheet. Keep the numbered tasks focused on actions; do not repeat
+table locations, capture instructions, or return-value lists unless necessary
+to perform the change. Do not ask for a field after completion unless it
+appeared as a row in the shareable table.
 
 After rendering the complete handoff, record that it was presented and is
 waiting for the administrator:
@@ -131,12 +149,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Do not treat the functional-area scopes from step 4 as domain permissions.
    Add another domain only when it is tied to a named supported scenario.
    Do not return employee membership lists.
-6. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the tenant’s
-   REST base URL ending exactly at `/ccx/api` and its SOAP service base URL
-   ending exactly at `/ccx/service`. The tenant name is collected separately;
-   do not append it to the SOAP base URL.
-   Do not return a client secret, password, token, cookie, or certificate body.
+6. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 7. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -183,12 +200,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    security group, and grant **Get** on **Worker Data: Public Worker Reports**
    and **Integration Permissions**. Never default a limited/test rollout to All
    Employees. Add optional domains only for a named supported scenario.
-7. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the REST
-   base URL ending exactly at `/ccx/api` and the SOAP service base URL ending
-   exactly at `/ccx/service`. Record the tenant name separately; do not append
-   it to the SOAP base URL. Do not return a client secret, password, token,
-   cookie, or certificate body.
+7. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 8. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -204,17 +220,10 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
     identity-provider SSO service URL, and sign-on redirect URL match the
     expected values.
 
-End the shareable handoff with **Information to return to the maker** and show
-every item from the packet's `informationToReturn` list. Do not defer this
-checklist until after completion; the administrator must know what to return
-before starting the tasks.
-
-Then render a section titled **Workday administrator return worksheet**. Use
-the customer-facing headers, questions, and choices from the worksheet
-definition below. Render them as one copyable worksheet that the administrator
-can complete and return through the customer's approved collaboration channel.
-Do not submit the definition as a multi-question `vscode_askQuestions` call;
-VS Code renders that array as a sequential wizard.
+End the shareable handoff after the applicable numbered tasks. The capture
+table already tells the administrator what to return and where to find it, so
+do not repeat an **Information to return to the maker** checklist or a separate
+return worksheet.
 
 After an applicable handoff is shown, ask exactly:
 
@@ -235,8 +244,8 @@ If the administrator reports that the provider state changed from the branch
 selected above, return to provider discovery instead of forcing the current
 form.
 
-Collect the completed worksheet in one response. Do not ask for these values
-as a sequence of separate chat or form questions. The worksheet retains all
+Collect the completed five-column table in one response. Do not ask for these
+values as a sequence of separate chat or form questions. The table retains all
 required evidence:
 
 - confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
@@ -264,8 +273,10 @@ required evidence:
   remediation was required; when it was, the affected domain, named scenario,
   and successful retest outcome.
 
-Use this exact worksheet definition, substituting the packet's expected
-issuer, Service Provider ID, and verified certificate expiration date:
+The worksheet definition below is an internal mapping reference for the exact
+successful values accepted by the controller. Do not render it after the
+handoff table. Substitute the packet's expected issuer, Service Provider ID,
+and verified certificate expiration date when building the table:
 
 ```json
 [
@@ -454,17 +465,19 @@ After the administrator confirms completion, use one
 ```json
 [
   {
-    "header": "Workday administrator return worksheet",
-    "question": "Paste the completed Workday administrator return worksheet in one response. Keep every field label with its answer. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
+    "header": "Workday administrator return table",
+    "question": "Paste the completed Workday administrator table in one response, including the header and every row. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
   }
 ]
 ```
 
-The response is a strict labeled worksheet, not free-form evidence. Preserve
-the exact labels and answers unchanged. The controller rejects missing,
-duplicate, or unknown labels and maps only the listed successful choices into
-the structured response object described below. Never parse, rename, infer,
-or normalize an answer in the skill:
+The response is a strict five-column table, not free-form evidence. Preserve it
+unchanged. The controller reads only the exact **Information to capture**
+labels and **Your tenant values** cells, rejects missing, duplicate, or unknown
+labels, and maps only the listed successful choices into the structured
+response object described below. The legacy exact labeled worksheet remains
+accepted for resume compatibility. Never parse, rename, infer, or normalize an
+answer in the skill:
 
 - an applicable Microsoft Entra branch plus
   **Yes, all four values match exactly** ->
@@ -554,7 +567,7 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the exact labeled response directly to
+key. Write the exact table response directly to
 `.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
 interpolate administrator-entered values into a generated shell command. Pass
 the worksheet once:

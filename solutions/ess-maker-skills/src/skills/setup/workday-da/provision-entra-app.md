@@ -111,27 +111,33 @@ returned `packet` for every packet-driven value below.
 
 Render one standalone section titled **Microsoft Entra administrator handoff -
 share this whole section**. It must contain the administrator role, canonical
-tenant ID, expected Workday Service Provider ID, the numbered tasks below, and
-the complete field-capture instructions and **Information to return to the
-maker** checklist. The administrator identifies the selected directory and
-exact enterprise application/app-registration identity. The maker must be
-able to forward that one section without copying values from earlier chat
-messages.
+tenant ID, expected Workday Service Provider ID, the capture table, and the
+numbered tasks below. The administrator identifies the selected directory and
+exact enterprise application/app-registration identity. The maker must be able
+to forward that one section without copying values from earlier chat messages.
 
 Before the numbered tasks, tell the administrator:
 
-> Record the values in the following table while completing the tasks. The
-> maker will be asked for these exact values after you finish, so do not close
-> the portal until they have been captured. Return only non-secret values. Do
-> not return credentials, tokens, certificate contents, or private keys.
+> Complete the **Your tenant values** column while performing the tasks, then
+> return the completed table to the maker. The maker will paste it back into
+> the agent chat. Return only non-secret values; never include credentials,
+> tokens, certificate contents, or private keys.
 
-Render every entry from the packet's `captureInstructions` as a table with
-columns **Information to capture**, **Where to find it**, and **What to
-record**. Use each entry's `information`, `portalLocation`, and `instruction`
-values respectively. Never show the internal `fields` names or state keys such
-as `microsoftEntraIdentifier` or `scopeGuid`. Keep the portal navigation and
-capture instruction verbatim. This table must appear before the administrator
-starts the numbered tasks, not only after the completion question.
+Render every entry from the packet's `captureInstructions` as one table with
+these exact columns, in this order:
+
+| Information to capture | Where to find it | What to record | Example value | Your tenant values |
+| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
+
+Use each entry's `information`, `portalLocation`, `instruction`, and
+`exampleValue` values for the first four columns. Leave every cell in **Your
+tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
+line break inside a cell. Never show internal `fields` names or state keys.
+This table is both the capture guide and the return worksheet; do not render a
+second checklist or worksheet after the numbered tasks. Keep the numbered
+tasks focused on actions and avoid repeating table locations or capture
+instructions unless they are required to perform the change. Do not ask for a
+field after completion unless it appeared as a row in the shareable table.
 
 After rendering the complete handoff, persist the presentation and waiting
 boundaries:
@@ -197,38 +203,9 @@ by display name alone.
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
 
-End the shareable handoff with **Information to return to the maker** and show
-every item from the packet's `informationToReturn` list. State that each later
-follow-up question corresponds to a value or outcome already identified in the
-capture table. Do not ask for a field after completion unless the shareable
-handoff told the administrator where to capture it.
-
-Then render a section titled **Microsoft Entra administrator return
-worksheet** using the template below. The administrator can complete this
-worksheet and return it to the maker through the customer's approved
-collaboration channel. Do not include internal field names or ask the
-administrator to enter answers directly into the maker's Copilot session.
-State that every line is required and must have an answer before the worksheet
-is returned. The certificate thumbprint and expiration date are shown on the
-active certificate row under **Enterprise applications -> the exact Workday
-application -> Single sign-on -> SAML -> SAML Signing Certificate**.
-
-```text
-Directory name:
-Enterprise application:
-Application ID:
-Selected Reply URL:
-NameID source:
-SAML signing: [Sign SAML response and assertion | Sign SAML assertion | Sign SAML response]
-Certificate thumbprint (active certificate row):
-Certificate expiration date (active certificate row):
-SAML configuration: [Yes, confirmed | No, configuration is incomplete or different | I'm not sure]
-Signing certificate: [Yes, confirmed | No, certificate setup or transfer is incomplete | I'm not sure]
-Authorized connector: [Yes, confirmed | No, it is not authorized | I'm not sure]
-Permissions and consent: [Yes, permissions and consent are confirmed | No, permissions or consent are incomplete | I'm not sure]
-Employee assignment: [Yes, access is confirmed or assignment is not required | No, required assignment is incomplete | I'm not sure]
-Existing configuration: [Preserved without changes | Remediated without replacing unrelated configuration | Not preserved or I'm not sure]
-```
+End the shareable handoff after the numbered tasks. Do not repeat an
+**Information to return to the maker** checklist: the five-column table already
+contains every required value, location, instruction, and allowed example.
 
 After the worksheet, ask exactly:
 
@@ -249,14 +226,12 @@ After **Yes**, run:
 python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
-Then collect the complete **Information to return to the maker** response from
-the Entra administrator. It must include the selected directory, exact
-enterprise-application/app-registration pairing, identifiers, Reply URL,
-safe certificate metadata, configured outcomes, and preservation outcomes.
-Store exact non-secret values as `observedValue` where required. Object IDs,
-the scope GUID, derived tenant URLs, and complete URI lists are not required
-from the maker. A reply such as "done", "all good", "continue", or "proceed"
-is not evidence and must not be converted into administrator attestation.
+Then collect the completed five-column table from the Entra administrator.
+The **Your tenant values** column must include every required non-secret value
+or outcome. Object IDs, the scope GUID, derived tenant URLs, and complete URI
+lists are not required. A reply such as "done", "all good", "continue", or
+"proceed" is not evidence and must not be converted into administrator
+attestation.
 
 The VS Code question UI renders an array of questions as a sequential wizard.
 Do not submit one question per worksheet field. Use one
@@ -265,17 +240,19 @@ Do not submit one question per worksheet field. Use one
 ```json
 [
   {
-    "header": "Entra return worksheet",
-    "question": "Paste the completed Microsoft Entra administrator return worksheet in one response. Keep every field label with its answer. Do not include credentials, tokens, certificate contents, or private keys."
+    "header": "Entra return table",
+    "question": "Paste the completed Microsoft Entra administrator table in one response, including the header and every row. Do not include credentials, tokens, certificate contents, or private keys."
   }
 ]
 ```
 
-The response is a strict labeled worksheet, not free-form evidence. Preserve
-the exact labels and answers unchanged. The controller rejects missing,
-duplicate, or unknown labels, maps only the listed successful choices, and
-then validates the resulting structured verification payload. Never parse,
-rename, infer, or normalize an answer in the skill.
+The response is a strict five-column table, not free-form evidence. Preserve it
+unchanged. The controller reads only the exact **Information to capture**
+labels and **Your tenant values** cells, rejects missing, duplicate, or unknown
+labels, maps only the listed successful choices, and validates the structured
+verification payload. The legacy exact labeled worksheet remains accepted for
+resume compatibility. Never parse, rename, infer, or normalize an answer in
+the skill.
 
 After submission, validate the complete worksheet once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer and ask
@@ -324,7 +301,7 @@ On resume, use the Entra administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Write the administrator's exact labeled response directly to
+Write the administrator's exact table response directly to
 `.local/connect/workday-da/entra-return-worksheet.txt`, then run:
 
 ```powershell

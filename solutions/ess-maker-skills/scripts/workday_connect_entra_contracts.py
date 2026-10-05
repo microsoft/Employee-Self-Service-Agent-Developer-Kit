@@ -375,72 +375,64 @@ def build_entra_handoff(
         "actions": actions,
         "captureInstructions": [
             {
-                "information": "Selected directory display name",
+                "information": "Directory name",
                 "fields": ["selectedDirectoryDisplayName"],
                 "portalLocation": (
                     "Microsoft Entra admin center -> Microsoft Entra ID -> Overview"
                 ),
                 "instruction": (
-                    "After switching to the deployment directory, record its "
-                    "exact display name. The tenant ID is already recorded "
-                    "from Preflight and does not need to be re-entered."
+                    "Record the exact display name of the deployment directory."
                 ),
+                "exampleValue": "Contoso",
             },
             {
-                "information": (
-                    "Enterprise application display name and Application ID"
+                "information": "Enterprise application",
+                "fields": ["applicationDisplayName"],
+                "portalLocation": (
+                    "Microsoft Entra ID -> Enterprise applications -> the "
+                    "exact Workday application -> Overview"
                 ),
-                "fields": [
-                    "applicationDisplayName",
-                    "applicationId",
-                ],
+                "instruction": "Record the exact application display name.",
+                "exampleValue": "Workday",
+            },
+            {
+                "information": "Application ID",
+                "fields": ["applicationId"],
                 "portalLocation": (
                     "Microsoft Entra ID -> Enterprise applications -> the "
                     "exact Workday application -> Overview"
                 ),
                 "instruction": (
-                    "Record the exact display name and Application ID. Object "
-                    "IDs are reserved for future role-aware verification and "
-                    "do not need to be copied by the maker."
+                    "Record the Application ID. Do not record either Object ID."
                 ),
+                "exampleValue": "11111111-1111-1111-1111-111111111111",
             },
             {
-                "information": ("Selected Reply URL and SAML configuration outcome"),
-                "fields": [
-                    "replyUrl",
-                    "entraChecks.samlMode",
-                ],
+                "information": "Selected Reply URL",
+                "fields": ["replyUrl"],
                 "portalLocation": (
                     "Enterprise applications -> the exact Workday "
                     "application -> Single sign-on -> SAML -> Basic SAML "
                     "Configuration"
                 ),
                 "instruction": (
-                    "Confirm the displayed Identifier (Entity ID) matches the "
-                    "expected Workday Service Provider ID in this handoff, "
-                    "then record only the Reply URL intended for this Workday "
-                    "tenant. The Microsoft Entra Identifier and Login URL are "
-                    "derived from the selected tenant ID."
+                    "Record the Reply URL intended for this Workday tenant."
                 ),
+                "exampleValue": "https://wd5.myworkday.com/contoso/login-saml2.htmld",
             },
             {
-                "information": ("Unique User Identifier (Name ID) source attribute"),
-                "fields": [
-                    "nameIdSource",
-                    "entraChecks.nameId",
-                ],
+                "information": "NameID source",
+                "fields": ["nameIdSource", "entraChecks.nameId"],
                 "portalLocation": (
                     "Enterprise applications -> the exact Workday "
                     "application -> Single sign-on -> SAML -> Attributes & "
                     "Claims -> Unique User Identifier (Name ID)"
                 ),
-                "instruction": (
-                    "Record the exact source attribute, such as user.mail or "
-                    "user.userPrincipalName."
-                ),
+                "instruction": "Record the exact source attribute.",
+                "exampleValue": "user.userPrincipalName",
             },
             {
-                "information": "SAML signing option",
+                "information": "SAML signing",
                 "fields": [
                     "samlSigningOption",
                     "entraChecks.samlSigningOption",
@@ -451,57 +443,76 @@ def build_entra_handoff(
                     "Certificate card -> Edit pencil -> Signing Option"
                 ),
                 "instruction": (
-                    "Open the Edit panel and record the exact value shown in "
-                    "the Signing Option field. The expected selection is Sign "
-                    "SAML response and assertion."
+                    "Record the exact value shown in the Signing Option field."
                 ),
+                "exampleValue": "Sign SAML response and assertion",
             },
             {
-                "information": (
-                    "Active certificate thumbprint and expiration date, and "
-                    "certificate-transfer confirmation"
-                ),
-                "fields": [
-                    "certificateThumbprint",
-                    "certificateValidTo",
-                    "entraChecks.signingCertificate",
-                ],
+                "information": "Certificate thumbprint (active certificate row)",
+                "fields": ["certificateThumbprint"],
                 "portalLocation": (
                     "Enterprise applications -> the exact Workday "
                     "application -> Single sign-on -> SAML -> SAML Signing "
                     "Certificate -> active certificate row"
                 ),
-                "instruction": (
-                    "Record the active certificate's thumbprint and "
-                    "Expiration date exactly as displayed. Confirm separately "
-                    "that the Base64 certificate was transferred through the "
-                    "approved customer channel; do not return the certificate "
-                    "body."
-                ),
+                "instruction": "Record the active certificate thumbprint.",
+                "exampleValue": "A1B2C3D4E5F6",
             },
             {
-                "information": (
-                    "Application ID URI, user_impersonation scope, and "
-                    "connector authorization outcome"
+                "information": "Certificate expiration date (active certificate row)",
+                "fields": ["certificateValidTo"],
+                "portalLocation": (
+                    "Enterprise applications -> the exact Workday "
+                    "application -> Single sign-on -> SAML -> SAML Signing "
+                    "Certificate -> active certificate row"
                 ),
-                "fields": [
-                    "entraChecks.connectorPreauthorized",
-                ],
+                "instruction": "Record the Expiration date exactly as displayed.",
+                "exampleValue": "2027-01-01",
+            },
+            {
+                "information": "SAML configuration",
+                "fields": ["entraChecks.samlMode"],
+                "portalLocation": (
+                    "Enterprise applications -> the exact Workday "
+                    "application -> Single sign-on -> SAML"
+                ),
+                "instruction": (
+                    "Confirm the Identifier, Reply URL, Login URL, NameID, and "
+                    "signing option match this handoff."
+                ),
+                "exampleValue": "Yes, confirmed",
+            },
+            {
+                "information": "Signing certificate",
+                "fields": ["entraChecks.signingCertificate"],
+                "portalLocation": (
+                    "Enterprise applications -> the exact Workday "
+                    "application -> Single sign-on -> SAML -> SAML Signing "
+                    "Certificate"
+                ),
+                "instruction": (
+                    "Confirm the active Base64 certificate was transferred "
+                    "through the approved customer channel. Do not return it."
+                ),
+                "exampleValue": "Yes, confirmed",
+            },
+            {
+                "information": "Authorized connector",
+                "fields": ["entraChecks.connectorPreauthorized"],
                 "portalLocation": (
                     "App registrations -> the exact Workday registration -> "
                     "Expose an API"
                 ),
                 "instruction": (
-                    "Confirm the derived api:// Application ID URI and enabled "
-                    "user_impersonation scope, then confirm connector "
+                    "Confirm the api:// Application ID URI, user_impersonation "
+                    "scope, and connector "
                     f"{WORKDAY_CONNECTOR_APP_ID} is authorized for that scope, "
                     "without copying the scope GUID."
                 ),
+                "exampleValue": "Yes, confirmed",
             },
             {
-                "information": (
-                    "Required delegated permissions and admin-consent outcome"
-                ),
+                "information": "Permissions and consent",
                 "fields": [
                     "entraChecks.graphDelegatedPermissions",
                     "entraChecks.adminConsent",
@@ -511,32 +522,28 @@ def build_entra_handoff(
                     "API permissions"
                 ),
                 "instruction": (
-                    "Confirm openid, profile, and User.Read are present, note "
-                    "whether admin consent is granted, and return one combined "
-                    "permissions-and-consent outcome."
+                    "Confirm openid, profile, and User.Read are present and "
+                    "administrator consent is granted."
                 ),
+                "exampleValue": "Yes, permissions and consent are confirmed",
             },
             {
-                "information": (
-                    "Assignment-required setting and intended ESS employee "
-                    "group assignment outcome"
-                ),
+                "information": "Employee assignment",
                 "fields": ["entraChecks.userAssignment"],
                 "portalLocation": (
                     "Enterprise applications -> the exact Workday "
                     "application -> Properties and Users and groups"
                 ),
                 "instruction": (
-                    "Record whether assignment is required and whether the "
-                    "intended ESS employee group, including the test employee, "
-                    "has access."
+                    "Confirm the intended ESS employee group has access, or "
+                    "that assignment is not required."
+                ),
+                "exampleValue": (
+                    "Yes, access is confirmed or assignment is not required"
                 ),
             },
             {
-                "information": (
-                    "Preservation of unrelated scopes, authorized clients, "
-                    "and API permissions"
-                ),
+                "information": "Existing configuration",
                 "fields": [
                     "entraChecks.existingScopesPreserved",
                     "entraChecks.authorizedClientsPreserved",
@@ -547,10 +554,10 @@ def build_entra_handoff(
                     "Expose an API and API permissions"
                 ),
                 "instruction": (
-                    "Return one combined outcome confirming that unrelated "
-                    "configuration was preserved, or that targeted remediation "
-                    "was completed without replacing unrelated configuration."
+                    "Confirm unrelated scopes, authorized clients, and "
+                    "permissions were preserved."
                 ),
+                "exampleValue": "Preserved without changes",
             },
         ],
         "informationToReturn": [
@@ -569,18 +576,23 @@ def build_entra_handoff(
             "required": sorted(ADMINISTRATOR_REQUIRED_FIELDS["entra"]),
             "collection": {
                 "mode": "labeled-worksheet",
+                "acceptedFormats": [
+                    "five-column-markdown-table",
+                    "labeled-worksheet",
+                ],
                 "labels": list(ENTRA_WORKSHEET_LABELS),
                 "duplicateLabels": "reject",
                 "unknownLabels": "reject",
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Collect the completed administrator worksheet in one "
-                "response and do not accept blank required lines. Do not ask "
-                "for passwords, client secrets, tokens, cookies, certificate "
-                "contents, or private keys. After submission, show the "
-                "capture location and a mini-template containing only values "
-                "that are missing, invalid, or inconsistent."
+                "Collect the completed five-column administrator table in one "
+                "response. The legacy labeled worksheet remains accepted. Do "
+                "not accept blank required values or ask for passwords, client "
+                "secrets, tokens, cookies, certificate contents, or private "
+                "keys. After submission, show the capture location and a "
+                "mini-template containing only values that are missing, "
+                "invalid, or inconsistent."
             ),
         },
     }

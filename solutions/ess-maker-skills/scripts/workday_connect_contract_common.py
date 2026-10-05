@@ -27,6 +27,107 @@ _SECRET_VALUE_MARKERS = (
     '"refresh_token"',
 )
 
+_WORKSHEET_TABLE_HEADERS = (
+    "Information to capture",
+    "Where to find it",
+    "What to record",
+    "Example value",
+    "Your tenant values",
+)
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not stripped.startswith("|") or not stripped.endswith("|"):
+        raise ValueError
+    cells: list[str] = []
+    current: list[str] = []
+    index = 1
+    while index < len(stripped) - 1:
+        character = stripped[index]
+        if (
+            character == "\\"
+            and index + 1 < len(stripped) - 1
+            and stripped[index + 1] == "|"
+        ):
+            current.append("|")
+            index += 2
+            continue
+        if character == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+        index += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _parse_markdown_worksheet(
+    lines: list[str],
+    *,
+    labels: tuple[str, ...],
+    label: str,
+    multiline_labels: frozenset[str],
+) -> dict[str, str]:
+    if len(lines) < 2:
+        raise WorkdayConnectContractError(
+            f"{label} table must include a header and separator row."
+        )
+    try:
+        headers = _split_markdown_table_row(lines[0])
+        separators = _split_markdown_table_row(lines[1])
+    except ValueError as exc:
+        raise WorkdayConnectContractError(
+            f"{label} must use a complete Markdown table."
+        ) from exc
+    if tuple(headers) != _WORKSHEET_TABLE_HEADERS:
+        raise WorkdayConnectContractError(
+            f"{label} table must use the expected five column headers."
+        )
+    if len(separators) != len(headers) or any(
+        re.fullmatch(r":?-{3,}:?", cell) is None for cell in separators
+    ):
+        raise WorkdayConnectContractError(
+            f"{label} table separator row is invalid."
+        )
+
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(lines[2:], start=3):
+        try:
+            cells = _split_markdown_table_row(line)
+        except ValueError as exc:
+            raise WorkdayConnectContractError(
+                f"{label} table row {line_number} is invalid."
+            ) from exc
+        if len(cells) != len(headers):
+            raise WorkdayConnectContractError(
+                f"{label} table row {line_number} must contain five columns."
+            )
+        row_label = cells[0]
+        if row_label not in labels:
+            raise WorkdayConnectContractError(
+                f"{label} contains unknown information label '{row_label}'."
+            )
+        if row_label in values:
+            raise WorkdayConnectContractError(
+                f"{label} contains duplicate label '{row_label}'."
+            )
+        replacement = "\n" if row_label in multiline_labels else " "
+        values[row_label] = re.sub(
+            r"<br\s*/?>",
+            replacement,
+            cells[4],
+            flags=re.IGNORECASE,
+        ).strip()
+
+    missing = [candidate for candidate in labels if candidate not in values]
+    if missing:
+        raise WorkdayConnectContractError(
+            f"{label} is missing labels: " + ", ".join(missing) + "."
+        )
+    return values
+
 
 def _safe_nonsecret_text(value: Any, label: str) -> str:
     text = str(value or "").strip()
@@ -78,6 +179,14 @@ def _parse_labeled_worksheet(
     if any(marker in normalized for marker in _SECRET_VALUE_MARKERS):
         raise WorkdayConnectContractError(
             f"{label} appears to contain secret or certificate material."
+        )
+    lines = [line.strip() for line in worksheet.splitlines() if line.strip()]
+    if lines and lines[0].startswith("|"):
+        return _parse_markdown_worksheet(
+            lines,
+            labels=labels,
+            label=label,
+            multiline_labels=multiline_labels,
         )
     values: dict[str, str] = {}
     current_label: str | None = None
