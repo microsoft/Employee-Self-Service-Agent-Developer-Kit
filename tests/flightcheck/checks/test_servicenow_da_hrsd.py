@@ -749,6 +749,48 @@ def test_test_checkpoint_requires_current_portal_configuration(
     assert "portal Base URI prerequisite" in test.result
 
 
+def test_portal_checkpoint_requires_latest_requested_url(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    _write_state(tmp_path, components)
+    state_path = _state_path(tmp_path)
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["transactions"] = {
+        "portal": {
+            "operation-1": {
+                "preparedAt": "2026-10-05T18:00:00Z",
+                "status": "failed-unchanged",
+                "requestedPortalUrl": (
+                    "https://dev123.service-now.com/requested-portal"
+                ),
+            }
+        }
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    mismatch = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert mismatch.status == Status.NOT_CONFIGURED.value
+    assert "does not match" in mismatch.result
+    assert "exact requested" in mismatch.remediation
+
+    components["botComponentChanges"][1]["component"]["dialog"][
+        "beginDialog"
+    ]["actions"][0]["value"]["literalValue"] = (
+        "https://dev123.service-now.com/requested-portal"
+    )
+    matching = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+    assert matching.status == Status.PASSED.value
+
+
 def test_publish_checkpoint_ignores_metadata_only_drift_and_reopens_on_semantic_drift(
     monkeypatch,
     tmp_path: Path,

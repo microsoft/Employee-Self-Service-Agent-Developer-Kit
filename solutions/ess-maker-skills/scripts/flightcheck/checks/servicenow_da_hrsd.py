@@ -20,6 +20,7 @@ from connect_servicenow_da import (
     _draft_semantic_hash,
     normalize_client_id,
     normalize_instance_name,
+    normalize_portal_url,
     portal_configuration_summary,
     required_servicenow_prerequisites,
     summarize_components,
@@ -246,7 +247,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
     if target == "SN-DA-HRSD-OIDC-001":
         return [_oidc_result(admin_setup)]
     if target == "SN-DA-HRSD-PORTAL-001":
-        return [_portal_result(components, admin_setup)]
+        return [_portal_result(components, admin_setup, state)]
 
     component_hash = (
         _hash(components)
@@ -365,7 +366,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return [agent_connection_result]
 
     topics_result = _topics_result(summary, evidence, component_hash)
-    portal_result = _portal_result(components, admin_setup)
+    portal_result = _portal_result(components, admin_setup, state)
     if target == "SN-DA-HRSD-TEST-001":
         return [
             _test_result(
@@ -1024,6 +1025,7 @@ def _topics_result(
 def _portal_result(
     components: dict[str, Any],
     admin_setup: dict[str, Any],
+    state: dict[str, Any],
 ) -> CheckResult:
     preflight = admin_setup.get("preflight")
     preflight = preflight if isinstance(preflight, dict) else {}
@@ -1050,6 +1052,37 @@ def _portal_result(
                 "node without overwriting unrelated topic content."
             ),
         )
+    expected_url = _latest_requested_portal_url(state)
+    if portal["valid"] and expected_url:
+        try:
+            actual_url = normalize_portal_url(
+                str(portal["origin"]) + str(portal["path"]),
+                expected_instance_name=str(expected_instance),
+            )
+            normalized_expected = normalize_portal_url(
+                expected_url,
+                expected_instance_name=str(expected_instance),
+            )
+        except Exception as exc:
+            return _result(
+                "SN-DA-HRSD-PORTAL-001",
+                Status.ERROR.value,
+                "ServiceNow HRSD employee portal Base URI",
+                "Unable to verify the current portal URL against the URL "
+                f"requested for this phase: {type(exc).__name__}: {exc}",
+                "Review the latest portal transaction and the exact authored "
+                "topic value before retrying.",
+            )
+        if actual_url != normalized_expected:
+            return _result(
+                "SN-DA-HRSD-PORTAL-001",
+                Status.NOT_CONFIGURED.value,
+                "ServiceNow HRSD employee portal Base URI",
+                "The current Portal BaseURI is valid but does not match the "
+                "administrator-confirmed URL requested for this phase.",
+                "Set the exact requested employee portal URL, save the topic, "
+                "and run a fresh read-only verification.",
+            )
     if portal["valid"]:
         status = Status.PASSED.value
         result = (
@@ -1091,6 +1124,29 @@ def _portal_result(
         result,
         remediation,
     )
+
+
+def _latest_requested_portal_url(state: dict[str, Any]) -> str | None:
+    transactions = state.get("transactions")
+    transactions = transactions if isinstance(transactions, dict) else {}
+    portal_transactions = transactions.get("portal")
+    portal_transactions = (
+        portal_transactions if isinstance(portal_transactions, dict) else {}
+    )
+    candidates = [
+        transaction
+        for transaction in portal_transactions.values()
+        if isinstance(transaction, dict)
+        and isinstance(transaction.get("requestedPortalUrl"), str)
+        and transaction["requestedPortalUrl"]
+    ]
+    if not candidates:
+        return None
+    latest = max(
+        candidates,
+        key=lambda transaction: str(transaction.get("preparedAt") or ""),
+    )
+    return str(latest["requestedPortalUrl"])
 
 
 def _selected_connection(

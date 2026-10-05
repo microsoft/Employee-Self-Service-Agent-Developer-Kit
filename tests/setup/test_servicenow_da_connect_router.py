@@ -108,12 +108,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     oidc = (actions / "guide-servicenow-oidc.md").read_text(
         encoding="utf-8"
     )
+    oidc_normalized = " ".join(oidc.split())
     credential = (actions / "prepare-credential.md").read_text(
         encoding="utf-8"
     )
     portal = (actions / "configure-portal-url.md").read_text(
         encoding="utf-8"
     )
+    portal_normalized = " ".join(portal.split())
     credential_normalized = " ".join(credential.split())
     assert "record-agent-connection" in agent
     assert "ACTION_RESULT = \"cancelled\"" in agent
@@ -238,6 +240,14 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Scope Restriction = `Broadly scoped`" in oidc
     assert "Graph Connector app-only provider" in oidc
     assert "non-email/non-UPN identifier" in oidc
+    assert "metadata URL is already used" in oidc
+    assert "do not claim a universal one-provider limit" in oidc_normalized
+    assert "Do not duplicate the same tenant metadata" in oidc
+    assert "must not attest this phase as Completed" in oidc_normalized
+    assert "evaluate metadata URL reuse or uniqueness separately" in (
+        oidc_normalized
+    )
+    assert "client IDs, metadata" not in oidc
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
@@ -267,6 +277,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "resolve-credential" in credential
     assert "--selection-key" in credential
     assert "inspect-portal-url" in portal
+    assert "--expected-portal-url <full-url>" in portal
+    assert "different same-instance HTTPS portal path is not sufficient" in (
+        portal_normalized
+    )
     assert "set-portal-url" in portal
     assert "must never be inferred as `/sp`, `/esc`" in portal
     assert "Topics -> ServiceNow HRSD Setup Configurations" in portal

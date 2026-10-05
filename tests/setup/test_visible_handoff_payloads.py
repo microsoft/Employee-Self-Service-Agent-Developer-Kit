@@ -116,6 +116,10 @@ def _validate_payload(
                 "2. Open All -> System OAuth",
                 "3. Select `Configure an OIDC provider",
                 "4. Create or reuse `Microsoft Entra ID - ESS Copilot`",
+                "metadata URL is already used",
+                "do not assume a universal one-provider limit",
+                "Do not duplicate the same metadata",
+                "STOP, choose Not yet, and do not attest Completed",
                 "5. Set metadata URL",
                 "6. Set the verified User Claim/User Field mapping",
                 "7. Confirm one real signed-in test user",
@@ -339,6 +343,17 @@ def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
         "Not yet",
     ]
     assert fallback["allowFreeformInput"] is False
+    source = (_ACTIONS / "configure-portal-url.md").read_text(
+        encoding="utf-8"
+    )
+    source_normalized = " ".join(source.split())
+    assert "--expected-portal-url <full-url>" in source
+    assert "exactly matches the complete URL supplied by the Maker" in (
+        source_normalized
+    )
+    assert "different same-instance HTTPS portal path is not sufficient" in (
+        source_normalized
+    )
 
 
 @pytest.mark.parametrize(

@@ -2347,6 +2347,7 @@ def inspect_portal_configuration(
     context: dict[str, Any],
     *,
     offline: bool = False,
+    expected_portal_url: str | None = None,
 ) -> dict[str, Any]:
     components = (
         _load_json(context["snapshotPath"])
@@ -2365,20 +2366,46 @@ def inspect_portal_configuration(
             else None
         ),
     )
+    expected_match: bool | None = None
+    if expected_portal_url is not None:
+        if not isinstance(expected_instance, str) or not expected_instance:
+            raise ServiceNowConnectError(
+                "The lifecycle has no confirmed ServiceNow instance."
+            )
+        expected = normalize_portal_url(
+            expected_portal_url,
+            expected_instance_name=expected_instance,
+        )
+        current = (
+            normalize_portal_url(
+                _portal_literal_value(_portal_topic_component(components)),
+                expected_instance_name=expected_instance,
+            )
+            if summary["valid"]
+            else None
+        )
+        expected_match = current == expected
+    configured = summary["valid"] and expected_match is not False
     return {
-        "status": "configured" if summary["valid"] else "input-required",
+        "status": "configured" if configured else "input-required",
         "mode": "offline" if offline else "live",
         "agentId": context["agent"]["id"],
         "environmentId": context["environment"]["id"],
         "portal": summary,
+        "expectedPortalUrlMatch": expected_match,
         "input": (
             None
-            if summary["valid"]
+            if configured
             else {
                 "field": "portalUrl",
                 "description": (
-                    "Administrator-confirmed full ServiceNow employee portal "
-                    "URL including its actual portal path."
+                    "The exact administrator-confirmed full ServiceNow "
+                    "employee portal URL supplied for this phase."
+                    if expected_match is False
+                    else (
+                        "Administrator-confirmed full ServiceNow employee "
+                        "portal URL including its actual portal path."
+                    )
                 ),
             }
         ),
@@ -4103,6 +4130,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect the exact HRSD Portal BaseURI topic value.",
     )
     inspect_portal_parser.add_argument("--offline", action="store_true")
+    inspect_portal_parser.add_argument("--expected-portal-url")
     subparsers.add_parser(
         "inspect-admin-setup",
         help="Discover reusable ServiceNow admin setup with read-only APIs.",
@@ -4277,6 +4305,7 @@ def main(argv: list[str] | None = None) -> int:
             result = inspect_portal_configuration(
                 context,
                 offline=args.offline,
+                expected_portal_url=args.expected_portal_url,
             )
         elif args.command == "inspect-admin-setup":
             result = inspect_admin_setup(context)

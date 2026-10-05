@@ -70,10 +70,18 @@ fallback above and use this visible **Completed / Not yet** confirmation:
 ]
 ```
 
-After Completed, rerun `inspect-portal-url`; only a valid exact readback
-completes the phase. Never convert HTTP 429, unknown mutation state, readback
-failure, conflict, or rollback failure into a manual-success fallback. Stop
-and report those conditions; honor Retry-After and do not probe repeatedly.
+After Completed, run:
+
+```text
+python scripts/connect_servicenow_da.py inspect-portal-url --expected-portal-url <full-url>
+```
+
+Only a fresh readback whose normalized authored value exactly matches the
+complete URL supplied by the Maker for this phase completes the step. A
+different same-instance HTTPS portal path is not sufficient. Never convert
+HTTP 429, unknown mutation state, readback failure, conflict, or rollback
+failure into a manual-success fallback. Stop and report those conditions;
+honor Retry-After and do not probe repeatedly.
 
 Do not publish the agent in this phase. Publishing remains the later explicit
 Publish phase.

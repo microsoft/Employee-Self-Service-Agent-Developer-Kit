@@ -1926,6 +1926,43 @@ def test_inspect_portal_url_offline_reports_sanitized_configuration(
     assert result["input"] is None
 
 
+def test_inspect_portal_url_requires_expected_maker_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    components = _portal_components()
+    _write_foundation_context(tmp_path, components=components)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(
+        [
+            "inspect-portal-url",
+            "--offline",
+            "--expected-portal-url",
+            "https://dev123.service-now.com/employee/",
+        ]
+    ) == 0
+    matching = json.loads(capsys.readouterr().out)
+    assert matching["status"] == "configured"
+    assert matching["expectedPortalUrlMatch"] is True
+
+    assert snow.main(
+        [
+            "inspect-portal-url",
+            "--offline",
+            "--expected-portal-url",
+            "https://dev123.service-now.com/different-portal",
+        ]
+    ) == 0
+    mismatch = json.loads(capsys.readouterr().out)
+    assert mismatch["status"] == "input-required"
+    assert mismatch["expectedPortalUrlMatch"] is False
+    assert mismatch["portal"]["path"] == "/employee"
+    assert "exact administrator-confirmed" in mismatch["input"]["description"]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
