@@ -681,7 +681,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
         if requested_family("WD-FLOW"):
             results.extend(_check_flow_status(runner, wd_flows))
         if requested("WD-RUN-001"):
-            results.extend(_check_workday_run_health(runner))
+            results.extend(_check_workday_run_health(runner, results))
         if requested_family("WD-WF"):
             results.extend(_check_workflows(runner))
             results.extend(_check_custom_workflow_inventory(runner))
@@ -770,7 +770,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results.extend(_check_flow_status(runner, wd_flows))
 
     # --- Run health (runtime failures connection-status can't see) ---
-    results.extend(_check_workday_run_health(runner))
+    results.extend(_check_workday_run_health(runner, results))
 
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
@@ -4241,7 +4241,39 @@ _WD_GUIDED_E2E_REMEDIATION = (
 )
 
 
-def _check_workday_run_health(runner) -> list[CheckResult]:
+# Prerequisite rungs WD-RUN-001 depends on. A live Copilot → Workday → Copilot
+# run cannot succeed while the environment config (WD-ENV-*), the Workday
+# connection (WD-CONN-*), or the backing flow (WD-FLOW-*) is broken. When one of
+# those has already FAILED earlier in this same run, asking the operator to sign
+# in and run a scenario is wasted effort — steer them to fix that rung first.
+_WD_RUN_PREREQ_PREFIXES = ("WD-ENV-", "WD-CONN-", "WD-FLOW-")
+
+
+def _wd_run_prereq_gate_note(prior_results) -> str:
+    """Return a steering sentence when a WD-RUN-001 prerequisite already FAILED.
+
+    ``prior_results`` are the CheckResults emitted earlier in ``run_workday_checks``
+    (env/connection/flow rungs run before WD-RUN-001). Returns ``""`` when nothing
+    relevant failed, so callers can unconditionally prepend it to the guided
+    end-to-end remediation.
+    """
+    if not prior_results:
+        return ""
+    failed_ids = [
+        r.checkpoint_id for r in prior_results
+        if getattr(r, "status", None) == Status.FAILED.value
+        and str(getattr(r, "checkpoint_id", "")).startswith(_WD_RUN_PREREQ_PREFIXES)
+    ]
+    if not failed_ids:
+        return ""
+    ids = ", ".join(dict.fromkeys(failed_ids))
+    return (
+        f"A prerequisite check failed ({ids}); a live Workday run cannot succeed until "
+        "that is fixed. Resolve it first, then run the end-to-end scenario below. "
+    )
+
+
+def _check_workday_run_health(runner, prior_results=None) -> list[CheckResult]:
     """WD-RUN-001 — user-assisted end-to-end Workday run health (passive-only).
 
     Grades a *fresh* real Copilot → Workday → Copilot run from history. Direct /
@@ -4253,11 +4285,16 @@ def _check_workday_run_health(runner) -> list[CheckResult]:
     safe read-only scenario (SKILL.md owns the interactive loop). The transient
     active-probe path (``_check_workday_active_run_health``) is retained but no
     longer wired here.
+
+    ``prior_results`` are the CheckResults already emitted earlier in
+    ``run_workday_checks`` (the env/connection/flow rungs). They let the guided
+    remediation point the operator at a failed prerequisite rung instead of
+    asking them to run a scenario that cannot pass.
     """
-    return _check_workday_run_health_passive(runner)
+    return _check_workday_run_health_passive(runner, prior_results)
 
 
-def _check_workday_run_health_passive(runner) -> list[CheckResult]:
+def _check_workday_run_health_passive(runner, prior_results=None) -> list[CheckResult]:
     """WD-RUN-001 — litmus test for a *deterministic* Workday runtime break.
 
     Reads run history for each discovered Workday flow via
@@ -4268,6 +4305,10 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
     Workday failures that connection status (WD-CONN-001+) cannot see.
     """
     roles = [Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value]
+    # When an env/connection/flow rung already FAILED earlier in this run, steer
+    # the guided end-to-end remediation at that rung first — a live run cannot
+    # pass until it is fixed.
+    guided = _wd_run_prereq_gate_note(prior_results) + _WD_GUIDED_E2E_REMEDIATION
     pp = runner.pp_admin
     env_id = runner.env_id
     wd_flows = getattr(runner, "_workday_flows", [])
@@ -4347,7 +4388,10 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
         dated = [r for r in inflight if r["start_dt"] is not None]
         if dated:
             dated.sort(key=lambda r: r["start_dt"], reverse=True)
-            age_min = int((_now - dated[0]["start_dt"]).total_seconds() // 60)
+            # Clamp at 0: minor clock skew between this host and Power Automate
+            # can make (_now - start) slightly negative, and floor division
+            # would then render "-1 minute(s) ago".
+            age_min = max(0, int((_now - dated[0]["start_dt"]).total_seconds() // 60))
             note = (
                 f" A Workday flow run is currently in progress (started about "
                 f"{age_min} minute(s) ago); wait for it to finish, then re-run "
@@ -4398,7 +4442,7 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             description="Workday flow run health",
             result="No recent Workday flow runs found — no runtime traffic to evaluate.",
             remediation=(
-                _WD_GUIDED_E2E_REMEDIATION
+                guided
                 + " Note: a fully-broken connection produces NO runs at all (the flow is "
                 "never invoked) — if Workday isn't responding, check connection status "
                 "first (WD-CONN-001)."
@@ -4422,7 +4466,9 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
         fresh = [r for r in parseable if r["start_dt"] >= _cutoff]
         if not fresh:
             newest = parseable[0]  # sorted newest-first above
-            age_min = int((_now - newest["start_dt"]).total_seconds() // 60)
+            # Clamp at 0 (see _inflight_context): clock skew must not render a
+            # negative age in the stale-run wording.
+            age_min = max(0, int((_now - newest["start_dt"]).total_seconds() // 60))
             had_success = any(r["kind"] == "success" for r in terminal)
             context = (
                 f" The most recent run was about {age_min} minute(s) ago"
@@ -4441,7 +4487,7 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
                 priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
                 description="Workday flow run health",
                 result=stale_result,
-                remediation=_WD_GUIDED_E2E_REMEDIATION,
+                remediation=guided,
                 doc_link=f"{DOC_BASE}/workday",
                 roles=roles,
             )]
@@ -4460,7 +4506,7 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
                 "timestamp on any of them, so their freshness cannot be verified. A run "
                 "must be proven recent to count as a live PASS." + _inflight_context()
             ),
-            remediation=_WD_GUIDED_E2E_REMEDIATION,
+            remediation=guided,
             doc_link=f"{DOC_BASE}/workday",
             roles=roles,
         )]
