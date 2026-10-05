@@ -1924,7 +1924,6 @@ def test_employee_success_runs_runtime_and_final_readiness(
     evidence_file.write_text(
         json.dumps(
             {
-                "scenarioName": "Check vacation balance",
                 "testUserCategory": "non-maker employee",
                 "timestamp": attempt["startedAt"],
                 "outcome": "passed",
@@ -1942,6 +1941,12 @@ def test_employee_success_runs_runtime_and_final_readiness(
     assert result["verified"] is True
     assert observed == ["workday-da:final"]
     assert state["status"] == "ready"
+    validation_evidence = state["phases"]["employee-validation"]["evidence"][0]
+    assert validation_evidence["action"] == "signed-in-scenario"
+    assert validation_evidence["outcome"] == "passed"
+    assert validation_evidence["testUserCategory"] == "non-maker employee"
+    assert validation_evidence["timestamp"] == attempt["startedAt"]
+    assert "scenarioName" not in validation_evidence
     assert (
         state["phases"]["employee-validation"]["employeeTestAttempt"][
             "status"

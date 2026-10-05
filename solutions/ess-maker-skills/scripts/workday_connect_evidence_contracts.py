@@ -172,7 +172,11 @@ def validate_employee_evidence(
             "Employee validation evidence contains unsupported fields: "
             + ", ".join(unexpected)
         )
-    result = {key: required_text(evidence, key, key) for key in allowed}
+    required = {"testUserCategory", "timestamp", "outcome"}
+    result = {key: required_text(evidence, key, key) for key in required}
+    scenario_name = str(evidence.get("scenarioName") or "").strip()
+    if scenario_name:
+        result["scenarioName"] = scenario_name
     if result["outcome"].casefold() not in {"passed", "verified"}:
         raise WorkdayConnectContractError(
             "Employee validation outcome must be passed or verified."

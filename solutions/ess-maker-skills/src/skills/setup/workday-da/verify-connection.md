@@ -105,39 +105,24 @@ Use `vscode_askQuestions` for the test result:
 ]
 ```
 
-Leave the result unset and do not mark the passing outcome as recommended. If
-the test passed, ask for the scenario with this separate structured choice:
+Leave the result unset and do not mark the passing outcome as recommended. Do
+not ask a second question about which scenario was used; the passing result
+already confirms that an enabled read-only Workday scenario identified the
+employee and returned real Workday data.
 
-```json
-[
-  {
-    "header": "Tested scenario",
-    "question": "Which read-only Workday scenario did the test employee run?",
-    "options": [
-      { "label": "Check vacation balance" },
-      { "label": "View employment information" },
-      { "label": "View compensation" },
-      { "label": "View organization or manager information" },
-      { "label": "Another read-only Workday scenario" }
-    ],
-    "allowFreeformInput": true
-  }
-]
-```
-
-On success, record only the scenario name, test-user category, timestamp, and
-outcome in `.local/connect/workday-da/employee-validation.json`. Write the
-object using a structured file-write tool rather than a generated shell
-command, then run:
+On success, record only the test-user category, timestamp, and outcome in
+`.local/connect/workday-da/employee-validation.json`. Write the object using a
+structured file-write tool rather than a generated shell command, then run:
 
 ```powershell
 python scripts/workday_connect.py record-validation --evidence-file ".local\connect\workday-da\employee-validation.json"
 ```
 
-Provide only `scenarioName`, `testUserCategory`, `timestamp`, and a passed or
-verified `outcome`. Use a non-maker employee category and a
-timezone-qualified ISO-8601 timestamp. The controller rejects additional
-fields. Never record employee data or credentials.
+Provide only `testUserCategory`, `timestamp`, and a passed or verified
+`outcome`. Use a non-maker employee category and a timezone-qualified ISO-8601
+timestamp. The controller accepts the legacy optional `scenarioName` field
+but this skill does not collect it. It rejects all other fields. Never record
+employee data or credentials.
 
 On success, the controller closes the bounded attempt, verifies the reviewed
 flow runs from that window, and evaluates final readiness before marking the

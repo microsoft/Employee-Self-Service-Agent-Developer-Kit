@@ -297,6 +297,10 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
     assert text.index("begin-employee-test") < text.index(
         '"header": "Employee test result"'
     )
+    assert '"header": "Tested scenario"' not in text
+    assert "Which read-only Workday scenario" not in text
+    assert "Do not ask a second question about which scenario was used" in normalized
+    assert "Provide only `testUserCategory`, `timestamp`" in text
     assert "start a bounded test attempt" in normalized
     assert "final readiness" in text
 

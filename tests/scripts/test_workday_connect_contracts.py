@@ -1411,6 +1411,29 @@ def test_employee_evidence_rejects_maker_and_invalid_timestamp():
             }
         )
 
+    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
+        validate_employee_evidence(
+            {
+                "testUserCategory": "non-maker employee",
+                "timestamp": "not-a-time",
+                "outcome": "passed",
+            }
+        )
+
+
+def test_employee_evidence_does_not_require_scenario_name():
+    assert validate_employee_evidence(
+        {
+            "testUserCategory": "non-maker employee",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "outcome": "passed",
+        }
+    ) == {
+        "testUserCategory": "non-maker employee",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
 
 def test_employee_failure_evidence_derives_safe_canonical_fields():
     for remediation_id, contract in (
