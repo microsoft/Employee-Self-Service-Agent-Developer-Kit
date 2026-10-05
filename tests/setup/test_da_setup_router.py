@@ -876,15 +876,22 @@ def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
     )[0]
     normalized_ready_choices = " ".join(ready_agent_choices.split())
     assert "same ready completion choices defined above" in normalized_ready_choices
-    assert "append **Redo setup for this agent**" in normalized_ready_choices
-    assert "**What\ndoes setup do?**" in ready_agent_choices
+    assert (
+        "inserting these choices immediately before **Exit setup**"
+        in normalized_ready_choices
+    )
+    assert (
+        "Use the same recommendation suffixes and maker-facing recommendation."
+        in normalized_ready_choices
+    )
+    assert "**What does setup do?**" in normalized_ready_choices
     assert "**Reset and use this workspace**" not in ready_agent_choices
     assert "**Create and open a new workspace**" not in ready_agent_choices
     assert "**Continue with this agent**" not in ready_agent_choices
     assert "**Cancel setup**" not in ready_agent_choices
     incomplete_agent_choices = foundation.split(
         "**{agent display name}** is the active agent in this workspace", 1
-    )[1].split("Do not preselect a choice.", 1)[0]
+    )[1].split("For **Redo setup for this agent**", 1)[0]
     assert "**Resume setup for this agent**" in incomplete_agent_choices
     assert "**Reset and use this workspace**" in incomplete_agent_choices
     assert "**Create and open a new workspace**" in incomplete_agent_choices
@@ -1619,6 +1626,21 @@ def test_foundation_offers_local_workspace_reset() -> None:
     assert "will not change or delete any agent in Copilot Studio" in normalized
     assert "archive its current local agent files" in normalized
     assert (
+        "Do not say that setup will switch, reset, reuse, archive, or open a "
+        "workspace before the corresponding choice and confirmation."
+    ) in normalized
+    assert (
+        "compare it with the retained workspace environment before any ALM "
+        "enrollment, import, attachment, reset, or other remote or local mutation"
+    ) in normalized
+    assert "Do not run attachment to discover this conflict" in normalized
+    assert (
+        text.index("Whenever the current request resolves a target environment")
+        < text.index(
+            "When the maker supplies a Microsoft Copilot Studio URL that identifies"
+        )
+    )
+    assert (
         "For **Go back**, make no changes and return to the choice surface that "
         "offered **Reset and use this workspace**."
     ) in normalized
@@ -1642,7 +1664,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Configure landing page{LANDING_RECOMMENDATION_SUFFIX}",
         "Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}",
     ):
         assert f"**{choice}**" in text
@@ -1659,8 +1680,16 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "append **(Recommended)** to exactly one action" in normalized_incomplete
     )
     assert (
-        "append **Exit setup** as the final secondary choice" in normalized_incomplete
+        "render every applicable remediation, recheck, and cleanup action in one "
+        "host interactive single-selection control"
+        in normalized_incomplete
     )
+    assert (
+        "After adding every static and dynamic action, append **Exit setup** as "
+        "the final secondary choice"
+        in normalized_incomplete
+    )
+    assert "disable custom entry" in normalized_incomplete
     assert "Do not render the ready completion choices" in normalized_incomplete
     assert "durable completion snapshot" in normalized_incomplete
     assert "general post-setup capabilities" in normalized_incomplete
@@ -1672,20 +1701,56 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "- **Create and open a new workspace**" not in completion_choices
     assert "- **Continue customizing this agent**" not in completion_choices
     assert "- **Finish for now**" not in completion_choices
-    assert "Set exactly one recommendation suffix to ` (Recommended)`" in normalized
     assert (
-        "product-specific evidence from that route affirmatively establishes that "
-        "its integration is not configured"
+        "Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when "
+        "**Add or change an integration** is recommended"
+    ) in normalized
+    normalized_completion_choices = " ".join(completion_choices.split())
+    ready_choice_list = normalized_completion_choices.split(
+        "Then present these choices in one host interactive single-selection control:",
+        1,
+    )[1].split("Set `{CONNECT_RECOMMENDATION_SUFFIX}`", 1)[0]
+    assert "- **Configure landing page" not in ready_choice_list
+    assert ready_choice_list.index(
+        "- **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**"
+    ) < ready_choice_list.index("- **Switch to another configured agent**")
+    assert ready_choice_list.index(
+        "- **Switch to another configured agent**"
+    ) < ready_choice_list.index("- **Set up another agent in this environment**")
+    assert ready_choice_list.index(
+        "- **Set up another agent in this environment**"
+    ) < ready_choice_list.index("- **Exit setup**")
+    assert (
+        "always render **Exit setup** after every static and dynamic choice"
+        in normalized
+    )
+    assert (
+        "inserting these choices immediately before **Exit setup**" in normalized
+    )
+    assert (
+        "when authoritative product-specific evidence shows that an applicable "
+        "supported integration is configured, render the setup terminal choice "
+        "control without a recommended action"
     ) in normalized
     assert (
-        "Do not treat **Connections: Not required**, an absent aggregate "
-        "diagnostic row, or the absence of native logical connector references "
-        "as evidence that an integration is not configured."
+        "Do not treat **Connections: Not required**, an aggregate diagnostic row, "
+        "or the presence or absence of native logical connector references as "
+        "authoritative evidence that an applicable integration is configured."
     ) in normalized
     assert (
-        "I recommend {recommended choice} because {reason grounded in the current "
-        "request, starting point, and supported routes}."
+        "The integration recommendation reflects the absence of completion "
+        "evidence; it does not claim that an integration is missing or broken."
     ) in normalized
+    assert (
+        "I recommend Add or change an integration so this agent can communicate "
+        "with your HR or IT systems. Setup did not find authoritative evidence "
+        "that an applicable integration is configured."
+    ) in normalized
+    assert (
+        "Setup is complete. You asked to configure the landing page next, so I'll "
+        "continue there."
+    ) in normalized
+    assert "Do not render the setup terminal choice control." in normalized
     assert "The {agent display name} agent is now active." in completion_choices
     assert "Here's your ESS agent setup:" in completion_choices
     assert completion_choices.count(
@@ -1696,30 +1761,34 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "**{overall readiness status}**" in completion_choices
     assert "Next steps:" in completion_choices
     assert (
-        "- Run `/landing-page`{LANDING_RECOMMENDATION_SUFFIX} to configure branding "
-        "and the content employees see."
-        in completion_choices
+        "Build `{POST_SETUP_COMMAND_REMINDERS}` from the same recommendation and "
+        "evidence used for the ready choice control."
+        in normalized
     )
     assert (
-        "- Run `/connect`{CONNECT_RECOMMENDATION_SUFFIX} to add or change an "
-        "integration."
-        in completion_choices
+        "Render exactly one of these non-interactive command lists, with the "
+        "recommended command first"
+        in normalized
     )
+    assert (
+        "- Run `/connect` **(Recommended)** to add or change an integration so "
+        "this agent can communicate with your HR or IT systems. Setup did not "
+        "find authoritative evidence that an applicable integration is configured."
+    ) in normalized
+    assert (
+        "- Run `/landing-page` **(Recommended)** to configure the branding and "
+        "content employees see. An applicable integration is already configured, "
+        "so this is the next useful customization step."
+    ) in normalized
+    assert (
+        "- Run `/connect` **(Recommended)** to add or change an integration. This "
+        "matches what you asked to do next, and integrations let this agent "
+        "communicate with your HR or IT systems."
+    ) in normalized
+    assert "These reminders are text, not another choice control." in normalized
+    assert "Do not render the case labels above." in normalized
+    assert text.count("\n{POST_SETUP_COMMAND_REMINDERS}\n") == 2
     assert "{SUPPORTED_INTEGRATION_SHORTCUTS}" in completion_choices
-    assert (
-        text.count(
-            "- Run `/landing-page`{LANDING_RECOMMENDATION_SUFFIX} to configure "
-            "branding and the content employees see."
-        )
-        == 3
-    )
-    assert (
-        text.count(
-            "- Run `/connect`{CONNECT_RECOMMENDATION_SUFFIX} to add or change an "
-            "integration."
-        )
-        == 3
-    )
     assert text.count("- Type `/menu` to see all available capabilities.") == 3
     assert "{APPLICABLE_LOCAL_CLEANUP_BLOCKS}" in completion_choices
     assert "body of every unresolved local-cleanup block" in normalized
@@ -1733,7 +1802,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     )
     assert "only for a supported HR architecture" in normalized
     assert "Render no shortcut lines when product identity is unresolved" in normalized
-    assert "- Type `/menu` to see all available capabilities." in completion_choices
     assert "What would you like to customize?" not in completion_choices
     assert "**Create a topic**" not in completion_choices
     assert "Then end the request." in completion_choices
@@ -1742,6 +1810,30 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "one Power Platform environment" in normalized
     assert "multiple ESS Dev agents" in normalized
     assert "one active agent" in normalized
+    incomplete_reentry = text.split(
+        "**{agent display name}** is the active agent in this workspace", 1
+    )[1].split("For **Redo setup for this agent**", 1)[0]
+    normalized_incomplete_reentry = " ".join(incomplete_reentry.split())
+    assert "one host interactive\nsingle-selection control" in incomplete_reentry
+    for earlier, later in (
+        ("- **Resume setup for this agent**", "- **Switch to another configured agent**"),
+        (
+            "- **Switch to another configured agent**",
+            "- **Set up another agent in this environment**",
+        ),
+        (
+            "- **Set up another agent in this environment**",
+            "- **Reset and use this workspace**",
+        ),
+        (
+            "- **Reset and use this workspace**",
+            "- **Create and open a new workspace**",
+        ),
+        ("- **Create and open a new workspace**", "- **What does setup do?**"),
+        ("- **What does setup do?**", "- **Exit setup**"),
+    ):
+        assert incomplete_reentry.index(earlier) < incomplete_reentry.index(later)
+    assert "keep **Exit setup** as the final choice" in normalized_incomplete_reentry
 
 
 def test_foundation_resolves_python_and_announces_authorization_wait() -> None:
@@ -1759,6 +1851,25 @@ def test_foundation_resolves_python_and_announces_authorization_wait() -> None:
     assert "**Waiting for authorization**" in text
     assert "Complete the Microsoft sign-in in your browser" in normalized
     assert "Do not describe an authorization wait as service processing" in normalized
+
+
+def test_foundation_reuses_invocation_evidence() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert (
+        "Read `.local/setup/config.json` and `.local/config.json` once per setup "
+        "invocation"
+    ) in normalized
+    assert "reusing content already read by the parent prompt" in normalized
+    assert "Reread a source only after an operation in this invocation changes" in (
+        normalized
+    )
+    assert (
+        "Do not rerun inventory, reconciliation, or inspection merely because a "
+        "later branch needs a value already retained"
+    ) in normalized
+    assert "keep the explicit post-enrollment reinspection" in normalized
 
 
 def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None:
@@ -1976,7 +2087,12 @@ def test_foundation_typed_intent_preserves_mutation_confirmations() -> None:
 def test_durable_snapshot_inserts_message_bodies_without_nested_markers() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
-    durable = text.split("selects **Exit setup**, show:", 1)[1].split(
+    durable_start = re.search(
+        r"After the maker selects \*\*Exit\s+setup\*\*, show:",
+        text,
+    )
+    assert durable_start is not None
+    durable = text[durable_start.end() :].split(
         "Then end the request.",
         1,
     )[0]
@@ -2083,6 +2199,10 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
         )
     )
     assert readiness_table in text
+    assert "**✅ Setup complete**" in text
+    assert "**⚠️ Setup needs attention**" in text
+    assert "Foundation ready" not in text
+    assert "Foundation needs attention" not in text
     assert "Checkpoint and refresh" in text
     assert "Keep local files unchanged" in text
     assert "preserve the managed local files and canonical setup state" in normalized
@@ -2146,9 +2266,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
-        "**⛔ Manual confirmation required**",
-        "**✅ Ready — manually confirmed**",
-        "**✅ Ready — manually overridden**",
+        "**⚠️ Skipped by administrator attestation**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
@@ -2175,29 +2293,50 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     )[0]
     assert agent_link not in capacity_section
     assert (
-        "Setup requires a nonzero allocation; for initial use, we recommend "
+        "Setup requires a nonzero allocation for an automatic pass; for initial use, we recommend "
         "allocating **500 or more Copilot Credits**."
     ) in normalized
     assert (
-        "After checking Power Platform Admin Center, is Copilot Studio "
-        "message capacity allocated to this environment?"
-    ) in text
+        "After a Power Platform administrator verifies or changes the allocation, use "
+        "**Check again**"
+    ) in normalized
+    assert (
+        "| **Power Platform administrator** | Review or change capacity, or consent to overriding this capacity check | Required for administrator-attested skip |"
+        in text
+    )
+    assert "> ⚠️ **Administrator consent required**" in text
+    assert (
+        "a **Power Platform administrator is present and has consented to override this capacity check**"
+        in normalized
+    )
+    assert "The original unavailable or denied result remains the recorded evidence." in (
+        normalized
+    )
     assert "Complete this check to finish foundation readiness" not in text
     assert "using `ring_from_environment_host()`" in normalized
     assert "do not assume production" in normalized
     assert '--ring "{CONFIRMED_RING}"' in text
-    assert "--manual-attested" in text
-    assert "--manual-overridden" in text
+    assert "--administrator-attested-skip" in text
+    assert "--manual-attested" not in text
+    assert "--manual-overridden" not in text
     assert "requires an observed allocation greater than zero" in normalized
+    assert (
+        "Apply the first `Warning` without a skip flag to record that zero allocation"
+        in normalized
+    )
     assert "the recheck still found 0 allocated credits" in normalized
     assert (
         "Never treat the maker's statement that capacity was allocated as verification"
         in normalized
     )
-    assert "Continue with manual override" in text
+    assert "Continue with administrator-attested skip" in text
+    assert (
+        "A Power Platform administrator was present and consented to override this capacity check"
+        in normalized
+    )
     assert "The final readiness table remains available" in normalized
     assert (
-        "manual override is allowed only for a successful check that found zero"
+        "`Failed` and `Error` are not eligible for administrator-attested skip"
         in normalized
     )
     assert "Agent content is present in your local workspace." in text

@@ -95,7 +95,7 @@ def test_warns_when_zero_capacity_no_payg():
     assert r.evidence["outcome"] == "empty-results"
     assert r.evidence["allocatedCredits"] == 0
     assert "not configured" in r.result
-    assert "manual override" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
@@ -103,7 +103,7 @@ def test_warns_when_zero_capacity_with_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=True))
     assert r.status == "Warning"
     assert "Pay-as-you-go billing is configured" in r.result
-    assert "manual override" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
@@ -112,7 +112,7 @@ def test_warns_when_zero_capacity_unknown_payg():
     r = _run(_runner(powerplatform=_FakePP([])))
     assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "manual override" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
 
 
 def test_requires_manual_confirmation_when_no_powerplatform_client():
@@ -121,7 +121,7 @@ def test_requires_manual_confirmation_when_no_powerplatform_client():
     assert "API capability was unavailable" in r.result
     assert r.evidence["outcome"] == "unsupported-capability"
     assert "Manage capacity" in r.remediation
-    assert "explicitly attest" in r.remediation
+    assert "capacity check is skipped" in r.remediation
 
 
 def test_requires_manual_confirmation_when_allocation_read_denied():
@@ -162,7 +162,10 @@ def test_requires_manual_confirmation_when_allocation_service_fails():
     }
 
 
-@pytest.mark.parametrize("allocated", ["not-a-number", None, True, 1.5, -1])
+@pytest.mark.parametrize(
+    "allocated",
+    ["not-a-number", "25000", None, True, 1.5, -1],
+)
 def test_requires_manual_confirmation_when_allocation_value_is_invalid(
     allocated,
 ):

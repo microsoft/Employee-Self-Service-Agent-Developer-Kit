@@ -462,6 +462,7 @@ def _capacity_portal(runner) -> str:
         getattr(runner, "power_platform_admin_origin", "") or ""
     ).strip().rstrip("/")
     ring = getattr(runner, "ring", None)
+    # Retained origins win because Preview targets intentionally use logical prod.
     origin = retained_origin or _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
         ring,
         _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"],
@@ -538,7 +539,7 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
             detail = "the required API capability was unavailable"
         return [_env_capacity(Status.MANUAL.value,
             f"FlightCheck could not verify this environment's Copilot Studio message capacity because {detail}.",
-            f"Verify in {capacity_portal} whether Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup. If it is not allocated, rerun this checkpoint after capacity is allocated.",
+            f"Retry this check after reviewing capacity in {capacity_portal}. If verification remains unavailable, an appropriate administrator may explicitly attest during setup that the capacity check is skipped; this does not verify allocation.",
             evidence=evidence)]
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
@@ -547,17 +548,17 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     if reason == "zero_with_payg":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is configured.",
-            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
             evidence=evidence)]
     if reason == "zero_payg_unknown":
         return [_env_capacity(Status.WARNING.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
-            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+            f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
             evidence=evidence)]
     # reason == "zero_no_payg"
     return [_env_capacity(Status.WARNING.value,
         "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go billing is not configured.",
-        f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. To continue without an allocation, explicitly choose the manual override.",
+        f"Allocate Copilot Studio capacity in {capacity_portal}, then rerun this check. After a fresh zero-allocation result, an appropriate administrator may explicitly attest during setup that the capacity check is skipped.",
         evidence=evidence)]
 
 

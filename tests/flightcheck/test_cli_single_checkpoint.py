@@ -181,6 +181,31 @@ def test_resolve_environment_ring_rejects_inconclusive_state(
         )
 
 
+def test_resolve_power_platform_admin_origin_from_config() -> None:
+    preview_origin = "https://admin.preview.powerplatform.microsoft.com"
+
+    assert (
+        cli._resolve_power_platform_admin_origin(
+            {
+                "portalOrigins": {
+                    "powerPlatformAdmin": f" {preview_origin}/ ",
+                }
+            }
+        )
+        == preview_origin
+    )
+
+
+def test_ring_admin_origins_are_validated() -> None:
+    from flightcheck.checks.environment import (
+        _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING,
+    )
+
+    assert set(_POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.values()) <= (
+        cli._POWER_PLATFORM_ADMIN_ORIGINS
+    )
+
+
 @pytest.fixture
 def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the summary printer and results writer so the run-reaching tests

@@ -806,23 +806,16 @@ def _env_mcs_allocation(powerplatform, env_id) -> int | None:
         denied, or the call failed); the caller must fall back to the
         tenant-wide signal.
     """
-    if powerplatform is None or not env_id:
-        return None
-    try:
-        allocations = powerplatform.get_currency_allocations(env_id)
-    except Exception:
-        return None
-    if isinstance(allocations, dict):  # {"_error": ...} sentinel
-        return None
-    total = 0
-    for allocation in allocations:
-        currency = str(allocation.get("currencyType") or "").strip().lower()
-        if currency == _MCS_MESSAGES_CURRENCY.lower():
-            try:
-                total += int(allocation.get("allocated") or 0)
-            except (TypeError, ValueError):
-                continue
-    return total
+    allocated, _evidence = _env_mcs_allocation_observation(
+        powerplatform,
+        env_id,
+    )
+    if (
+        _evidence.get("outcome") == "invalid-response"
+        or _evidence.get("errorType") == "InvalidAllocationResponse"
+    ):
+        raise ValueError("Power Platform returned an invalid allocation response.")
+    return allocated
 
 
 def _env_mcs_allocation_observation(
@@ -831,8 +824,12 @@ def _env_mcs_allocation_observation(
 ) -> tuple[int | None, dict[str, object]]:
     """Read allocation while preserving safe classification evidence."""
     evidence: dict[str, object] = {"environmentId": env_id}
-    if powerplatform is None:
-        evidence["outcome"] = "unsupported-capability"
+    if powerplatform is None or not env_id:
+        evidence["outcome"] = (
+            "unsupported-capability"
+            if powerplatform is None
+            else "missing-environment-id"
+        )
         return None, evidence
     try:
         allocations = powerplatform.get_currency_allocations(env_id)
@@ -891,6 +888,7 @@ def _env_mcs_allocation_observation(
             if (
                 raw_allocated is None
                 or isinstance(raw_allocated, bool)
+                or isinstance(raw_allocated, str)
                 or (
                     isinstance(raw_allocated, float)
                     and not raw_allocated.is_integer()

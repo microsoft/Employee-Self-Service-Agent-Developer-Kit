@@ -164,14 +164,14 @@ python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-
 
 FlightCheck resolves the ring from the explicit ring persisted by setup and validates it against the canonical Power Platform environment endpoint using `ring_from_environment_host()`. If the ring is missing, malformed, or contradictory, do not assume production. Ask the maker to confirm whether the environment uses **prod**, **preprod**, or **test**, then rerun the affected checkpoint with `--ring "{CONFIRMED_RING}"`.
 
-After each setup-readiness run, even when that FlightCheck exits nonzero, apply its result to canonical setup state. Apply agent access and content directly:
+After each agent-access or content run, even when that FlightCheck exits nonzero, apply its result to canonical setup state:
 
 ```text
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-AGENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001/results.json
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Inspect the exact `ENV-CAPACITY-001` row before applying it. `Passed` requires an observed allocation greater than zero and can be applied normally. `Failed` remains blocked. A `Warning` means the Licensing API ran successfully and found zero allocated credits; do not complete the capacity step from that result without an explicit manual override.
+Inspect the exact `ENV-CAPACITY-001` row before applying it and apply each result exactly once. Apply `Passed`, `Failed`, and `Error` immediately without a skip flag. `Passed` requires an observed allocation greater than zero. `Failed` and `Error` remain blocked and are not eligible for administrator-attested skip. A `Warning` means the Licensing API ran successfully and found zero allocated credits. Apply the first `Warning` without a skip flag to record that zero allocation, then present the follow-up below. Do not complete the capacity step without a successful recheck or an explicit administrator-attested skip after a second zero-allocation result. `Manual` means the exact environment is known but the capacity read did not produce a verdict; follow its branch below before applying it so the maker's selected disposition and the source evidence are recorded together.
 
 For `Warning`, present:
 
@@ -200,23 +200,35 @@ For **Not yet**, leave capacity unresolved. The final readiness table remains av
 For **Check again**, rerun `ENV-CAPACITY-001` before applying capacity state. If the new result is `Passed`, apply it normally. If it is still `Warning`, say that the recheck still found 0 allocated credits and present:
 
 - **Check again**
-- **Continue with manual override**
+- **Continue with administrator-attested skip**
+- **Not yet**
+- **Help me decide**
 
-If the recheck cannot produce a verdict, preserve its failure category and safe request or correlation evidence, explain why verification is unavailable, and offer its supported next action. Never treat the maker's statement that capacity was allocated as verification.
+Before offering **Continue with administrator-attested skip**, state that an appropriate administrator must be present and must attest that Setup may skip this capacity check. This choice does not allocate capacity, change the observed 0-credit result, or verify that capacity is available.
 
-For **Continue with manual override**, apply the current `Warning` evidence explicitly:
+For **Help me decide**, follow the shared contract in `SKILL.md`. Recommend **Check again** when the administrator has allocated credits or the maker wants fresh evidence. Recommend **Continue with administrator-attested skip** only when an appropriate administrator is present and accepts that Setup will complete without a verified positive allocation. Recommend **Not yet** otherwise. This conversation does not apply the attestation.
+
+If the recheck cannot produce a verdict, preserve its failure category and safe request or correlation evidence, explain why verification is unavailable, and follow the matching current-status branch. Never treat the maker's statement that capacity was allocated as verification.
+
+For **Continue with administrator-attested skip**, apply the current `Warning` evidence explicitly:
 
 ```text
-python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --manual-overridden
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --administrator-attested-skip
 ```
 
-When the status is `Manual`, automatic verification did not produce an allocation verdict. Present this guidance and confirmation before applying the result:
+For **Not yet**, apply the current `Warning` evidence without the skip flag and leave capacity unresolved.
+
+When the status is `Manual`, automatic verification did not produce an allocation verdict. Present this guidance before applying the result:
 
 **Message:**
 
 ### Capacity follow-up
 
 We weren’t able to automatically verify capacity for this environment. Your agent and local authoring workspace are already available.
+
+| Person or access | Why setup may need them | When |
+| --- | --- | --- |
+| **Power Platform administrator** | Review or change capacity, or consent to overriding this capacity check | Required for administrator-attested skip |
 
 #### Copilot Studio message capacity
 
@@ -225,31 +237,32 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 3. Under **Products**, select **Copilot Studio**.
 4. Select **Manage Copilot Credits**.
 5. Find **{friendly environment name or selected Power Platform environment}**.
-6. Confirm that the environment has allocated Copilot Credits. Setup requires a nonzero allocation; for initial use, we recommend allocating **500 or more Copilot Credits**.
+6. Review the allocated Copilot Credits. Setup requires a nonzero allocation for an automatic pass; for initial use, we recommend allocating **500 or more Copilot Credits**.
 
-If you cannot view capacity settings, ask a **Power Platform administrator** to verify the allocation for this exact environment.
+After a Power Platform administrator verifies or changes the allocation, use **Check again** so Setup can attempt to verify the current state.
+
+> ⚠️ **Administrator consent required**
+>
+> Selecting **Continue with administrator-attested skip** confirms that a **Power Platform administrator is present and has consented to override this capacity check**. Setup will not verify or allocate capacity. The original unavailable or denied result remains the recorded evidence.
 
 **End message.**
 
-Then ask exactly:
+Present these choices:
 
-**After checking Power Platform Admin Center, is Copilot Studio message capacity allocated to this environment?**
-
-Present these standard choices:
-
-- **Yes — capacity is allocated**
+- **Check again**
+- **Continue with administrator-attested skip**
 - **Not yet**
 - **Help me decide**
 
-For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what the maker or administrator can see for this exact environment in **Manage Copilot Credits**. Recommend **Yes — capacity is allocated** only when they confirm a positive allocation for this environment; recommend **Not yet** when it has not been checked, cannot be viewed, or still shows zero. This conversation is not capacity verification and does not apply manual attestation.
+For **Help me decide**, follow the shared contract in `SKILL.md`. Recommend **Check again** when the read may now succeed. Recommend **Continue with administrator-attested skip** only when an appropriate administrator is present and accepts that Setup will complete without verified capacity. Recommend **Not yet** otherwise. This conversation does not apply the attestation.
 
-For **Yes — capacity is allocated**, apply the same current evidence with explicit attestation:
+For **Continue with administrator-attested skip**, apply the current `Manual` evidence explicitly:
 
 ```text
-python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --manual-attested
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --administrator-attested-skip
 ```
 
-For **Not yet**, leave capacity unresolved. After the maker allocates capacity, offer **Check again** and rerun `ENV-CAPACITY-001`.
+For **Not yet**, apply the current `Manual` evidence without the skip flag and leave capacity unresolved. For **Check again**, rerun `ENV-CAPACITY-001` and follow the new result.
 
 Use the `{POWER_PLATFORM_ADMIN_ORIGIN}` retained by **Resolve the service ring** in `da-environment-target.md`. Do not reconstruct it from `{RING}` alone: an explicit Preview target remains logical ring `prod` while retaining the Preview admin-center origin.
 
@@ -275,7 +288,7 @@ For the exact registry-required row:
 
 When the registry declares no connection requirement for the resolved product, keep `SETUP-05` skipped and render Connections as **➖ Not required**. When the agent does not exactly match a registered product, also keep `SETUP-05` skipped, but state that no foundation connection requirement was applied because the product identity is not registered; do not claim that the registry declares no requirement for that product. A required connection does not prevent creation, attachment, or workspace materialization, but it does keep canonical `connectReady` false until its exact post-attachment evidence is ready.
 
-`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready** and requires an observed allocation greater than zero. `Warning` is **⛔ Action required** until a recheck passes or the maker chooses **Continue with manual override**; an accepted `--manual-overridden` result is **✅ Ready — manually overridden**. `Failed` is **⛔ Action required** for a checkpoint error that prevents trustworthy evaluation, such as an unavailable environment identity. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation, while manual override is allowed only for a successful check that found zero. Neither path converts its source evidence into an automated pass. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
+`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready** and requires an observed allocation greater than zero. `Warning` is **⛔ Action required** until a recheck passes or an appropriate administrator chooses **Continue with administrator-attested skip** after a second zero-allocation result. `Manual` is **⚠️ Check unavailable** until the check succeeds or an appropriate administrator chooses the same skip. An accepted `--administrator-attested-skip` result is **⚠️ Skipped by administrator attestation**. `Failed` is **⛔ Action required** for a target or checkpoint failure that prevents trustworthy evaluation, such as an unavailable environment identity. `Error` is **⚠️ Check unavailable** for an execution failure and remains unresolved. `Failed` and `Error` are not eligible for administrator-attested skip. The skip records that an appropriate administrator was present; it does not change the source evidence or claim that capacity was verified. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
 
 ## Interpret results
 
@@ -301,9 +314,9 @@ After successful materialization, use this compact two-line snapshot while readi
 
 **End message.**
 
-Use **✅ Ready** only for current passing evidence, **🔄 Checking** only for the operation that will run next, **⬜ Pending** for an applicable check that has not run, **⛔ Action required** for an authoritative actionable failure or a zero allocation awaiting recheck or override, **⛔ Manual confirmation required** for unreadable capacity awaiting the maker's answer, **⚠️ Check unavailable** for an attempted check without a verdict, **⚠️ Ready with limitation** for the supported connection warning state, **➖ Not required** only when the registry explicitly declares no requirement, **✅ Ready — manually confirmed** only after accepted capacity attestation, and **✅ Ready — manually overridden** only after the maker accepts a current automatic zero-allocation result.
+Use **✅ Ready** only for current passing evidence, **🔄 Checking** only for the operation that will run next, **⬜ Pending** for an applicable check that has not run, **⛔ Action required** for an authoritative actionable failure or a zero allocation awaiting recheck or attestation, **⚠️ Check unavailable** for an attempted check without a verdict, **⚠️ Skipped by administrator attestation** only after an appropriate administrator accepts an eligible capacity result, **⚠️ Ready with limitation** for the supported connection warning state, and **➖ Not required** only when the registry explicitly declares no requirement.
 
-While checks remain, render the second line's status as **🔄 {resolved count} of 4 resolved** and say that setup is still verifying runtime readiness. Count **Ready**, **Ready — manually confirmed**, **Ready — manually overridden**, **Ready with limitation**, **Action required**, **Check unavailable**, and **Not required** as resolved; do not count **Checking**, **Pending**, or **Manual confirmation required**. When maker action is required before checks can continue, render the second line's status as **⛔ Waiting for action** and identify the blocking check without converting pending checks into failures. Do not calculate or display the final **Overall** verdict in this in-progress snapshot.
+While checks remain, render the second line's status as **🔄 {resolved count} of 4 resolved** and say that setup is still verifying runtime readiness. Count **Ready**, **Skipped by administrator attestation**, **Ready with limitation**, **Action required**, **Check unavailable**, and **Not required** as resolved; do not count **Checking** or **Pending**. When maker action is required before checks can continue, render the second line's status as **⛔ Waiting for action** and identify the blocking check without converting pending checks into failures. Do not calculate or display the final **Overall** verdict in this in-progress snapshot.
 
 After successful materialization and after the three setup-readiness checks and broad connection diagnostic have been attempted, build the agent link from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both even when `connectReady` is false.
 
@@ -341,12 +354,12 @@ Use concise factual details:
 
 - Agent access: **Access to {agent display name} was verified. Observed at {observation time}.**
 - Environment capacity after an automatic pass: **{allocated credits} credits are allocated to {environment display name}. Observed at {observation time}.**
-- Environment capacity after attestation: **Automatic verification was unavailable for {environment display name}. Capacity was manually confirmed at {recorded time}.**
-- Environment capacity after override: **A recheck of {environment display name} at {observation time} found 0 allocated credits. You selected Continue with manual override.**
+- Environment capacity after administrator-attested skip from `Manual`: **Automatic verification was unavailable for {environment display name}. A Power Platform administrator was present and consented to override this capacity check at {recorded time}. Capacity was not verified.**
+- Environment capacity after administrator-attested skip from `Warning`: **A recheck of {environment display name} at {observation time} found 0 allocated credits. A Power Platform administrator was present and consented to override this capacity check at {recorded time}.**
 - Connections when ready: **{required connection display name} is connected for {environment display name}. Observed at {observation time}.**
 - Agent content when ready: **Agent content is present in your local workspace. Observed for {agent display name} at {observation time}.**
 
-Calculate Overall from canonical `connectReady`. When `connectReady` is true, render Overall as **✅ Foundation ready**. When it is false after materialization, render Overall as **⚠️ Foundation needs attention** and state that local authoring is ready while the setup-owned prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
+Calculate Overall from canonical `connectReady`. When `connectReady` is true, render Overall as **✅ Setup complete**. When it is false after materialization, render Overall as **⚠️ Setup needs attention** and state that local authoring is ready while the setup-owned prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
 
 When the registry-required `shared_alchemy` result is `NotConfigured` or `Failed`, append this section after the complete table and before the shared completion choices:
 

@@ -24,6 +24,14 @@ Use the active agent's entry in `.local/setup/config.json` when determining its
 setup progress and readiness. Evidence files support that state; they are not a
 separate setup record.
 
+Read `.local/setup/config.json` and `.local/config.json` once per setup
+invocation, reusing content already read by the parent prompt. Retain the
+resolved workspace environment, active agent, account, service origins, and
+operation results for later routing. Reread a source only after an operation in
+this invocation changes that source. Do not rerun inventory, reconciliation, or
+inspection merely because a later branch needs a value already retained; keep
+the explicit post-enrollment reinspection and maker-requested refreshes.
+
 Maker-visible setup text consists of the defined **Message** blocks and
 questions, their choices, an observed blocker with its supported recovery, and
 the final handoff. Operational sequencing and response-policy prose are
@@ -331,6 +339,10 @@ Use the host's interactive single-selection control and present these choices:
 - **Work with both environments side by side** -- create a separate Git worktree for the new environment.
 - **Go back**
 
+Until the maker selects and confirms a path, describe the two environments
+neutrally. Do not say that setup will switch, reset, reuse, archive, or open a
+workspace before the corresponding choice and confirmation.
+
 For **Use the new environment in this workspace (Recommended)**, do not derive or create a fresh destination. Show:
 
 > Reusing this workspace will archive its local setup records, agent files, and FlightCheck results for **{current environment}**. It will not change or delete any agent in Copilot Studio. Continue?
@@ -399,55 +411,73 @@ The final handoff is the detailed setup report. Branch on the final
 
 When `connectReady` is false or absent, setup is not complete. Keep the
 runtime-readiness table and every applicable owning remediation, recheck, and
-local-cleanup block visible. Across those blocks, append **(Recommended)** to
-exactly one action: the action owned by the first unresolved row in runtime
-readiness order. Leave every other action untagged, then append **Exit setup**
-as the final secondary choice. Selecting it uses the incomplete **Exit setup**
-message under **Start**. Do not render the ready completion choices, durable
-completion snapshot, or general post-setup capabilities. The global router's
-explicit `/connect`-after-materialization exception remains available only
-when the maker requests it; do not advertise it as incomplete setup.
+local-cleanup block visible. After those messages, render every applicable
+remediation, recheck, and cleanup action in one host interactive
+single-selection control, in runtime readiness order. Across those actions,
+append **(Recommended)** to exactly one action: the action owned by the first
+unresolved row. Leave every other action untagged. After adding every static
+and dynamic action, append **Exit setup** as the final secondary choice. Leave
+every choice initially unselected and disable custom entry. Selecting **Exit
+setup** uses the incomplete **Exit setup** message under **Start**. Do not
+render the ready completion choices, durable completion snapshot, or general
+post-setup capabilities. The global router's explicit
+`/connect`-after-materialization exception remains available only when the
+maker requests it; do not advertise it as incomplete setup.
 
-When `connectReady` is true, setup is complete. Build one recommended
-post-setup action:
+When `connectReady` is true, setup is complete. Resolve the terminal
+continuation:
 
-1. When the current request explicitly states `/landing-page` or `/connect`
-   as the supported next goal, recommend that action.
-2. Otherwise, for a newly created agent with an authoritative supported
-   connection route, recommend **Add or change an integration**.
-3. Otherwise, recommend **Add or change an integration** when the active
-   agent's authoritative product identity exposes a supported connection route
-   and product-specific evidence from that route affirmatively establishes that
-   its integration is not configured.
-4. Otherwise, recommend **Configure landing page**.
+1. When the current request explicitly states `/landing-page` as the supported
+   next goal, render the final setup report, say **Setup is complete. You asked
+   to configure the landing page next, so I'll continue there.**, and begin
+   `/landing-page` at its first decision surface. Do not render the setup
+   terminal choice control.
+2. When the current request explicitly states `/connect` as the supported next
+   goal, recommend **Add or change an integration**.
+3. Otherwise, when authoritative product-specific evidence shows that an
+   applicable supported integration is configured, render the setup terminal
+   choice control without a recommended action.
+4. Otherwise, recommend **Add or change an integration**.
 
-Do not treat **Connections: Not required**, an absent aggregate diagnostic row,
-or the absence of native logical connector references as evidence that an
-integration is not configured. Those observations establish only that the
-foundation registry did not require a connection or that the broad diagnostic
-found no applicable native reference. Use only evidence whose owning
-integration route defines the checked configuration surface.
+Do not treat **Connections: Not required**, an aggregate diagnostic row, or the
+presence or absence of native logical connector references as authoritative
+evidence that an applicable integration is configured. Those observations
+establish only the Foundation requirement or broad diagnostic state. Use only
+evidence whose owning integration route defines the checked configuration
+surface to suppress the default integration recommendation. The integration
+recommendation reflects the absence of completion evidence; it does not claim
+that an integration is missing or broken.
 
-Before the choice control, say **I recommend {recommended choice} because
-{reason grounded in the current request, starting point, and supported
-routes}.** Present:
+Before the choice control, render the applicable maker-facing recommendation
+only when **Add or change an integration** is recommended:
 
-- **Configure landing page{LANDING_RECOMMENDATION_SUFFIX}**
+- For the default integration recommendation, say: **I recommend Add or change
+  an integration so this agent can communicate with your HR or IT systems.
+  Setup did not find authoritative evidence that an applicable integration is
+  configured.**
+- For an explicitly requested `/connect` action, state that it matches what the
+  maker asked to do next and explain that integrations let the agent
+  communicate with HR or IT systems.
+
+Then present these choices in one host interactive single-selection control:
+
 - **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**
-- **Exit setup**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Set up another agent in this environment**
+- **Exit setup**
 
-Set exactly one recommendation suffix to ` (Recommended)` and the other to an
-empty string. Do not preselect a choice. **Configure landing page** begins
-`/landing-page` at its first decision surface. **Add or change an integration**
-begins `/connect` at its first decision surface. **Exit setup** acknowledges
-the displayed results and renders a durable completion snapshot as the final
-chat message without rerunning checks. Reuse the exact agent link, final
-readiness rows, statuses, evidence summaries, Overall verdict, and every
-applicable local-cleanup block from the final handoff in this invocation. Do
-not read new state or infer a value from an earlier turn. After the maker
-selects **Exit setup**, show:
+Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when **Add or
+change an integration** is recommended; otherwise set it to an empty string.
+Omit **Switch to another configured agent** when it is unavailable. Leave every
+choice initially unselected, disable custom entry, and always render **Exit
+setup** after every static and dynamic choice. **Add or change an integration**
+begins `/connect` at its first decision surface. **Exit setup** acknowledges the
+displayed results and renders a durable completion snapshot as the final chat
+message without rerunning checks. Reuse the exact agent link, final readiness
+rows, statuses, evidence summaries, Overall verdict, and every applicable
+local-cleanup block from the final handoff in this invocation. Do not read new
+state or infer a value from an earlier turn. After the maker selects **Exit
+setup**, show:
 
 **Message:**
 
@@ -479,10 +509,7 @@ These are the readiness results you acknowledged when you finished setup. No che
 
 Next steps:
 
-- Run `/landing-page`{LANDING_RECOMMENDATION_SUFFIX} to configure branding and the content employees see.
-- Run `/connect`{CONNECT_RECOMMENDATION_SUFFIX} to add or change an integration.
-  {SUPPORTED_INTEGRATION_SHORTCUTS}
-- Type `/menu` to see all available capabilities.
+{POST_SETUP_COMMAND_REMINDERS}
 
 **End message.**
 
@@ -501,12 +528,35 @@ another shortcut only when its route explicitly supports the resolved product.
 Render no shortcut lines when product identity is unresolved or the active
 agent does not support them.
 
-Every exit from setup when the active canonical agent has `connect_ready` equal to `true` must end with the same post-setup option list used in the durable completion snapshot:
+Build `{POST_SETUP_COMMAND_REMINDERS}` from the same recommendation and evidence
+used for the ready choice control. Render exactly one of these non-interactive
+command lists, with the recommended command first:
 
-- Run `/landing-page`{LANDING_RECOMMENDATION_SUFFIX} to configure branding and the content employees see.
-- Run `/connect`{CONNECT_RECOMMENDATION_SUFFIX} to add or change an integration.
-  {SUPPORTED_INTEGRATION_SHORTCUTS}
-- Type `/menu` to see all available capabilities.
+- For the default integration recommendation:
+  - Run `/connect` **(Recommended)** to add or change an integration so this agent can communicate with your HR or IT systems. Setup did not find authoritative evidence that an applicable integration is configured.
+    {SUPPORTED_INTEGRATION_SHORTCUTS}
+  - Run `/landing-page` to configure the branding and content employees see.
+  - Type `/menu` to see all available capabilities.
+- For the evidence-based landing-page recommendation:
+  - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable integration is already configured, so this is the next useful customization step.
+  - Run `/connect` to add or change an integration.
+    {SUPPORTED_INTEGRATION_SHORTCUTS}
+  - Type `/menu` to see all available capabilities.
+- For an explicitly requested `/connect` action:
+  - Run `/connect` **(Recommended)** to add or change an integration. This matches what you asked to do next, and integrations let this agent communicate with your HR or IT systems.
+    {SUPPORTED_INTEGRATION_SHORTCUTS}
+  - Run `/landing-page` to configure the branding and content employees see.
+  - Type `/menu` to see all available capabilities.
+
+Every exit from setup when the active canonical agent has `connect_ready` equal
+to `true` must end with the same `{POST_SETUP_COMMAND_REMINDERS}` used in the
+durable completion snapshot. These reminders are text, not another choice
+control.
+
+Do not render the case labels above. Replace
+`{POST_SETUP_COMMAND_REMINDERS}` with only the three bullets for the applicable
+case, and replace or omit `{SUPPORTED_INTEGRATION_SHORTCUTS}` under the
+`/connect` bullet using the authoritative product rule above.
 
 **Set up another agent in this environment** begins `da-mos-starter.md` at
 its first agent-setup decision surface with the recorded environment
@@ -529,30 +579,52 @@ existing-agent readiness remains unchanged.
 
 When the current request supplies no agent, environment, package, or fresh-agent intent, read canonical setup state and `.local/config.json`. A usable active local target must identify the agent display name, agent ID, environment ID, service ring or validated API endpoint, and local workspace folder. Treat these values only as routing input; they do not prove current access, realm, or readiness.
 
+Whenever the current request resolves a target environment, compare it with the
+retained workspace environment before any ALM enrollment, import, attachment,
+reset, or other remote or local mutation. If an occupied workspace targets a
+different environment, follow **Shared workspace choices** before continuing
+the selected-agent route. Preserve the resolved target, account, ring, and
+service origins across that choice. Do not run attachment to discover this
+conflict; `.local/config.json` already owns the workspace environment. A
+read-only identity probe may still validate supplied target data when needed,
+but no target-side mutation may precede the workspace choice.
+
 For a usable local target whose canonical agent record has `connect_ready` equal to `true`, do not render the maker-facing progress checklist. Ask:
 
 > Setup is already complete for **{agent display name}**, and this workspace is ready to use. What would you like to do?
 
 Build the recommended post-setup action and render the same ready completion
-choices defined above, then append **Redo setup for this agent** and **What
-does setup do?**. Use the same recommendation suffixes and reason. Selecting
-**Exit setup** uses the ready exit message below.
+choices defined above, inserting these choices immediately before **Exit
+setup**:
+
+- **Redo setup for this agent**
+- **What does setup do?**
+
+Use the same recommendation suffixes and maker-facing recommendation. Leave
+every choice initially unselected, disable custom entry, and keep **Exit setup**
+as the final choice. Selecting **Exit setup** uses the ready exit message below.
 
 For a usable local target whose canonical agent record is incomplete or blocked, render the maker-facing progress checklist and ask:
 
 > **{agent display name}** is the active agent in this workspace. What would you like to do?
 
-Present these context-appropriate choices:
+Present these context-appropriate choices in one host interactive
+single-selection control:
 
-- **Exit setup**
 - **Resume setup for this agent**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Set up another agent in this environment**
-- **What does setup do?**
 - **Reset and use this workspace**
 - **Create and open a new workspace**
+- **What does setup do?**
+- **Exit setup**
 
-Do not preselect a choice. Follow the corresponding shared workspace choice above. For **Create and open a new workspace**, use the location-selection and worktree handoff defined under **Work with both environments side by side**, using the recorded environment as the target; this choice does not imply an environment change.
+Leave every choice initially unselected, disable custom entry, and keep **Exit
+setup** as the final choice. Follow the corresponding shared workspace choice
+above. For **Create and open a new workspace**, use the location-selection and
+worktree handoff defined under **Work with both environments side by side**,
+using the recorded environment as the target; this choice does not imply an
+environment change.
 
 For **Redo setup for this agent**, begin the existing setup route, render its progress checklist before the first setup operation, complete the one-time account selection and selected-agent product-line reconciliation above, then run the inspection command below. Do not create a separate redo workflow or state model.
 
@@ -575,10 +647,7 @@ Setup remains complete for **{agent display name}**. No checks were rerun.
 
 Next steps:
 
-- Run `/landing-page`{LANDING_RECOMMENDATION_SUFFIX} to configure branding and the content employees see.
-- Run `/connect`{CONNECT_RECOMMENDATION_SUFFIX} to add or change an integration.
-  {SUPPORTED_INTEGRATION_SHORTCUTS}
-- Type `/menu` to see all available capabilities.
+{POST_SETUP_COMMAND_REMINDERS}
 
 **End message.**
 
