@@ -17,7 +17,7 @@ from tests.mocks import power_automate as pa
 from tests.mocks import pp_admin as pp
 
 from flightcheck.checks.workday import (
-    _check_workday_run_health,
+    _check_workday_active_run_health,
     _with_wd_run_passive_context,
 )
 from flightcheck.runner import Status
@@ -110,7 +110,7 @@ def _register_connector_lifecycle(
 
 
 def _run_single(runner: SimpleNamespace):
-    results = _check_workday_run_health(runner)
+    results = _check_workday_active_run_health(runner)
     assert len(results) == 1
     return results[0]
 

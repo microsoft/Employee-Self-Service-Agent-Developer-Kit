@@ -3556,8 +3556,23 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# WD-RUN-001 — Workday shared-flow run health (run-history analysis)
+# WD-RUN-001 — Workday shared-flow run health (user-assisted E2E run-history)
 # ─────────────────────────────────────────────────────────────────────────
+#
+# Approach (locked 2026-10): WD-RUN-001 is PASSIVE-ONLY. It grades a *fresh*
+# real end-to-end run (Copilot → Workday → Copilot) from run history. It does
+# NOT trigger Workday itself. Direct/headless flow invocation was investigated
+# and ruled out: the Workday connector is invoker-scoped, so the flow never
+# carries the signed-in user's Workday token outside the real execution path,
+# and triggering it hit authentication/runtime-context walls. Even when it can
+# be forced, it only tests Flow → Workday, not the full Copilot round-trip —
+# and we have seen incidents where the flow succeeded but the Copilot
+# experience still failed. So the only honest E2E signal is a real recent run.
+# When none exists the check emits a guided NOT_CONFIGURED that steers the
+# operator to sign in to ESS Copilot and run a safe read-only Workday scenario
+# (the interactive loop itself lives in SKILL.md). The transient active-probe
+# function (_check_workday_active_run_health) is retained for reference but is
+# no longer wired to WD-RUN-001.
 #
 # Complements the connection-status checks (WD-CONN-001+): those confirm the
 # Power Platform connection is *Connected*, but a connection can be Connected
@@ -3588,6 +3603,16 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # user requesting a scenario their Workday security doesn't allow) do NOT fail
 # readiness — recent successes prove the integration is wired up. A single run
 # that failed (no successes in the window) IS a failure.
+#
+# Freshness gate (user-assisted E2E): a success only counts toward a PASS if it
+# happened within ``_WD_FRESH_WINDOW_MINUTES``. An old success can mask a
+# since-broken connection/permission, and it does not prove the LIVE Copilot →
+# Workday path still works today. When no terminal run falls inside the window,
+# the verdict is a guided NOT_CONFIGURED asking the operator to perform a fresh
+# run (not a FAILED — a stale history is not evidence of breakage). As a
+# defensive fallback, if NO run carries a parseable timestamp we evaluate the
+# recent window as before rather than forcing a manual re-run on a format
+# regression.
 #
 # Known limitations (documented, not silently swallowed):
 #   * A fully-broken/unconfigured connection makes Copilot Studio prompt
@@ -3632,6 +3657,14 @@ _RUN_FAILURE_STATUSES = {"Failed", "TimedOut", "Faulted", "Aborted"}
 # scenario their Workday security doesn't permit) and must NOT fail readiness —
 # the presence of recent successes proves the integration is wired up.
 _WD_RECENT_WINDOW = 10
+
+# WD-RUN-001 user-assisted E2E freshness window. A terminal run only counts
+# toward a PASS when its ``properties.startTime`` is within this many minutes of
+# now. Outside it, an old success cannot prove the LIVE Copilot → Workday →
+# Copilot path still works (it may mask a since-broken connection/permission),
+# so the check asks the operator to perform a fresh real run (see SKILL.md and
+# the WD-RUN-001 module comment). Fixed constant for v1 (not a CLI flag).
+_WD_FRESH_WINDOW_MINUTES = 60
 
 _WD_CONNECTOR_API_ID = "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
 _WD_CONNECTOR_NAME = "shared_workdaysoap"
@@ -4156,9 +4189,63 @@ def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
     }
 
 
+def _parse_run_start(value) -> "datetime.datetime | None":
+    """Parse a flow-run ``properties.startTime`` into an aware UTC datetime.
+
+    Returns ``None`` when the value is missing or unparseable so callers can
+    treat an unreadable timestamp as "cannot prove freshness" rather than
+    guessing an age. Power Automate emits ISO-8601 with a trailing ``Z`` and up
+    to 7 fractional-second digits (more precision than ``datetime`` accepts), so
+    the trailing sub-microsecond digits are truncated and ``Z`` is normalised to
+    an explicit UTC offset.
+    """
+    import datetime as _dt
+    import re
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    if s.endswith("Z") or s.endswith("z"):
+        s = s[:-1] + "+00:00"
+    s = re.sub(r"(\.\d{6})\d+", r"\1", s)
+    try:
+        parsed = _dt.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return parsed
+
+
+# Guided remediation shared by both no-fresh-run paths (no runs at all, and
+# stale-only runs). WD-RUN-001 can only be proven by a real, recent end-to-end
+# run because the Workday connector is invoker-scoped (it cannot be triggered
+# headlessly outside a signed-in user), so the operator must perform one.
+_WD_GUIDED_E2E_REMEDIATION = (
+    "WD-RUN-001 validates the full Copilot \u2192 Workday \u2192 Copilot path, which only a "
+    "real, recent end-to-end run can prove: the Workday connector is invoker-scoped, so the "
+    "flow cannot be triggered headlessly outside a signed-in user, and a direct flow run would "
+    "only test Flow \u2192 Workday, not Copilot routing. To validate: sign in to ESS Copilot as a "
+    "test user, run a safe read-only Workday scenario (for example ask \"Who is my manager?\" or "
+    "\"What is my job title?\"), then re-run /flightcheck within "
+    f"{_WD_FRESH_WINDOW_MINUTES} minutes."
+)
+
+
 def _check_workday_run_health(runner) -> list[CheckResult]:
-    """WD-RUN-001 — active connector probe with passive run-history fallback."""
-    return _check_workday_active_run_health(runner)
+    """WD-RUN-001 — user-assisted end-to-end Workday run health (passive-only).
+
+    Grades a *fresh* real Copilot → Workday → Copilot run from history. Direct /
+    headless flow invocation is deliberately not used (the Workday connector is
+    invoker-scoped, so the flow never carries the user token outside the real
+    execution path, and it would only test Flow → Workday, not the full Copilot
+    round-trip). When no fresh run exists the check emits a guided
+    NOT_CONFIGURED steering the operator to sign in to ESS Copilot and run a
+    safe read-only scenario (SKILL.md owns the interactive loop). The transient
+    active-probe path (``_check_workday_active_run_health``) is retained but no
+    longer wired here.
+    """
+    return _check_workday_run_health_passive(runner)
 
 
 def _check_workday_run_health_passive(runner) -> list[CheckResult]:
@@ -4213,8 +4300,10 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             if kind == "pending":
                 continue
             props = run.get("properties", {}) or {}
+            start_raw = props.get("startTime") or ""
             terminal.append({
-                "start": props.get("startTime") or "",
+                "start": start_raw,
+                "start_dt": _parse_run_start(start_raw),
                 "kind": kind,
                 "flow": fname,
                 "run": run.get("name"),
@@ -4238,9 +4327,12 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="Workday flow run health",
             result="No recent Workday flow runs found — no runtime traffic to evaluate.",
-            remediation="Exercise a Workday scenario in the agent Test pane, then re-run /flightcheck. "
-                        "Note: a fully-broken connection produces NO runs (the flow is never invoked) — "
-                        "if Workday isn't responding, check connection status first (WD-CONN-001).",
+            remediation=(
+                _WD_GUIDED_E2E_REMEDIATION
+                + " Note: a fully-broken connection produces NO runs at all (the flow is "
+                "never invoked) — if Workday isn't responding, check connection status "
+                "first (WD-CONN-001)."
+            ),
             doc_link=f"{DOC_BASE}/workday",
             roles=roles,
         )]
@@ -4249,7 +4341,46 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
     # break = NO success among the recent runs. Scattered failures alongside
     # recent successes do NOT fail readiness.
     terminal.sort(key=lambda r: r["start"], reverse=True)
-    window = terminal[:_WD_RECENT_WINDOW]
+
+    # Freshness gate (user-assisted E2E). A run only counts toward a PASS if it
+    # started within _WD_FRESH_WINDOW_MINUTES — an older success can mask a
+    # since-broken connection and does not prove the LIVE Copilot → Workday path
+    # still works. Defensive fallback: if NO run has a parseable timestamp we
+    # cannot assess freshness, so evaluate the recent window as before rather
+    # than forcing a manual re-run on a timestamp-format regression.
+    import datetime as _dt
+    _now = _dt.datetime.now(_dt.timezone.utc)
+    _cutoff = _now - _dt.timedelta(minutes=_WD_FRESH_WINDOW_MINUTES)
+    parseable = [r for r in terminal if r["start_dt"] is not None]
+    if parseable:
+        fresh = [r for r in parseable if r["start_dt"] >= _cutoff]
+        if not fresh:
+            newest = parseable[0]  # terminal is sorted newest-first
+            age_min = int((_now - newest["start_dt"]).total_seconds() // 60)
+            had_success = any(r["kind"] == "success" for r in terminal)
+            context = (
+                f" The most recent run was about {age_min} minute(s) ago"
+                + (" and succeeded" if newest["kind"] == "success" else "")
+                + "; a stale run cannot prove the live Copilot \u2192 Workday path still works."
+            )
+            stale_result = (
+                f"Found {len(terminal)} Workday flow run(s), but none within the last "
+                f"{_WD_FRESH_WINDOW_MINUTES} minutes." + context
+            )
+            if had_success:
+                stale_result += " Older successes are not counted as a PASS."
+            return [CheckResult(
+                checkpoint_id="WD-RUN-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+                description="Workday flow run health",
+                result=stale_result,
+                remediation=_WD_GUIDED_E2E_REMEDIATION,
+                doc_link=f"{DOC_BASE}/workday",
+                roles=roles,
+            )]
+        window = fresh[:_WD_RECENT_WINDOW]
+    else:
+        window = terminal[:_WD_RECENT_WINDOW]
     n = len(window)
     win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
     win_success = n - len(win_fail)

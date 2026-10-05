@@ -298,6 +298,126 @@ class TestEdgeCases:
         assert "Power Platform Admin API not available" in r.result
 
 
+class TestFreshness:
+    """WD-RUN-001 user-assisted E2E freshness gate: only a run started within
+    the last 60 minutes counts toward a PASS. A stale-only history yields a
+    guided NOT_CONFIGURED (not a FAIL — stale history is not evidence of
+    breakage)."""
+
+    @staticmethod
+    def _ts(minutes_ago: int) -> str:
+        from datetime import datetime, timedelta, timezone
+        dt = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
+    @responses.activate
+    def test_stale_only_successes_is_guided_not_configured(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """All runs succeeded but all are older than the freshness window →
+        NOT_CONFIGURED with guided sign-in remediation (an old success cannot
+        prove the live path still works)."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="old1", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(180)),
+                pp.flow_run(run_id="old2", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(240)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert "last 60 minutes" in r.result
+        assert "Older successes are not counted as a PASS" in r.result
+        assert "sign in to ESS Copilot" in r.remediation.lower() or \
+            "sign in to ess copilot" in r.remediation.lower()
+        assert "read-only" in r.remediation
+
+    @responses.activate
+    def test_fresh_success_passes(self, runner: _MinimalRunner) -> None:
+        """An explicit fresh success (inside the window) PASSES."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="fresh", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(5)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+        assert "succeeded" in r.result.lower()
+
+    @responses.activate
+    def test_fresh_all_failed_is_failure(self, runner: _MinimalRunner) -> None:
+        """A fresh run that failed (no fresh success) is a deterministic break
+        → FAIL, not the guided NOT_CONFIGURED."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="f1", flow_id=_FLOW_ID, status="Failed",
+                            response_name="Respond_to_Copilot_with_XmlTemplate_To_Json_Failed",
+                            error={"code": "ActionFailed", "message": "An action failed."},
+                            start_time=self._ts(3)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Failed"
+        assert "FAILED" in r.result
+
+    @responses.activate
+    def test_fresh_failure_with_stale_success_is_failure(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """A stale success does NOT rescue a fresh failure: only the fresh run
+        is in the window, so the verdict is FAIL."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="freshfail", flow_id=_FLOW_ID, status="Failed",
+                            response_name="Respond_to_Copilot_with_XmlTemplate_To_Json_Failed",
+                            error={"code": "ActionFailed", "message": "An action failed."},
+                            start_time=self._ts(2)),
+                pp.flow_run(run_id="staleok", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(500)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Failed"
+
+    @responses.activate
+    def test_unparseable_timestamps_fall_back_to_window(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Defensive fallback: if NO run has a parseable startTime we cannot
+        assess freshness, so evaluate the recent window as before rather than
+        forcing a manual re-run on a timestamp-format regression."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="g1", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time="not-a-timestamp"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+
+
 class TestManualConnSecSuppression:
     """`_suppress_manual_conn_sec_when_runs_healthy` hides MANUAL Workday
     connection/security rows only when WD-RUN-001 PASSED."""
