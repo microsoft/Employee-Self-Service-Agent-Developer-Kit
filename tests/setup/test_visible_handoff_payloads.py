@@ -307,6 +307,40 @@ def test_credential_has_completed_question_and_bounded_candidate_selector() -> N
     )
 
 
+def test_portal_has_url_input_and_manual_fallback_payloads() -> None:
+    payloads = _payloads(_ACTIONS / "configure-portal-url.md")
+    assert len(payloads) == 2
+    portal_input = _validate_payload(
+        payloads[0],
+        required_phrases=(
+            "Purpose:",
+            "Owner:",
+            "{SERVICENOW_INSTANCE_ORIGIN}",
+            "complete HTTPS employee portal URL",
+            "will not infer `/sp`, `/esc`",
+            "Set ServiceNow Portal BaseURI",
+            "guarded native component update",
+            "Copilot Studio -> Topics -> ServiceNow HRSD Setup Configurations",
+        ),
+    )
+    fallback = _validate_payload(
+        payloads[1],
+        required_phrases=(
+            "guarded component API did not change the topic",
+            "Topics -> ServiceNow HRSD Setup Configurations",
+            "Set ServiceNow Portal BaseURI",
+            "{PORTAL_URL}",
+            "fresh read-only verification",
+        ),
+    )
+    assert portal_input["allowFreeformInput"] is True
+    assert [option["label"] for option in fallback["options"]] == [
+        "Completed",
+        "Not yet",
+    ]
+    assert fallback["allowFreeformInput"] is False
+
+
 @pytest.mark.parametrize(
     "payload",
     [

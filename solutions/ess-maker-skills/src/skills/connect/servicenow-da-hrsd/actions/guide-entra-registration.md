@@ -48,6 +48,19 @@ Open the stable portal root once:
      no redirect URI is required.
 2. In `Token configuration` → `Add optional claim` → `Access`, add `email`
    and `upn`.
+   - Do not try to add `aud` as an optional claim. `aud` is an access-token
+     audience claim emitted by Microsoft Entra; the receiving API validates
+     that it matches the intended App A audience.
+   - If employees must be matched with a directory attribute that is neither
+     email nor UPN, the Entra admin must first identify the exact directory
+     attribute, expose it as a custom access-token claim, and confirm the
+     emitted value is a non-email identifier that exactly matches the chosen
+     ServiceNow user field.
+   - Claims mapping is a tenant security decision. For a single-tenant app,
+     use `acceptMappedClaims` only when the tenant's security policy and the
+     reviewed Microsoft guidance permit it; otherwise use the tenant-approved
+     custom signing-key route. Do not enable either merely to satisfy this
+     skill, and never return signing material.
 3. In `Expose an API`, set Application ID URI to
    `api://<application-client-id>` and add an enabled delegated
    `user_impersonation` scope.
@@ -80,7 +93,7 @@ client ID?”:
 [
   {
     "header": "Entra User Login app",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: configure one single-tenant App A so the ServiceNow connector can request delegated user tokens accepted by ServiceNow.\n\nOwner: Application Administrator, Cloud Application Administrator, Privileged Role Administrator, or Global Administrator. Tenant-wide consent requires an authorized admin.\n\nOpen Microsoft Entra admin center: https://entra.microsoft.com/\n\nComplete or re-verify all six operations:\n1. In App registrations, resolve the exact existing `ESS Copilot - ServiceNow OIDC ({instance-name})` app by client ID/name, repair it if unhealthy, resolve duplicates, or create it only if none exists. No redirect URI is required.\n2. In Token configuration, add Access optional claims `email` and `upn`.\n3. In Expose an API, set `api://<application-client-id>` and add enabled delegated scope `user_impersonation`.\n4. In Authorized client applications, add ServiceNow connector app `c26b24aa-7874-4e06-ad55-7d06b1f79b63` and select `user_impersonation`.\n5. In API permissions, add Microsoft Graph delegated permissions `openid`, `profile`, and `User.Read`.\n6. Grant tenant-wide admin consent.\n\nReturn only the non-secret Application (client) ID GUID and confirmation that all six operations are complete. Never return a secret, certificate, password, token, or PFX.\n\nWhat is the completed or reused Application (client) ID?",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: configure one single-tenant App A so the ServiceNow connector can request delegated user tokens accepted by ServiceNow.\n\nOwner: Application Administrator, Cloud Application Administrator, Privileged Role Administrator, or Global Administrator. Tenant-wide consent requires an authorized admin.\n\nOpen Microsoft Entra admin center: https://entra.microsoft.com/\n\nComplete or re-verify all six operations:\n1. In App registrations, resolve the exact existing `ESS Copilot - ServiceNow OIDC ({instance-name})` app by client ID/name, repair it if unhealthy, resolve duplicates, or create it only if none exists. No redirect URI is required.\n2. In Token configuration, add Access optional claims `email` and `upn`. Do not add `aud` as an optional claim; Microsoft Entra emits the access-token audience and the receiver validates it. If a non-email/non-UPN employee identifier is required, choose the exact directory attribute, expose it as a custom access-token claim, and verify its non-email value exactly matches the selected ServiceNow user field. Claims mapping is security-sensitive: for a single-tenant app, use `acceptMappedClaims` only when tenant policy and reviewed guidance permit it, otherwise use the tenant-approved custom signing-key route; never return signing material.\n3. In Expose an API, set `api://<application-client-id>` and add enabled delegated scope `user_impersonation`.\n4. In Authorized client applications, add ServiceNow connector app `c26b24aa-7874-4e06-ad55-7d06b1f79b63` and select `user_impersonation`.\n5. In API permissions, add Microsoft Graph delegated permissions `openid`, `profile`, and `User.Read`.\n6. Grant tenant-wide admin consent.\n\nReturn only the non-secret Application (client) ID GUID and confirmation that all six operations are complete. Never return a secret, certificate, password, token, or PFX.\n\nWhat is the completed or reused Application (client) ID?",
     "allowFreeformInput": true
   }
 ]

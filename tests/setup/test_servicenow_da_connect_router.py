@@ -79,7 +79,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "Microsoft Learn is a\nsecondary reference" in skill
     assert "it never overrides PR #217 by itself" in skill
     assert "old PR behavior, current evidence, proposed deviation" in skill
-    assert "`email`/`upn` optional-claim requirement" in skill
+    assert "`email` and `upn` are configurable optional claims" in skill
+    assert "`aud` is a built-in" in skill
+    assert "Portal Base URI is now in scope" in skill
     assert "current active\nHR agent/profile only" in skill
     assert "ITSM remains a separate provider/PR layer" in skill
 
@@ -107,6 +109,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         encoding="utf-8"
     )
     credential = (actions / "prepare-credential.md").read_text(
+        encoding="utf-8"
+    )
+    portal = (actions / "configure-portal-url.md").read_text(
         encoding="utf-8"
     )
     credential_normalized = " ".join(credential.split())
@@ -184,6 +189,10 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
         assert f"--checkpoint SN-DA-HRSD-ENTRA-{suffix}-001" not in entra
     assert "one category evaluation" in entra
     assert "Do not decide checkpoint success in this action" in entra
+    assert "Do not try to add `aud` as an optional claim" in entra
+    assert "non-email identifier" in entra
+    assert "acceptMappedClaims" in entra
+    assert "custom signing-key route" in entra
     assert "same as old" in entra_normalized
     assert "What is the existing Application (client) ID?" in entra_normalized
     assert "do not tell them to restart `/connect`" in entra_normalized
@@ -226,7 +235,9 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     assert "matching Active" in oidc
     assert "Do not return the employee's" in oidc
     assert "Do not create a test user" in oidc
-    assert "Broadly scoped" not in oidc
+    assert "Scope Restriction = `Broadly scoped`" in oidc
+    assert "Graph Connector app-only provider" in oidc
+    assert "non-email/non-UPN identifier" in oidc
     assert "Resource URI" in credential
     assert "verified App A Application client ID" in credential
     assert "api://<client-id>" in credential
@@ -255,6 +266,12 @@ def test_da_servicenow_skill_uses_shared_lifecycle_and_maker_actions() -> None:
     )
     assert "resolve-credential" in credential
     assert "--selection-key" in credential
+    assert "inspect-portal-url" in portal
+    assert "set-portal-url" in portal
+    assert "must never be inferred as `/sp`, `/esc`" in portal
+    assert "Topics -> ServiceNow HRSD Setup Configurations" in portal
+    assert "Set ServiceNow Portal BaseURI" in portal
+    assert "Do not publish the agent in this phase" in portal
     assert (
         "[Open connections for this environment]"
         "({POWER_AUTOMATE_CONNECTIONS_URL})"

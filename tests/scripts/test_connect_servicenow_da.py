@@ -153,7 +153,7 @@ def _components(connection_id: str | None = None) -> dict:
                     },
                 },
             },
-            {
+                {
                 "$kind": "BotComponentInsert",
                 "component": {
                     "$kind": "DialogComponent",
@@ -196,6 +196,52 @@ def _components(connection_id: str | None = None) -> dict:
             {"$kind": "ConnectorDefinitionInsert"}
         ],
     }
+
+
+def _portal_components() -> dict:
+    components = _components()
+    components["botComponentChanges"].insert(
+        1,
+        {
+            "$kind": "BotComponentInsert",
+            "component": {
+                "$kind": "DialogComponent",
+                "id": "00000000-0000-4000-8000-000000005556",
+                "version": 3,
+                "displayName": "ServiceNow HRSD Setup Configurations",
+                "schemaName": (
+                    f"{snow.HR_SCHEMA_NAME}.topic."
+                    "ServiceNowHRSDSetupConfigurations"
+                ),
+                "state": "Active",
+                "status": "Active",
+                "dialog": {
+                    "$kind": "TaskDialog",
+                    "beginDialog": {
+                        "actions": [
+                            {
+                                "$kind": "SetVariable",
+                                "displayName": (
+                                    "Set ServiceNow Portal BaseURI"
+                                ),
+                                "variable": (
+                                    "Global.ServiceNowHRSDPortalBaseURI"
+                                ),
+                                "value": {
+                                    "$kind": "Literal",
+                                    "literalValue": (
+                                        "https://dev123.service-now.com/"
+                                        "employee"
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                },
+            },
+        },
+    )
+    return components
 
 
 def _connection_record(
@@ -378,6 +424,145 @@ def test_draft_semantic_hash_fails_closed_on_malformed_relevant_shape() -> None:
 
     with pytest.raises(snow.ServiceNowConnectError, match="topic collection"):
         snow._draft_semantic_hash(components)
+
+
+def test_portal_url_payload_updates_only_exact_literal_node() -> None:
+    components = _portal_components()
+    before = copy.deepcopy(components)
+
+    payload, preimage, postimage = snow.build_portal_url_update_payload(
+        components,
+        "https://dev123.service-now.com/hrportal",
+        expected_instance_name="dev123",
+    )
+
+    assert payload["changeToken"] == "token"
+    assert len(payload["botComponentChanges"]) == 1
+    update = payload["botComponentChanges"][0]
+    assert update["$kind"] == "BotComponentUpdate"
+    assert update["component"] == postimage
+    assert snow._portal_literal_value(preimage) == (
+        "https://dev123.service-now.com/employee"
+    )
+    assert snow._portal_literal_value(postimage) == (
+        "https://dev123.service-now.com/hrportal"
+    )
+    assert components == before
+    restored = copy.deepcopy(postimage)
+    snow._portal_value_node(restored)["value"]["literalValue"] = (
+        snow._portal_literal_value(preimage)
+    )
+    assert snow._component_content_hash(restored) == (
+        snow._component_content_hash(preimage)
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("https://dev123.service-now.com", "portal path"),
+        ("https://dev123.service-now.com/", "portal path"),
+        ("https://other.service-now.com/sp", "confirmed ServiceNow instance"),
+        ("http://dev123.service-now.com/sp", "plain HTTPS"),
+        ("https://dev123.service-now.com/sp?x=1", "plain HTTPS"),
+        ("https://dev123.service-now.com:8443/sp", "plain HTTPS"),
+        ("https://dev123.service-now.com/hr portal", "plain HTTPS"),
+    ],
+)
+def test_portal_url_validation_rejects_unsafe_or_inferred_values(
+    value: str,
+    message: str,
+) -> None:
+    with pytest.raises(snow.ServiceNowConnectError, match=message):
+        snow.normalize_portal_url(
+            value,
+            expected_instance_name="dev123",
+        )
+
+
+def test_portal_payload_rejects_zero_or_multiple_target_nodes() -> None:
+    components = _portal_components()
+    setup_topic = components["botComponentChanges"][1]["component"]
+    setup_topic["dialog"]["beginDialog"]["actions"] = []
+    with pytest.raises(snow.ServiceNowConnectError, match="exactly one Set"):
+        snow.build_portal_url_update_payload(
+            components,
+            "https://dev123.service-now.com/hrportal",
+            expected_instance_name="dev123",
+        )
+
+    duplicate = copy.deepcopy(components)
+    duplicate["botComponentChanges"][1]["component"]["dialog"][
+        "beginDialog"
+    ]["actions"] = [
+        {
+            "$kind": "SetVariable",
+            "displayName": snow.PORTAL_NODE_DISPLAY_NAME,
+            "variable": snow.PORTAL_VARIABLE_NAME,
+            "value": {"$kind": "Literal", "literalValue": ""},
+        },
+        {
+            "$kind": "SetVariable",
+            "displayName": snow.PORTAL_NODE_DISPLAY_NAME,
+            "variable": snow.PORTAL_VARIABLE_NAME,
+            "value": {"$kind": "Literal", "literalValue": ""},
+        },
+    ]
+    with pytest.raises(snow.ServiceNowConnectError, match="found 2"):
+        snow.build_portal_url_update_payload(
+            duplicate,
+            "https://dev123.service-now.com/hrportal",
+            expected_instance_name="dev123",
+        )
+
+
+def test_portal_summary_never_echoes_url_credentials() -> None:
+    components = _portal_components()
+    setup_topic = components["botComponentChanges"][1]["component"]
+    snow._portal_value_node(setup_topic)["value"]["literalValue"] = (
+        "https://user:password@dev123.service-now.com/employee"
+    )
+
+    summary = snow.portal_configuration_summary(
+        components,
+        expected_instance_name="dev123",
+    )
+
+    assert summary["valid"] is False
+    assert summary["reason"] == "invalid-url"
+    assert summary["origin"] == "https://dev123.service-now.com"
+    assert "user" not in json.dumps(summary)
+    assert "password" not in json.dumps(summary)
+
+
+def test_portal_payload_rejects_zero_or_multiple_setup_topics() -> None:
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Setup Configurations topic; found 0",
+    ):
+        snow.build_portal_url_update_payload(
+            _components(),
+            "https://dev123.service-now.com/hrportal",
+            expected_instance_name="dev123",
+        )
+
+    components = _portal_components()
+    duplicate = copy.deepcopy(
+        components["botComponentChanges"][1]
+    )
+    duplicate["component"]["id"] = (
+        "00000000-0000-4000-8000-000000005557"
+    )
+    components["botComponentChanges"].append(duplicate)
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Setup Configurations topic; found 2",
+    ):
+        snow.build_portal_url_update_payload(
+            components,
+            "https://dev123.service-now.com/hrportal",
+            expected_instance_name="dev123",
+        )
 
 
 def test_topic_state_update_replays_full_dialog_component() -> None:
@@ -1415,6 +1600,330 @@ def test_connectivity_scopes_are_read_only() -> None:
         in scopes
     )
     assert not any(scope.endswith(".Write") for scope in scopes)
+
+
+def test_set_portal_url_commits_with_fresh_readback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+    updates: list[dict] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updates.append(copy.deepcopy(payload))
+            updated = payload["botComponentChanges"][0]["component"]
+            components["botComponentChanges"][1]["component"] = copy.deepcopy(
+                updated
+            )
+            components["botComponentChanges"][1]["component"]["version"] += 1
+            components["changeToken"] = "token-2"
+            return {"changeToken": "token-2"}
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.set_portal_url(
+        _context(),
+        "https://dev123.service-now.com/hrportal",
+        confirmed=True,
+    )
+
+    assert result["status"] == "committed"
+    assert result["readbackVerified"] is True
+    assert len(updates) == 1
+    assert snow._portal_literal_value(
+        components["botComponentChanges"][1]["component"]
+    ) == "https://dev123.service-now.com/hrportal"
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = state["transactions"]["portal"][result["operationId"]]
+    assert transaction["status"] == "committed"
+
+
+def test_set_portal_url_skips_update_when_already_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, _payload: dict) -> dict:
+            raise AssertionError("already configured value must not be updated")
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.set_portal_url(
+        _context(),
+        "https://dev123.service-now.com/employee",
+        confirmed=True,
+    )
+
+    assert result["status"] == "already-configured"
+    assert result["readbackVerified"] is True
+
+
+def test_set_portal_url_reports_failed_unchanged_for_unsupported_update(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, _payload: dict) -> dict:
+            raise PermissionError("unsupported")
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="did not apply the Portal BaseURI change",
+    ) as raised:
+        snow.set_portal_url(
+            _context(),
+            "https://dev123.service-now.com/hrportal",
+            confirmed=True,
+        )
+
+    transaction = raised.value.details["transaction"]
+    assert transaction["status"] == "failed-unchanged"
+    assert transaction["rollbackVerified"] is True
+
+
+def test_set_portal_url_can_verify_and_roll_back(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+    original = snow._portal_literal_value(
+        components["botComponentChanges"][1]["component"]
+    )
+    updates: list[dict] = []
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updates.append(copy.deepcopy(payload))
+            updated = payload["botComponentChanges"][0]["component"]
+            components["botComponentChanges"][1]["component"] = copy.deepcopy(
+                updated
+            )
+            components["botComponentChanges"][1]["component"]["version"] += 1
+            components["changeToken"] = f"token-{len(updates) + 1}"
+            return {"changeToken": components["changeToken"]}
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    result = snow.set_portal_url(
+        _context(),
+        "https://dev123.service-now.com/hrportal",
+        confirmed=True,
+        rollback_after_verify=True,
+    )
+
+    assert result["status"] == "verified-and-rolled-back"
+    assert result["rollbackVerified"] is True
+    assert len(updates) == 2
+    assert snow._portal_literal_value(
+        components["botComponentChanges"][1]["component"]
+    ) == original
+
+
+def test_set_portal_url_reports_rollback_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+    update_count = 0
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            nonlocal update_count
+            update_count += 1
+            if update_count == 2:
+                raise PermissionError("rollback rejected")
+            updated = payload["botComponentChanges"][0]["component"]
+            components["botComponentChanges"][1]["component"] = copy.deepcopy(
+                updated
+            )
+            components["botComponentChanges"][1]["component"]["version"] += 1
+            components["changeToken"] = "token-2"
+            return {"changeToken": "token-2"}
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="Rollback did not restore",
+    ) as raised:
+        snow.set_portal_url(
+            _context(),
+            "https://dev123.service-now.com/hrportal",
+            confirmed=True,
+            rollback_after_verify=True,
+        )
+
+    transaction = raised.value.details["transaction"]
+    assert transaction["status"] == "rollback-incomplete"
+    assert transaction["rollbackVerified"] is False
+    assert transaction["rollbackError"] == "PermissionError"
+
+
+def test_set_portal_url_preserves_concurrent_authored_edit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updated = copy.deepcopy(
+                payload["botComponentChanges"][0]["component"]
+            )
+            updated["externalConcurrentEdit"] = "must-survive"
+            components["botComponentChanges"][1]["component"] = updated
+            components["changeToken"] = "token-2"
+            return {"changeToken": "token-2"}
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="changed unexpectedly",
+    ):
+        snow.set_portal_url(
+            _context(),
+            "https://dev123.service-now.com/hrportal",
+            confirmed=True,
+            rollback_after_verify=True,
+        )
+
+    assert (
+        components["botComponentChanges"][1]["component"][
+            "externalConcurrentEdit"
+        ]
+        == "must-survive"
+    )
+    state = json.loads(_lifecycle_path(tmp_path).read_text(encoding="utf-8"))
+    transaction = next(iter(state["transactions"]["portal"].values()))
+    assert transaction["status"] == "conflict"
+
+
+def test_set_portal_url_reports_unverifiable_readback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    components = _portal_components()
+    fetch_count = 0
+
+    class FakeAgentBuilder:
+        def fetch_components(self, _agent_id: str) -> dict:
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count > 1:
+                raise RuntimeError("readback unavailable")
+            return copy.deepcopy(components)
+
+        def update_components(self, _agent_id: str, payload: dict) -> dict:
+            updated = payload["botComponentChanges"][0]["component"]
+            components["botComponentChanges"][1]["component"] = copy.deepcopy(
+                updated
+            )
+            return {}
+
+    monkeypatch.chdir(tmp_path)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.setattr(
+        snow,
+        "_agentbuilder_client",
+        lambda _context: FakeAgentBuilder(),
+    )
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="readback failed",
+    ) as raised:
+        snow.set_portal_url(
+            _context(),
+            "https://dev123.service-now.com/hrportal",
+            confirmed=True,
+        )
+
+    transaction = raised.value.details["transaction"]
+    assert transaction["status"] == "reconciliation-required"
+    assert transaction["reconciliationError"] == "RuntimeError"
+    assert transaction["mutationMayHaveOccurred"] is True
+
+
+def test_inspect_portal_url_offline_reports_sanitized_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    components = _portal_components()
+    _write_foundation_context(tmp_path, components=components)
+    _seed_admin_credential_requirements(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert snow.main(["inspect-portal-url", "--offline"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["status"] == "configured"
+    assert result["mode"] == "offline"
+    assert result["portal"]["origin"] == "https://dev123.service-now.com"
+    assert result["portal"]["path"] == "/employee"
+    assert result["input"] is None
 
 
 @pytest.mark.parametrize(

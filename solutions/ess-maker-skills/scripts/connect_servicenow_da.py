@@ -48,6 +48,9 @@ CONTRACT_PATH = Path(
 LIFECYCLE_SCHEMA_VERSION = 6
 ADMIN_SETUP_SCHEMA_VERSION = 4
 AUTH_MODE = "entraIDUserLogin"
+PORTAL_TOPIC_SCHEMA_SUFFIX = ".topic.ServiceNowHRSDSetupConfigurations"
+PORTAL_NODE_DISPLAY_NAME = "Set ServiceNow Portal BaseURI"
+PORTAL_VARIABLE_NAME = "Global.ServiceNowHRSDPortalBaseURI"
 SERVICENOW_CONNECTOR_APP_ID = "c26b24aa-7874-4e06-ad55-7d06b1f79b63"
 PORTAL_ORIGINS = {
     "prod": {
@@ -1001,6 +1004,211 @@ def build_enable_all_topics_payload(
         "changeToken": change_token,
         "botComponentChanges": changes,
     }
+
+
+def _portal_topic_component(
+    components: dict[str, Any],
+) -> dict[str, Any]:
+    matches = []
+    for change in components.get("botComponentChanges") or []:
+        component = change.get("component")
+        if (
+            isinstance(component, dict)
+            and str(component.get("schemaName") or "").endswith(
+                PORTAL_TOPIC_SCHEMA_SUFFIX
+            )
+        ):
+            matches.append(component)
+    if len(matches) != 1:
+        raise ServiceNowConnectError(
+            "Expected exactly one ServiceNow HRSD Setup Configurations topic; "
+            f"found {len(matches)}."
+        )
+    topic = matches[0]
+    if (
+        topic.get("$kind") != "DialogComponent"
+        or not topic.get("id")
+        or not isinstance(topic.get("version"), int)
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow portal configuration topic lacks safe dialog "
+            "identity or version evidence."
+        )
+    return topic
+
+
+def _portal_value_nodes(value: Any) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        if (
+            value.get("$kind") == "SetVariable"
+            and value.get("displayName") == PORTAL_NODE_DISPLAY_NAME
+            and value.get("variable") == PORTAL_VARIABLE_NAME
+        ):
+            matches.append(value)
+        for child in value.values():
+            matches.extend(_portal_value_nodes(child))
+    elif isinstance(value, list):
+        for child in value:
+            matches.extend(_portal_value_nodes(child))
+    return matches
+
+
+def _portal_value_node(topic: dict[str, Any]) -> dict[str, Any]:
+    matches = _portal_value_nodes(topic.get("dialog"))
+    if len(matches) != 1:
+        raise ServiceNowConnectError(
+            "Expected exactly one Set ServiceNow Portal BaseURI node; "
+            f"found {len(matches)}."
+        )
+    node = matches[0]
+    node_value = node.get("value")
+    if (
+        not isinstance(node_value, dict)
+        or set(node_value) != {"$kind", "literalValue"}
+        or not isinstance(node_value.get("$kind"), str)
+    ):
+        raise ServiceNowConnectError(
+            "The ServiceNow Portal BaseURI node has an unsupported value shape."
+        )
+    return node
+
+
+def normalize_portal_url(
+    value: str,
+    *,
+    expected_instance_name: str,
+) -> str:
+    stripped = value.strip()
+    parsed = urlparse(stripped)
+    try:
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ServiceNowConnectError(
+            "ServiceNow portal URL has an invalid network port."
+        ) from exc
+    if (
+        any(character.isspace() for character in stripped)
+        or parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.params
+        or parsed_port not in {None, 443}
+    ):
+        raise ServiceNowConnectError(
+            "ServiceNow portal URL must be a plain HTTPS URL without "
+            "credentials, query, fragment, or a nonstandard port."
+        )
+    expected_host = f"{expected_instance_name}.service-now.com"
+    if parsed.hostname.casefold() != expected_host.casefold():
+        raise ServiceNowConnectError(
+            "ServiceNow portal URL must use the confirmed ServiceNow instance."
+        )
+    path = parsed.path.rstrip("/")
+    if not path or path == "/":
+        raise ServiceNowConnectError(
+            "ServiceNow portal URL must include the administrator-confirmed "
+            "portal path; it cannot be inferred from the instance origin."
+        )
+    return f"https://{expected_host}{path}"
+
+
+def build_portal_url_update_payload(
+    components: dict[str, Any],
+    portal_url: str,
+    *,
+    expected_instance_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    change_token = components.get("changeToken")
+    if not isinstance(change_token, str) or not change_token:
+        raise ServiceNowConnectError(
+            "MinimalBot component state has no concurrency change token."
+        )
+    before = copy.deepcopy(_portal_topic_component(components))
+    updated = copy.deepcopy(before)
+    node = _portal_value_node(updated)
+    normalized_url = normalize_portal_url(
+        portal_url,
+        expected_instance_name=expected_instance_name,
+    )
+    node["value"]["literalValue"] = normalized_url
+    payload = {
+        "changeToken": change_token,
+        "botComponentChanges": [
+            {
+                "$kind": "BotComponentUpdate",
+                "component": updated,
+            }
+        ],
+    }
+    return payload, before, updated
+
+
+def _portal_literal_value(topic: dict[str, Any]) -> str:
+    literal = _portal_value_node(topic)["value"].get("literalValue")
+    if not isinstance(literal, str):
+        raise ServiceNowConnectError(
+            "The ServiceNow Portal BaseURI value is not a string literal."
+        )
+    return literal
+
+
+def portal_configuration_summary(
+    components: dict[str, Any],
+    *,
+    expected_instance_name: str | None = None,
+) -> dict[str, Any]:
+    topic = _portal_topic_component(components)
+    literal = _portal_literal_value(topic).strip()
+    summary = {
+        "topicId": topic.get("id"),
+        "topicSchemaName": topic.get("schemaName"),
+        "topicDisplayName": topic.get("displayName"),
+        "topicState": topic.get("state"),
+        "topicStatus": topic.get("status"),
+        "variable": PORTAL_VARIABLE_NAME,
+        "configured": False,
+        "valid": False,
+        "origin": None,
+        "path": None,
+        "reason": "missing",
+    }
+    if not literal:
+        return summary
+    parsed = urlparse(literal)
+    summary["origin"] = (
+        f"{parsed.scheme}://{parsed.hostname}"
+        if parsed.scheme and parsed.hostname
+        else None
+    )
+    summary["path"] = parsed.path or None
+    summary["configured"] = True
+    if (
+        parsed.scheme.casefold() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.params
+    ):
+        summary["reason"] = "invalid-url"
+        return summary
+    if expected_instance_name and (
+        parsed.hostname.casefold()
+        != f"{expected_instance_name}.service-now.com".casefold()
+    ):
+        summary["reason"] = "wrong-instance"
+        return summary
+    if not parsed.path.rstrip("/") or parsed.path.rstrip("/") == "/":
+        summary["reason"] = "missing-portal-path"
+        return summary
+    summary["valid"] = True
+    summary["reason"] = "valid"
+    return summary
 
 
 def _component_hash(components: dict[str, Any]) -> str:
@@ -2135,6 +2343,48 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
     return result
 
 
+def inspect_portal_configuration(
+    context: dict[str, Any],
+    *,
+    offline: bool = False,
+) -> dict[str, Any]:
+    components = (
+        _load_json(context["snapshotPath"])
+        if offline
+        else _agentbuilder_client(context).fetch_components(
+            context["agent"]["id"]
+        )
+    )
+    state = _load_lifecycle_state(context, components)
+    expected_instance = _admin_setup(state)["preflight"].get("instanceName")
+    summary = portal_configuration_summary(
+        components,
+        expected_instance_name=(
+            expected_instance
+            if isinstance(expected_instance, str)
+            else None
+        ),
+    )
+    return {
+        "status": "configured" if summary["valid"] else "input-required",
+        "mode": "offline" if offline else "live",
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+        "portal": summary,
+        "input": (
+            None
+            if summary["valid"]
+            else {
+                "field": "portalUrl",
+                "description": (
+                    "Administrator-confirmed full ServiceNow employee portal "
+                    "URL including its actual portal path."
+                ),
+            }
+        ),
+    }
+
+
 def prepare_manual_connection(
     context: dict[str, Any],
     *,
@@ -2808,6 +3058,306 @@ def rollback_topic_transaction(
         _agentbuilder_client(context),
         state,
         operation_id,
+    )
+
+
+def _rollback_portal_transaction(
+    context: dict[str, Any],
+    agentbuilder: AgentBuilderClient,
+    state: dict[str, Any],
+    operation_id: str,
+) -> dict[str, Any]:
+    transactions = state.setdefault("transactions", {}).setdefault(
+        "portal", {}
+    )
+    transaction = transactions.get(operation_id)
+    if not isinstance(transaction, dict):
+        raise ServiceNowConnectError(
+            f"Unknown portal transaction: {operation_id}"
+        )
+    try:
+        current = agentbuilder.fetch_components(context["agent"]["id"])
+    except Exception as exc:
+        transaction.update(
+            {
+                "status": "rollback-incomplete",
+                "rolledBackAt": _utc_now(),
+                "rollbackError": type(exc).__name__,
+                "remediation": (
+                    "The skill could not read the portal topic before "
+                    "rollback. Stop and verify the current authored value "
+                    "manually before retrying."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        return transaction
+    current_topic = _portal_topic_component(current)
+    expected_post_hash = transaction.get(
+        "expectedPostContentHashExcludingVersion"
+    )
+    if (
+        not expected_post_hash
+        or _component_content_hash(current_topic) != expected_post_hash
+    ):
+        transaction.update(
+            {
+                "status": "rollback-incomplete",
+                "rolledBackAt": _utc_now(),
+                "remediation": (
+                    "The portal configuration topic changed after the guarded "
+                    "update. Preserve the current authored content and restore "
+                    "the prior value manually after reviewing the conflict."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        return transaction
+    preimage = transaction.get("component")
+    if not isinstance(preimage, dict):
+        raise ServiceNowConnectError(
+            "Portal transaction has no rollback preimage."
+        )
+    token = current.get("changeToken")
+    if not isinstance(token, str) or not token:
+        raise ServiceNowConnectError(
+            "Cannot roll back the portal URL without a fresh change token."
+        )
+    restored = copy.deepcopy(preimage)
+    restored["version"] = current_topic.get("version")
+    rollback_error: Exception | None = None
+    try:
+        agentbuilder.update_components(
+            context["agent"]["id"],
+            {
+                "changeToken": token,
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentUpdate",
+                        "component": restored,
+                    }
+                ],
+            },
+        )
+    except Exception as exc:
+        rollback_error = exc
+    try:
+        verified = agentbuilder.fetch_components(context["agent"]["id"])
+    except Exception as exc:
+        transaction.update(
+            {
+                "status": "rollback-incomplete",
+                "rolledBackAt": _utc_now(),
+                "rollbackVerified": False,
+                "rollbackError": type(exc).__name__,
+                "remediation": (
+                    "The rollback write could not be verified. Stop and "
+                    "inspect the current portal value manually before "
+                    "retrying."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        return transaction
+    verified_topic = _portal_topic_component(verified)
+    restored_ok = (
+        _component_content_hash(verified_topic)
+        == _component_content_hash(preimage)
+    )
+    transaction.update(
+        {
+            "status": "rolled-back" if restored_ok else "rollback-incomplete",
+            "rolledBackAt": _utc_now(),
+            "rollbackVerified": restored_ok,
+        }
+    )
+    if not restored_ok:
+        transaction["rollbackError"] = (
+            type(rollback_error).__name__
+            if rollback_error is not None
+            else "ReadbackMismatch"
+        )
+        transaction["remediation"] = (
+            "Rollback did not restore the original portal configuration. "
+            "Stop and restore the prior value manually from the recorded "
+            "preimage before retrying."
+        )
+    _write_lifecycle_state(context, state)
+    return transaction
+
+
+def set_portal_url(
+    context: dict[str, Any],
+    portal_url: str,
+    *,
+    confirmed: bool,
+    rollback_after_verify: bool = False,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Portal URL update requires explicit confirmation (--yes)."
+        )
+    state = _load_lifecycle_state(context)
+    setup = _admin_setup(state)
+    expected_instance = setup["preflight"].get("instanceName")
+    if not isinstance(expected_instance, str) or not expected_instance:
+        raise ServiceNowConnectError(
+            "The lifecycle has no confirmed ServiceNow instance."
+        )
+    agentbuilder = _agentbuilder_client(context)
+    before = agentbuilder.fetch_components(context["agent"]["id"])
+    payload, preimage, expected_postimage = build_portal_url_update_payload(
+        before,
+        portal_url,
+        expected_instance_name=expected_instance,
+    )
+    normalized_url = _portal_literal_value(expected_postimage)
+    if _portal_literal_value(preimage) == normalized_url:
+        return {
+            "status": "already-configured",
+            "portal": portal_configuration_summary(
+                before,
+                expected_instance_name=expected_instance,
+            ),
+            "readbackVerified": True,
+        }
+    operation_id = str(uuid.uuid4())
+    transaction = {
+        "operationId": operation_id,
+        "status": "prepared",
+        "preparedAt": _utc_now(),
+        "topicId": preimage.get("id"),
+        "topicSchemaName": preimage.get("schemaName"),
+        "beforeContentHashExcludingVersion": _component_content_hash(preimage),
+        "expectedPostContentHashExcludingVersion": _component_content_hash(
+            expected_postimage
+        ),
+        "beforePortalUrl": _portal_literal_value(preimage),
+        "requestedPortalUrl": normalized_url,
+        "component": preimage,
+    }
+    state.setdefault("transactions", {}).setdefault("portal", {})[
+        operation_id
+    ] = transaction
+    _write_lifecycle_state(context, state)
+    update_error: Exception | None = None
+    try:
+        agentbuilder.update_components(context["agent"]["id"], payload)
+    except Exception as exc:
+        update_error = exc
+    transaction.update(
+        {
+            "status": "reconciliation-required",
+            "mutationMayHaveOccurred": True,
+            "mutationAttemptedAt": _utc_now(),
+            "updateError": (
+                type(update_error).__name__
+                if update_error is not None
+                else None
+            ),
+        }
+    )
+    _write_lifecycle_state(context, state)
+    try:
+        after = agentbuilder.fetch_components(context["agent"]["id"])
+    except Exception as exc:
+        transaction.update(
+            {
+                "status": "reconciliation-required",
+                "reconciliationError": type(exc).__name__,
+                "remediation": (
+                    "The portal URL update may have occurred, but readback "
+                    "failed. Do not retry or roll back until a fresh component "
+                    "read establishes the current authored content."
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        raise ServiceNowConnectError(
+            transaction["remediation"],
+            details={
+                "operationId": operation_id,
+                "transaction": copy.deepcopy(transaction),
+            },
+        ) from exc
+    postimage = _portal_topic_component(after)
+    post_hash = _component_content_hash(postimage)
+    transaction.update(
+        {
+            "postContentHashExcludingVersion": post_hash,
+            "readbackAt": _utc_now(),
+        }
+    )
+    if post_hash == transaction["expectedPostContentHashExcludingVersion"]:
+        transaction.update(
+            {
+                "status": "committed",
+                "committedAt": _utc_now(),
+                "readbackVerified": (
+                    _portal_literal_value(postimage) == normalized_url
+                ),
+            }
+        )
+        _write_lifecycle_state(context, state)
+        if rollback_after_verify:
+            rolled_back = _rollback_portal_transaction(
+                context,
+                agentbuilder,
+                state,
+                operation_id,
+            )
+            if rolled_back.get("status") != "rolled-back":
+                raise ServiceNowConnectError(
+                    str(rolled_back.get("remediation")),
+                    details={
+                        "operationId": operation_id,
+                        "transaction": copy.deepcopy(rolled_back),
+                    },
+                )
+            return {
+                "status": "verified-and-rolled-back",
+                "operationId": operation_id,
+                "topicId": preimage.get("id"),
+                "portalUrl": normalized_url,
+                "rollbackVerified": True,
+            }
+        return {
+            "status": "committed",
+            "operationId": operation_id,
+            "topicId": preimage.get("id"),
+            "portalUrl": normalized_url,
+            "readbackVerified": True,
+        }
+    if post_hash == transaction["beforeContentHashExcludingVersion"]:
+        transaction.update(
+            {
+                "status": "failed-unchanged",
+                "mutationMayHaveOccurred": False,
+                "readbackVerified": True,
+                "rollbackVerified": True,
+                "remediation": (
+                    "The component API did not apply the Portal BaseURI "
+                    "change. Use the manual Copilot Studio topic step."
+                ),
+            }
+        )
+    else:
+        transaction.update(
+            {
+                "status": "conflict",
+                "remediation": (
+                    "The portal configuration topic changed unexpectedly. "
+                    "Do not overwrite it; review the current topic manually."
+                ),
+            }
+        )
+    _write_lifecycle_state(context, state)
+    raise ServiceNowConnectError(
+        transaction["remediation"],
+        details={
+            "operationId": operation_id,
+            "transaction": copy.deepcopy(transaction),
+        },
     )
 
 
@@ -3548,6 +4098,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the cached component snapshot and skip live APIs.",
     )
+    inspect_portal_parser = subparsers.add_parser(
+        "inspect-portal-url",
+        help="Inspect the exact HRSD Portal BaseURI topic value.",
+    )
+    inspect_portal_parser.add_argument("--offline", action="store_true")
     subparsers.add_parser(
         "inspect-admin-setup",
         help="Discover reusable ServiceNow admin setup with read-only APIs.",
@@ -3634,6 +4189,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("keep-current",),
         required=True,
     )
+    portal_parser = subparsers.add_parser(
+        "set-portal-url",
+        help=(
+            "Set the exact HRSD Setup Configurations Portal BaseURI topic "
+            "value with guarded readback and rollback."
+        ),
+    )
+    portal_parser.add_argument("--portal-url", required=True)
+    portal_parser.add_argument("--yes", action="store_true")
+    portal_parser.add_argument(
+        "--rollback-after-verify",
+        action="store_true",
+        help="Restore the original value after a successful guarded readback.",
+    )
 
     publish_parser = subparsers.add_parser(
         "publish",
@@ -3704,6 +4273,11 @@ def main(argv: list[str] | None = None) -> int:
         context = load_context()
         if args.command == "inspect":
             result = inspect(context, offline=args.offline)
+        elif args.command == "inspect-portal-url":
+            result = inspect_portal_configuration(
+                context,
+                offline=args.offline,
+            )
         elif args.command == "inspect-admin-setup":
             result = inspect_admin_setup(context)
         elif args.command == "record-preflight":
@@ -3760,6 +4334,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "record-topic-choice":
             result = record_keep_current_topic_choice(context)
+        elif args.command == "set-portal-url":
+            result = set_portal_url(
+                context,
+                args.portal_url,
+                confirmed=args.yes,
+                rollback_after_verify=args.rollback_after_verify,
+            )
         elif args.command == "publish":
             result = publish(context, confirmed=args.yes)
         elif args.command == "inspect-publish":

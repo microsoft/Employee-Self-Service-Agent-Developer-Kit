@@ -44,18 +44,27 @@ Use the exact URL from preflight discovery `links.serviceNowInstance.url`.
    - Entity state = `Active`;
    - if `Client secret` is required, enter a tenant-approved non-empty
      placeholder locally; never return or persist it.
+   - This delegated-user provider is separate from any Knowledge/Graph
+     Connector app-only provider. Do not reuse the Graph Connector client ID,
+     metadata, audience, or entity. If both configurations exist, the
+     ServiceNow admin must verify their entity names, client IDs, metadata,
+     audiences, and token purposes remain distinct.
 5. In `OAuth OIDC Provider Configuration`, set:
    - metadata URL =
      `https://login.microsoftonline.com/<tenant-id>/.well-known/openid-configuration`;
    - cache lifespan = `120`;
    - Application = `Global`;
-   - JTI verification = disabled.
+   - JTI verification = disabled;
+   - Scope Restriction = `Broadly scoped`.
 6. Set `User Claim` and `User Field`:
    - preferred: `upn` → the ServiceNow field containing the same UPN,
      commonly `user_name`;
    - alternative: `email` → `email`;
+   - for a non-email/non-UPN identifier, use only the exact custom access-token
+     claim configured by the Entra admin. Confirm its emitted non-email value
+     exactly matches the selected ServiceNow user field for the same employee;
    - a verified custom claim is allowed only when its value exactly matches
-     the selected field.
+     the selected field. Do not collect or persist the employee value.
 7. Open `All` → `User Administration` → `Users` and confirm a real signed-in
    test user has one matching Active record. Do not return the employee's
    identifier to the skill. Do not create a test user as part of this skill.
@@ -76,7 +85,7 @@ must contain all seven operations:
 [
   {
     "header": "ServiceNow OIDC",
-    "question": "{CURRENT_PROGRESS}\n\nPurpose: make ServiceNow trust App A's delegated user token and resolve the signed-in employee to one matching Active ServiceNow user.\n\nOwner: ServiceNow `admin` or `security_admin`, elevated to `security_admin`.\n\nOpen this ServiceNow instance: {SERVICENOW_INSTANCE_URL}\n\nComplete or re-verify all seven operations:\n1. Elevate to `security_admin`; if **New** is missing, the role is not elevated.\n2. Open All -> System OAuth -> Application Registry -> New.\n3. Select `Configure an OIDC provider to verify ID tokens`. If unavailable after elevation, stop and confirm tenant OIDC / Multi-Provider SSO capability; do not guess a plugin or record completion.\n4. Create or reuse `Microsoft Entra ID - ESS Copilot` with the verified App A client ID and Active state. If a client-secret field is required, enter a tenant-approved non-empty placeholder locally and never return it.\n5. Set metadata URL `https://login.microsoftonline.com/{tenant-id}/.well-known/openid-configuration`, cache lifespan `120`, Application `Global`, and JTI verification disabled.\n6. Set the verified User Claim/User Field mapping: prefer `upn` to the matching UPN field (commonly `user_name`), or `email` to `email`; custom values must match exactly.\n7. Confirm one real signed-in test user has one matching Active User record. Do not return that employee identifier or create a test user.\n\nDo not use a Graph Connector app-only setup, object ID, `api://` URI, connector app ID, secret, or certificate.\n\nHave you completed or re-verified the ServiceNow OIDC provider, claim mapping, and matching Active user checks?",
+    "question": "{CURRENT_PROGRESS}\n\nPurpose: make ServiceNow trust App A's delegated user token and resolve the signed-in employee to one matching Active ServiceNow user.\n\nOwner: ServiceNow `admin` or `security_admin`, elevated to `security_admin`.\n\nOpen this ServiceNow instance: {SERVICENOW_INSTANCE_URL}\n\nComplete or re-verify all seven operations:\n1. Elevate to `security_admin`; if **New** is missing, the role is not elevated.\n2. Open All -> System OAuth -> Application Registry -> New.\n3. Select `Configure an OIDC provider to verify ID tokens`. If unavailable after elevation, stop and confirm tenant OIDC / Multi-Provider SSO capability; do not guess a plugin or record completion.\n4. Create or reuse `Microsoft Entra ID - ESS Copilot` with the verified App A client ID and Active state. If a client-secret field is required, enter a tenant-approved non-empty placeholder locally and never return it. Keep this delegated-user provider distinct from any Knowledge/Graph Connector app-only provider: verify separate entity name, client ID, metadata, audience, and token purpose.\n5. Set metadata URL `https://login.microsoftonline.com/{tenant-id}/.well-known/openid-configuration`, cache lifespan `120`, Application `Global`, JTI verification disabled, and Scope Restriction `Broadly scoped`.\n6. Set the verified User Claim/User Field mapping: prefer `upn` to the matching UPN field (commonly `user_name`), or `email` to `email`. For a non-email/non-UPN identifier, use only the exact custom access-token claim configured by the Entra admin and verify its non-email value exactly matches the selected ServiceNow user field. Do not return the employee value.\n7. Confirm one real signed-in test user has one matching Active User record. Do not return that employee identifier or create a test user.\n\nDo not use a Graph Connector app-only setup, object ID, `api://` URI, connector app ID, secret, or certificate.\n\nHave you completed or re-verified the ServiceNow OIDC provider, claim mapping, and matching Active user checks?",
     "options": [
       { "label": "Completed", "recommended": true },
       { "label": "Not yet" }

@@ -126,7 +126,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
     assert contract["provider"] == "servicenow-da-hrsd"
     assert contract["checkpointResultMode"] == "compact-stdout-v1"
     assert contract["attestedRoleScope"] == "lifecycle"
-    assert contract["contractRevision"] == 5
+    assert contract["contractRevision"] == 6
     assert contract["planRoles"] == [
         "ESS Maker / Agent Developer",
         "ServiceNow Admin / security_admin",
@@ -145,6 +145,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "servicenow-oidc",
         "credential",
         "topics",
+        "portal-url",
         "agent-connection",
         "test",
         "publish",
@@ -157,6 +158,7 @@ def test_servicenow_hrsd_contract_uses_generic_lifecycle() -> None:
         "entra-registration",
         "servicenow-oidc",
         "credential",
+        "portal-url",
     ):
         assert by_id[phase_id]["actionExecution"] == "once"
     assert by_id["agent-connection"]["actionExecution"] == "every-invocation"

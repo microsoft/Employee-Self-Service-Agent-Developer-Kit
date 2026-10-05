@@ -1,5 +1,5 @@
 {
-  "contractRevision": 5,
+  "contractRevision": 6,
   "provider": "servicenow-da-hrsd",
   "displayName": "ServiceNow HRSD",
   "profile": "hrsd",
@@ -110,6 +110,17 @@
           }
         ]
       },
+      "mutates": true,
+      "requiredRole": "ESS Maker / Agent Developer",
+      "gateMode": "attested"
+    },
+    {
+      "id": "portal-url",
+      "label": "Configure the ServiceNow employee portal Base URI",
+      "checkpoints": ["SN-DA-HRSD-PORTAL-001"],
+      "completionStatuses": ["Passed"],
+      "actionDoc": "src/skills/connect/servicenow-da-hrsd/actions/configure-portal-url.md",
+      "actionExecution": "once",
       "mutates": true,
       "requiredRole": "ESS Maker / Agent Developer",
       "gateMode": "attested"

@@ -45,7 +45,45 @@ def _components() -> dict:
                     "status": "Active",
                     "dialog": {"$kind": "TaskDialog"},
                 },
-            }
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "DialogComponent",
+                    "id": "00000000-0000-4000-8000-000000005556",
+                    "version": 2,
+                    "displayName": "ServiceNow HRSD Setup Configurations",
+                    "schemaName": (
+                        f"{snow.HR_SCHEMA_NAME}.topic."
+                        "ServiceNowHRSDSetupConfigurations"
+                    ),
+                    "state": "Active",
+                    "status": "Active",
+                    "dialog": {
+                        "$kind": "TaskDialog",
+                        "beginDialog": {
+                            "actions": [
+                                {
+                                    "$kind": "SetVariable",
+                                    "displayName": (
+                                        "Set ServiceNow Portal BaseURI"
+                                    ),
+                                    "variable": (
+                                        "Global.ServiceNowHRSDPortalBaseURI"
+                                    ),
+                                    "value": {
+                                        "$kind": "Literal",
+                                        "literalValue": (
+                                            "https://dev123.service-now.com/"
+                                            "employee"
+                                        ),
+                                    },
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
         ],
         "connectionReferenceChanges": [
             {
@@ -343,6 +381,7 @@ def test_hrsd_checks_preserve_manual_maker_evidence(
 
     assert statuses["SN-DA-HRSD-PKG-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-TOPICS-001"] == Status.PASSED.value
+    assert statuses["SN-DA-HRSD-PORTAL-001"] == Status.PASSED.value
     assert statuses["SN-DA-HRSD-CREDENTIAL-001"] == Status.PASSED.value
     assert (
         statuses["SN-DA-HRSD-AGENT-CONNECTION-001"]
@@ -642,6 +681,72 @@ def test_oidc_checkpoint_rejects_legacy_mapping_details(
 
     assert result.status == Status.NOT_CONFIGURED.value
     assert "privacy-minimized" in result.result
+
+
+@pytest.mark.parametrize(
+    ("portal_value", "expected_status", "expected_phrase"),
+    [
+        ("", Status.NOT_CONFIGURED.value, "does not contain"),
+        (
+            "https://dev123.service-now.com",
+            Status.NOT_CONFIGURED.value,
+            "does not contain",
+        ),
+        (
+            "https://other.service-now.com/sp",
+            Status.FAILED.value,
+            "different ServiceNow instance",
+        ),
+        (
+            "http://dev123.service-now.com/sp",
+            Status.FAILED.value,
+            "not a safe plain HTTPS URL",
+        ),
+    ],
+)
+def test_portal_checkpoint_fails_closed_on_invalid_configuration(
+    monkeypatch,
+    tmp_path: Path,
+    portal_value: str,
+    expected_status: str,
+    expected_phrase: str,
+) -> None:
+    components = _components()
+    node = components["botComponentChanges"][1]["component"]["dialog"][
+        "beginDialog"
+    ]["actions"][0]
+    node["value"]["literalValue"] = portal_value
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+
+    result = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-PORTAL-001",
+    )
+
+    assert result.status == expected_status
+    assert expected_phrase in result.result
+    assert result.remediation
+
+
+def test_test_checkpoint_requires_current_portal_configuration(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    components = _components()
+    components["botComponentChanges"][1]["component"]["dialog"][
+        "beginDialog"
+    ]["actions"][0]["value"]["literalValue"] = ""
+    _write_state(tmp_path, components)
+    monkeypatch.chdir(tmp_path)
+
+    test = _checkpoint(
+        run_servicenow_da_hrsd_checks(_runner(components)),
+        "SN-DA-HRSD-TEST-001",
+    )
+
+    assert test.status == Status.NOT_CONFIGURED.value
+    assert "portal Base URI prerequisite" in test.result
 
 
 def test_publish_checkpoint_ignores_metadata_only_drift_and_reopens_on_semantic_drift(

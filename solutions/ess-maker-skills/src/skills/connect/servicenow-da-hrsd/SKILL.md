@@ -8,8 +8,12 @@ ITSM remains a separate provider/PR layer.
 
 The lifecycle is Actions-only and supports only Microsoft Entra ID User Login
 (`entraIDUserLogin`). Knowledge/Graph Connector retrieval, certificate/App B,
-PFX, Basic/OAuth2, Dataverse connections/references, cloud flows, and portal
-URL setup are out of scope. Admin prerequisites are always guided: the skill
+PFX, Basic/OAuth2, Dataverse connections/references, and cloud flows remain
+out of scope. The HR Setup
+Configurations topic's Portal Base URI is now in scope: the skill may update
+that exact authored node through the native component API only with an
+administrator-supplied full portal URL and guarded rollback, or guide the same
+manual edit when the API path is unavailable. Admin prerequisites are always guided: the skill
 may discover and verify with read-only APIs, but never creates or patches an
 Entra application or ServiceNow OIDC/security object.
 
@@ -22,8 +26,12 @@ change; it never overrides PR #217 by itself. If Learn or current runtime
 evidence suggests PR #217 is stale in a way that changes user steps, required
 artifacts, admin roles, auth requirements, or acceptance criteria, stop and
 report the old PR behavior, current evidence, proposed deviation, and impact
-for a user decision. The explicit DA-GA scope exclusions above and the
-`email`/`upn` optional-claim requirement are already approved decisions.
+for a user decision. The explicit DA-GA scope exclusions above remain approved. For Entra access
+tokens, `email` and `upn` are configurable optional claims; `aud` is a built-in
+access-token audience claim that must be validated, not added as an optional
+claim. The approved manual runbook also covers Broadly scoped ServiceNow scope
+restriction, non-email custom user identifiers, and safe coexistence with a
+separate Graph Connector app-only configuration.
 
 Secondary help references (PR #217 remains authoritative):
 
@@ -49,7 +57,7 @@ confirmation. Parameter-sharing is not a standalone lifecycle phase; legacy
 evidence is retained only as historical state and never treated as proof that
 the direct connector-action path was independently verified.
 
-Only report the integration connected after the runner completes all nine
+Only report the integration connected after the runner completes all ten
 phases, including explicit remote reuse approval and the four admin
 prerequisite phases before the physical connection and topics. Do not add a
 second completion message.

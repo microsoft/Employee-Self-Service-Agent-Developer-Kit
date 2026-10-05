@@ -20,6 +20,7 @@ from connect_servicenow_da import (
     _draft_semantic_hash,
     normalize_client_id,
     normalize_instance_name,
+    portal_configuration_summary,
     required_servicenow_prerequisites,
     summarize_components,
 )
@@ -244,6 +245,8 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return _entra_results(getattr(runner, "graph", None), admin_setup)
     if target == "SN-DA-HRSD-OIDC-001":
         return [_oidc_result(admin_setup)]
+    if target == "SN-DA-HRSD-PORTAL-001":
+        return [_portal_result(components, admin_setup)]
 
     component_hash = (
         _hash(components)
@@ -362,6 +365,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         return [agent_connection_result]
 
     topics_result = _topics_result(summary, evidence, component_hash)
+    portal_result = _portal_result(components, admin_setup)
     if target == "SN-DA-HRSD-TEST-001":
         return [
             _test_result(
@@ -369,6 +373,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
                 draft_semantic_hash,
                 current_connection_binding_hash,
                 topics_result,
+                portal_result,
                 credential_result,
                 agent_connection_result,
             )
@@ -378,6 +383,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         draft_semantic_hash,
         current_connection_binding_hash,
         topics_result,
+        portal_result,
         credential_result,
         agent_connection_result,
     )
@@ -388,6 +394,7 @@ def run_servicenow_da_hrsd_checks(runner) -> list[CheckResult]:
         *_entra_results(getattr(runner, "graph", None), admin_setup),
         _oidc_result(admin_setup),
         topics_result,
+        portal_result,
         credential_result,
         agent_connection_result,
         test_result,
@@ -418,6 +425,7 @@ def _all_unavailable(
         "ENTRA-CONSENT",
         "OIDC",
         "TOPICS",
+        "PORTAL",
         "CREDENTIAL",
         "AGENT-CONNECTION",
         "TEST",
@@ -1013,6 +1021,78 @@ def _topics_result(
     )
 
 
+def _portal_result(
+    components: dict[str, Any],
+    admin_setup: dict[str, Any],
+) -> CheckResult:
+    preflight = admin_setup.get("preflight")
+    preflight = preflight if isinstance(preflight, dict) else {}
+    expected_instance = preflight.get("instanceName")
+    try:
+        portal = portal_configuration_summary(
+            components,
+            expected_instance_name=(
+                expected_instance
+                if isinstance(expected_instance, str)
+                else None
+            ),
+        )
+    except Exception as exc:
+        return _result(
+            "SN-DA-HRSD-PORTAL-001",
+            Status.ERROR.value,
+            "ServiceNow HRSD employee portal Base URI",
+            f"Unable to inspect the exact portal configuration: "
+            f"{type(exc).__name__}: {exc}",
+            (
+                "Open Copilot Studio Topics -> ServiceNow HRSD Setup "
+                "Configurations and review the Set ServiceNow Portal BaseURI "
+                "node without overwriting unrelated topic content."
+            ),
+        )
+    if portal["valid"]:
+        status = Status.PASSED.value
+        result = (
+            "The exact Setup Configurations topic has an HTTPS employee portal "
+            f"path on the confirmed ServiceNow instance: {portal['path']}."
+        )
+        remediation = ""
+    elif portal["reason"] == "wrong-instance":
+        status = Status.FAILED.value
+        result = (
+            "The configured Portal BaseURI targets a different ServiceNow "
+            "instance."
+        )
+        remediation = (
+            "Set the exact administrator-confirmed employee portal URL on the "
+            "confirmed ServiceNow instance."
+        )
+    elif portal["reason"] == "invalid-url":
+        status = Status.FAILED.value
+        result = "The configured Portal BaseURI is not a safe plain HTTPS URL."
+        remediation = (
+            "Set a plain HTTPS employee portal URL without credentials, query, "
+            "or fragment."
+        )
+    else:
+        status = Status.NOT_CONFIGURED.value
+        result = (
+            "The exact Setup Configurations topic does not contain an "
+            "administrator-confirmed employee portal path."
+        )
+        remediation = (
+            "Provide the full employee portal URL, including its real portal "
+            "path; do not infer /sp or /esc from the instance origin."
+        )
+    return _result(
+        "SN-DA-HRSD-PORTAL-001",
+        status,
+        "ServiceNow HRSD employee portal Base URI",
+        result,
+        remediation,
+    )
+
+
 def _selected_connection(
     evidence: dict[str, Any],
     connections: list[dict[str, Any]],
@@ -1277,11 +1357,13 @@ def _test_result(
     draft_semantic_hash: str,
     connection_binding_hash: str | None,
     topics_check: CheckResult,
+    portal_check: CheckResult,
     credential_check: CheckResult,
     agent_connection_check: CheckResult,
 ) -> CheckResult:
     prerequisite = _test_prerequisite_gate(
         topics_check,
+        portal_check,
         credential_check,
         agent_connection_check,
     )
@@ -1349,6 +1431,7 @@ def _test_result(
 
 def _test_prerequisite_gate(
     topics_check: CheckResult,
+    portal_check: CheckResult,
     credential_check: CheckResult,
     agent_connection_check: CheckResult,
 ) -> CheckResult | None:
@@ -1359,6 +1442,7 @@ def _test_prerequisite_gate(
             topics_check,
             {Status.PASSED.value, Status.MANUAL.value},
         ),
+        ("portal Base URI", portal_check, {Status.PASSED.value}),
         (
             "Agent Connect",
             agent_connection_check,
