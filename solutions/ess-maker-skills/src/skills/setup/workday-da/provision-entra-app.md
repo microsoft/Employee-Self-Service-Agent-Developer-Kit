@@ -99,6 +99,16 @@ After **Yes**, record the engagement boundary:
 python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 ```
 
+Then generate the guided handoff packet:
+
+```powershell
+python scripts/workday_connect.py entra-handoff
+```
+
+This command reads only the recorded lifecycle state. It does not authenticate
+to Microsoft Graph, discover applications, or make an Entra change. Use the
+returned `packet` for every packet-driven value below.
+
 Render one standalone section titled **Microsoft Entra administrator handoff -
 share this whole section**. It must contain the administrator role, canonical
 tenant ID, expected Workday Service Provider ID, the numbered tasks below, and
@@ -115,23 +125,13 @@ Before the numbered tasks, tell the administrator:
 > the portal until they have been captured. Return only non-secret values. Do
 > not return credentials, tokens, certificate contents, or private keys.
 
-Render this table before the administrator starts the numbered tasks:
-
-| Information to capture | Where to find it | What to record |
-| ---------------------- | ---------------- | -------------- |
-| Selected directory | Microsoft Entra ID -> Overview | Exact directory display name |
-| Workday application | Enterprise applications -> exact Workday application -> Overview | Exact display name and Application ID |
-| Reply URL and SAML configuration | Enterprise applications -> exact Workday application -> Single sign-on -> SAML -> Basic SAML Configuration | Reply URL and whether the displayed Identifier matches the expected Workday Service Provider ID |
-| NameID source | Single sign-on -> SAML -> Attributes & Claims -> Unique User Identifier | Exact source attribute |
-| SAML signing option | Single sign-on -> SAML -> SAML Signing Certificate -> Edit -> Signing Option | Exact displayed signing option |
-| Active signing certificate | Single sign-on -> SAML -> SAML Signing Certificate -> active certificate row | Thumbprint, expiration date, and confirmation that the Base64 certificate was transferred through the approved customer channel |
-| Connector authorization | App registrations -> exact Workday registration -> Expose an API | Whether `user_impersonation` is enabled and the Workday connector is authorized |
-| Permissions and consent | App registrations -> exact Workday registration -> API permissions | Whether `openid`, `profile`, and `User.Read` are present and administrator consent is granted |
-| Employee assignment | Enterprise applications -> exact Workday application -> Properties and Users and groups | Whether assignment is required and the intended ESS employee group has access |
-| Existing configuration | App registrations -> exact Workday registration -> Expose an API and API permissions | Whether unrelated scopes, authorized clients, and permissions were preserved |
-
-Never show internal state keys such as `microsoftEntraIdentifier` or
-`scopeGuid`.
+Render every entry from the packet's `captureInstructions` as a table with
+columns **Information to capture**, **Where to find it**, and **What to
+record**. Use each entry's `information`, `portalLocation`, and `instruction`
+values respectively. Never show the internal `fields` names or state keys such
+as `microsoftEntraIdentifier` or `scopeGuid`. Keep the portal navigation and
+capture instruction verbatim. This table must appear before the administrator
+starts the numbered tasks, not only after the completion question.
 
 After rendering the complete handoff, persist the presentation and waiting
 boundaries:
@@ -197,21 +197,11 @@ by display name alone.
    Identifier (Name ID)** so the source attribute equals the Workday User Name
    used by the tenant, commonly `user.mail` or `user.userPrincipalName`.
 
-End the shareable handoff with **Information to return to the maker** and list:
-
-- selected directory display name, Workday application display name, and
-  Application ID;
-- Reply URL and confirmation that the displayed Entity ID matches the expected
-  Workday Service Provider ID;
-- NameID source attribute and SAML signing option;
-- active certificate thumbprint and expiration date, plus confirmation that
-  the Base64 certificate was transferred through an approved customer
-  channel; and
-- connector scope, delegated permissions and consent, employee assignment,
-  and preservation outcomes.
-
-State that each later follow-up question corresponds to a value or outcome
-already identified in the capture table.
+End the shareable handoff with **Information to return to the maker** and show
+every item from the packet's `informationToReturn` list. State that each later
+follow-up question corresponds to a value or outcome already identified in the
+capture table. Do not ask for a field after completion unless the shareable
+handoff told the administrator where to capture it.
 
 Then render a section titled **Microsoft Entra administrator return
 worksheet** using the template below. The administrator can complete this
@@ -291,9 +281,9 @@ After submission, validate the complete worksheet once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer and ask
 for one revised worksheet containing only the returned `invalidFields` and
 `outstandingFields`. Do not replay the full worksheet or revert to one-by-one
-chat questions. Before the retry question, repeat the applicable portal
-location from the capture table and render a fill-in template containing only
-the missing or invalid customer-facing labels. For example:
+chat questions. Before the retry question, repeat the applicable
+`captureInstructions` portal location and render a fill-in template containing
+only the missing or invalid customer-facing labels. For example:
 
 ```text
 Find both values at:

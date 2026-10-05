@@ -9,9 +9,11 @@ The only writable lifecycle state is:
 ```
 
 `scripts/workday_connect_store.py` owns locking, migration backup and
-invocation, validation, atomic writes, and phase transitions.
-`scripts/workday_connect_migrations.py` owns the pure version-selection and
-legacy-normalization policy; it never reads or writes the state file. Skills
+invocation, validation, atomic writes, and durable phase transitions.
+`scripts/workday_connect_migrations.py` owns every pure legacy and schema-v2
+through schema-v8 transformation; it never reads or writes the state file.
+`scripts/workday_connect_state_policy.py` owns shared pure reset, invalidation,
+and tenant-foundation comparisons used by persistence and migration. Skills
 must use `scripts/workday_connect.py`; they must not edit this file directly
 or create a Markdown state mirror.
 

@@ -783,6 +783,15 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+def test_controller_parser_accepts_guided_entra_handoff() -> None:
+    import workday_connect
+
+    args = workday_connect.build_parser().parse_args(["entra-handoff"])
+
+    assert args.discovery_file is None
+    assert args.discovery_json is None
+
+
 def test_controller_public_command_and_result_contract_is_stable(
     capsys,
 ) -> None:
@@ -939,6 +948,16 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
         "entra",
         "administrator-engaged",
     )
+    guided = workday_connect._entra_handoff(
+        SimpleNamespace(
+            discovery_file=None,
+            discovery_json=None,
+        ),
+        store,
+    )
+    assert guided["packet"]["target"]["mode"] == "administrator-selection"
+    assert guided["rediscoveryRequired"] is False
+
     creation = workday_connect._entra_handoff(
         SimpleNamespace(
             discovery_file=None,

@@ -90,8 +90,9 @@ def _add_json_input(
     *,
     allow_legacy_inline: bool = True,
     allow_worksheet: bool = False,
+    required: bool = True,
 ) -> None:
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=required)
     group.add_argument(
         f"--{name}-file",
         type=Path,
@@ -186,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     tenant.add_argument("--tenant", required=True)
 
     entra_handoff = subparsers.add_parser("entra-handoff")
-    _add_json_input(entra_handoff, "discovery")
+    _add_json_input(entra_handoff, "discovery", required=False)
     record_entra = subparsers.add_parser("record-entra")
     _add_json_input(
         record_entra,
@@ -456,9 +457,15 @@ def _entra_handoff(
 ) -> dict[str, Any]:
     state = store.load()
     administrator = state["phases"]["entra"]["administrator"]
+    discovery = None
+    if (
+        getattr(args, "discovery_file", None) is not None
+        or getattr(args, "discovery_json", None) is not None
+    ):
+        discovery = _json_input(args, "discovery", "Entra discovery")
     packet = build_entra_handoff(
         state,
-        _json_input(args, "discovery", "Entra discovery"),
+        discovery,
     )
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
         administrator["substage"]

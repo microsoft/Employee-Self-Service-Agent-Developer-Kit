@@ -288,6 +288,17 @@ def test_entra_handoff_selects_only_exact_service_provider_id():
     assert "planHash" not in handoff
 
 
+def test_entra_handoff_builds_guided_packet_without_graph_discovery():
+    handoff = build_entra_handoff(_state())
+
+    assert handoff["target"]["mode"] == "administrator-selection"
+    assert handoff["requiresRediscovery"] is False
+    assert "directoryDisplayName" not in handoff["scope"]
+    assert handoff["captureInstructions"]
+    assert handoff["informationToReturn"]
+    assert handoff["identifiers"]["entraAppIdUri"] is None
+
+
 def test_entra_handoff_rejects_missing_exact_discovery():
     with pytest.raises(WorkdayConnectContractError, match="No exact"):
         build_entra_handoff(

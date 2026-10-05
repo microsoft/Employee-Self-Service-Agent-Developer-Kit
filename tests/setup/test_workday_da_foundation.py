@@ -94,6 +94,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         '"all good", "continue", or "proceed"' in " ".join(entra.split())
     )
     assert "captureInstructions" in entra
+    assert "python scripts/workday_connect.py entra-handoff" in entra
     assert "Microsoft Entra administrator return\nworksheet" in entra
     assert (
         "before the administrator starts the numbered tasks"
