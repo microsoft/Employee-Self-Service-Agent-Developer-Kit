@@ -56,11 +56,13 @@ def _runner(
     payg=None,
     env_id="env-guid",
     ring="prod",
+    power_platform_admin_origin=None,
 ):
     runner = SimpleNamespace(
         powerplatform=powerplatform,
         env_id=env_id,
         ring=ring,
+        power_platform_admin_origin=power_platform_admin_origin,
     )
     if payg is not None:
         runner._payg_configured = payg
@@ -198,6 +200,22 @@ def test_capacity_remediation_uses_ring_admin_center(
 ) -> None:
     r = _run(_runner(powerplatform=None, ring=ring))
     assert expected_origin in r.remediation
+
+
+def test_capacity_remediation_uses_retained_preview_admin_origin() -> None:
+    preview_origin = "https://admin.preview.powerplatform.microsoft.com"
+    r = _run(
+        _runner(
+            powerplatform=None,
+            ring="prod",
+            power_platform_admin_origin=preview_origin,
+        )
+    )
+    assert (
+        f"{preview_origin}/billing/licenses/copilotStudio/overview"
+        in r.remediation
+    )
+    assert "https://admin.powerplatform.microsoft.com/billing" not in r.remediation
 
 
 def test_capacity_remediation_falls_back_when_ring_unresolved():

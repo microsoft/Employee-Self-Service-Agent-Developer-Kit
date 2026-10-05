@@ -3,7 +3,7 @@
 
 """List MOS starters and create a Dev agent when requested.
 
-This is the DA `/setup` entitled-product installation path. It exposes two
+This is the DA `/setup` agent-template installation path. It exposes two
 independently observable operations: read-only ``list`` and request-guarded
 ``create``. Shared ALM enrollment belongs to ``setup_existing_da.py
 ensure-alm``. This script has no ``resolve``/``status`` command and no
@@ -568,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = commands.add_parser(
         "list",
-        help="List entitled MOS starter packages. Read-only.",
+        help="List available agent templates. Read-only.",
     )
     _add_agentbuilder_target_arguments(list_command)
 

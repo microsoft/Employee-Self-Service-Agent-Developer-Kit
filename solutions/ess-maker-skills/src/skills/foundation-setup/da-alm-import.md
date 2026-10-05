@@ -19,6 +19,29 @@ only when the environment ID is unclear.
 
 Pass the resolved environment ID and ring to the import command.
 
+When `{SETUP_ACCOUNT}` is not already retained, use the parent's shared
+authorization message and run this read-only command solely to establish the
+selected Microsoft login:
+
+```text
+python scripts/setup_existing_da.py list-environments \
+  --ring "{RING}" \
+  --select-account
+```
+
+Do not use its environment rows to replace the supplied target. Parse
+`DA_AGENTBUILDER_AUTH_JSON:` and complete any picker-cancellation or
+account-mismatch recovery before continuing. Retain the confirmed account as
+`{SETUP_ACCOUNT}`.
+
+Before this file runs its first import or attachment operation, complete the
+parent skill's **Confirm people and role availability for the selected path**
+checkpoint if it was not already completed for the current fresh-agent path,
+environment, and Microsoft login. Use **Fresh-agent setup** from
+`permission-guidance.md` because the initial import is create-only. **Yes, the
+required people are present** does not replace the import operation's
+authorization check.
+
 When both the package and target environment are known, mark **Choose the
 starting point and target environment** complete. Keep **Verify access and agent
 identity** current until the import operation returns a directly validated Dev
@@ -40,6 +63,7 @@ message from the parent skill. Run:
 python scripts/setup_alm_import.py \
   --environment-id "{ENVIRONMENT_ID}" \
   --ring "{RING}" \
+  --account "{SETUP_ACCOUNT}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
@@ -117,7 +141,7 @@ Present these standard choices:
 - **Replace an existing agent with this package**
 - **Go back**
 
-Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment and interpret its `minimalBots` and `copilotStudioAgents` results independently. Build one picker option per exact ID while retaining each endpoint's untouched source object, then show every candidate by an exact service-provided display name. Do not append a realm, enrollment state, ALM status, source, or preparation suffix. Never correlate by display name or bulk-enroll unresolved rows. When the matching MakerOperations BotEntity supplies a usable exact schema, pass it to the parent's selected-agent product-line reconciliation as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Otherwise run both exact product-line probes. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment.
+Do not preselect a choice or recommend replacement. Before either existing-agent choice runs `list-agents` or `validate-agent`, complete the parent checkpoint for the current existing-agent path, environment, and Microsoft login and use **Existing-agent setup** from `permission-guidance.md`. Then run `setup_existing_da.py list-agents` for the target environment and interpret its `minimalBots` and `copilotStudioAgents` results independently. Build one picker option per exact ID while retaining each endpoint's untouched source object, then show every candidate by an exact service-provided display name followed by **Help me decide**. Every agent identity option contains only the service-provided display name; the separate help action is not an agent identity. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`. Do not append a realm, enrollment state, ALM status, source, or preparation suffix to an agent identity option. Never correlate by display name or bulk-enroll unresolved rows. When `list-agents` or `validate-agent` returns an authentication or authorization failure, follow **Existing-agent discovery and access** in `permission-guidance.md`; do not recommend **Environment Maker** as remediation for existing-agent access. When the matching MakerOperations BotEntity supplies a usable exact schema, pass it to the parent's selected-agent product-line reconciliation as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Otherwise run both exact product-line probes. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment.
 
 For **Choose an existing agent in this environment**, skipped enrollment with established supported native identity may continue through `da-existing-dev.md` using `--allow-unenrolled-authoring`; a resolved Dev route uses the normal attachment path. For **Replace an existing agent with this package**, skipped enrollment does not authorize replacement or local attachment. Return to the collision choices and preserve that replacement still requires ALM preparation.
 
@@ -129,7 +153,8 @@ Before replacement, validate the exact selected Dev agent. Enrollment preparatio
 python scripts/setup_existing_da.py validate-agent \
   --environment-id "{ENVIRONMENT_ID}" \
   --agent-id "{INTERNAL_AGENT_ID}" \
-  --ring "{RING}"
+  --ring "{RING}" \
+  --account "{SETUP_ACCOUNT}"
 ```
 
 Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
@@ -156,7 +181,8 @@ python scripts/setup_alm_import.py \
   --ring "{RING}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}" \
   --replace-agent-id "{INTERNAL_AGENT_ID}" \
-  --confirm-replace-agent-id "{INTERNAL_AGENT_ID}"
+  --confirm-replace-agent-id "{INTERNAL_AGENT_ID}" \
+  --account "{SETUP_ACCOUNT}"
 ```
 
 After a successful replacement, complete workspace setup through the existing
@@ -177,9 +203,14 @@ checkpointing and refreshing them.
 - `pre-dispatch-failure`: no request reached the service. Explain the local,
   DNS, or connection prerequisite. State that no remote import was observed. Do
   not retry automatically.
-- `rejected`: the service returned a normal error response. Explain the
-  actionable error and preserve its status, error code, and request ID when
-  available. Do not retry automatically.
+- `rejected`: the service returned a normal error response. Preserve its
+  status, error code, and request ID. For HTTP 401, follow the generic sign-in
+  recovery under **Microsoft authorization**, then return control to this route.
+  For HTTP 403, follow **Fresh-agent creation** in `permission-guidance.md`.
+  When evidence explicitly identifies missing first-party application approval,
+  use **Microsoft authorization** instead. For another status, explain the
+  actionable error. Do not retry automatically; any later retry uses the
+  existing maker confirmation and `--retry-safe-failure` path below.
 - `invalid-success` or `ambiguous`: the mutation may have completed, but no
   usable identity is available. Preserve the receipt and follow the read-only
   reconciliation procedure in `src/reference/native-alm-import.md`. For a
@@ -213,6 +244,7 @@ the original command and add only that flag:
 python scripts/setup_alm_import.py \
   --environment-id "{ENVIRONMENT_ID}" \
   --ring "{RING}" \
+  --account "{SETUP_ACCOUNT}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}" \
   --retry-safe-failure
 ```

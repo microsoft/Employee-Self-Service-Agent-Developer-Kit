@@ -454,15 +454,17 @@ _CAPACITY_PORTAL_PATH = "/billing/licenses/copilotStudio/overview"
 def _capacity_portal(runner) -> str:
     """Return the Power Platform capacity portal link.
 
-    Prefers the ring-matched admin center origin. Targeted runs (for example
-    ``--checkpoint ENV-CAPACITY-001``) authenticate only the AgentBuilder
-    client and never resolve the BAP ring, so ``runner.ring`` can be None. Fall
-    back to the ring-agnostic production Admin Center rather than raising, so a
-    missing ring cannot crash an otherwise-successful capacity verdict.
+    Prefers the retained target origin, then the ring-matched admin center.
+    Targeted runs can have no ring, so fall back to the production Admin Center
+    rather than crashing an otherwise-successful capacity verdict.
     """
+    retained_origin = str(
+        getattr(runner, "power_platform_admin_origin", "") or ""
+    ).strip().rstrip("/")
     ring = getattr(runner, "ring", None)
-    origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
-        ring, _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"]
+    origin = retained_origin or _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.get(
+        ring,
+        _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING["prod"],
     )
     return (
         "[Power Platform Admin Center > Licensing > Copilot Studio > "

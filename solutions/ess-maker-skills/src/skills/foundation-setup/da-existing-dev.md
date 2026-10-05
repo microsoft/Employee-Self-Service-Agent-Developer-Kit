@@ -6,9 +6,17 @@ Connect this ADK workspace to an existing editable DA Dev agent. Do not run the 
 
 Use one Power Platform environment per ADK workspace. The workspace can contain multiple Dev agents from that environment and has one active agent. A target in another environment uses the parent skill's conflicting-environment flow.
 
-## Connect from the agent URL
+Before this file runs its first `list-agents`, `inspect-agent`,
+`validate-agent`, or `attach` operation, complete the parent skill's **Confirm
+people and role availability for the selected path** checkpoint if it was not
+already completed for the current existing-agent path, environment, and
+account. Use **Existing-agent setup** from `permission-guidance.md`. A **Yes,
+the required people are present** answer does not replace the exact-agent
+access check below.
 
-Ask for the URL of the agent in Copilot Studio only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete agent URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
+## Connect from a Microsoft Copilot Studio URL
+
+Ask for the Microsoft Copilot Studio URL only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete Microsoft Copilot Studio URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
 
 Infer the environment ID, agent ID, and service ring from the URL. When the URL
 does not identify the ring, use **Resolve the service ring** in
@@ -19,7 +27,8 @@ Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
 router already inspected the supplied or recorded agent. The result is based on
 the direct Swagger-defined `MinimalBotCard`; this setup inspection does not call
 the ALM `/realms` endpoint. Otherwise, use the
-shared authorization message from `SKILL.md`, then run:
+shared authorization message from `SKILL.md`, render the **Agent access check**
+from `permission-guidance.md`, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -103,6 +112,12 @@ python scripts/setup_existing_da.py list-agents \
 
 Parse `DA_AGENT_LIST_JSON:` as endpoint-labeled evidence. `minimalBots.response` is the untouched array returned by `GET /copilotstudio/minimalBots/api` for the explicit `CopilotStudio` and `AgentBuilder` creation sources. `copilotStudioAgents.response` is the untouched array of paged response objects returned by `GET /copilotstudio/agents`; each page retains its exact `Entities` and `ContinuationToken` fields. Each endpoint label also has an `error` field. The command does not merge, deduplicate, rename, enrich, classify, or directly inspect any listed identity.
 
+When `list-agents`, `inspect-agent`, `validate-agent`, or `attach` returns an
+authentication or authorization failure, follow **Existing-agent discovery and
+access** in `permission-guidance.md`. Use its inventory message for a failed
+list and its exact-agent message for a failed direct operation. Do not recommend
+**Environment Maker** as remediation for access to an existing agent.
+
 Interpret the two sources independently. A successful empty response from one source does not negate identities returned by the other, and one endpoint's error does not make the other endpoint unavailable. Preserve every endpoint-specific error. At the session layer, correlate candidates only by exact `botId` from a MinimalBot card or exact `cdsBotId` from a MakerOperations BotEntity. Retain both untouched source objects when the same ID appears in both responses, but render only one picker option per exact ID. Never correlate by display name.
 
 Use exact source fields only. A MakerOperations BotEntity may provide `displayName` and `schemaName`; a MinimalBot card may provide `shortBotName`, `fullBotName`, and `realm`, but it does not provide schema identity. Do not copy a value between source-specific fields or insert a synthesized schema into either response. Every maker-facing agent option contains only the selected source's service-provided display name. Do not append a realm, enrollment state, ALM status, source, or preparation suffix.
@@ -113,7 +128,9 @@ When both endpoint labels report an error, agent inventory is unavailable. Prese
 
 Then use **Retry setup with another target** from `da-environment-target.md`.
 
-When exact-ID candidates are returned by either endpoint, show their exact service-provided display names and ask the maker to choose one exact identity. Run the parent's selected-agent product-line reconciliation for the selected ID before realm-specific setup:
+When exact-ID candidates are returned by either endpoint, show their exact service-provided display names followed by **Help me decide** and ask the maker to choose one exact identity. Every agent identity option contains only its service-provided display name; the separate help action is not an agent identity. Run the parent's selected-agent product-line reconciliation for the selected ID before realm-specific setup:
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what the intended agent is used for, which name or owner the maker recognizes, and whether they have its Microsoft Copilot Studio URL. Recommend only one exact returned display name grounded in the maker's answer. If the intended identity still cannot be established, tell the maker not to guess and explain that its Microsoft Copilot Studio URL or creator login can resolve the target.
 
 - When the matching MakerOperations BotEntity has a non-empty exact `schemaName`, pass it as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`.
 - When no matching MakerOperations BotEntity supplies a usable schema, do not synthesize one or withhold the candidate. Run both exact identity probes so the native component response can establish product identity.
@@ -125,7 +142,7 @@ When both endpoint reads succeed and both contain no identities, say:
 
 > No agents created by this Microsoft login were returned for this environment.
 
-Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
+Present **Retry setup with another target** from `da-environment-target.md`, including its **Use a Microsoft Copilot Studio URL** choice. For an exact agent selected through that URL, run both independent identity probes in the full selected-agent product-line reconciliation before validating it directly.
 
 When one endpoint reports an error and the other succeeds with no identities, do not use the empty-list message. State that the successful source returned no agents but the other source could not be loaded, then present the same recovery choices.
 
@@ -133,11 +150,14 @@ When one endpoint reports an error and the other succeeds with no identities, do
 
 After every successful `attach` or unchanged existing-workspace resume, run the three setup-readiness FlightChecks and the broad connection diagnostic for the exact agent. Attempt every check whose prerequisites remain available and present all four together.
 
+Before running `ENV-CAPACITY-001` for the first time in the invocation, render
+the **Capacity check** from `permission-guidance.md`.
+
 Run each checkpoint into its dedicated local evidence folder:
 
 ```text
 python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001
-python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001
+python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --power-platform-admin-origin "{POWER_PLATFORM_ADMIN_ORIGIN}" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001
 python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN
 python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
 ```
@@ -207,6 +227,8 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 5. Find **{friendly environment name or selected Power Platform environment}**.
 6. Confirm that the environment has allocated Copilot Credits. Setup requires a nonzero allocation; for initial use, we recommend allocating **500 or more Copilot Credits**.
 
+If you cannot view capacity settings, ask a **Power Platform administrator** to verify the allocation for this exact environment.
+
 **End message.**
 
 Then ask exactly:
@@ -217,6 +239,9 @@ Present these standard choices:
 
 - **Yes — capacity is allocated**
 - **Not yet**
+- **Help me decide**
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what the maker or administrator can see for this exact environment in **Manage Copilot Credits**. Recommend **Yes — capacity is allocated** only when they confirm a positive allocation for this environment; recommend **Not yet** when it has not been checked, cannot be viewed, or still shows zero. This conversation is not capacity verification and does not apply manual attestation.
 
 For **Yes — capacity is allocated**, apply the same current evidence with explicit attestation:
 
@@ -226,7 +251,7 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 
 For **Not yet**, leave capacity unresolved. After the maker allocates capacity, offer **Check again** and rerun `ENV-CAPACITY-001`.
 
-Resolve `{POWER_PLATFORM_ADMIN_ORIGIN}` from the selected service ring: `prod` is `https://admin.powerplatform.microsoft.com`, `preprod` is `https://admin.preprod.powerplatform.microsoft.com`, and `test` is `https://admin.test.powerplatform.microsoft.com`. Do not send a maker from a non-production setup ring to the production admin center.
+Use the `{POWER_PLATFORM_ADMIN_ORIGIN}` retained by **Resolve the service ring** in `da-environment-target.md`. Do not reconstruct it from `{RING}` alone: an explicit Preview target remains logical ring `prod` while retaining the Preview admin-center origin.
 
 When canonical `SETUP-05` contains a registry-declared `requirement`, also apply the broad connection result:
 
@@ -282,15 +307,15 @@ While checks remain, render the second line's status as **🔄 {resolved count} 
 
 After successful materialization and after the three setup-readiness checks and broad connection diagnostic have been attempted, build the agent link from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both even when `connectReady` is false.
 
-Infer a concise user-friendly product name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
+Infer a concise user-friendly agent name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
 
-Build the exact Classic Copilot Studio agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details?agentBackend=cosmos`, using the validated Copilot Studio origin for the selected service ring and the exact environment and agent IDs from setup evidence. Never link to the environment's agent-list page.
+Build the exact Microsoft Copilot Studio URL for the agent as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details?agentBackend=cosmos`, using the retained origin from **Resolve the service ring** and the exact environment and agent IDs from setup evidence. An explicit Preview target keeps its Preview origin even though its logical ring is `prod`. Never link to the environment's agent-list page.
 
 **Message:**
 
 Your local workspace is ready for authoring.
 
-> **Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
+> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
 
 For listing newer declarative agents, use the Classic experience. From the new experience, open the **…** menu beside your profile, select **Open classic experience**, then select **Skip feedback** or **Open in a new tab**.
 
@@ -310,6 +335,8 @@ Use the same five rows and order in every runtime-readiness table. Map the three
 
 Each evidence summary states whether the check ran, its target, and the result file's `started` observation time when available. Preserve the row's safe `serviceStatus`, `requestId`, `outcome`, and other non-secret evidence when a check is unavailable. Do not expose tokens, authorization headers, or customer content.
 
+Convert every maker-facing FlightCheck timestamp to the local timezone of the machine running setup. Render timestamps at second precision using `YYYY-MM-DDTHH:mm:ss`, for example `2026-10-03T01:43:19`. Truncate fractional seconds; do not round. Do not display a UTC suffix, numeric offset, or timezone abbreviation. Apply this format to every `{observation time}` and `{recorded time}` in the runtime-readiness table. Format presentation only; do not rewrite persisted evidence. If a source timestamp is missing, invalid, or lacks timezone information, omit the displayed time rather than inferring one.
+
 Use concise factual details:
 
 - Agent access: **Access to {agent display name} was verified. Observed at {observation time}.**
@@ -318,10 +345,6 @@ Use concise factual details:
 - Environment capacity after override: **A recheck of {environment display name} at {observation time} found 0 allocated credits. You selected Continue with manual override.**
 - Connections when ready: **{required connection display name} is connected for {environment display name}. Observed at {observation time}.**
 - Agent content when ready: **Agent content is present in your local workspace. Observed for {agent display name} at {observation time}.**
-
-Before presenting the shared completion choices, say:
-
-> **Exit setup (Recommended)** acknowledges these results and closes setup. It does not run the checks again.
 
 Calculate Overall from canonical `connectReady`. When `connectReady` is true, render Overall as **✅ Foundation ready**. When it is false after materialization, render Overall as **⚠️ Foundation needs attention** and state that local authoring is ready while the setup-owned prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
 
@@ -350,7 +373,7 @@ When the connection is ready, return here and ask me to check it again.
 
 **End message.**
 
-Resolve `{POWER_APPS_ORIGIN}` from the selected service ring: `prod` is `https://make.powerapps.com`, `preprod` is `https://make.preprod.powerapps.com`, and `test` is `https://make.test.powerapps.com`. Do not send a maker from a non-production setup ring to the production maker portal.
+Use the `{POWER_APPS_ORIGIN}` retained by **Resolve the service ring** in `da-environment-target.md`. Do not reconstruct it from `{RING}` alone or collapse an explicit Preview target to the production maker portal.
 
 Do not append this section for a ready, warning, or unavailable required result, or when the registry declares no requirement. Do not add another completion choice. A later request to check the connection reruns the broad diagnostic and reapplies its exact required row to `SETUP-05`.
 
@@ -358,7 +381,7 @@ This report is a factual handoff, not another readiness gate. If the maker dispu
 
 Preserve service status, error code, request ID, and local projection-failure evidence for diagnosis. In ordinary maker-facing copy, explain the specific service or conversion failure in plain language without exposing raw technical output. Do not replace it with a generic setup error.
 
-For an identity or authorization failure, rerun the same operation with `--select-account`. Use `--tenant-id` only when the maker supplies the tenant that owns the target and understands that tenant selection does not grant access.
+For an identity or authorization failure, preserve the operation evidence and follow **Existing-agent discovery and access** in `permission-guidance.md`. Run the account picker only after the maker chooses the different-account route. Retain the selected environment and exact agent, rerender **Existing-agent setup** for the new login, then let the session invoke the relevant existing operation again. Use `--tenant-id` only when the maker supplies the tenant that owns the target and understands that tenant selection does not grant access.
 
 ## Refresh changed content
 
