@@ -1667,6 +1667,45 @@ def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics
     assert runtime["blocker"] is None
 
 
+def test_runtime_template_wiring_requires_topic_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    verifier_called = False
+
+    def verify(*_args, **_kwargs):
+        nonlocal verifier_called
+        verifier_called = True
+        return {}
+
+    monkeypatch.setattr(
+        workday_connect,
+        "verify_runtime_template_wiring",
+        verify,
+    )
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Enable and verify all Workday topics",
+    ):
+        workday_connect._record_runtime_template_wiring(
+            SimpleNamespace(),
+            store,
+        )
+
+    assert verifier_called is False
+
+
 def test_record_agent_binding_rejects_manual_boolean_evidence(
     tmp_path: Path,
 ) -> None:

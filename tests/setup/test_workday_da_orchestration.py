@@ -489,6 +489,12 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "User Context V2" in text
     assert "activate-workday-topics.md" in text
     assert text.index("Allow permission") < text.index("activate-workday-topics.md")
+    assert text.index("activate-workday-topics.md") < text.index(
+        "wire-runtime-template-config.md"
+    )
+    assert text.index("wire-runtime-template-config.md") < text.index(
+        "wire-user-context-redirect.md"
+    )
 
 
 def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
@@ -556,7 +562,7 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate" not in redirect
 
 
-def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
+def test_topic_activation_precedes_runtime_template_and_user_context_wiring() -> None:
     configure = (
         _WORKDAY_DA / "configure-power-platform.md"
     ).read_text(encoding="utf-8")
@@ -572,9 +578,14 @@ def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
         / "wire-runtime-template-config.md"
     ).read_text(encoding="utf-8")
 
+    assert configure.index("activate-workday-topics.md") < (
+        configure.index("wire-runtime-template-config.md")
+    )
     assert configure.index("wire-runtime-template-config.md") < (
         configure.index("wire-user-context-redirect.md")
     )
+    assert "only after all reviewed Workday topics are enabled" in action
+    assert "workday-topics-activated" in action
     assert "Conversation Start" in action
     assert "immediately before User Context Validate" in action
     assert "remove only that exact obsolete nested" in action

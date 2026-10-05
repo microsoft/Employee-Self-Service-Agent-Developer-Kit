@@ -1025,9 +1025,17 @@ def _record_runtime_template_wiring(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    if "workday-topics-activated" not in state["phases"]["runtime"][
+        "completedActions"
+    ]:
+        raise WorkdayConnectStoreError(
+            "Enable and verify all Workday topics before wiring the runtime "
+            "template into Conversation Start."
+        )
     evidence = verify_runtime_template_wiring(
         store.workspace_root,
-        store.load(),
+        state,
     )
     store.complete_action(
         "runtime",
