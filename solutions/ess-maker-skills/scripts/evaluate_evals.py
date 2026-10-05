@@ -5,7 +5,8 @@ evaluate_evals.py — Quality validation for generated evaluation test sets.
 Reads eval YAML files from an agent's evaluations/ folder, sends them to a
 LLM judge via GitHub Copilot API, and reports quality scores per dimension.
 
-Uses 'gh auth token' for credentials — no extra setup required.
+Uses the effective github.com credential from GitHub CLI. The account must have
+GitHub Copilot access; authentication failures are returned as structured JSON.
 
 Usage:
     python scripts/evaluate_evals.py
@@ -17,6 +18,9 @@ Usage:
 """
 
 import argparse
+from contextlib import redirect_stdout
+from dataclasses import dataclass, field
+from io import StringIO
 import json
 import os
 import random
@@ -37,6 +41,7 @@ MODELS_API_URL = "https://api.githubcopilot.com/chat/completions"
 # No model specified — Copilot API uses the plan default (gpt-4o-mini for most accounts).
 # Avoids failures on Business/Enterprise accounts where specific models may be restricted.
 DEFAULT_SAMPLE = 100  # cases per category to send to judge (100 = eval set cap, i.e. all cases)
+AUTHENTICATION_REQUIRED_EXIT = 3
 
 QUALITY_DIMENSIONS = {
     "Validity": "Each input is grammatically correct and plausible as a real user utterance.",
@@ -83,6 +88,43 @@ QUALITY_DIMENSION_HINTS = {
 
 # Categories where topic alignment check applies
 TOPIC_ALIGNMENT_CATEGORIES = {"topic-triggering", "integration-data"}
+
+
+@dataclass(frozen=True)
+class GitHubCredential:
+    token: str = field(repr=False)
+    account: str | None
+    environment_override: str | None
+
+
+class EvaluationAuthenticationError(RuntimeError):
+    """Automated scoring needs a different or repaired GitHub credential."""
+
+    def __init__(
+        self,
+        reason: str,
+        message: str,
+        *,
+        account: str | None = None,
+        environment_override: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.account = account
+        self.environment_override = environment_override
+
+    def as_result(self) -> dict[str, str]:
+        result = {
+            "status": "authentication_required",
+            "reason": self.reason,
+            "message": str(self),
+            "host": "github.com",
+        }
+        if self.account:
+            result["account"] = self.account
+        if self.environment_override:
+            result["environmentOverride"] = self.environment_override
+        return result
 
 
 def resolve_evaluation_folder(value: str, repo_root: Path) -> Path:
@@ -196,31 +238,70 @@ def load_topic_context(topics_dir: Path) -> dict[str, str]:
 
 # ─── Copilot API ──────────────────────────────────────────────────────────────
 
-def get_gh_token() -> str:
-    """Get the current GitHub token via gh auth token."""
+def _effective_environment_override() -> str | None:
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if os.environ.get(name):
+            return name
+    return None
+
+
+def get_gh_credential() -> GitHubCredential:
+    """Resolve the effective github.com credential without exposing its token."""
+    environment_override = _effective_environment_override()
     try:
         result = subprocess.run(
-            ["gh", "auth", "token"],
+            ["gh", "auth", "token", "--hostname", "github.com"],
             capture_output=True, text=True, timeout=10
         )
         if result.returncode != 0:
-            err = (result.stderr or "").strip()
-            print(
-                f"ERROR: 'gh auth token' failed (exit {result.returncode}). {err}",
-                file=sys.stderr,
+            raise EvaluationAuthenticationError(
+                "gh_not_authenticated",
+                "GitHub CLI has no usable github.com credential. "
+                f"'gh auth token' exited {result.returncode}.",
+                environment_override=environment_override,
             )
-            sys.exit(1)
         token = result.stdout.strip()
         if not token:
-            print("ERROR: gh auth token returned empty. Run 'gh auth login' first.", file=sys.stderr)
-            sys.exit(1)
-        return token
-    except FileNotFoundError:
-        print("ERROR: 'gh' CLI not found. Install it from https://cli.github.com/", file=sys.stderr)
-        sys.exit(1)
+            raise EvaluationAuthenticationError(
+                "gh_not_authenticated",
+                "GitHub CLI returned an empty github.com token.",
+                environment_override=environment_override,
+            )
+    except FileNotFoundError as exc:
+        raise EvaluationAuthenticationError(
+            "gh_cli_missing",
+            "GitHub CLI is required for automated scoring but was not found.",
+            environment_override=environment_override,
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise EvaluationAuthenticationError(
+            "github_auth_timeout",
+            "GitHub credential discovery timed out.",
+            environment_override=environment_override,
+        ) from exc
+    try:
+        identity = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", "user", "--jq", ".login"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        identity = None
+    account = (
+        identity.stdout.strip()
+        if identity is not None and identity.returncode == 0
+        and identity.stdout.strip()
+        else None
+    )
+    return GitHubCredential(
+        token=token,
+        account=account,
+        environment_override=environment_override,
+    )
 
 
-def call_judge(prompt: str, token: str, _retry: bool = True) -> str:
+def call_judge(
+    prompt: str, credential: GitHubCredential, _retry: bool = True,
+) -> str:
     """Call the Copilot API LLM judge. Returns the response text."""
     payload = {
         "messages": [
@@ -244,7 +325,7 @@ def call_judge(prompt: str, token: str, _retry: bool = True) -> str:
         MODELS_API_URL,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {credential.token}",
             "Content-Type": "application/json",
             "Copilot-Integration-Id": "copilot-chat",
         },
@@ -265,21 +346,22 @@ def call_judge(prompt: str, token: str, _retry: bool = True) -> str:
             return choice["message"]["content"]
     except urllib.error.HTTPError as e:
         err_body = e.read().decode("utf-8", errors="replace")
-        if e.code == 401:
-            print(
-                "\nERROR: GitHub Copilot API returned 401 Unauthorized.\n"
-                "Ensure you have an active GitHub Copilot subscription and run:\n"
-                "  gh auth login\n"
-                f"Details: {err_body}",
-                file=sys.stderr,
+        if e.code in (401, 403):
+            raise EvaluationAuthenticationError(
+                "copilot_unauthorized",
+                "The effective GitHub account could not access the GitHub "
+                "Copilot API. The credential may be stale, belong to the wrong "
+                "account, lack a Copilot entitlement, or be restricted by "
+                "organization policy.",
+                account=credential.account,
+                environment_override=credential.environment_override,
             )
-            sys.exit(1)
         elif e.code == 429:
             if _retry:
                 import time
                 print("\nRate limited — waiting 10 seconds before retrying...", file=sys.stderr)
                 time.sleep(10)
-                return call_judge(prompt, token, _retry=False)
+                return call_judge(prompt, credential, _retry=False)
             print("\nERROR: Rate limited by Copilot API. Wait a moment and retry.", file=sys.stderr)
             sys.exit(1)
         else:
@@ -610,6 +692,9 @@ def main():
         print("No evaluation categories found.", file=sys.stderr)
         sys.exit(1)
 
+    # Resolve auth before emitting normal stdout so an auth failure is pure JSON.
+    credential = get_gh_credential()
+
     # ── Load topic context ────────────────────────────────────────────────────
     topics_dir = (
         Path(args.topics_dir)
@@ -622,9 +707,7 @@ def main():
     if topic_context:
         print(f"  Loaded {len(topic_context)} topic definitions for alignment checks.")
 
-    # ── Get auth token once ───────────────────────────────────────────────────
     print(f"\nLoading eval test cases from {agent_name}...")
-    token = get_gh_token()
 
     # ── Process each category ─────────────────────────────────────────────────
     random.seed(args.seed)
@@ -655,7 +738,7 @@ def main():
         print(f"  {category}: {len(cases)} cases — sending {sample_size} to quality evaluator...", end="", flush=True)
 
         prompt = build_judge_prompt(category, sampled, topic_context=topic_context or None)
-        raw_response = call_judge(prompt, token)
+        raw_response = call_judge(prompt, credential)
 
         # Strip markdown code fences if the model wrapped the JSON
         clean = raw_response.strip()
@@ -709,5 +792,20 @@ def main():
         print(f"Results saved to {out_path}")
 
 
+def cli() -> int:
+    output = StringIO()
+    try:
+        with redirect_stdout(output):
+            main()
+    except EvaluationAuthenticationError as exc:
+        print(json.dumps(exc.as_result()))
+        return AUTHENTICATION_REQUIRED_EXIT
+    except BaseException:
+        sys.stdout.write(output.getvalue())
+        raise
+    sys.stdout.write(output.getvalue())
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(cli())
