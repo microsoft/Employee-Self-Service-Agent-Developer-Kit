@@ -12,6 +12,7 @@ from workday_connect_contract_common import (
     _absolute_https_url,
     _administrator_attestation,
     _certificate_thumbprint,
+    _date_only,
     _normalized_uri,
     _parse_labeled_worksheet,
     _reject_secret_like_value,
@@ -147,8 +148,13 @@ def parse_entra_return_worksheet(
                 values["Certificate thumbprint (active certificate row)"],
                 "Certificate thumbprint",
             ),
-            "validTo": _safe_nonsecret_text(
-                values["Certificate expiration date (active certificate row)"],
+            "validTo": _date_only(
+                _safe_nonsecret_text(
+                    values[
+                        "Certificate expiration date (active certificate row)"
+                    ],
+                    "Certificate expiration date",
+                ),
                 "Certificate expiration date",
             ),
         },
@@ -918,14 +924,20 @@ def validate_entra_verification(
             certificate.get("thumbprint"),
             "Entra signing certificate thumbprint",
         ),
-        "validTo": _required_text(
-            certificate,
-            "validTo",
-            "Entra signing certificate validTo",
+        "validTo": _date_only(
+            _required_text(
+                certificate,
+                "validTo",
+                "Entra signing certificate validTo",
+            ),
+            "Entra signing certificate expiration date",
         ),
     }
     if certificate_valid_from:
-        safe_certificate["validFrom"] = certificate_valid_from
+        safe_certificate["validFrom"] = _date_only(
+            certificate_valid_from,
+            "Entra signing certificate start date",
+        )
     identifiers = {
         "entraAppId": application["appId"],
         "entraAppIdUri": expected_app_uri,

@@ -187,8 +187,7 @@ def validate_administrator_partial_evidence(
                     )
                 return normalized
             if name in {"certificateValidFrom", "certificateValidTo"}:
-                _date_only(str(value or ""), name)
-                return str(value).strip()
+                return _date_only(str(value or ""), name)
             if name == "certificateThumbprint":
                 return _certificate_thumbprint(
                     value,

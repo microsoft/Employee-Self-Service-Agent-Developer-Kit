@@ -387,10 +387,90 @@ def _require_endpoint_path(
 
 
 def _date_only(value: str, label: str) -> str:
-    normalized = value.strip().replace("Z", "+00:00")
+    text = str(value or "").strip()
+    if not text:
+        raise WorkdayConnectContractError(f"{label} is required.")
+    normalized = text.replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(normalized).date().isoformat()
-    except ValueError as exc:
-        raise WorkdayConnectContractError(
-            f"{label} must be an ISO-8601 date or timestamp."
-        ) from exc
+    except ValueError:
+        pass
+
+    without_ordinals = re.sub(
+        r"(?<=\d)(st|nd|rd|th)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    named_patterns = (
+        re.compile(
+            r"^(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2}),?\s+"
+            r"(?P<year>\d{4})\b",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"^(?P<day>\d{1,2})\s+(?P<month>[A-Za-z]+),?\s+"
+            r"(?P<year>\d{4})\b",
+            re.IGNORECASE,
+        ),
+    )
+    for pattern in named_patterns:
+        match = pattern.match(without_ordinals)
+        if match is None:
+            continue
+        month_text = match.group("month")
+        month = None
+        for month_format in ("%B", "%b"):
+            try:
+                month = datetime.strptime(
+                    month_text,
+                    month_format,
+                ).month
+                break
+            except ValueError:
+                continue
+        if month is None:
+            continue
+        try:
+            return datetime(
+                int(match.group("year")),
+                month,
+                int(match.group("day")),
+            ).date().isoformat()
+        except ValueError:
+            break
+
+    numeric = re.match(
+        r"^(?P<first>\d{1,4})(?P<separator>[./-])"
+        r"(?P<second>\d{1,2})(?P=separator)(?P<third>\d{1,4})\b",
+        text,
+    )
+    if numeric is not None:
+        first = int(numeric.group("first"))
+        second = int(numeric.group("second"))
+        third = int(numeric.group("third"))
+        if len(numeric.group("first")) == 4:
+            candidates = ((first, second, third),)
+        elif len(numeric.group("third")) == 4:
+            candidates = (
+                (third, first, second),
+                (third, second, first),
+            )
+        else:
+            candidates = ()
+        valid_dates = []
+        for year, month, day in candidates:
+            try:
+                valid_dates.append(datetime(year, month, day).date())
+            except ValueError:
+                continue
+        unique_dates = {candidate.isoformat() for candidate in valid_dates}
+        if len(unique_dates) == 1:
+            return unique_dates.pop()
+        if len(unique_dates) > 1:
+            return numeric.group(0)
+
+    raise WorkdayConnectContractError(
+        f"{label} must be a recognizable calendar date. A time is optional "
+        "and is ignored."
+    )

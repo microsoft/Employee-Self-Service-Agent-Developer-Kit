@@ -479,6 +479,11 @@ response object described below. The legacy exact labeled worksheet remains
 accepted for resume compatibility. Never parse, rename, infer, or normalize an
 answer in the skill:
 
+Certificate comparisons are date-only. Do not ask either administrator for a
+timestamp, time, or timezone. Accept the portal's displayed certificate date
+in a common numeric or month-name format; the controller ignores any supplied
+time component.
+
 - an applicable Microsoft Entra branch plus
   **Yes, all four values match exactly** ->
   `identityProviderOutcome: verified-entra-issuer`,

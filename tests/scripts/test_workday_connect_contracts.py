@@ -471,6 +471,36 @@ def test_entra_completed_capture_table_parses_to_validated_evidence() -> None:
 
 
 @pytest.mark.parametrize(
+    ("supplied", "expected"),
+    [
+        ("January 1, 2027", "2027-01-01"),
+        ("1 Jan 2027", "2027-01-01"),
+        ("2027-01-01T17:45:00-08:00", "2027-01-01"),
+        ("31/01/2027", "2027-01-31"),
+        ("10/5/2027", "10/5/2027"),
+    ],
+)
+def test_entra_certificate_expiration_accepts_maker_friendly_dates(
+    supplied: str,
+    expected: str,
+) -> None:
+    worksheet = _entra_worksheet().replace(
+        (
+            "Certificate expiration date (active certificate row): "
+            "2027-01-01"
+        ),
+        (
+            "Certificate expiration date (active certificate row): "
+            f"{supplied}"
+        ),
+    )
+
+    parsed = parse_entra_return_worksheet(_state(), worksheet)
+
+    assert parsed["certificate"]["validTo"] == expected
+
+
+@pytest.mark.parametrize(
     "worksheet",
     [
         _entra_worksheet().replace(
@@ -838,6 +868,15 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     )
 
 
+def test_workday_packet_preserves_ambiguous_displayed_certificate_date():
+    state = _workday_state()
+    state["identifiers"]["signingCertificate"]["validTo"] = "10/5/2027"
+
+    packet = build_workday_admin_packet(state)
+
+    assert packet["referenceValues"]["certificateValidTo"] == "10/5/2027"
+
+
 def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     parsed = parse_workday_admin_return_worksheet(
         _workday_state(),
@@ -1152,6 +1191,16 @@ def test_partial_administrator_evidence_rejects_secret_material() -> None:
     assert "secret or certificate material" in (
         result["fieldErrors"]["certificateThumbprint"]
     )
+
+
+def test_partial_entra_evidence_normalizes_maker_friendly_certificate_date() -> None:
+    result = validate_administrator_partial_evidence(
+        _state(),
+        "entra",
+        {"certificateValidTo": "January 1, 2027 at 5:00 PM"},
+    )
+
+    assert result["validFields"]["certificateValidTo"] == "2027-01-01"
 
 
 def test_workday_admin_response_rejects_certificate_date_drift():

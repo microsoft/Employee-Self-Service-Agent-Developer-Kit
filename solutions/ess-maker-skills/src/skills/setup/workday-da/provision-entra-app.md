@@ -254,6 +254,13 @@ verification payload. The legacy exact labeled worksheet remains accepted for
 resume compatibility. Never parse, rename, infer, or normalize an answer in
 the skill.
 
+For the certificate expiration, accept the date exactly as the administrator
+copies it from the portal. Do not ask for an ISO timestamp or require a time or
+timezone. The controller accepts common date-only, timestamp, numeric, and
+month-name formats and ignores any time component. If an all-numeric date is
+inherently ambiguous, preserve the displayed date rather than guessing a
+different locale.
+
 After submission, validate the complete worksheet once. If fields are missing,
 invalid, or internally inconsistent, retain every safe valid answer and ask
 for one revised worksheet containing only the returned `invalidFields` and
