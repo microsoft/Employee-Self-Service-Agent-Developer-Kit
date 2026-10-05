@@ -929,6 +929,39 @@ def _resolve_environment_ring(
     return candidates.pop()
 
 
+_POWER_PLATFORM_ADMIN_ORIGINS = {
+    "https://admin.powerplatform.microsoft.com",
+    "https://admin.preprod.powerplatform.microsoft.com",
+    "https://admin.test.powerplatform.microsoft.com",
+    "https://admin.preview.powerplatform.microsoft.com",
+}
+
+
+def _resolve_power_platform_admin_origin(
+    config: dict,
+    *,
+    explicit_origin: str | None = None,
+) -> str | None:
+    """Resolve a retained, canonical Power Platform admin portal origin."""
+    configured_origins = config.get("portalOrigins")
+    configured_origin = (
+        configured_origins.get("powerPlatformAdmin")
+        if isinstance(configured_origins, dict)
+        else None
+    )
+    origin = str(explicit_origin or configured_origin or "").strip().rstrip("/")
+    if not origin:
+        return None
+    if origin.casefold() not in {
+        candidate.casefold() for candidate in _POWER_PLATFORM_ADMIN_ORIGINS
+    }:
+        raise ValueError(
+            "The Power Platform admin origin must be a recognized Microsoft "
+            "Power Platform admin portal origin."
+        )
+    return origin
+
+
 _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
     "appIdUri",
     "baseUrl",
@@ -1229,11 +1262,20 @@ def _run_single_checkpoint(args):
         sys.exit(1)
 
     resolved_ring = None
+    power_platform_admin_origin = None
     if target == "ENV-CAPACITY-001":
         try:
             resolved_ring = _resolve_environment_ring(
                 config,
                 explicit_ring=getattr(args, "ring", None),
+            )
+            power_platform_admin_origin = _resolve_power_platform_admin_origin(
+                config,
+                explicit_origin=getattr(
+                    args,
+                    "power_platform_admin_origin",
+                    None,
+                ),
             )
         except ValueError as exc:
             print(f"ERROR: {exc}")
@@ -1632,6 +1674,7 @@ def _run_single_checkpoint(args):
     runner.config = config
     if resolved_ring is not None:
         runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         explicit_agent_slug
         or config.get("activeAgent")
@@ -2596,6 +2639,13 @@ def main():
         ),
     )
     parser.add_argument(
+        "--power-platform-admin-origin",
+        help=(
+            "Retain the resolved Power Platform admin portal origin for "
+            "ring-correct remediation links."
+        ),
+    )
+    parser.add_argument(
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
     )
@@ -2839,11 +2889,16 @@ def main():
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
     resolved_ring = None
+    power_platform_admin_origin = None
     if args.scope in {"full", "environment"}:
         try:
             resolved_ring = _resolve_environment_ring(
                 config,
                 explicit_ring=args.ring,
+            )
+            power_platform_admin_origin = _resolve_power_platform_admin_origin(
+                config,
+                explicit_origin=args.power_platform_admin_origin,
             )
         except ValueError as exc:
             print(f"ERROR: {exc}")
@@ -3195,6 +3250,7 @@ def main():
     runner.config = config
     if resolved_ring is not None:
         runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")

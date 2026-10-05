@@ -10,7 +10,7 @@ Send this exact Message block:
 
 **Message:**
 
-This agent is not currently available through an ALM authoring route.
+This agent is not enrolled in ALM.
 
 Enroll this agent in ALM to prepare it for safer releases, repeatable deployments, and version-controlled collaboration. [Learn more](https://learn.microsoft.com/en-us/microsoft-copilot-studio/guidance/alm).
 
@@ -18,7 +18,7 @@ Enroll this agent in ALM to prepare it for safer releases, repeatable deployment
 
 Then ask exactly:
 
-> How would you like to continue?
+> Enroll this agent in ALM?
 
 Use the host's interactive single-selection control and present these choices in this order:
 

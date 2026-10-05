@@ -162,3 +162,16 @@ def test_app_management_permission_error_is_explicit() -> None:
         "_error": "insufficient_permissions",
         "_status": 403,
     }
+
+
+@responses.activate
+def test_capacity_permission_error_preserves_request_id() -> None:
+    response = pp.get_currency_allocations(status=403)
+    response["headers"] = {"x-ms-request-id": "capacity-request-403"}
+    responses.add(**response)
+
+    assert _client().get_currency_allocations(pp.MOCK_ENV_ID) == {
+        "_error": "insufficient_permissions",
+        "_status": 403,
+        "_request_id": "capacity-request-403",
+    }
