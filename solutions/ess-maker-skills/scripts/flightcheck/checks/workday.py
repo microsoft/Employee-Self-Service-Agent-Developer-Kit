@@ -4352,10 +4352,14 @@ def _check_workday_run_health_passive(runner) -> list[CheckResult]:
     _now = _dt.datetime.now(_dt.timezone.utc)
     _cutoff = _now - _dt.timedelta(minutes=_WD_FRESH_WINDOW_MINUTES)
     parseable = [r for r in terminal if r["start_dt"] is not None]
+    # Order by the parsed timestamp, not the raw ISO string: Power Automate's
+    # 7-digit fractional seconds make a lexicographic sort fragile when the
+    # sub-second precision differs between runs. start_dt comparison is exact.
+    parseable.sort(key=lambda r: r["start_dt"], reverse=True)
     if parseable:
         fresh = [r for r in parseable if r["start_dt"] >= _cutoff]
         if not fresh:
-            newest = parseable[0]  # terminal is sorted newest-first
+            newest = parseable[0]  # sorted newest-first above
             age_min = int((_now - newest["start_dt"]).total_seconds() // 60)
             had_success = any(r["kind"] == "success" for r in terminal)
             context = (

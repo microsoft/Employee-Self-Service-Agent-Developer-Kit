@@ -194,7 +194,12 @@ class TestEdgeCases:
         r = _only(_check_workday_run_health(runner))
         assert r.status == "NotConfigured"
         assert "No recent Workday flow runs found" in r.result
-        # Must steer the operator to connection status for the no-run case.
+        # Must carry the guided user-assisted E2E remediation (sign in, run a
+        # safe read-only scenario, re-run within the freshness window)...
+        assert "sign in to ESS Copilot" in r.remediation
+        assert "read-only" in r.remediation
+        assert "60 minutes" in r.remediation
+        # ...and still steer the operator to connection status for the no-run case.
         assert "broken connection produces NO runs" in r.remediation
         assert "WD-CONN-001" in r.remediation
 
