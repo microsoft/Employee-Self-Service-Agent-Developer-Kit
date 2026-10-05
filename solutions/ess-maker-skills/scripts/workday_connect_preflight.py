@@ -30,6 +30,9 @@ class WorkdayConnectPreflightError(RuntimeError):
     """Raised when the Workday target cannot be proven safely."""
 
 
+SUPPORTED_POWER_PLATFORM_RINGS = frozenset({"prod", "preprod", "test"})
+
+
 @dataclass(frozen=True)
 class PreflightTarget:
     agent: dict[str, Any]
@@ -257,6 +260,10 @@ def resolve_target(
     _require_materialized_workspace(setup_state, agent)
 
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
+    if foundation_ring not in SUPPORTED_POWER_PLATFORM_RINGS:
+        raise WorkdayConnectPreflightError(
+            f"Unsupported Power Platform ring: {foundation.get('ring')!r}."
+        )
     foundation_environment_id = str(
         foundation.get("environmentId") or ""
     ).strip()

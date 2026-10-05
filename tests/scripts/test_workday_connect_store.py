@@ -107,6 +107,30 @@ def test_future_schema_is_rejected_without_rewriting_state(
     assert json.loads(path.read_text(encoding="utf-8")) == original
 
 
+@pytest.mark.parametrize("schema_version", [[], {}])
+def test_malformed_schema_is_rejected_without_rewriting_state(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    import workday_connect_store as store_module
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    original = {
+        "schemaVersion": schema_version,
+        "existingField": {"mustRemain": True},
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+
+    with pytest.raises(
+        store_module.WorkdayConnectStoreError,
+        match="Unsupported Workday connect state schema version",
+    ):
+        store_module.WorkdayConnectStore(tmp_path).initialize()
+
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
 def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
     tmp_path: Path,
 ) -> None:

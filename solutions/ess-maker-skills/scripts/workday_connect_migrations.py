@@ -455,6 +455,15 @@ _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
 def migrate_state(document: Mapping[str, Any]) -> dict[str, Any]:
     """Return a validated schema-v9 state without performing any I/O."""
     source_version = document.get("schemaVersion")
+    if "schemaVersion" in document and not isinstance(
+        source_version,
+        (str, int, float, bool, type(None)),
+    ):
+        raise WorkdayConnectMigrationError(
+            "Unsupported Workday connect state schema version: "
+            f"{source_version!r}. Use the kit version that created this state "
+            "or restore a compatible backup."
+        )
     upgrade = _UPGRADES.get(source_version)
     if upgrade is not None:
         return upgrade(document)
