@@ -278,7 +278,21 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
     assert "derives the safe category and canonical remediation" in normalized
     assert "migrates existing three-field failure files" in normalized
     assert "legacy free-form remediation text is discarded" in normalized
-    assert "cannot publish the agent, impersonate an employee" in normalized
+    assert "cannot publish or deploy the agent, impersonate an employee" in normalized
+    assert "Maker smoke test before publishing" in text
+    assert "without publishing the agent" in text
+    assert '"header": "Maker smoke test"' in text
+    assert "does not complete Employee validation" in normalized
+    assert "Non-maker employee validation after deployment" in text
+    assert "deployed ESS HR agent in Microsoft 365 Chat" in text
+    assert "required employee-owned Workday connections" in text
+    assert "Do not reuse the maker's connections or credentials" in text
+    assert normalized.index('"header": "Maker smoke test"') < normalized.index(
+        "publish the ESS HR agent"
+    )
+    assert normalized.index("publish the ESS HR agent") < normalized.index(
+        "begin-employee-test"
+    )
     assert "workday_connect.py begin-employee-test" in text
     assert text.index("begin-employee-test") < text.index(
         '"header": "Employee test result"'
@@ -625,6 +639,9 @@ def test_readiness_requires_real_employee_runtime_evidence() -> None:
     normalized = " ".join(text.split())
 
     assert "real signed-in employee scenario" in text
+    assert "Copilot Studio Test pane" in text
+    assert "Microsoft 365 Chat" in text
+    assert "employee-owned Workday connections" in text
     assert "returns real" in text
     assert "without an unexpected repeated sign-in" in text
     assert "Never record employee data or credentials" in normalized
@@ -702,7 +719,7 @@ def test_capability_claims_match_controller_surface() -> None:
         in (normalized["power_platform"])
     )
     assert "These are real automated changes" in (normalized["power_platform"])
-    assert "The skill cannot publish the agent" in normalized["employee"]
+    assert "The skill cannot publish or deploy the agent" in normalized["employee"]
 
 
 def test_runtime_apply_persists_verified_stages_before_later_failure(

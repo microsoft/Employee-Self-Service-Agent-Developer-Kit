@@ -5,13 +5,58 @@
 This phase requires a real signed-in employee scenario. Configuration checks
 alone cannot complete it.
 
-The skill cannot publish the agent, impersonate an employee, or perform this
-scenario on the employee's behalf. It guides the maker through the test and
-records only the safe outcome.
+The skill cannot publish or deploy the agent, impersonate an employee, create
+an employee's Workday connections, or perform either scenario on the user's
+behalf. It guides the maker through both validation stages and records only
+the safe final employee outcome.
 
-First ask the maker to publish the ESS HR agent, open a new Test pane
-conversation, and sign in as the assigned non-maker test employee. Stop before
-running a Workday scenario.
+## Maker smoke test before publishing
+
+First ask the maker to:
+
+1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
+2. open a new Test pane conversation without publishing the agent;
+3. use the maker's configured Workday connection to run one enabled read-only
+   scenario, such as checking a vacation balance; and
+4. confirm that the agent identifies the maker's Workday user and returns real
+   Workday data without an unexpected repeated sign-in.
+
+Use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "Maker smoke test",
+    "question": "Did the Workday scenario succeed in the Copilot Studio Test pane?",
+    "options": [
+      { "label": "Yes, the Test pane scenario passed" },
+      { "label": "No, the Test pane scenario needs remediation" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This smoke test does not complete Employee
+validation and must not be recorded as non-maker evidence. If it fails, stop
+before publishing, remediate the observed issue, and repeat the maker smoke
+test.
+
+## Non-maker employee validation after deployment
+
+Only after the maker smoke test passes, ask the maker to publish the ESS HR
+agent and complete the normal deployment or availability step for Microsoft
+365 Chat.
+
+Then ask the assigned non-maker Workday test employee to:
+
+1. open the deployed ESS HR agent in Microsoft 365 Chat;
+2. establish the required employee-owned Workday connections under the
+   employee account, completing the expected first-use sign-in when prompted;
+3. open a new conversation after those connections are ready; and
+4. stop before sending a Workday scenario request.
+
+Do not reuse the maker's connections or credentials for this stage.
 
 When the employee is ready to send the scenario request, start a bounded test
 attempt:
@@ -31,11 +76,11 @@ python scripts/workday_connect.py abandon-employee-test
 
 Then start a new attempt immediately before retrying.
 
-Then ask the maker to immediately:
+Then ask the maker to have the employee immediately:
 
 1. run one enabled read-only scenario, such as checking a vacation balance;
 2. confirm the agent identifies the signed-in employee and returns real
-   Workday data without an unexpected repeated sign-in.
+   Workday data without another unexpected sign-in.
 
 Use `vscode_askQuestions` for the test result:
 
