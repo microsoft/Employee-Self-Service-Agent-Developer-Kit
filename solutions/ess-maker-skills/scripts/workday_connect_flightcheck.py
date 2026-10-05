@@ -109,8 +109,10 @@ def _customer_remediation(phase_id: str, error_type: str) -> str:
             "topic wiring, and selected-agent attachment, then rerun Runtime."
         ),
         "employee-validation": (
-            "Retry the signed-in employee validation using the recorded "
-            "target and reviewed runtime flows."
+            "Review the employee runtime evidence result. Reuse the current "
+            "attempt for a pending or transient readiness check; run another "
+            "employee scenario only when the result explicitly requires a "
+            "fresh evidence window."
         ),
     }
     return guidance[phase_id]

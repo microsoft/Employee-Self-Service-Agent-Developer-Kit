@@ -731,6 +731,26 @@ def test_correlated_runtime_evidence_passes_recorded_attempt() -> None:
     assert row.remediation == ""
 
 
+def test_correlated_runtime_evidence_accepts_one_of_two_eligible_flows() -> None:
+    flow_ids = list(FLOW_IDS.values())[:2]
+    runs = {
+        flow_ids[0]: [_run(
+            run_id="run-main",
+            flow_id=flow_ids[0],
+            start_time="2026-06-01T00:00:30Z",
+        )],
+        flow_ids[1]: [],
+    }
+
+    row = workday_da._check_correlated_runtime_evidence(
+        _runtime_runner(runs)
+    )[0]
+
+    assert row.status == "Passed"
+    assert "1 of 2 eligible" in row.result
+    assert "not required to invoke every attached runtime flow" in row.result
+
+
 @pytest.mark.parametrize("response_value", [None, [], {}, {"name": ""}])
 def test_correlated_runtime_evidence_rejects_missing_or_malformed_success_action(
     response_value,
@@ -931,6 +951,6 @@ def test_correlated_runtime_evidence_fails_missing_candidate_run() -> None:
     row = workday_da._check_correlated_runtime_evidence(runner)[0]
 
     assert row.status == "Failed"
-    assert "No terminal run was found" in row.result
+    assert "No reviewed Workday runtime flow ran" in row.result
     assert row.evidence["migrationBaseline"] is True
     assert "capture a fresh evidence window" in row.remediation

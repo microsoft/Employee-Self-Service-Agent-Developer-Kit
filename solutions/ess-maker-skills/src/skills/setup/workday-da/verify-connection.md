@@ -124,10 +124,12 @@ timestamp. The controller accepts the legacy optional `scenarioName` field
 but this skill does not collect it. It rejects all other fields. Never record
 employee data or credentials.
 
-On success, the controller closes the bounded attempt, verifies the reviewed
-flow runs from that window, and evaluates final readiness before marking the
-lifecycle ready. Show any returned customer-safe remediation without exposing
-internal profile or checkpoint identifiers.
+On success, the controller freezes the bounded attempt, verifies the successful
+reviewed runtime flow or flows actually exercised in that window, and evaluates
+final readiness before marking the lifecycle ready. A single scenario is not
+required to exercise both the main and REST runtime flows. Show any returned
+customer-safe remediation without exposing internal profile or checkpoint
+identifiers.
 
 On failure, map the selected result to exactly one stable ID below. Do not
 invent a remediation ID.
@@ -200,8 +202,12 @@ surface to choose the next check:
 - employee mismatch -> inspect NameID and User Context V2 evidence;
 - network error -> inspect the exact Workday REST or SOAP host.
 
-After remediation, retry with a new conversation. Do not reset completed
-phases. Run `begin-employee-test` again immediately before every retried
-employee scenario, including when the previous `record-validation` command
-returned a readiness or service error. If the prior attempt is still active,
-run `abandon-employee-test` first.
+Do not automatically ask the employee to repeat a scenario when final readiness
+is pending or a transient service/read-history error occurs. Keep the frozen
+attempt and rerun `record-validation` with the same evidence file after waiting
+or restoring access. Start a new conversation and run `begin-employee-test`
+again only when the returned remediation explicitly requires a fresh evidence
+window, such as when no reviewed flow ran, multiple candidate runs made the
+window ambiguous, the candidate run failed, or the target changed. Do not reset
+completed phases. If the prior attempt is still active before a genuinely new
+scenario, run `abandon-employee-test` first.

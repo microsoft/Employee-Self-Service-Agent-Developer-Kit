@@ -2683,19 +2683,20 @@ def main():
     )
     parser.add_argument(
         "--runtime-evidence-start",
-        help="UTC ISO-8601 start of the employee Test pane evidence window.",
+        help="UTC ISO-8601 start of the employee scenario evidence window.",
     )
     parser.add_argument(
         "--runtime-evidence-end",
-        help="UTC ISO-8601 end of the employee Test pane evidence window.",
+        help="UTC ISO-8601 end of the employee scenario evidence window.",
     )
     parser.add_argument(
         "--runtime-evidence-flow-id",
         action="append",
         default=[],
         help=(
-            "Reviewed Workday runtime flow ID expected to run during the "
-            "recorded Test pane attempt. Repeat for each expected flow."
+            "Reviewed Workday runtime flow ID eligible to run during the "
+            "recorded employee scenario. Repeat for each attached flow; the "
+            "scenario does not need to exercise every supplied flow."
         ),
     )
     parser.add_argument(

@@ -1113,7 +1113,7 @@ def _classify_employee_runtime_run(run: dict[str, Any]) -> str:
 
 def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
     checkpoint_id = "WD-DA-RUN-001"
-    description = "Bounded employee Test pane runtime evidence"
+    description = "Bounded employee scenario runtime evidence"
     pp_admin = getattr(runner, "pp_admin", None)
     env_id = str(getattr(runner, "env_id", "") or "")
     attempt_id = str(
@@ -1137,7 +1137,7 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             checkpoint_id,
             Status.NOT_CONFIGURED.value,
             description,
-            "No complete employee Test pane evidence window was supplied. "
+            "No complete employee scenario evidence window was supplied. "
             "Generic recent Workday run health is not accepted as employee "
             "scenario proof.",
             remediation=(
@@ -1277,10 +1277,6 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             automation_type="passive",
         )]
 
-    missing = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if not outcomes
-    ]
     ambiguous = [
         flow_id for flow_id, outcomes in flow_outcomes.items()
         if len(outcomes) > 1
@@ -1316,7 +1312,7 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             checkpoint_id,
             Status.BLOCKED.value,
             description,
-            "The employee Test pane evidence window contains multiple "
+            "The employee scenario evidence window contains multiple "
             "candidate "
             "runs for: "
             + ", ".join(ambiguous)
@@ -1333,7 +1329,7 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             checkpoint_id,
             Status.BLOCKED.value,
             description,
-            "The employee Test pane evidence window contains a non-terminal or "
+            "The employee scenario evidence window contains a non-terminal or "
             "inconclusive run for: "
             + ", ".join(pending)
             + ".",
@@ -1345,17 +1341,19 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             automation_type="passive",
             evidence=evidence,
         )]
-    if missing:
+    observed_flow_ids = [
+        flow_id for flow_id, outcomes in flow_outcomes.items()
+        if outcomes
+    ]
+    if not observed_flow_ids:
         return [_da_result(
             checkpoint_id,
             Status.FAILED.value,
             description,
-            "No terminal run was found in the bounded employee evidence "
-            "window for: "
-            + ", ".join(missing)
-            + ".",
+            "No reviewed Workday runtime flow ran in the bounded employee "
+            "evidence window.",
             remediation=(
-                "Confirm the Test pane scenario invoked the reviewed flows, "
+                "Confirm the employee scenario invoked a reviewed flow, "
                 "then repeat the scenario and capture a fresh evidence window."
             ),
             automation_type="passive",
@@ -1382,8 +1380,10 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
         Status.PASSED.value,
         description,
         f"Evidence label '{attempt_id}' identified one successful terminal "
-        f"run in the bounded window for each of the "
-        f"{len(expected_flow_ids)} reviewed expected flows. The label is an "
+        f"run for each reviewed flow exercised in the bounded window "
+        f"({len(observed_flow_ids)} of {len(expected_flow_ids)} eligible). "
+        "A scenario is not required to invoke every attached runtime flow. "
+        "The label is an "
         "operator reference, not a Power Automate correlation key.",
         automation_type="passive",
         evidence=evidence,

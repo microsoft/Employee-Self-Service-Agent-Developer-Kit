@@ -303,6 +303,13 @@ def test_employee_validation_uses_stable_remediation_contract() -> None:
     assert "Provide only `testUserCategory`, `timestamp`" in text
     assert "start a bounded test attempt" in normalized
     assert "final readiness" in text
+    assert "not required to exercise both the main and REST runtime flows" in (
+        normalized
+    )
+    assert "Do not automatically ask the employee to repeat a scenario" in (
+        normalized
+    )
+    assert "rerun `record-validation` with the same evidence file" in normalized
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
