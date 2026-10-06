@@ -12,8 +12,8 @@ This is a DIFFERENT host and audience from the BAP admin client in
 
   - BAP (pp_admin_client.py): ``https://api.bap.microsoft.com`` /
     ``https://service.powerapps.com//.default``
-  - This client:             ``https://api.powerplatform.com`` /
-    ``https://api.powerplatform.com/.default``
+  - This client:             the target ring's Power Platform API audience /
+    ``.default`` scope
 
 Authentication reuses the same MSAL token cache as auth.py /
 graph_client.py / pp_admin_client.py (``.local/.token_cache.bin``).
@@ -25,6 +25,8 @@ are verified against the Microsoft Learn references cited on each method.
 
 import os
 import sys
+
+from agentbuilder import RING_CONFIG
 
 try:
     import msal
@@ -49,11 +51,6 @@ except ImportError:
 # Shared first-party public client used across the kit's MSAL flows.
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
-PP_API_BASE = "https://api.powerplatform.com"
-# The Power Platform API uses its own audience, distinct from the BAP /
-# PowerApps (service.powerapps.com) audience the pp_admin client uses.
-PP_API_SCOPE = "https://api.powerplatform.com/.default"
-
 # Billing-policy endpoints are stable at this version (MS Learn).
 API_VERSION = "2024-10-01"
 
@@ -70,11 +67,39 @@ _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
+def _request_id(response) -> str | None:
+    """Return the first correlation identifier exposed by the service."""
+    return (
+        response.headers.get("x-ms-request-id")
+        or response.headers.get("request-id")
+        or response.headers.get("x-ms-correlation-request-id")
+    )
+
+
+def _error_result(response, error: str) -> dict:
+    """Build a safe error observation without copying the response body."""
+    result = {
+        "_error": error,
+        "_status": response.status_code,
+    }
+    request_id = _request_id(response)
+    if request_id:
+        result["_request_id"] = request_id
+    return result
+
+
 class PowerPlatformClient:
     """Power Platform API client for billing-policy / PayG queries."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, *, ring: str = "prod"):
+        normalized_ring = str(ring).strip().casefold()
+        config = RING_CONFIG.get(normalized_ring)
+        if config is None:
+            raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
         self.tenant_id = tenant_id
+        self.ring = normalized_ring
+        self.base_url = str(config["audience"]).rstrip("/")
+        self.scope = f"{self.base_url}/.default"
         self._token: str | None = None
         self.signed_in_username: str | None = None
 
@@ -109,7 +134,7 @@ class PowerPlatformClient:
         )
         if selected_account:
             result = app.acquire_token_silent(
-                [PP_API_SCOPE],
+                [self.scope],
                 account=selected_account,
             )
         if not result or "access_token" not in result:
@@ -121,7 +146,7 @@ class PowerPlatformClient:
                 else {"prompt": "select_account"}
             )
             result = app.acquire_token_interactive(
-                [PP_API_SCOPE],
+                [self.scope],
                 **interactive_options,
             )
         if "access_token" not in result:
@@ -166,20 +191,20 @@ class PowerPlatformClient:
 
         Follows the same contract as ``pp_admin_client._get_all``:
 
-        - On 401/403 returns ``{"_error": "insufficient_permissions",
-          "_status": <code>}`` so callers surface the permission failure
-          instead of mistaking a swallowed auth error for an empty list.
+        - On 401/403 returns an explicit insufficient-permissions observation
+          with the status and service request ID when available, so callers
+          do not mistake a swallowed auth error for an empty list.
         - On 404 returns ``[]`` — a 404 on a billing-policy sub-collection
           (e.g. ``.../environments``) means "nothing linked", not an error.
           The environments endpoint documents 404 as a valid response.
         - Paginates via ``@odata.nextLink``.
         """
         items: list = []
-        url = f"{PP_API_BASE}{path}"
+        url = f"{self.base_url}{path}"
         while url:
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
             if resp.status_code in (401, 403):
-                return {"_error": "insufficient_permissions", "_status": resp.status_code}
+                return _error_result(resp, "insufficient_permissions")
             if resp.status_code == 404:
                 return items
             resp.raise_for_status()
@@ -243,47 +268,46 @@ class PowerPlatformClient:
             params={"api-version": API_VERSION},
         )
 
-    def get_currency_allocations(self, environment_id: str) -> list | dict:
-        """Get prepaid currency capacity allocated to a single environment.
+    def get_environment_entitlements(self, environment_id: str) -> dict:
+        """Get environment-scoped capacity and Pay-as-you-go entitlements.
 
-        MS Learn (documented tier):
-        https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/currency-allocation/get-currency-allocation-by-environment
+        Microsoft Learn:
+        https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/entitlement/get-many-environment-entitlements
 
-        GET /licensing/environments/{environmentId}/allocations?api-version=2024-10-01
+        GET /licensing/environments/{environmentId}/entitlements?api-version=2024-10-01
 
-        The response is a single ``AllocationsByEnvironmentResponseModelV1``
-        (not an OData collection):
-        ``{environmentId, currencyAllocations: [{currencyType, allocated}]}``.
-        ``currencyType`` is an ``ExternalCurrencyType`` enum; Copilot Studio
-        message capacity is ``MCSMessages`` (sessions are ``MCSSessions``).
-        The Sept 2025 rename to "Copilot Credits" did not change the enum value.
-
-        Returns the ``currencyAllocations`` list (``[]`` when the environment
-        has no allocations / 404), or a ``{"_error": ...}`` sentinel on 401/403.
+        Returns an evidence envelope containing the documented
+        ``EnvironmentEntitlementResponseModel[]`` plus the HTTP status and
+        service request ID. Expected 401, 403, and 404 responses are returned
+        as explicit error observations; other unsuccessful responses surface.
         """
-        url = f"{PP_API_BASE}/licensing/environments/{environment_id}/allocations"
+        url = (
+            f"{self.base_url}/licensing/environments/"
+            f"{environment_id}/entitlements"
+        )
         resp = _SESSION.get(
-            url, headers=self.headers,
-            params={"api-version": API_VERSION}, timeout=60,
+            url,
+            headers=self.headers,
+            params={"api-version": API_VERSION},
+            timeout=60,
         )
         if resp.status_code in (401, 403):
-            request_id = (
-                resp.headers.get("x-ms-request-id")
-                or resp.headers.get("request-id")
-                or resp.headers.get("x-ms-correlation-request-id")
-            )
-            result = {
-                "_error": "insufficient_permissions",
-                "_status": resp.status_code,
-            }
-            if request_id:
-                result["_request_id"] = request_id
-            return result
+            return _error_result(resp, "insufficient_permissions")
         if resp.status_code == 404:
-            return []
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("currencyAllocations", []) or []
+            return _error_result(resp, "not_found")
+        if resp.status_code == 204:
+            data = []
+        else:
+            resp.raise_for_status()
+            data = resp.json()
+        result = {
+            "items": data,
+            "_status": resp.status_code,
+        }
+        request_id = _request_id(resp)
+        if request_id:
+            result["_request_id"] = request_id
+        return result
 
     def list_environment_application_packages(
         self,
@@ -330,7 +354,7 @@ class PowerPlatformClient:
         https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/run-maker-evaluation-test-set
         """
         url = (
-            f"{PP_API_BASE}/copilotstudio/environments/{environment_id}"
+            f"{self.base_url}/copilotstudio/environments/{environment_id}"
             f"/bots/{bot_id}/api/makerevaluation/testsets/{test_set_id}/run"
         )
         resp = _SESSION.post(
@@ -341,10 +365,7 @@ class PowerPlatformClient:
             timeout=120,
         )
         if resp.status_code in (401, 403):
-            return {
-                "_error": "insufficient_permissions",
-                "_status": resp.status_code,
-            }
+            return _error_result(resp, "insufficient_permissions")
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, dict) else {}
@@ -379,7 +400,7 @@ class PowerPlatformClient:
         https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/get-maker-evaluation-test-run
         """
         url = (
-            f"{PP_API_BASE}/copilotstudio/environments/{environment_id}"
+            f"{self.base_url}/copilotstudio/environments/{environment_id}"
             f"/bots/{bot_id}/api/makerevaluation/testruns/{run_id}"
         )
         resp = _SESSION.get(
@@ -389,12 +410,9 @@ class PowerPlatformClient:
             timeout=120,
         )
         if resp.status_code in (401, 403):
-            return {
-                "_error": "insufficient_permissions",
-                "_status": resp.status_code,
-            }
+            return _error_result(resp, "insufficient_permissions")
         if resp.status_code == 404:
-            return {"_error": "not_found", "_status": 404}
+            return _error_result(resp, "not_found")
         resp.raise_for_status()
         data = resp.json()
         return data if isinstance(data, dict) else {}
@@ -415,7 +433,7 @@ class PowerPlatformClient:
         lost response is never replayed automatically.
         """
         url = (
-            f"{PP_API_BASE}/appmanagement/environments/{environment_id}"
+            f"{self.base_url}/appmanagement/environments/{environment_id}"
             f"/applicationPackages/{unique_name}/install"
         )
         resp = _SESSION.post(
@@ -426,10 +444,7 @@ class PowerPlatformClient:
             timeout=60,
         )
         if resp.status_code in (401, 403):
-            return {
-                "_error": "insufficient_permissions",
-                "_status": resp.status_code,
-            }
+            return _error_result(resp, "insufficient_permissions")
         if resp.status_code not in (200, 202):
             resp.raise_for_status()
 

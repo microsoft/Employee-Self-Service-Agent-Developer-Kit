@@ -1757,8 +1757,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
         "in Classic Copilot Studio.**"
     ) == 1
-    assert "### Runtime readiness" in completion_choices
-    assert "**{overall readiness status}**" in completion_choices
     assert "Next steps:" in completion_choices
     assert (
         "Build `{POST_SETUP_COMMAND_REMINDERS}` from the same recommendation and "
@@ -2272,16 +2270,13 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     ):
         assert readiness_status in text
     assert "### Capacity follow-up" in text
-    assert "local timezone of the machine running setup" in normalized
-    assert "`YYYY-MM-DDTHH:mm:ss`" in text
-    assert "`2026-10-03T01:43:19`" in text
-    assert "Truncate fractional seconds; do not round" in normalized
-    assert "do not rewrite persisted evidence" in normalized
-    assert "omit the displayed time rather than inferring one" in normalized
     assert "Times are shown in your local timezone" not in text
     assert (
-        "We weren’t able to automatically verify capacity for this environment."
+        "We weren’t able to automatically verify capacity for "
+        "**{ENVIRONMENT_DISPLAY_NAME}**."
     ) in text
+    assert "canonical `environment.display_name`" in text
+    assert '--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"' in text
     assert "Your agent and local authoring workspace are already available." in text
     assert "#### Copilot Studio message capacity" in text
     assert "In the left navigation, select **Licensing**." in text
@@ -2306,7 +2301,8 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     )
     assert "> ⚠️ **Administrator consent required**" in text
     assert (
-        "a **Power Platform administrator is present and has consented to override this capacity check**"
+        "a **Power Platform administrator is present and has consented to "
+        "override the capacity check for {ENVIRONMENT_DISPLAY_NAME}**"
         in normalized
     )
     assert "The original unavailable or denied result remains the recorded evidence." in (

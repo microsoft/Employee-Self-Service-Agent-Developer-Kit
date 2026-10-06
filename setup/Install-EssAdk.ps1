@@ -1440,6 +1440,7 @@ if ($FlightCheckOnly) {
             configVersion      = 1
             setup              = 'flightcheck-only'
             dataverseEndpoint  = $envUrl
+            ring               = $Ring
             flightCheckOnly    = $true
             agent              = $agentEntry
             agents             = $agentsList
@@ -1450,6 +1451,33 @@ if ($FlightCheckOnly) {
         [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
     }
+
+    # Reuse the retained config's ring when it has one, infer it from a saved
+    # environment API endpoint when possible, and migrate legacy configs that
+    # had neither. This keeps the explicit --ring argument consistent with the
+    # durable config instead of letting the installer's default prod conflict
+    # with a retained preprod/test workspace.
+    $configState = Get-Content $configPath -Raw | ConvertFrom-Json
+    $effectiveRing = [string]$configState.ring
+    if (-not $effectiveRing) {
+        $endpoint = ([string]$configState.powerPlatformApiEndpoint).ToLowerInvariant()
+        if ($endpoint -match 'api[.]test[.]powerplatform[.]com') {
+            $effectiveRing = 'test'
+        } elseif ($endpoint -match 'api[.]preprod[.]powerplatform[.]com') {
+            $effectiveRing = 'preprod'
+        } elseif ($endpoint -match 'api[.]powerplatform[.]com') {
+            $effectiveRing = 'prod'
+        }
+    }
+    if (-not $effectiveRing) { $effectiveRing = $Ring }
+    $effectiveRing = $effectiveRing.Trim().ToLowerInvariant()
+    if ($effectiveRing -notin @('prod', 'preprod', 'test')) {
+        throw "Existing config has unsupported Power Platform ring '$effectiveRing'. Reconfigure and choose prod, preprod, or test."
+    }
+    $Ring = $effectiveRing
+    $configState | Add-Member -NotePropertyName ring -NotePropertyValue $Ring -Force
+    $json = $configState | ConvertTo-Json -Depth 20 -Compress:$false
+    [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
 
     # --- Read config values if they came from an existing file ---
     if (-not $botId -and (Test-Path $configPath)) {
@@ -1511,10 +1539,8 @@ if ($FlightCheckOnly) {
             # environments via BAP prod (api.bap.microsoft.com) by default,
             # so we target the prod service ring unless the caller (typically
             # a PM validating a preprod/test environment) overrode -Ring.
-            # Without this flag FlightCheck's --scope full aborts with
-            # "The Power Platform environment ring is unavailable" because
-            # the installer-authored config.json only carries dataverseEndpoint
-            # (no powerPlatformApiEndpoint from which FC could infer the ring).
+            # Persisting the ring supports later /flightcheck runs; forwarding
+            # it explicitly also covers this first run and older configs.
             if ($pythonExe -eq 'py -3.12') {
                 & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } elseif ($pythonExe -eq 'py -3') {

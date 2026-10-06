@@ -493,15 +493,7 @@ Here's your ESS agent setup:
 
 > **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) in Classic Copilot Studio.**
 
-### Runtime readiness
-
-| Check                | Status                         | Details                                 |
-| -------------------- | ------------------------------ | --------------------------------------- |
-| Agent access         | {agent access status}          | {agent access evidence summary}         |
-| Environment capacity | {environment capacity status}  | {environment capacity evidence summary} |
-| Connections          | {connections status}           | {connections evidence summary}          |
-| Agent content        | {agent content status}         | {agent content evidence summary}        |
-| **Overall**          | **{overall readiness status}** | **{maker-facing readiness summary}**    |
+{FINAL_RUNTIME_READINESS_BLOCK}
 
 {APPLICABLE_LOCAL_CLEANUP_BLOCKS}
 
@@ -514,6 +506,12 @@ Next steps:
 **End message.**
 
 Then end the request.
+
+Replace `{FINAL_RUNTIME_READINESS_BLOCK}` with the complete `### Runtime
+readiness` block already rendered in the final handoff during this invocation.
+Reuse that block verbatim, including the five rows, statuses, evidence summaries,
+observation times, and Overall verdict. Do not regenerate the table from
+placeholders or read state again.
 
 Replace `{APPLICABLE_LOCAL_CLEANUP_BLOCKS}` with the body of every unresolved
 local-cleanup block from the detailed handoff, in the same order.
@@ -680,7 +678,12 @@ not explicitly selected package import, infer its environment ID, agent ID,
 service ring, and optional `agentBackend` ordering hint. When the URL does not
 identify the ring, use **Resolve the service ring** in
 `src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when
-the environment ID or agent ID is unclear. Complete the selected-agent
+the environment ID or agent ID is unclear. If this invocation has not already
+received the environment's service-provided display name, run `list-environments`
+for the resolved ring and retain the exact matching environment record's `name`
+as `{ENVIRONMENT_DISPLAY_NAME}`. A failed or missing exact match does not
+invalidate the URL target; leave the display name unavailable rather than
+inferring it. Complete the selected-agent
 product-line reconciliation before running:
 
 ```text

@@ -1641,7 +1641,10 @@ def _run_single_checkpoint(args):
     if registry.POWERPLATFORM in needed:
         if not quiet_auth:
             print("Authenticating to Power Platform API (capacity allocation)...")
-        powerplatform = PowerPlatformClient(tenant_id)
+        powerplatform = PowerPlatformClient(
+            tenant_id,
+            ring=resolved_ring,
+        )
         try:
             if canonical_username:
                 powerplatform.authenticate(
@@ -2890,16 +2893,19 @@ def main():
     )
     resolved_ring = None
     power_platform_admin_origin = None
-    if args.scope in {"full", "environment"}:
+    if args.scope in {"full", "environment", "prerequisites"}:
         try:
             resolved_ring = _resolve_environment_ring(
                 config,
                 explicit_ring=args.ring,
             )
-            power_platform_admin_origin = _resolve_power_platform_admin_origin(
-                config,
-                explicit_origin=args.power_platform_admin_origin,
-            )
+            if args.scope in {"full", "environment"}:
+                power_platform_admin_origin = (
+                    _resolve_power_platform_admin_origin(
+                        config,
+                        explicit_origin=args.power_platform_admin_origin,
+                    )
+                )
         except ValueError as exc:
             print(f"ERROR: {exc}")
             sys.exit(1)
@@ -3086,7 +3092,10 @@ def main():
 
         if args.scope in {"full", "environment"}:
             print("Authenticating to Power Platform API (capacity)...")
-            powerplatform = PowerPlatformClient(tenant_id)
+            powerplatform = PowerPlatformClient(
+                tenant_id,
+                ring=resolved_ring or "prod",
+            )
             try:
                 powerplatform.authenticate()
                 print("  Power Platform API: OK")
@@ -3226,7 +3235,10 @@ def main():
         and args.scope in ("full", "prerequisites")
     ):
         print("Authenticating to Power Platform API (billing policies)...")
-        powerplatform = PowerPlatformClient(tenant_id)
+        powerplatform = PowerPlatformClient(
+            tenant_id,
+            ring=resolved_ring or "prod",
+        )
         try:
             powerplatform.authenticate()
             print("  Power Platform API: OK")

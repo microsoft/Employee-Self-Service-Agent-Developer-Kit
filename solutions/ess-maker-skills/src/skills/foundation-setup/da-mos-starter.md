@@ -282,7 +282,7 @@ After the initial route inspection establishes a Dev route, successful enrollmen
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --environment-id "{ENVIRONMENT_ID}" \
+  --environment-id "{ENVIRONMENT_ID}" --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}" \
   --setup-source mos-starter \

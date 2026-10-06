@@ -38,7 +38,7 @@ python scripts/setup_existing_da.py list-environments \
 
 Parse `DA_ENVIRONMENT_LIST_JSON:` as the compact environment-selection result. Retain its `evidencePath` as the complete raw service evidence; the compact fields are sufficient for the picker, so read that file only when richer diagnostics or an unprojected service field is needed. Environment discovery is separate from agent discovery: do not run `list-agents`, infer agent visibility, or describe an empty environment result as an empty agent list. Present every environment returned by the Power Platform API without filtering by URL, Dataverse metadata, or environment type.
 
-When environments are returned, show their display names followed by **Help me decide** and let the maker select one exact environment. Retain its exact environment ID and the selected ring for every later operation in this invocation.
+When environments are returned, show their display names followed by **Help me decide** and let the maker select one exact environment. Retain its exact environment ID as `{ENVIRONMENT_ID}`, its service-provided `name` as `{ENVIRONMENT_DISPLAY_NAME}`, and the selected ring for every later operation in this invocation.
 
 For **Help me decide**, follow the shared contract in `SKILL.md`. Ask which team will own the agent, where that team normally performs development, who administers the environment, and whether isolation in a separate environment is intentional. Recommend an exact returned environment only when the maker's answers identify it; otherwise explain which ownership or administration fact must be confirmed.
 
