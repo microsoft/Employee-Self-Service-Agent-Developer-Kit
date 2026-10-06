@@ -239,27 +239,27 @@ This toolkit does NOT:
 
 ## Integrations
 
-> **DA-GA boundary:** ServiceNow, Workday, and other integrations are delivered
-> through separate product extensions. The current release does not install
-> those extensions, configure their connections, or enter the retired CEA or
-> DA-Preview setup flows. The detailed material below is reference-only until
-> DA-GA product-extension guidance is available.
+> **DA-GA boundary:** `/connect` offers Workday for the native ESS HR Agent.
+> ServiceNow connection setup is not supported in this DA release; its retained
+> implementation and integration documentation are reference-only. The kit
+> does not enter retired CEA or DA-Preview setup flows.
 
-The reference sections below describe how these integrations were configured in
-earlier Dataverse-based releases. They are not executable setup paths in the
-current DA-GA release.
+The ServiceNow reference below describes earlier Dataverse-based releases,
+not an executable setup path in the current DA-GA release.
 
 ### ServiceNow (HRSD / ITSM)
 
-Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog items. Run `/connect servicenow` to start.
+ServiceNow connection setup is not supported in this DA release, including
+reconnect, authentication changes, and resuming saved setup. Its source remains
+available for reference.
 
-**What the kit sets up:**
+**Retained setup reference:**
 - **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
 - **OAuth or Certificate auth** for service-to-service flows — configurable per environment
 - **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
 - **Extension pack installation** — installs the ServiceNow HRSD/ITSM extension in Copilot Studio with all connection references wired up
 
-**Supported auth methods:**
+**Historical auth methods:**
 | Method | Use case |
 |--------|----------|
 | Microsoft Entra ID (interactive) | Production — employees SSO through Microsoft |
@@ -348,7 +348,7 @@ The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for 
 - **REST API** — Query and create records in any ServiceNow table
 - **Connection testing** — Verify instance connectivity and credentials
 
-Configured automatically during `/connect servicenow`.
+Retained for reference; the DA connection experience does not configure it.
 
 ---
 
@@ -406,7 +406,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
 | `/landing-page` | Configure landing-page branding and content |
-| `/connect` | Explain the DA-GA product extension requirement |
+| `/connect` | Choose the supported Workday integration |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Report that DA-GA deletion is not yet available |

@@ -292,9 +292,14 @@ Status emoji mapping:
 After the table, analyze the failed and warning results and build a list
 of things you CAN fix automatically vs. things that need manual action.
 
+Before offering or dispatching connection repairs, apply **Availability** in
+`src/skills/connect/SKILL.md`. ServiceNow connection findings are not
+auto-fixable; retain their diagnostics and manual remediation without offering
+`/connect` or loading retained provider files.
+
 **Auto-fixable** (offer to do these right now):
 - Compile errors in topics → run `/scan` skill
-- Missing Workday/ServiceNow connection → run `/connect` skill
+- Missing Workday connection → run `/connect workday` skill
 - Workday env vars not set → run `/connect workday` skill
 - Workday connections in Error state → run `/connect workday` skill
 - Disabled Workday/ServiceNow flows → enable via Dataverse MCP
@@ -354,7 +359,8 @@ Then use `vscode_askQuestions` to ask:
 
 **If they say yes**, execute each fix by reading and following the
 appropriate skill file:
-- Connection issues → read `src/skills/connect/SKILL.md` and follow it
+- Supported Workday connection issues → read `src/skills/connect/SKILL.md`
+  and follow it with Workday preselected
 - Compile errors → read `src/skills/cleanup/SKILL.md` and follow it
 - Flow enablement → use Dataverse MCP to update flow state
 

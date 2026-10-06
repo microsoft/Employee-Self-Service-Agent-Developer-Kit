@@ -38,7 +38,8 @@ def test_connect_workday_routes_installed_cea_packages_to_lifecycle() -> None:
     assert "connect/workday/step" not in step1
     assert "connect/workday/step" not in connect
     assert "connect/shared/lifecycle-runner.md" in connect
-    assert "src/skills/connect/servicenow/" in connect
+    assert "ServiceNow integration isn't supported in this DA release." in connect
+    assert "src/skills/connect/servicenow/" not in connect
 
 
 def test_hybrid_boundary_is_non_mutating() -> None:
