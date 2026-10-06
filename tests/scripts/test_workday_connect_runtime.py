@@ -187,9 +187,26 @@ def _identity(_token, *, preferred_username):
     }
 
 
-def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
+def _authorization_preview_runner(command, **_kwargs):
+    assert command[-1].endswith("-WhatIf")
+    flow_names = runtime.load_catalog()["packages"]["runtime"]["flowNames"]
+    output = [
+        "  [reuse]  delegatedauthorization authorization-id (providertype 3)",
+        "  [reuse]  team team-id 'ESS DA HR Workday - Development' (teamtype 1)",
+        *[
+            f"  [reuse]  '{flow_name}' already shared with the team "
+            "(mask: ReadAccess,WriteAccess)"
+            for flow_name in flow_names
+        ],
+        "Dataverse authorization is in place.",
+    ]
+    return SimpleNamespace(returncode=0, stdout="\n".join(output), stderr="")
+
+
+def test_runtime_plan_uses_one_dataverse_token_and_exact_targets(monkeypatch):
     records = _records()
     token_calls = []
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
 
     result = runtime.run_runtime_operation(
         _state(),
@@ -198,6 +215,7 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
             token_calls.append((url, preferred_username)) or "token"
         ),
         identity_provider=_identity,
+        authorization_runner=_authorization_preview_runner,
         **_discovery_dependencies(records),
     )
 
@@ -211,6 +229,11 @@ def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
         "Workday",
         "Dataverse",
     ]
+    assert result["approvalSummary"]["targetRealm"] == "Development"
+    assert result["approvalSummary"]["authorizationTeamName"] == (
+        "ESS DA HR Workday - Development"
+    )
+    assert result["authorizationPreview"]["outcome"] == "already-configured"
     serialized_summary = __import__("json").dumps(
         result["approvalSummary"],
         sort_keys=True,
@@ -367,8 +390,9 @@ def test_physical_connection_ambiguity_exposes_structured_candidates(
     assert duplicate_id not in str(raised.value)
 
 
-def test_runtime_plan_reuses_recorded_connection_ids():
+def test_runtime_plan_reuses_recorded_connection_ids(monkeypatch):
     state = _state()
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
     state["phases"]["connections"]["evidence"] = [
         {
             "action": "physical-connections-verified",
@@ -414,6 +438,7 @@ def test_runtime_plan_reuses_recorded_connection_ids():
         apply=False,
         token_provider=lambda *_args, **_kwargs: "token",
         identity_provider=_identity,
+        authorization_runner=_authorization_preview_runner,
         runner=runner,
         query=_query_for(_records()),
         pac_resolver=lambda: Path("pac.exe"),
@@ -477,8 +502,15 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
 
     def authorization_runner(command, **_kwargs):
-        assert command[command.index("-PreferredUsername") + 1] == ("maker@contoso.com")
-        assert command[-2] == "-WorkflowId"
+        invocation = command[-1]
+        assert "-PreferredUsername 'maker@contoso.com'" in invocation
+        assert "-WorkflowId @(" in invocation
+        for value in records["flows"].values():
+            assert value["workflowid"] in invocation
+        assert (
+            "-TeamName 'ESS DA HR Workday - Development'" in invocation
+        )
+        assert "-WhatIf" not in invocation
         return SimpleNamespace(
             returncode=0,
             stdout="Dataverse authorization is in place.",
@@ -519,16 +551,22 @@ def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
     )
     messages = capsys.readouterr().err
     script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
-    expected_flows = set(records["flows"])
-    for flow_name in expected_flows:
-        assert f'[INFO] Running {script} for flow "{flow_name}".' in messages
-        assert (
-            f'[INFO] {script} completed for flow "{flow_name}"; '
-            "Dataverse authorization was verified."
-        ) in messages
-    assert messages.count("Dataverse authorization was verified.") == len(
-        expected_flows
-    )
+    assert (
+        f"[INFO] Running {script} once for 3 reviewed Workday flows in "
+        "Development."
+    ) in messages
+    assert (
+        f"[INFO] {script} completed in Development; Dataverse authorization "
+        "was verified."
+    ) in messages
+    assert messages.count("Dataverse authorization was verified.") == 1
+    assert result["applied"]["delegatedAuthorization"] == {
+        "outcome": "verified",
+        "realm": "dev",
+        "teamName": "ESS DA HR Workday - Development",
+        "workflowCount": 3,
+    }
+    assert len(result["applied"]["flows"]) == 3
     assert "[ERROR]" not in messages
 
 
@@ -587,8 +625,8 @@ def test_runtime_records_verified_stages_before_later_failure(monkeypatch, capsy
     )
     messages = capsys.readouterr().err
     script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
-    assert f"[INFO] Running {script} for flow " in messages
-    assert f"[ERROR] {script} failed for flow " in messages
+    assert f"[INFO] Running {script} once for 3 reviewed Workday flows" in messages
+    assert f"[ERROR] {script} failed in Development" in messages
     assert "explicit [FAIL] result" in messages
     assert "Dataverse authorization was verified." not in messages
 
@@ -760,13 +798,17 @@ def test_runtime_rejects_a_different_dataverse_identity():
 def test_runtime_authorization_timeout_is_structured(monkeypatch, capsys):
     plan = {
         "scope": {
+            "realm": "test",
+            "realmDisplayName": "Test",
             "dataverseUrl": "https://contoso.crm.dynamics.com",
             "makerUsername": "maker@contoso.com",
         },
+        "flows": [{"name": "Get Employee Information"}],
         "delegatedAuthorization": {
             "script": "alm/Enable-CosmosDAFlowAuthorization.ps1",
             "botId": BOT_ID,
             "workflowIds": ["workflow-id"],
+            "teamName": "ESS DA HR Workday - Test",
         },
     }
 
@@ -785,9 +827,126 @@ def test_runtime_authorization_timeout_is_structured(monkeypatch, capsys):
 
     messages = capsys.readouterr().err
     script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
-    assert f"[INFO] Running {script} for workflow workflow-id." in messages
     assert (
-        f"[ERROR] {script} failed for workflow workflow-id: "
+        f"[INFO] Running {script} once for 1 reviewed Workday flows in Test."
+    ) in messages
+    assert (
+        f"[ERROR] {script} failed in Test: "
         "execution did not finish within 10 minutes."
     ) in messages
     assert "Dataverse authorization was verified." not in messages
+
+
+def test_runtime_authorization_accepts_first_time_whatif_preview(monkeypatch):
+    workflow_ids = [
+        "44444444-4444-4444-4444-000000000001",
+        "44444444-4444-4444-4444-000000000002",
+        "44444444-4444-4444-4444-000000000003",
+    ]
+    flow_names = [
+        "Get Employee Information",
+        "Get Employee Time Off",
+        "Get Employee Time Off Balances",
+    ]
+    plan = {
+        "scope": {
+            "realm": "test",
+            "realmDisplayName": "Test",
+            "dataverseUrl": "https://contoso.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+        },
+        "flows": [
+            {"name": name, "workflowId": workflow_id}
+            for name, workflow_id in zip(flow_names, workflow_ids, strict=True)
+        ],
+        "delegatedAuthorization": {
+            "script": "alm/Enable-CosmosDAFlowAuthorization.ps1",
+            "botId": BOT_ID,
+            "workflowIds": workflow_ids,
+            "teamName": "ESS DA HR Workday - Test",
+        },
+    }
+    output = "\n".join(
+        [
+            "  [create] would create delegatedauthorization (providertype 3)",
+            "  [create] would create access team (teamtype 1)",
+            *[
+                f"  [create] would share '{name}' with the team"
+                for name in flow_names
+            ],
+            (
+                "  [FAIL] GetTeamsForBotId returned 0 teams; Flow-RP takes "
+                "the first and expects exactly one"
+            ),
+            *[
+                f"  [FAIL] {workflow_id} is NOT shared with the team "
+                "with WriteAccess"
+                for workflow_id in workflow_ids
+            ],
+            "Verification FAILED - see [FAIL] lines above.",
+        ]
+    )
+    commands = []
+
+    def runner(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=1, stdout=output, stderr="")
+
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    result = runtime._run_authorization(plan, runner=runner, preview=True)
+
+    assert len(commands) == 1
+    assert commands[0][-1].endswith("-WhatIf")
+    assert result == {
+        "outcome": "changes-required",
+        "realm": "test",
+        "teamName": "ESS DA HR Workday - Test",
+        "workflowCount": 3,
+        "changesRequired": True,
+    }
+
+
+def test_runtime_authorization_rejects_unsafe_whatif_preview(monkeypatch):
+    plan = {
+        "scope": {
+            "realm": "test",
+            "realmDisplayName": "Test",
+            "dataverseUrl": "https://contoso.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+        },
+        "flows": [{"name": "Get Employee Information"}],
+        "delegatedAuthorization": {
+            "script": "alm/Enable-CosmosDAFlowAuthorization.ps1",
+            "botId": BOT_ID,
+            "workflowIds": [
+                "44444444-4444-4444-4444-000000000001",
+            ],
+            "teamName": "ESS DA HR Workday - Test",
+        },
+    }
+    output = "\n".join(
+        [
+            "  [reuse] delegatedauthorization authorization-id",
+            "  [create] would create access team (teamtype 1)",
+            (
+                "  [create] would share 'Get Employee Information' "
+                "with the team"
+            ),
+            "Access denied while reading workflow shares.",
+        ]
+    )
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="unsafe or ambiguous",
+    ):
+        runtime._run_authorization(
+            plan,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout=output,
+                stderr="",
+            ),
+            preview=True,
+        )

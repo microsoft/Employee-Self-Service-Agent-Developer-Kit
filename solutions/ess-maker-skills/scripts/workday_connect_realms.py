@@ -466,3 +466,64 @@ def discover_and_record_realm_target(
         ]["deploymentStatus"],
         "status": store.status(),
     }
+
+
+def revalidate_active_realm_target(
+    root: Path,
+    store: WorkdayConnectStore,
+    *,
+    account_hint: str | None = None,
+    authenticator: Callable[..., tuple[str, str]] = authenticate_agent_inventory,
+    client_factory: Callable[..., AgentBuilderClient] = AgentBuilderClient,
+    environment_loader: Callable[..., list[dict[str, Any]]] = list_environments,
+) -> dict[str, Any]:
+    """Reread the exact promoted target identity immediately before mutation."""
+    state = store.load()
+    realm = str(state.get("activeTargetRealm") or "dev").casefold()
+    if realm == "dev":
+        return {"realm": "dev", "revalidated": False}
+    target = (state.get("targets") or {}).get(realm)
+    identity = (
+        target.get("identity")
+        if isinstance(target, Mapping)
+        and isinstance(target.get("identity"), Mapping)
+        else {}
+    )
+    required = {
+        "environmentId": str(identity.get("environmentId") or "").strip(),
+        "environmentUrl": str(identity.get("environmentUrl") or "").strip(),
+        "tenantId": str(identity.get("tenantId") or "").strip(),
+        "agentId": str(identity.get("agentId") or "").strip(),
+        "almFamilyId": str(identity.get("almFamilyId") or "").strip(),
+        "commitSha": str(identity.get("commitSha") or "").strip(),
+    }
+    missing = [key for key, value in required.items() if not value]
+    if missing:
+        raise WorkdayConnectRealmError(
+            f"The active {realm.title()} target identity is incomplete: "
+            + ", ".join(sorted(missing))
+        )
+    discover_and_record_realm_target(
+        root,
+        store,
+        realm=realm,
+        environment_id=required["environmentId"],
+        environment_url=required["environmentUrl"],
+        account_hint=account_hint,
+        authenticator=authenticator,
+        client_factory=client_factory,
+        environment_loader=environment_loader,
+    )
+    refreshed = store.load()["targets"][realm]["identity"]
+    changed = [
+        key
+        for key, expected in required.items()
+        if str(refreshed.get(key) or "").casefold() != expected.casefold()
+    ]
+    if changed:
+        raise WorkdayConnectRealmError(
+            f"The active {realm.title()} target changed after approval: "
+            + ", ".join(sorted(changed))
+            + ". Generate and approve a new runtime plan."
+        )
+    return {"realm": realm, "revalidated": True}

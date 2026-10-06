@@ -542,6 +542,60 @@ def test_changed_deployment_commit_resets_only_that_target(
     assert state["targets"]["dev"]["identity"]["commitSha"] == "dev123"
 
 
+def test_revalidating_dev_target_does_not_call_promoted_discovery(
+    tmp_path: Path,
+) -> None:
+    from workday_connect_realms import revalidate_active_realm_target
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+
+    assert revalidate_active_realm_target(tmp_path, store) == {
+        "realm": "dev",
+        "revalidated": False,
+    }
+
+
+def test_revalidating_promoted_target_rejects_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workday_connect_realms as realms
+    from workday_connect_realms import WorkdayConnectRealmError
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    identity = _identity(
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        agent_id=TEST_AGENT_ID,
+        commit_sha="abc123",
+    )
+    store.record_target_discovery("test", identity, ring="test")
+    store.activate_target("test")
+
+    def rediscover(_root, target_store, **_kwargs):
+        target_store.record_target_discovery(
+            "test",
+            {**identity, "commitSha": "def456"},
+            ring="test",
+        )
+        target_store.activate_target("test")
+        return {"realm": "test"}
+
+    monkeypatch.setattr(realms, "discover_and_record_realm_target", rediscover)
+
+    with pytest.raises(
+        WorkdayConnectRealmError,
+        match="changed after approval: commitSha",
+    ):
+        realms.revalidate_active_realm_target(tmp_path, store)
+
+
 def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
     from workday_connect_model import default_state
     from workday_connect_store import WorkdayConnectStore

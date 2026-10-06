@@ -56,6 +56,7 @@ from workday_connect_readiness import (
 from workday_connect_realms import (
     WorkdayConnectRealmError,
     discover_and_record_realm_target,
+    revalidate_active_realm_target,
 )
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
@@ -872,6 +873,7 @@ def _runtime_apply(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    revalidate_active_realm_target(args.root, store)
     result = run_runtime_operation(
         store.load(),
         apply=True,
