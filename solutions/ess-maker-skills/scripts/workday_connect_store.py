@@ -681,6 +681,13 @@ def _transition_phase_state(
         evidence_actions = {
             str(record.get("action") or "") for record in phase["evidence"]
         }
+        if (
+            phase_id == "employee-validation"
+            and "signed-in-scenario" in completed
+            and "signed-in-scenario" in evidence_actions
+        ):
+            completed.add("maker-smoke-test")
+            evidence_actions.add("maker-smoke-test")
         missing = sorted((required - completed) | (required - evidence_actions))
         if missing:
             raise WorkdayConnectStoreError(
@@ -1755,6 +1762,33 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
+    def finalize_maker_validation_success(self) -> dict[str, Any]:
+        def mutation(state: dict[str, Any]) -> None:
+            phase = state["phases"]["employee-validation"]
+            maker_evidence = next(
+                (
+                    record
+                    for record in phase["evidence"]
+                    if record.get("action") == "maker-smoke-test"
+                ),
+                None,
+            )
+            if not isinstance(maker_evidence, Mapping):
+                raise WorkdayConnectStoreError(
+                    "Record the successful maker smoke test before completing "
+                    "the Workday connection lifecycle."
+                )
+            phase["employeeTestAttempt"] = None
+            phase["validationProfiles"] = {}
+            _transition_phase_state(
+                state,
+                "employee-validation",
+                PhaseStatus.COMPLETE.value,
+                invalidate_downstream=False,
+            )
+
+        return self._mutate(mutation)
+
     def finalize_employee_validation_failure(
         self,
         *,
@@ -1881,10 +1915,14 @@ class WorkdayConnectStore:
                 attempt["status"] = "succeeded"
                 attempt["completedAt"] = attempt["completedAt"] or utc_now()
                 attempt["outcome"] = "success"
+            completed_actions = set(phase["completedActions"])
             if (
                 phase["status"] != PhaseStatus.COMPLETE.value
-                and PHASE_REQUIRED_ACTIONS["employee-validation"]
-                <= set(phase["completedActions"])
+                and (
+                    PHASE_REQUIRED_ACTIONS["employee-validation"]
+                    <= completed_actions
+                    or "signed-in-scenario" in completed_actions
+                )
             ):
                 _transition_phase_state(
                     state,

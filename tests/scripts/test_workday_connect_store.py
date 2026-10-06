@@ -1504,7 +1504,12 @@ def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+        actions = (
+            ("signed-in-scenario",)
+            if phase_id == "employee-validation"
+            else model.PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        for action in actions:
             phase["completedActions"].append(action)
             phase["evidence"].append(
                 {"action": action, "outcome": "verified"}
@@ -1559,7 +1564,12 @@ def test_v7_ready_migration_requires_final_readiness_after_preparing_attempt(
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+        actions = (
+            ("signed-in-scenario",)
+            if phase_id == "employee-validation"
+            else model.PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        for action in actions:
             evidence = {"action": action, "outcome": "verified"}
             if (
                 phase_id == "runtime"

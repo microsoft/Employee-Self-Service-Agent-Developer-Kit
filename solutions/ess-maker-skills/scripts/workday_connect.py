@@ -1073,6 +1073,49 @@ def _record_validation(
             _json_input(args, "evidence", "employee validation evidence")
         )
         phase = store.load()["phases"]["employee-validation"]
+        if evidence["testUserCategory"].casefold() == "maker":
+            maker_evidence = {
+                "testUserCategory": "maker",
+                "timestamp": evidence["timestamp"],
+                "outcome": evidence["outcome"],
+            }
+            if (
+                phase["status"] == "complete"
+                and _action_evidence(
+                    {"phases": {"employee-validation": phase}},
+                    "employee-validation",
+                    "maker-smoke-test",
+                )
+                == maker_evidence
+            ):
+                return {
+                    "verified": True,
+                    "replayed": True,
+                    "lifecycleComplete": True,
+                    "status": store.status(),
+                }
+            store.complete_action(
+                "employee-validation",
+                "maker-smoke-test",
+                evidence=maker_evidence,
+            )
+            store.finalize_maker_validation_success()
+            return {
+                "verified": True,
+                "lifecycleComplete": True,
+                "postSkillNextSteps": [
+                    "Publish and deploy the agent when ready.",
+                    (
+                        "Have each non-maker employee establish their own "
+                        "Workday connections in Microsoft 365 Chat."
+                    ),
+                    (
+                        "Validate an enabled Workday scenario with the "
+                        "published agent."
+                    ),
+                ],
+                "status": store.status(),
+            }
         attempt = phase.get("employeeTestAttempt")
         if (
             isinstance(attempt, Mapping)

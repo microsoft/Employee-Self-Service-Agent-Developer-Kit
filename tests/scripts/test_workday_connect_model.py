@@ -143,7 +143,7 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "| 3 | Workday administrator | Pending |\n"
         "| 4 | Connections | Pending |\n"
         "| 5 | Runtime configuration | Pending |\n"
-        "| 6 | Employee validation | Pending |"
+        "| 6 | Maker validation | Pending |"
     )
     assert model.next_phase_summary(state) == {
         "id": "entra",
@@ -177,21 +177,21 @@ def test_employee_validation_summary_preserves_test_then_publish_order() -> None
 
     assert model.next_phase_summary(state) == {
         "id": "employee-validation",
-        "title": "Employee validation",
+        "title": "Maker validation",
         "whatHappens": [
             (
                 "Smoke-test an enabled read-only Workday scenario in the "
                 "Copilot Studio Test pane without publishing the agent."
             ),
             (
-                "After the maker smoke test passes, publish and deploy the "
-                "agent to Microsoft 365 Chat."
+                "Complete the guided Workday connection lifecycle when the "
+                "maker scenario returns the expected employee context and "
+                "Workday data."
             ),
             (
-                "Have the assigned non-maker employee establish "
-                "employee-owned Workday connections, run a real scenario, "
-                "and confirm employee context and Workday data work without "
-                "an unexpected repeated sign-in."
+                "Show publishing, deployment, employee-owned connections, and "
+                "non-maker Microsoft 365 Chat validation as post-skill next "
+                "steps."
             ),
         ],
     }

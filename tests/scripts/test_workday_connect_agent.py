@@ -1996,3 +1996,77 @@ def test_employee_success_runs_runtime_and_final_readiness(
         ]
         == "succeeded"
     )
+
+
+def test_maker_success_completes_without_runtime_evidence_correlation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pytest
+
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        if phase_id == "runtime":
+            store.approve_plan(
+                "runtime",
+                {
+                    "phase": "runtime",
+                    "scope": {"environmentId": "environment-id"},
+                    "actions": ["Configure runtime"],
+                    "flows": [{"name": "REST", "workflowId": "flow-id"}],
+                },
+            )
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            evidence = {"outcome": "verified"}
+            if action == "flow-attachment-confirmed":
+                evidence["flowNames"] = ["REST"]
+            store.complete_action(
+                phase_id,
+                action,
+                evidence=evidence,
+            )
+        store.set_phase_status(phase_id, "complete")
+    store.begin_employee_test_attempt()
+    monkeypatch.setattr(
+        workday_connect,
+        "_run_final_readiness",
+        lambda _store: pytest.fail("maker validation must not correlate runs"),
+    )
+    evidence_file = tmp_path / "maker-validation.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "testUserCategory": "maker",
+                "timestamp": "2026-10-05T18:00:00-07:00",
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = workday_connect._record_validation(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+
+    state = store.load()
+    assert result["verified"] is True
+    assert result["lifecycleComplete"] is True
+    assert len(result["postSkillNextSteps"]) == 3
+    assert state["status"] == "ready"
+    assert state["phases"]["employee-validation"]["employeeTestAttempt"] is None
+    assert state["phases"]["employee-validation"]["validationProfiles"] == {}
+    evidence = state["phases"]["employee-validation"]["evidence"][0]
+    assert evidence["action"] == "maker-smoke-test"
+    assert evidence["testUserCategory"] == "maker"

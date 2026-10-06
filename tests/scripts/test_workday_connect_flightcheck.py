@@ -766,7 +766,12 @@ def test_ready_v7_migration_runs_only_final_profile(
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+        actions = (
+            ("signed-in-scenario",)
+            if phase_id == "employee-validation"
+            else model.PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        for action in actions:
             evidence = {"action": action, "outcome": "verified"}
             if (
                 phase_id == "runtime"

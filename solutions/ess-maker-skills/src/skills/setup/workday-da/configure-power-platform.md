@@ -414,10 +414,10 @@ mapped topic. It completes the runtime phase only when the target-bound flow
 attachment is confirmed, every Workday topic is Active, and the automatic
 configuration checks are accepted. It retains any topic
 diagnostics for support correlation without presenting them as runtime failure
-evidence. The signed-in employee scenario remains the functional confirmation
-that the Workday runtime works. Do not substitute an unscoped "done" response
-for the structured confirmation, run separate readiness commands, or ask for
-the flow-connection confirmation twice.
+evidence. The maker's Copilot Studio Test pane scenario remains the functional
+confirmation that the Workday runtime works. Do not substitute an unscoped
+"done" response for the structured confirmation, run separate readiness
+commands, or ask for the flow-connection confirmation twice.
 
 If runtime discovery reports that the selected package has no reviewed flow
 catalog, record a manual handoff. Do not claim that connection references,

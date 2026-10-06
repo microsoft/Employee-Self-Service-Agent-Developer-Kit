@@ -84,7 +84,7 @@ Describe each action according to who actually performs it:
 | Workday administrator | Generate the handoff, validate returned non-secret values, derive endpoints, and record evidence                                                                                                                              | Change SAML, OAuth, API-client, certificate, or authentication-policy settings in Workday                               |
 | Connections           | After approval, install or verify the Workday package, then record the reviewed physical-connection readiness evidence                                                                                                        | Approve package installation, create connector connections, and complete connector OAuth                                |
 | Runtime               | After approval, bind the Workday connections, activate the package flows, configure required runtime permissions, connect employee context routing, enable every Workday topic included with the agent, and verify the result | Connect flows to the agent and enable parameter sharing in Copilot Studio when those settings require maker interaction |
-| Employee validation   | Guide a pre-publish maker smoke test, then record safe post-deployment employee evidence and retain the current blocker                                                                                                        | Test once in the Copilot Studio Test pane, publish and deploy the agent, then establish employee-owned connections and run the real scenario in Microsoft 365 Chat |
+| Maker validation      | Guide and record one successful pre-publish maker smoke test, then close the guided lifecycle                                                                                                                                    | Test once in the Copilot Studio Test pane without publishing                                                                                                         |
 
 Never say "I changed," "I configured," "I enabled," or "I updated" for a
 manual action. Say what the administrator or maker must do, then say what the
@@ -95,8 +95,8 @@ command succeeded and the target was reread.
 
 Treat the Entra and Workday configuration as a reusable tenant foundation.
 Treat package installation, physical connections, runtime flow wiring, native
-topics, publishing, and employee validation as environment-and-agent-specific
-deployment work.
+topics, and maker validation as environment-and-agent-specific deployment
+work. Publishing and non-maker validation happen after this guided lifecycle.
 
 - A different Power Platform environment, ESS HR agent, or maker account must
   not by itself require the Entra or Workday administrators to repeat setup.
@@ -148,12 +148,12 @@ resumed setup must still make its remaining administrator dependencies clear.
 > | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy           | Workday Administrator                                                                                                |
 > | Connections           | Install or verify the supported Workday package, then create the Workday OAuthUser and Dataverse connections and complete connector sign-in                | Power Platform Environment Maker with package installation access                                                    |
 > | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization                    |
-> | Employee validation   | Smoke-test in the Copilot Studio Test pane before publishing, then publish and validate a real signed-in employee scenario in Microsoft 365 Chat using employee-owned connections | Environment Maker and Workday test employee; Workday Administrator or network administrator if remediation is needed |
+> | Maker validation      | Smoke-test an enabled Workday scenario in the Copilot Studio Test pane without publishing; publishing and non-maker validation are post-skill next steps | Environment Maker |
 >
 > I'll automate checks and supported changes where reliable APIs are available.
 > For Workday or portal-only settings, I'll provide the responsible
 > administrator with the exact steps and wait for verified evidence. The
-> environment isn't ready until the signed-in Workday scenario succeeds.
+> guided lifecycle completes after the maker's Test pane scenario succeeds.
 
 Run:
 
@@ -204,7 +204,7 @@ from `nextPhaseId`:
 | `workday-admin`       | Workday Administrator                                                                                                                                                                                       |
 | `connections`         | Power Platform Environment Maker with package installation access                                                                                                                                           |
 | `runtime`             | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization                                                                                                       |
-| `employee-validation` | Environment Maker and Workday test employee                                                                                                                                                                 |
+| `employee-validation` | Environment Maker                                                                                                                                                                                           |
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
 form below. That phase asks whether the maker has looped in the administrator,
@@ -281,5 +281,15 @@ question; answer the side question, then resume the same blocker.
 
 Only show the following after controller status is `ready`:
 
-> Your ESS HR agent is connected to Workday, and the signed-in employee path
-> has been validated in this environment.
+> Your ESS HR agent is connected to Workday, and the maker smoke test passed
+> in the Copilot Studio Test pane.
+>
+> **Next steps after this guided setup:**
+>
+> 1. Publish and deploy the agent when ready.
+> 2. Have each non-maker employee establish their own Workday connections in
+>    Microsoft 365 Chat.
+> 3. Validate an enabled Workday scenario with the published agent.
+>
+> These are deployment and adoption steps outside the Workday setup lifecycle;
+> you do not need to return their results to this skill.

@@ -1691,6 +1691,20 @@ def test_employee_evidence_does_not_require_scenario_name():
     }
 
 
+def test_maker_validation_evidence_is_accepted() -> None:
+    assert validate_employee_evidence(
+        {
+            "testUserCategory": "maker",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "outcome": "passed",
+        }
+    ) == {
+        "testUserCategory": "maker",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
+
 def test_employee_failure_evidence_derives_safe_canonical_fields():
     for remediation_id, contract in (
         contracts.EMPLOYEE_VALIDATION_REMEDIATIONS.items()

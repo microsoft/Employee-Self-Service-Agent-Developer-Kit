@@ -150,16 +150,14 @@ PHASE_DEFINITIONS = (
     ),
     PhaseDefinition(
         identifier=Phase.EMPLOYEE_VALIDATION,
-        title="Employee validation",
+        title="Maker validation",
         what_happens=(
             "Smoke-test an enabled read-only Workday scenario in the Copilot "
             "Studio Test pane without publishing the agent.",
-            "After the maker smoke test passes, publish and deploy the agent "
-            "to Microsoft 365 Chat.",
-            "Have the assigned non-maker employee establish employee-owned "
-            "Workday connections, run a real scenario, and confirm employee "
-            "context and Workday data work without an unexpected repeated "
-            "sign-in.",
+            "Complete the guided Workday connection lifecycle when the maker "
+            "scenario returns the expected employee context and Workday data.",
+            "Show publishing, deployment, employee-owned connections, and "
+            "non-maker Microsoft 365 Chat validation as post-skill next steps.",
         ),
         prerequisite=Phase.RUNTIME,
     ),
@@ -192,7 +190,7 @@ PHASE_REQUIRED_ACTIONS = {
             "workday-topics-activated",
         }
     ),
-    Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
+    Phase.EMPLOYEE_VALIDATION.value: frozenset({"maker-smoke-test"}),
 }
 ADMINISTRATOR_PHASES = frozenset(
     {
@@ -1002,10 +1000,17 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
     if value["status"] == PhaseStatus.COMPLETE.value:
         required_actions = PHASE_REQUIRED_ACTIONS[phase_id]
         completed_actions = set(value["completedActions"])
-        missing_actions = sorted(required_actions - completed_actions)
         evidence_actions = {
             str(record.get("action") or "") for record in value["evidence"]
         }
+        if (
+            phase_id == Phase.EMPLOYEE_VALIDATION.value
+            and "signed-in-scenario" in completed_actions
+            and "signed-in-scenario" in evidence_actions
+        ):
+            completed_actions.add("maker-smoke-test")
+            evidence_actions.add("maker-smoke-test")
+        missing_actions = sorted(required_actions - completed_actions)
         missing_evidence = sorted(required_actions - evidence_actions)
         if missing_actions or missing_evidence:
             details = []

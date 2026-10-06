@@ -182,6 +182,8 @@ def validate_employee_evidence(
             "Employee validation outcome must be passed or verified."
         )
     category = result["testUserCategory"].casefold()
+    if category == "maker":
+        return result
     explicitly_non_maker = (
         "non-maker" in category or "non maker" in category
     )

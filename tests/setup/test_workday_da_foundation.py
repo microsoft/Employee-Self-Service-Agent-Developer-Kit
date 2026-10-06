@@ -46,7 +46,7 @@ def test_orchestrator_exposes_exactly_six_customer_phases() -> None:
         "Workday administrator",
         "Connections",
         "Runtime configuration",
-        "Employee validation",
+        "Maker validation",
     ):
         assert phase in skill
     assert "21" not in skill

@@ -183,7 +183,12 @@ def test_every_controller_command_is_documented() -> None:
         re.findall(r"workday_connect\.py\s+([a-z][a-z-]*)", guide_text)
     )
 
-    assert documented == set(controller._COMMAND_HANDLERS)
+    legacy_commands = {
+        "begin-employee-test",
+        "abandon-employee-test",
+        "record-validation-failure",
+    }
+    assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
 
 
 def test_workday_guides_use_file_backed_json_inputs() -> None:
@@ -227,94 +232,28 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
         "Leave every field and option initially unset" in form_text
         or "Leave every worksheet answer blank" in form_text
     )
-    assert "do not mark the passing outcome as recommended" in form_text
+    assert (
+        "do not mark the passing option as recommended"
+        in form_text.casefold()
+    )
 
 
-def test_employee_validation_uses_stable_remediation_contract() -> None:
-    import workday_connect_contracts as contracts
-
+def test_maker_validation_ends_guided_lifecycle() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
-    documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
-    assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
-    documented_result_ids = dict(
-        re.findall(
-            r"\|\s*(Failed - [^|]+?)\s*\|\s*`(WD-E2E-\d{3})`\s*\|",
-            text,
-        )
-    )
-    assert documented_result_ids == contracts.EMPLOYEE_VALIDATION_RESULT_IDS
-    documented_surfaces = {
-        value
-        for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
-        if value in contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
-    }
-    assert documented_surfaces == set(
-        contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
-    )
-    surface_section = text.split(
-        '"header": "Failure surface"',
-        maxsplit=1,
-    )[1].split("Map those choices respectively to", maxsplit=1)[0]
-    surface_labels = re.findall(
-        r'\{ "label": "([^"]+)" \}',
-        surface_section,
-    )
-    documented_surface_choices = dict(
-        zip(
-            surface_labels,
-            re.findall(
-                r"`([a-z]+(?:-[a-z]+)*)`",
-                text.split("Map those choices respectively to", maxsplit=1)[1],
-            )[: len(surface_labels)],
-            strict=True,
-        )
-    )
-    assert (
-        documented_surface_choices
-        == contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES
-    )
-    assert "`failureCategory`" not in text
-    assert "Canonical `remediation`" not in text
-    assert "Do not invent a remediation ID" in normalized
-    assert "derives the safe category and canonical remediation" in normalized
-    assert "migrates existing three-field failure files" in normalized
-    assert "legacy free-form remediation text is discarded" in normalized
-    assert "cannot publish or deploy the agent, impersonate an employee" in normalized
-    assert "Maker smoke test before publishing" in text
+    assert "# Phase 6 - Maker validation" in text
     assert "without publishing the agent" in text
     assert '"header": "Maker smoke test"' in text
-    assert "does not complete Employee validation" in normalized
-    assert "Non-maker employee validation after deployment" in text
-    assert "deployed ESS HR agent in Microsoft 365 Chat" in text
-    assert "required employee-owned Workday connections" in text
-    assert "Do not reuse the maker's connections or credentials" in text
-    assert normalized.index('"header": "Maker smoke test"') < normalized.index(
-        "publish the ESS HR agent"
-    )
-    assert normalized.index("publish the ESS HR agent") < normalized.index(
-        "begin-employee-test"
-    )
-    assert "workday_connect.py begin-employee-test" in text
-    assert text.index("begin-employee-test") < text.index(
-        '"header": "Employee test result"'
-    )
-    assert '"header": "Tested scenario"' not in text
-    assert "Which read-only Workday scenario" not in text
-    assert "Do not ask a second question about which scenario was used" in normalized
-    assert "Provide only `testUserCategory`, `timestamp`" in text
-    assert "start a bounded test attempt" in normalized
-    assert "final readiness" in text
-    assert "not required to exercise both the main and REST runtime flows" in (
-        normalized
-    )
-    assert "Do not automatically ask the employee to repeat a scenario" in (
-        normalized
-    )
-    assert "rerun `record-validation` with the same evidence file" in normalized
+    assert '"testUserCategory": "maker"' in text
+    assert "lifecycleComplete: true" in text
+    assert "do not run `begin-employee-test`" in normalized.casefold()
+    assert "wait for Power Automate run-history evidence" in normalized
+    assert "Publish and deploy the agent when ready" in text
+    assert "employee establish their own Workday connections" in text
+    assert "outside this guided setup lifecycle" in normalized
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
@@ -333,12 +272,15 @@ def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     ) == payload
 
 
-def test_employee_validation_documents_attempt_abandonment() -> None:
+def test_maker_validation_does_not_open_employee_attempt() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split()).casefold()
 
-    assert "abandon-employee-test" in text
+    assert "do not run `begin-employee-test`" in normalized
+    assert "abandon-employee-test" not in text
+    assert "runtime-evidence" not in text
 
 
 @pytest.mark.parametrize(
@@ -511,7 +453,7 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "--attachment-file" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
     assert "--checkpoint WD-CONN-013" not in text
-    assert "run separate readiness commands" in text
+    assert "run separate readiness commands" in normalized
     assert "confirmation twice" in text
     assert "Do not substitute an unscoped" in normalized
     assert "one Dataverse token" in normalized
@@ -665,18 +607,17 @@ def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
     assert "Do not ask the maker to choose an overwrite\nstrategy" in action
 
 
-def test_readiness_requires_real_employee_runtime_evidence() -> None:
+def test_maker_validation_lists_non_maker_work_as_post_skill_steps() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "real signed-in employee scenario" in text
     assert "Copilot Studio Test pane" in text
     assert "Microsoft 365 Chat" in text
-    assert "employee-owned Workday connections" in text
+    assert "their own Workday connections" in text
     assert "returns real" in text
     assert "without an unexpected repeated sign-in" in text
-    assert "Never record employee data or credentials" in normalized
-    assert "Do not reset completed phases" in normalized
+    assert "Do not wait for those results" in text
+    assert "keep the Workday skill open" in normalized
 
 
 def test_capability_claims_match_controller_surface() -> None:
@@ -708,11 +649,10 @@ def test_capability_claims_match_controller_surface() -> None:
         "Application Administrator or Cloud Application Administrator",
         "Workday Administrator",
         "Dataverse System Administrator",
-        "Workday test employee",
     ):
         assert required_role in skill
     assert (
-        "isn't ready until the signed-in Workday scenario succeeds"
+        "guided lifecycle completes after the maker's Test pane scenario succeeds"
         in (normalized["skill"])
     )
     assert "Claim an automated change only after" in normalized["skill"]
@@ -746,7 +686,8 @@ def test_capability_claims_match_controller_surface() -> None:
         in (normalized["power_platform"])
     )
     assert (
-        "signed-in employee scenario remains the functional confirmation"
+        "maker's Copilot Studio Test pane scenario remains the functional "
+        "confirmation"
         in (normalized["power_platform"])
     )
     assert "These are real automated changes" in (normalized["power_platform"])
