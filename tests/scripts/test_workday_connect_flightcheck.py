@@ -370,6 +370,44 @@ def test_external_profile_reconciles_manual_rows_from_controller_evidence():
     assert len(summary["acceptedSuppressions"]) == 4
 
 
+def test_external_profile_keeps_entra_failure_in_started_workday_phase():
+    from workday_connect_flightcheck import (
+        PROFILE_POLICIES,
+        WorkdayConnectFlightCheckError,
+        evaluate_contract,
+    )
+
+    profile = "workday-da:external-prerequisites"
+    checkpoints = PROFILE_POLICIES[profile].checkpoints
+    state = _state()
+    state["phases"]["entra"]["status"] = "complete"
+    state["phases"]["workday-admin"]["status"] = "active"
+    contract = _contract(profile=profile)
+    contract["overall"] = "NOT_READY"
+    contract["results"] = [
+        {
+            "checkpointId": checkpoint,
+            "status": (
+                "Failed"
+                if checkpoint == "WD-ENTRA-SIGNOPT-001"
+                else "Passed"
+            ),
+            "severity": "Blocking",
+            "automationType": "Automated",
+            "remediationId": "",
+            "evidence": {},
+        }
+        for checkpoint in checkpoints
+    ]
+
+    with pytest.raises(WorkdayConnectFlightCheckError) as raised:
+        evaluate_contract(contract, state, profile)
+
+    assert raised.value.phase_id == "workday-admin"
+    assert "Workday administrator" in raised.value.customer_remediation
+    assert "Entra administrator" not in raised.value.customer_remediation
+
+
 def test_lifecycle_profiles_defer_privileged_graph_checks():
     from flightcheck import registry
     from workday_connect_flightcheck import PROFILE_POLICIES
@@ -494,6 +532,30 @@ def test_every_profile_checkpoint_has_explicit_phase_ownership():
         for policy in PROFILE_POLICIES.values()
         for checkpoint in policy.checkpoints
     } <= set(_CHECKPOINT_PHASES)
+
+
+def test_connect_readiness_lookup_views_are_derived_from_policy():
+    from workday_connect_readiness_policy import (
+        CHECKPOINT_POLICIES,
+        MANUAL_EVIDENCE,
+        PHASE_ORDER,
+        PHASE_REQUIRED_PROFILES,
+        PROFILE_POLICIES,
+    )
+
+    assert PHASE_REQUIRED_PROFILES == {
+        phase_id: tuple(
+            profile_name
+            for profile_name, policy in PROFILE_POLICIES.items()
+            if policy.phase_id == phase_id
+        )
+        for phase_id in PHASE_ORDER
+    }
+    assert MANUAL_EVIDENCE == {
+        checkpoint_id: policy.manual_evidence
+        for checkpoint_id, policy in CHECKPOINT_POLICIES.items()
+        if policy.manual_evidence
+    }
 
 
 def test_run_profile_rejects_ready_contract_after_nonzero_exit(
@@ -665,14 +727,13 @@ def test_run_profile_reports_timeout(tmp_path, monkeypatch):
     assert raised.value.error_type == "flightcheck-timeout"
 
 
-def test_ready_v7_migration_runs_only_final_profile(
+def test_ready_v7_migration_preserves_completion_without_runtime_profile(
     tmp_path,
     monkeypatch,
 ):
     import workday_connect
     import workday_connect_model as model
     from workday_connect_flightcheck import (
-        PHASE_REQUIRED_PROFILES,
         PROFILE_POLICIES,
     )
     from workday_connect_store import WorkdayConnectStore
@@ -704,7 +765,12 @@ def test_ready_v7_migration_runs_only_final_profile(
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+        actions = (
+            ("signed-in-scenario",)
+            if phase_id == "employee-validation"
+            else model.PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        for action in actions:
             evidence = {"action": action, "outcome": "verified"}
             if (
                 phase_id == "runtime"
@@ -771,30 +837,18 @@ def test_ready_v7_migration_runs_only_final_profile(
     workday_connect._ensure_migration_baseline(store)
 
     state = store.load()
-    public_status = store.status()
-    assert observed == [
-        (
-            "workday-da:final",
-            {
-                "source_profile": "workday-da:final",
-                "migration_baseline": True,
-            },
-        )
-    ]
+    assert observed == []
     assert state["status"] == "ready"
-    assert all(
-        phase["readiness"]["accepted"]
-        for phase in public_status["phases"]
-        if PHASE_REQUIRED_PROFILES[phase["id"]]
-    )
     assert state["migration"]["flightcheckBaselineRequired"] is False
+    assert (
+        state["migration"]["flightcheckBaselineOutcome"]
+        == "legacy-ready-preserved"
+    )
     assert "workday-da:" not in json.dumps(store.status())
-    for profile_name, policy in PROFILE_POLICIES.items():
-        summary = state["phases"][policy.phase_id]["validationProfiles"][
-            profile_name
-        ]
-        assert summary["sourceProfile"] == "workday-da:final"
-        assert summary["migrationBaseline"] is True
+    assert all(
+        phase["validationProfiles"] == {}
+        for phase in state["phases"].values()
+    )
 
 
 def test_partial_v7_migration_validates_completed_boundaries(
@@ -874,7 +928,7 @@ def test_partial_v7_migration_validates_completed_boundaries(
     )
 
 
-def test_failed_migration_baseline_is_not_replayed_before_every_command(
+def test_legacy_ready_migration_does_not_run_runtime_profile(
     tmp_path,
     monkeypatch,
 ):
@@ -885,10 +939,7 @@ def test_failed_migration_baseline_is_not_replayed_before_every_command(
         effective_validation_state,
         validation_input_fingerprint,
     )
-    from workday_connect_store import (
-        WorkdayConnectStore,
-        WorkdayConnectStoreError,
-    )
+    from workday_connect_store import WorkdayConnectStore
 
     store = WorkdayConnectStore(tmp_path)
     store.initialize()
@@ -941,8 +992,9 @@ def test_failed_migration_baseline_is_not_replayed_before_every_command(
     store.set_phase_status("runtime", "complete")
     store.complete_action(
         "employee-validation",
-        "signed-in-scenario",
+        "maker-smoke-test",
         evidence={
+            "testUserCategory": "maker",
             "outcome": "verified",
             "timestamp": "2026-09-28T12:00:00Z",
         },
@@ -974,15 +1026,13 @@ def test_failed_migration_baseline_is_not_replayed_before_every_command(
 
     monkeypatch.setattr(workday_connect, "run_profile", fail_profile)
 
-    with pytest.raises(WorkdayConnectStoreError):
-        workday_connect._ensure_migration_baseline(store)
     workday_connect._ensure_migration_baseline(store)
 
     state = store.load()
-    assert calls == 1
+    assert calls == 0
     assert state["migration"]["flightcheckBaselineRequired"] is False
     assert (
         state["migration"]["flightcheckBaselineOutcome"]
-        == "remediation-required"
+        == "legacy-ready-preserved"
     )
-    assert state["phases"]["runtime"]["status"] == "blocked"
+    assert state["status"] == "ready"

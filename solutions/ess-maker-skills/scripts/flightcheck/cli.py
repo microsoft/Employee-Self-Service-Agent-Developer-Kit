@@ -2676,34 +2676,31 @@ def main():
     parser.add_argument(
         "--runtime-evidence-attempt-id",
         help=(
-            "Opaque operator evidence label for workday-da:post-runtime, "
-            "workday-da:final, or WD-DA-RUN-001. This is not a Power Automate "
-            "or Copilot Studio correlation identifier."
+            "Deprecated compatibility input for retired checkpoint "
+            "WD-DA-RUN-001. It is not accepted as scenario proof."
         ),
     )
     parser.add_argument(
         "--runtime-evidence-start",
-        help="UTC ISO-8601 start of the employee Test pane evidence window.",
+        help="Deprecated compatibility input for retired runtime evidence.",
     )
     parser.add_argument(
         "--runtime-evidence-end",
-        help="UTC ISO-8601 end of the employee Test pane evidence window.",
+        help="Deprecated compatibility input for retired runtime evidence.",
     )
     parser.add_argument(
         "--runtime-evidence-flow-id",
         action="append",
         default=[],
         help=(
-            "Reviewed Workday runtime flow ID expected to run during the "
-            "recorded Test pane attempt. Repeat for each expected flow."
+            "Deprecated compatibility input for retired runtime evidence."
         ),
     )
     parser.add_argument(
         "--runtime-evidence-migration-baseline",
         action="store_true",
         help=(
-            "Mark the supplied runtime evidence window as migration-derived "
-            "from previously captured ready state."
+            "Deprecated compatibility marker for retired runtime evidence."
         ),
     )
     parser.add_argument(

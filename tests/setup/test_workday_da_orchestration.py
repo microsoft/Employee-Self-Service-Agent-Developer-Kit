@@ -149,6 +149,11 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         in " ".join(tenant.split())
     )
     assert "Have you looped in the Workday administrator" in tenant
+    assert "## One-way administrator handoff" in skill
+    assert "Microsoft Entra sign-off must finish first" in skill
+    assert "Only then may the Workday administrator phase begin" in skill
+    assert "must not ask the maker to\n   reopen Entra" in skill
+    assert "different\npeople" in skill
 
 
 def test_entra_waiting_boundary_follows_guided_handoff() -> None:
@@ -178,7 +183,12 @@ def test_every_controller_command_is_documented() -> None:
         re.findall(r"workday_connect\.py\s+([a-z][a-z-]*)", guide_text)
     )
 
-    assert documented == set(controller._COMMAND_HANDLERS)
+    legacy_commands = {
+        "begin-employee-test",
+        "abandon-employee-test",
+        "record-validation-failure",
+    }
+    assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
 
 
 def test_workday_guides_use_file_backed_json_inputs() -> None:
@@ -222,69 +232,28 @@ def test_workday_forms_do_not_preselect_or_recommend_answers() -> None:
         "Leave every field and option initially unset" in form_text
         or "Leave every worksheet answer blank" in form_text
     )
-    assert "do not mark the passing outcome as recommended" in form_text
+    assert (
+        "do not mark the passing option as recommended"
+        in form_text.casefold()
+    )
 
 
-def test_employee_validation_uses_stable_remediation_contract() -> None:
-    import workday_connect_contracts as contracts
-
+def test_maker_validation_ends_guided_lifecycle() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split())
 
-    documented_ids = set(re.findall(r"`(WD-E2E-(?:\d{3}))`", text))
-    assert documented_ids == set(contracts.EMPLOYEE_VALIDATION_REMEDIATIONS)
-    documented_result_ids = dict(
-        re.findall(
-            r"\|\s*(Failed - [^|]+?)\s*\|\s*`(WD-E2E-\d{3})`\s*\|",
-            text,
-        )
-    )
-    assert documented_result_ids == contracts.EMPLOYEE_VALIDATION_RESULT_IDS
-    documented_surfaces = {
-        value
-        for value in re.findall(r"`([a-z]+(?:-[a-z]+)*)`", text)
-        if value in contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
-    }
-    assert documented_surfaces == set(
-        contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACES
-    )
-    surface_section = text.split(
-        '"header": "Failure surface"',
-        maxsplit=1,
-    )[1].split("Map those choices respectively to", maxsplit=1)[0]
-    surface_labels = re.findall(
-        r'\{ "label": "([^"]+)" \}',
-        surface_section,
-    )
-    documented_surface_choices = dict(
-        zip(
-            surface_labels,
-            re.findall(
-                r"`([a-z]+(?:-[a-z]+)*)`",
-                text.split("Map those choices respectively to", maxsplit=1)[1],
-            )[: len(surface_labels)],
-            strict=True,
-        )
-    )
-    assert (
-        documented_surface_choices
-        == contracts.EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES
-    )
-    assert "`failureCategory`" not in text
-    assert "Canonical `remediation`" not in text
-    assert "Do not invent a remediation ID" in normalized
-    assert "derives the safe category and canonical remediation" in normalized
-    assert "migrates existing three-field failure files" in normalized
-    assert "legacy free-form remediation text is discarded" in normalized
-    assert "cannot publish the agent, impersonate an employee" in normalized
-    assert "workday_connect.py begin-employee-test" in text
-    assert text.index("begin-employee-test") < text.index(
-        '"header": "Employee test result"'
-    )
-    assert "start a bounded test attempt" in normalized
-    assert "final readiness" in text
+    assert "# Phase 6 - Maker validation" in text
+    assert "without publishing the agent" in text
+    assert '"header": "Maker smoke test"' in text
+    assert '"testUserCategory": "maker"' in text
+    assert "lifecycleComplete: true" in text
+    assert "do not run `begin-employee-test`" in normalized.casefold()
+    assert "wait for Power Automate run-history evidence" in normalized
+    assert "Publish and deploy the agent when ready" in text
+    assert "employee establish their own Workday connections" in text
+    assert "outside this guided setup lifecycle" in normalized
 
 
 def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
@@ -303,12 +272,15 @@ def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     ) == payload
 
 
-def test_employee_validation_documents_attempt_abandonment() -> None:
+def test_maker_validation_does_not_open_employee_attempt() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(text.split()).casefold()
 
-    assert "abandon-employee-test" in text
+    assert "do not run `begin-employee-test`" in normalized
+    assert "abandon-employee-test" not in text
+    assert "runtime-evidence" not in text
 
 
 @pytest.mark.parametrize(
@@ -481,7 +453,7 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "--attachment-file" in text
     assert text.index("runtime-apply") < text.index("record-agent-binding")
     assert "--checkpoint WD-CONN-013" not in text
-    assert "run separate readiness commands" in text
+    assert "run separate readiness commands" in normalized
     assert "confirmation twice" in text
     assert "Do not substitute an unscoped" in normalized
     assert "one Dataverse token" in normalized
@@ -489,31 +461,52 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "User Context V2" in text
     assert "activate-workday-topics.md" in text
     assert text.index("Allow permission") < text.index("activate-workday-topics.md")
+    assert text.index("activate-workday-topics.md") < text.index(
+        "wire-runtime-template-config.md"
+    )
+    assert text.index("wire-runtime-template-config.md") < text.index(
+        "wire-user-context-redirect.md"
+    )
 
 
 def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     text = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
 
     packet = text.index("workday_connect.py workday-admin-packet")
     provider_question = text.index("`identityProviderQuestion` from the packet")
     unsupported_stop = text.index(
         "For **Okta**, **Ping Identity**, or **Another sign-in provider**"
     )
+    capture_table = text.index("Before the numbered tasks")
     existing_handoff = text.index("### Existing Microsoft Entra federation handoff")
     greenfield_handoff = text.index("### New Microsoft Entra federation handoff")
     completion = text.index(
         "Has the Workday administrator completed every applicable task"
     )
-    return_information = text.index("Information to return to the maker")
     form = text.index('"header": "SAML row settings"')
 
     assert packet < provider_question < unsupported_stop
-    assert unsupported_stop < existing_handoff < greenfield_handoff
-    assert greenfield_handoff < return_information < completion < form
+    assert unsupported_stop < capture_table < existing_handoff < greenfield_handoff
+    assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
-    assert "Do not show the completion question\n  or response form" in text
+    assert (
+        "Do not reopen Entra, re-engage the Entra administrator, show the "
+        "completion question, or show the response form"
+    ) in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
     assert "share this whole section" in text
+    assert "both the capture guide and\nthe return worksheet" in text
+    assert "Leave every cell in **Your\ntenant values** blank" in text
+    assert "do not repeat an **Information to return to the maker**" in text
+    assert "This phase starts only after Microsoft Entra sign-off is complete" in text
+    assert "Do not direct the maker back to the Entra" in text
+    assert "already delivered through the approved customer channel" in text
+    assert "Do not open Entra or request another" in text
+    assert "Do not return to the Entra phase" in text
+    assert "In Entra, open" not in text
+    assert "Workday and identity administrators" not in text
+    assert "identity administrator to identify" not in text
     assert "--substage handoff-presented" in text
     assert "ending at /ccx/service, without the tenant name" in text
     assert "using steps 2 through 7" not in text
@@ -556,7 +549,7 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate" not in redirect
 
 
-def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
+def test_topic_activation_precedes_runtime_template_and_user_context_wiring() -> None:
     configure = (
         _WORKDAY_DA / "configure-power-platform.md"
     ).read_text(encoding="utf-8")
@@ -572,9 +565,14 @@ def test_runtime_template_initialization_precedes_user_context_wiring() -> None:
         / "wire-runtime-template-config.md"
     ).read_text(encoding="utf-8")
 
+    assert configure.index("activate-workday-topics.md") < (
+        configure.index("wire-runtime-template-config.md")
+    )
     assert configure.index("wire-runtime-template-config.md") < (
         configure.index("wire-user-context-redirect.md")
     )
+    assert "only after all reviewed Workday topics are enabled" in action
+    assert "workday-topics-activated" in action
     assert "Conversation Start" in action
     assert "immediately before User Context Validate" in action
     assert "remove only that exact obsolete nested" in action
@@ -609,15 +607,17 @@ def test_user_context_redirect_reconciles_without_publish_prompt() -> None:
     assert "Do not ask the maker to choose an overwrite\nstrategy" in action
 
 
-def test_readiness_requires_real_employee_runtime_evidence() -> None:
+def test_maker_validation_lists_non_maker_work_as_post_skill_steps() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "real signed-in employee scenario" in text
+    assert "Copilot Studio Test pane" in text
+    assert "Microsoft 365 Chat" in text
+    assert "their own Workday connections" in text
     assert "returns real" in text
     assert "without an unexpected repeated sign-in" in text
-    assert "Never record employee data or credentials" in normalized
-    assert "Do not reset completed phases" in normalized
+    assert "Do not wait for those results" in text
+    assert "keep the Workday skill open" in normalized
 
 
 def test_capability_claims_match_controller_surface() -> None:
@@ -649,11 +649,10 @@ def test_capability_claims_match_controller_surface() -> None:
         "Application Administrator or Cloud Application Administrator",
         "Workday Administrator",
         "Dataverse System Administrator",
-        "Workday test employee",
     ):
         assert required_role in skill
     assert (
-        "isn't ready until the signed-in Workday scenario succeeds"
+        "guided lifecycle completes after the maker's Test pane scenario succeeds"
         in (normalized["skill"])
     )
     assert "Claim an automated change only after" in normalized["skill"]
@@ -687,11 +686,12 @@ def test_capability_claims_match_controller_surface() -> None:
         in (normalized["power_platform"])
     )
     assert (
-        "signed-in employee scenario remains the functional confirmation"
+        "maker's Copilot Studio Test pane scenario remains the functional "
+        "confirmation"
         in (normalized["power_platform"])
     )
     assert "These are real automated changes" in (normalized["power_platform"])
-    assert "The skill cannot publish the agent" in normalized["employee"]
+    assert "The skill cannot publish or deploy the agent" in normalized["employee"]
 
 
 def test_runtime_apply_persists_verified_stages_before_later_failure(

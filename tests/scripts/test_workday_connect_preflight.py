@@ -21,6 +21,7 @@ def _write_foundation(
     *,
     dataverse_url: str | None = None,
     schema_name: str = "gptagent_copilotforemployeeselfservicehr",
+    ring: str = "prod",
 ) -> None:
     local = root / ".local"
     local.mkdir(parents=True, exist_ok=True)
@@ -30,7 +31,7 @@ def _write_foundation(
         "releaseLine": "da",
         "environmentId": "agent-environment",
         "powerPlatformApiEndpoint": "https://api.powerplatform.com",
-        "ring": "prod",
+        "ring": ring,
         "activeAgent": "ess-hr",
         "agent": {
             "slug": "ess-hr",
@@ -86,6 +87,29 @@ def test_resolve_target_rejects_url_that_differs_from_setup(
         preflight.resolve_target(
             tmp_path,
             dataverse_url="https://other.crm.dynamics.com",
+            state=model.default_state(),
+        )
+
+
+def test_resolve_target_rejects_unsupported_power_platform_ring(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        ring="staging",
+    )
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="Unsupported Power Platform ring: 'staging'",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url=ENV_URL,
             state=model.default_state(),
         )
 

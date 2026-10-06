@@ -26,20 +26,20 @@ from workday_connect_model import (
     workday_saml_entity_id,
 )
 from workday_connect_contracts import (
-    WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
     parse_entra_return_worksheet,
     parse_workday_admin_return_worksheet,
-    validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
-    validate_employee_evidence,
-    validate_employee_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
+from workday_connect_evidence_contracts import (
+    WorkdayConnectContractError,
+    validate_agent_binding_evidence,
+    validate_employee_evidence,
+)
 from workday_connect_flightcheck import (
-    PROFILE_POLICIES,
     WorkdayConnectFlightCheckError,
     run_profile,
 )
@@ -47,6 +47,11 @@ from workday_connect_preflight import (
     WorkdayConnectPreflightError,
     prepare_connections_package,
     run_preflight,
+)
+from workday_connect_readiness import (
+    ensure_migration_baseline,
+    run_final_readiness,
+    run_profile_gate,
 )
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
@@ -68,6 +73,12 @@ RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
 ERROR_MARKER = "WORKDAY_CONNECT_ERROR_JSON:"
 
 
+class WorkdayConnectRetiredOperationError(WorkdayConnectStoreError):
+    """Raised when a compatibility-only operation has been retired."""
+
+    suppress_blocker_persistence = True
+
+
 def _json_object(value: str, label: str) -> dict[str, Any]:
     try:
         document = json.loads(value)
@@ -84,8 +95,9 @@ def _add_json_input(
     *,
     allow_legacy_inline: bool = True,
     allow_worksheet: bool = False,
+    required: bool = True,
 ) -> None:
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=required)
     group.add_argument(
         f"--{name}-file",
         type=Path,
@@ -180,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     tenant.add_argument("--tenant", required=True)
 
     entra_handoff = subparsers.add_parser("entra-handoff")
-    _add_json_input(entra_handoff, "discovery")
+    _add_json_input(entra_handoff, "discovery", required=False)
     record_entra = subparsers.add_parser("record-entra")
     _add_json_input(
         record_entra,
@@ -289,187 +301,24 @@ def _run_profile_gate(
     store: WorkdayConnectStore,
     profile_name: str,
 ) -> dict[str, Any]:
-    policy = PROFILE_POLICIES[profile_name]
-    try:
-        summary = run_profile(
-            store.workspace_root,
-            store.load(),
-            profile_name,
-        )
-    except WorkdayConnectFlightCheckError as exc:
-        try:
-            store.block_validation_profile(
-                exc.phase_id or policy.phase_id,
-                profile_name,
-                error_type=exc.error_type,
-                message=str(exc),
-                customer_remediation=exc.customer_remediation,
-                input_fingerprint=exc.input_fingerprint,
-                source_profile=profile_name,
-            )
-        except WorkdayConnectStoreError as stale:
-            stale.profile_blocker_persisted = True
-            raise
-        wrapped = WorkdayConnectStoreError(
-            exc.customer_remediation
-            or "Readiness checks need attention before setup can continue."
-        )
-        wrapped.profile_blocker_persisted = True
-        wrapped.customer_remediation = exc.customer_remediation
-        raise wrapped from exc
-    try:
-        updated_state = store.record_validation_profile(
-            policy.phase_id,
-            summary,
-        )
-    except WorkdayConnectStoreError as stale:
-        stale.profile_blocker_persisted = True
-        raise
-    return updated_state["phases"][policy.phase_id]["validationProfiles"][
-        profile_name
-    ]
+    return run_profile_gate(
+        store,
+        profile_name,
+        profile_runner=run_profile,
+    )
 
 
-def _derived_profile_summary(
-    source: Mapping[str, Any],
-    profile_name: str,
-    *,
-    migration_baseline: bool,
+def _run_final_readiness(
+    store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    policy = PROFILE_POLICIES[profile_name]
-
-    def belongs(checkpoint_id: str) -> bool:
-        return checkpoint_id in policy.checkpoints or any(
-            checkpoint_id.startswith(family + "-")
-            for family in policy.families
-        )
-
-    return {
-        **dict(source),
-        "profile": profile_name,
-        "sourceProfile": source["profile"],
-        "checkpointStatuses": {
-            checkpoint_id: status
-            for checkpoint_id, status in source[
-                "checkpointStatuses"
-            ].items()
-            if belongs(checkpoint_id)
-        },
-        "acceptedSuppressions": [
-            suppression
-            for suppression in source["acceptedSuppressions"]
-            if belongs(suppression["checkpointId"])
-        ],
-        "migrationBaseline": migration_baseline,
-    }
-
-
-def _run_final_readiness(store: WorkdayConnectStore) -> dict[str, Any]:
-    final_summary = _run_profile_gate(store, "workday-da:final")
-    for profile_name, policy in PROFILE_POLICIES.items():
-        if profile_name == "workday-da:final":
-            continue
-        store.record_validation_profile(
-            policy.phase_id,
-            _derived_profile_summary(
-                final_summary,
-                profile_name,
-                migration_baseline=False,
-            ),
-        )
-    migration = store.load().get("migration") or {}
-    if (
-        migration.get("source") == "workday-connect-state-v7"
-        and migration.get("flightcheckBaselineOutcome")
-        == "remediation-required"
-    ):
-        store.complete_flightcheck_migration()
-    return final_summary
+    return run_final_readiness(
+        store,
+        profile_runner=run_profile,
+    )
 
 
 def _ensure_migration_baseline(store: WorkdayConnectStore) -> None:
-    try:
-        with store.migration_guard():
-            state = store.load()
-            migration = state.get("migration") or {}
-            if not migration.get("flightcheckBaselineRequired"):
-                return
-            ready = migration.get("legacyReady") is True
-            if ready and not store.prepare_migration_employee_test_attempt():
-                return
-            state = store.load()
-            if ready:
-                profile_names = ("workday-da:final",)
-            else:
-                profile_names = tuple(
-                    profile_name
-                    for profile_name, phase_id in (
-                        ("workday-da:setup-readiness", "preflight"),
-                        (
-                            "workday-da:external-prerequisites",
-                            "workday-admin",
-                        ),
-                        ("workday-da:package-ready", "connections"),
-                        ("workday-da:dataverse-ready", "runtime"),
-                        ("workday-da:post-connection", "runtime"),
-                        ("workday-da:post-agent-wiring", "runtime"),
-                    )
-                    if state["phases"][phase_id]["status"] == "complete"
-                )
-            if not profile_names:
-                store.complete_flightcheck_migration()
-                return
-            active_profile = profile_names[0]
-            try:
-                for active_profile in profile_names:
-                    summary = run_profile(
-                        store.workspace_root,
-                        state,
-                        active_profile,
-                        source_profile=active_profile,
-                        migration_baseline=True,
-                    )
-                    if not ready:
-                        store.record_validation_profile(
-                            PROFILE_POLICIES[active_profile].phase_id,
-                            summary,
-                        )
-            except WorkdayConnectFlightCheckError as exc:
-                store.block_flightcheck_migration(
-                    exc.phase_id
-                    or PROFILE_POLICIES[active_profile].phase_id,
-                    error_type=exc.error_type,
-                    message=str(exc),
-                    customer_remediation=exc.customer_remediation,
-                    input_fingerprint=exc.input_fingerprint,
-                    source_profile=active_profile,
-                )
-                wrapped = WorkdayConnectStoreError(
-                    exc.customer_remediation
-                    or (
-                        "Readiness checks need attention before setup can "
-                        "continue."
-                    )
-                )
-                wrapped.profile_blocker_persisted = True
-                wrapped.customer_remediation = exc.customer_remediation
-                raise wrapped from exc
-            if ready:
-                final_summary = summary
-                for profile_name, policy in PROFILE_POLICIES.items():
-                    summary = _derived_profile_summary(
-                        final_summary,
-                        profile_name,
-                        migration_baseline=True,
-                    )
-                    store.record_validation_profile(
-                        policy.phase_id,
-                        summary,
-                    )
-            store.complete_flightcheck_migration()
-    except WorkdayConnectStoreError as exc:
-        exc.profile_blocker_persisted = True
-        raise
+    ensure_migration_baseline(store, profile_runner=run_profile)
 
 
 def _set_workday_tenant(
@@ -618,9 +467,15 @@ def _entra_handoff(
 ) -> dict[str, Any]:
     state = store.load()
     administrator = state["phases"]["entra"]["administrator"]
+    discovery = None
+    if (
+        getattr(args, "discovery_file", None) is not None
+        or getattr(args, "discovery_json", None) is not None
+    ):
+        discovery = _json_input(args, "discovery", "Entra discovery")
     packet = build_entra_handoff(
         state,
-        _json_input(args, "discovery", "Entra discovery"),
+        discovery,
     )
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
         administrator["substage"]
@@ -838,6 +693,11 @@ def _workday_admin_packet(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra administrator sign-off before "
+            "starting the Workday administrator handoff."
+        )
     administrator = state["phases"]["workday-admin"]["administrator"]
     packet = build_workday_admin_packet(state)
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
@@ -855,6 +715,11 @@ def _record_workday_admin(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra administrator sign-off before "
+            "recording Workday administrator evidence."
+        )
     _require_administrator_completion(state, "workday-admin")
     response = {
         **dict(
@@ -900,6 +765,8 @@ def _record_workday_admin(
                 store,
                 "workday-da:external-prerequisites",
             )
+            if state.get("tenantFoundation") is None:
+                store.capture_tenant_foundation()
             return {
                 "verified": True,
                 "replayed": True,
@@ -1180,9 +1047,17 @@ def _record_runtime_template_wiring(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    if "workday-topics-activated" not in state["phases"]["runtime"][
+        "completedActions"
+    ]:
+        raise WorkdayConnectStoreError(
+            "Enable and verify all Workday topics before wiring the runtime "
+            "template into Conversation Start."
+        )
     evidence = verify_runtime_template_wiring(
         store.workspace_root,
-        store.load(),
+        state,
     )
     store.complete_action(
         "runtime",
@@ -1208,50 +1083,68 @@ def _record_validation(
             _json_input(args, "evidence", "employee validation evidence")
         )
         phase = store.load()["phases"]["employee-validation"]
-        attempt = phase.get("employeeTestAttempt")
-        if (
-            isinstance(attempt, Mapping)
-            and attempt.get("status") == "succeeded"
-            and phase["status"] == "complete"
-        ):
-            return {"verified": True, "replayed": True, "status": store.status()}
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "success."
+        if evidence["testUserCategory"].casefold() == "maker":
+            maker_evidence = {
+                "testUserCategory": "maker",
+                "timestamp": evidence["timestamp"],
+                "outcome": evidence["outcome"],
+            }
+            replayed = (
+                phase["status"] == "complete"
+                and _action_evidence(
+                    {"phases": {"employee-validation": phase}},
+                    "employee-validation",
+                    "maker-smoke-test",
+                )
+                == maker_evidence
             )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
+            if not replayed:
+                store.complete_action(
+                    "employee-validation",
+                    "maker-smoke-test",
+                    evidence=maker_evidence,
+                )
+            _run_final_readiness(store)
+            store.finalize_maker_validation_success()
+            if replayed:
+                return {
+                    "verified": True,
+                    "replayed": True,
+                    "lifecycleComplete": True,
+                    "status": store.status(),
+                }
+            return {
+                "verified": True,
+                "lifecycleComplete": True,
+                "postSkillNextSteps": [
+                    "Publish and deploy the agent when ready.",
+                    (
+                        "Have each non-maker employee establish their own "
+                        "Workday connections in Microsoft 365 Chat."
+                    ),
+                    (
+                        "Validate an enabled Workday scenario with the "
+                        "published agent."
+                    ),
+                ],
+                "status": store.status(),
+            }
+        raise WorkdayConnectRetiredOperationError(
+            "Signed-in employee runtime-evidence validation has been retired. "
+            "Complete the guided lifecycle with the maker's successful "
+            "Copilot Studio Test pane scenario."
         )
-        store.complete_action(
-            "employee-validation",
-            "signed-in-scenario",
-            evidence=evidence,
-        )
-        _run_final_readiness(store)
-        store.finalize_employee_validation_success()
-        return {"verified": True, "status": store.status()}
 
 
 def _begin_employee_test(
     _args: argparse.Namespace,
-    store: WorkdayConnectStore,
+    _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    state = store.begin_employee_test_attempt()
-    attempt = state["phases"]["employee-validation"][
-        "employeeTestAttempt"
-    ]
-    return {
-        "attempt": {
-            "scenarioId": attempt["scenarioId"],
-            "status": attempt["status"],
-            "startedAt": attempt["startedAt"],
-        },
-        "status": store.status(),
-    }
+    raise WorkdayConnectRetiredOperationError(
+        "Employee runtime-evidence windows have been retired. Complete the "
+        "guided lifecycle with the maker's successful Copilot Studio Test "
+        "pane scenario."
+    )
 
 
 def _abandon_employee_test(
@@ -1272,47 +1165,13 @@ def _abandon_employee_test(
 
 
 def _record_validation_failure(
-    args: argparse.Namespace,
-    store: WorkdayConnectStore,
+    _args: argparse.Namespace,
+    _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    evidence = validate_employee_failure_evidence(
-        _json_input(
-            args,
-            "evidence",
-            "employee validation failure evidence",
-        )
+    raise WorkdayConnectRetiredOperationError(
+        "Employee runtime-evidence failure recording has been retired. "
+        "Resolve maker Test pane failures before completing maker validation."
     )
-    with store.employee_validation_guard():
-        attempt = store.load()["phases"]["employee-validation"].get(
-            "employeeTestAttempt"
-        )
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "failure."
-            )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
-        )
-        store.finalize_employee_validation_failure(
-            blocker={
-                "operation": "record-validation-failure",
-                "remediationId": evidence["remediationId"],
-                "errorType": evidence["failureCategory"],
-                "failureSurface": evidence["failureSurface"],
-                "message": evidence["remediation"],
-                "remediation": evidence["remediation"],
-                "capturedAt": evidence["timestamp"],
-            }
-        )
-    return {
-        "recorded": True,
-        "remediationId": evidence["remediationId"],
-        "status": store.status(),
-    }
 
 
 def _preflight(
@@ -1460,10 +1319,10 @@ def main() -> None:
     ) as exc:
         phase_id = _COMMAND_PHASES.get(args.command)
         blocker_persistence_error = None
-        if phase_id and not getattr(
-            exc,
-            "profile_blocker_persisted",
-            False,
+        if (
+            phase_id
+            and not getattr(exc, "profile_blocker_persisted", False)
+            and not getattr(exc, "suppress_blocker_persistence", False)
         ):
             try:
                 blocker = {

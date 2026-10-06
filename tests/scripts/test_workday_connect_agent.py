@@ -783,6 +783,67 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+def test_controller_parser_accepts_guided_entra_handoff() -> None:
+    import workday_connect
+
+    args = workday_connect.build_parser().parse_args(["entra-handoff"])
+
+    assert args.discovery_file is None
+    assert args.discovery_json is None
+
+
+def test_controller_public_command_and_result_contract_is_stable(
+    capsys,
+) -> None:
+    import argparse
+
+    import workday_connect
+
+    parser = workday_connect.build_parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+    assert tuple(subparsers.choices) == (
+        "status",
+        "set-workday-tenant",
+        "entra-handoff",
+        "record-entra",
+        "administrator-stage",
+        "record-administrator-evidence",
+        "workday-admin-packet",
+        "record-workday-admin",
+        "runtime-plan",
+        "runtime-apply",
+        "runtime-approve",
+        "record-connections",
+        "record-topic-activation",
+        "record-runtime-template-wiring",
+        "record-agent-binding",
+        "record-validation",
+        "begin-employee-test",
+        "abandon-employee-test",
+        "record-validation-failure",
+        "preflight",
+        "prepare-connections",
+        "prepare-connections-approve",
+    )
+
+    workday_connect._emit("status", {"status": "in-progress"})
+    output = capsys.readouterr().out
+    payload = json.loads(
+        output.split(workday_connect.RESULT_MARKER, maxsplit=1)[1]
+    )
+
+    assert payload == {
+        "contractVersion": 4,
+        "operation": "status",
+        "status": "in-progress",
+    }
+
+
 def test_abandon_employee_test_is_idempotent_without_active_attempt(
     tmp_path: Path,
 ) -> None:
@@ -887,6 +948,16 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
         "entra",
         "administrator-engaged",
     )
+    guided = workday_connect._entra_handoff(
+        SimpleNamespace(
+            discovery_file=None,
+            discovery_json=None,
+        ),
+        store,
+    )
+    assert guided["packet"]["target"]["mode"] == "administrator-selection"
+    assert guided["rediscoveryRequired"] is False
+
     creation = workday_connect._entra_handoff(
         SimpleNamespace(
             discovery_file=None,
@@ -1104,7 +1175,6 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
             ),
             "signingCertificate": {
                 "thumbprint": "AA11",
-                "validFrom": "2026-01-01T00:00:00Z",
                 "validTo": "2027-01-01T00:00:00Z",
             },
         },
@@ -1136,6 +1206,16 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
     )
 
     result = workday_connect._record_workday_admin(args, store)
+    completed = store.load()
+    assert completed["tenantFoundation"] is not None
+    assert "validFrom" not in completed["tenantFoundation"]["identifiers"][
+        "signingCertificate"
+    ]
+    completed["tenantFoundation"] = None
+    store.config_path.write_text(
+        json.dumps(completed),
+        encoding="utf-8",
+    )
     replay = workday_connect._record_workday_admin(
         SimpleNamespace(
             response_file=None,
@@ -1143,6 +1223,7 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
         ),
         store,
     )
+    assert store.load()["tenantFoundation"] is not None
     drift = workday_connect._record_workday_admin(
         SimpleNamespace(
             response_file=None,
@@ -1159,6 +1240,39 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
     state = store.load()
     assert state["phases"]["workday-admin"]["status"] == "pending"
     assert state["identifiers"]["oauthClientId"] == "rotated-client-id"
+
+
+def test_workday_administrator_commands_require_completed_entra(
+    tmp_path: Path,
+) -> None:
+    import pytest
+    import workday_connect
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _complete_preflight(store)
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Complete the Microsoft Entra administrator sign-off",
+    ):
+        workday_connect._workday_admin_packet(
+            SimpleNamespace(),
+            store,
+        )
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Complete the Microsoft Entra administrator sign-off",
+    ):
+        workday_connect._record_workday_admin(
+            SimpleNamespace(response_file=None, response_json="{}"),
+            store,
+        )
 
 
 def test_controller_surfaces_blocker_persistence_failure(
@@ -1251,6 +1365,61 @@ def test_controller_emits_structured_runtime_error_details(
         error.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
     )
     assert payload["details"] == details
+
+
+def test_retired_cli_operations_do_not_persist_blockers(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    original = store.initialize()
+    evidence_file = tmp_path / "retired-evidence.json"
+    evidence_file.write_text("{}", encoding="utf-8")
+    invocations = (
+        (
+            "begin-employee-test",
+            [],
+            "runtime-evidence windows have been retired",
+        ),
+        (
+            "record-validation-failure",
+            ["--evidence-file", str(evidence_file)],
+            "failure recording has been retired",
+        ),
+    )
+
+    for command, command_args, expected_error in invocations:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "workday_connect.py",
+                "--root",
+                str(tmp_path),
+                command,
+                *command_args,
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            workday_connect.main()
+
+        assert exc.value.code == 1
+        error = capsys.readouterr().err
+        payload = json.loads(
+            error.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+        )
+        assert expected_error in payload["error"]
+        assert payload["errorType"] == (
+            "WorkdayConnectRetiredOperationError"
+        )
+        assert store.load() == original
 
 
 def test_record_connections_uses_live_verification(
@@ -1596,6 +1765,45 @@ def test_record_topic_activation_does_not_infer_runtime_failure_from_diagnostics
     assert runtime["blocker"] is None
 
 
+def test_runtime_template_wiring_requires_topic_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    verifier_called = False
+
+    def verify(*_args, **_kwargs):
+        nonlocal verifier_called
+        verifier_called = True
+        return {}
+
+    monkeypatch.setattr(
+        workday_connect,
+        "verify_runtime_template_wiring",
+        verify,
+    )
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="Enable and verify all Workday topics",
+    ):
+        workday_connect._record_runtime_template_wiring(
+            SimpleNamespace(),
+            store,
+        )
+
+    assert verifier_called is False
+
+
 def test_record_agent_binding_rejects_manual_boolean_evidence(
     tmp_path: Path,
 ) -> None:
@@ -1617,9 +1825,11 @@ def test_record_agent_binding_rejects_manual_boolean_evidence(
         )
 
 
-def test_record_validation_failure_blocks_employee_phase(
+def test_record_validation_failure_is_retired(
     tmp_path: Path,
 ) -> None:
+    import pytest
+
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
@@ -1672,19 +1882,18 @@ def test_record_validation_failure_blocks_employee_phase(
         encoding="utf-8",
     )
 
-    result = workday_connect._record_validation_failure(
-        SimpleNamespace(evidence_file=evidence_file),
-        store,
-    )
+    with pytest.raises(
+        workday_connect.WorkdayConnectStoreError,
+        match="failure recording has been retired",
+    ):
+        workday_connect._record_validation_failure(
+            SimpleNamespace(evidence_file=evidence_file),
+            store,
+        )
 
-    assert result["recorded"] is True
-    assert result["remediationId"] == "WD-E2E-006"
     phase = store.load()["phases"]["employee-validation"]
-    assert phase["status"] == "blocked"
-    assert phase["blocker"]["remediationId"] == "WD-E2E-006"
-    assert phase["blocker"]["errorType"] == "workday-access"
-    assert phase["blocker"]["failureSurface"] == "workday-response"
-    assert phase["blocker"]["capturedAt"] == attempt["startedAt"]
+    assert phase["status"] == "active"
+    assert phase["blocker"] is None
 
 
 def test_invalid_validation_retry_preserves_stable_failure_evidence(
@@ -1761,10 +1970,11 @@ def test_invalid_validation_retry_preserves_stable_failure_evidence(
     assert blocker["operation"] == "record-validation"
 
 
-def test_employee_success_runs_runtime_and_final_readiness(
+def test_employee_success_runtime_correlation_is_retired(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
+    import pytest
+
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
@@ -1804,23 +2014,129 @@ def test_employee_success_runs_runtime_and_final_readiness(
     attempt = store.begin_employee_test_attempt()["phases"][
         "employee-validation"
     ]["employeeTestAttempt"]
-    observed = []
-    monkeypatch.setattr(
-        workday_connect,
-        "_run_final_readiness",
-        lambda _store: observed.append("workday-da:final") or {},
-    )
     evidence_file = tmp_path / "employee.json"
     evidence_file.write_text(
         json.dumps(
             {
-                "scenarioName": "Check vacation balance",
                 "testUserCategory": "non-maker employee",
                 "timestamp": attempt["startedAt"],
                 "outcome": "passed",
             }
         ),
         encoding="utf-8",
+    )
+
+    with pytest.raises(
+        workday_connect.WorkdayConnectStoreError,
+        match="runtime-evidence validation has been retired",
+    ):
+        workday_connect._record_validation(
+            SimpleNamespace(evidence_file=evidence_file),
+            store,
+        )
+
+    state = store.load()
+    assert state["status"] == "in-progress"
+    assert state["phases"]["employee-validation"]["evidence"] == []
+    assert (
+        state["phases"]["employee-validation"]["employeeTestAttempt"][
+            "status"
+        ]
+        == "active"
+    )
+
+
+def test_maker_success_completes_without_runtime_evidence_correlation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    import workday_connect_model as model
+    from workday_connect_flightcheck import (
+        effective_validation_state,
+        validation_input_fingerprint,
+    )
+    from workday_connect_readiness_policy import PROFILE_POLICIES
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        if phase_id == "runtime":
+            store.approve_plan(
+                "runtime",
+                {
+                    "phase": "runtime",
+                    "scope": {"environmentId": "environment-id"},
+                    "actions": ["Configure runtime"],
+                    "flows": [{"name": "REST", "workflowId": "flow-id"}],
+                },
+            )
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            evidence = {"outcome": "verified"}
+            if action == "flow-attachment-confirmed":
+                evidence["flowNames"] = ["REST"]
+            store.complete_action(
+                phase_id,
+                action,
+                evidence=evidence,
+            )
+        store.set_phase_status(phase_id, "complete")
+    store.begin_employee_test_attempt()
+    evidence_file = tmp_path / "maker-validation.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "testUserCategory": "maker",
+                "timestamp": "2026-10-05T18:00:00-07:00",
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def profile_runner(root, state, profile_name, **_kwargs):
+        effective_state = effective_validation_state(root, state)
+        return {
+            "profile": profile_name,
+            "sourceProfile": profile_name,
+            "schemaVersion": "flightcheck.result.v2",
+            "overall": "READY",
+            "target": {
+                "realm": "dev",
+                "environmentId": "environment-id",
+                "environmentUrl": "https://example.crm.dynamics.com",
+                "tenantId": "tenant-id",
+                "agentSlug": "ess-hr",
+                "agentSchemaName": "contoso_agent",
+                "agentId": "bot-id",
+            },
+            "inputFingerprint": validation_input_fingerprint(
+                effective_state,
+                profile_name,
+            ),
+            "checkpointStatuses": {
+                checkpoint_id: "Passed"
+                for checkpoint_id in PROFILE_POLICIES[
+                    profile_name
+                ].checkpoints
+            },
+            "acceptedSuppressions": [],
+            "remediationIds": [],
+            "accepted": True,
+            "migrationBaseline": False,
+        }
+
+    monkeypatch.setattr(
+        workday_connect,
+        "run_profile",
+        profile_runner,
     )
 
     result = workday_connect._record_validation(
@@ -1830,11 +2146,27 @@ def test_employee_success_runs_runtime_and_final_readiness(
 
     state = store.load()
     assert result["verified"] is True
-    assert observed == ["workday-da:final"]
+    assert result["lifecycleComplete"] is True
+    assert len(result["postSkillNextSteps"]) == 3
     assert state["status"] == "ready"
-    assert (
-        state["phases"]["employee-validation"]["employeeTestAttempt"][
-            "status"
-        ]
-        == "succeeded"
+    assert state["phases"]["employee-validation"]["employeeTestAttempt"] is None
+    assert set(
+        state["phases"]["employee-validation"]["validationProfiles"]
+    ) == {
+        "workday-da:post-runtime",
+        "workday-da:final",
+    }
+    employee_status = next(
+        phase
+        for phase in result["status"]["phases"]
+        if phase["id"] == "employee-validation"
     )
+    assert employee_status["readiness"]["accepted"] is True
+    assert employee_status["readiness"]["summary"] == (
+        "Maker validation readiness checks passed."
+    )
+    assert employee_status["readiness"]["validatedAt"]
+    evidence = state["phases"]["employee-validation"]["evidence"][0]
+    assert evidence["action"] == "maker-smoke-test"
+    assert evidence["testUserCategory"] == "maker"
+    assert evidence["timestamp"] == "2026-10-06T01:00:00Z"
