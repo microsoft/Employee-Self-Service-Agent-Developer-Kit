@@ -48,9 +48,9 @@ def test_installers_use_matching_purpose_specific_guidance() -> None:
     windows = WINDOWS_INSTALLER.read_text(encoding="utf-8")
     mac = MAC_INSTALLER.read_text(encoding="utf-8")
     expected = (
-        "Sign in to GitHub Copilot with an entitled GitHub account to activate "
-        "Copilot Chat, where you run /setup. This sign-in does not grant Power "
-        "Platform access."
+        "When VS Code asks you to sign in to GitHub Copilot, use a GitHub account "
+        "with an active Copilot entitlement. This enables Copilot Chat, where you "
+        "run /setup. It does not grant Power Platform access."
     )
     work_account = (
         "Microsoft work account that can access the target Power Platform "

@@ -1558,7 +1558,7 @@ if (-not $FlightCheckOnly -and -not $SkipLaunch) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 function Write-AuthenticationGuidance {
-    Write-Host "Sign in to GitHub Copilot with an entitled GitHub account to activate Copilot Chat, where you run /setup. This sign-in does not grant Power Platform access." -ForegroundColor Yellow
+    Write-Host "When VS Code asks you to sign in to GitHub Copilot, use a GitHub account with an active Copilot entitlement. This enables Copilot Chat, where you run /setup. It does not grant Power Platform access." -ForegroundColor Yellow
     Write-Host "When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent." -ForegroundColor Yellow
 }
 
