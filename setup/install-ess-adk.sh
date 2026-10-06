@@ -834,8 +834,8 @@ fi
 # 8. Launch VS Code
 # ---------------------------------------------------------------------------
 print_authentication_guidance() {
-    echo -e "    ${YELLOW}When VS Code asks you to sign in to GitHub Copilot, use a GitHub account with an active Copilot entitlement. This enables Copilot Chat, where you run /setup. It does not grant Power Platform access.${NC}"
-    echo -e "    ${YELLOW}When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent.${NC}"
+    echo -e "    ${YELLOW}When VS Code asks you to sign in to GitHub Copilot, use the GitHub account that has your Copilot access. This enables Copilot Chat, where you run /setup.${NC}"
+    echo -e "    ${YELLOW}When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent. GitHub sign-in does not grant Power Platform access.${NC}"
 }
 
 if [[ -n "$CODE_CMD" ]]; then
