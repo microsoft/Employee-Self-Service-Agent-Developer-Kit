@@ -31,10 +31,12 @@ it is not a customer-executed phase and must not be shown as an extra step.
   checked-in script evidence that produced the diagnosis.
 - Use structured `vscode_askQuestions` forms for choices and short customer
   evidence. The Entra and Workday administrator handoffs are the only
-  exception: collect their exact labeled return worksheet in one response,
-  pass the untouched text to the controller's worksheet parser, and accept
-  only the resulting validated structured payload. Reject missing, duplicate,
-  or unknown labels; never infer an answer or treat the raw text as evidence.
+  exception: collect all required administrator values in one response and
+  pass the untouched text to the controller's worksheet parser. For Entra,
+  accept either the completed table or a recognizable `Label: value` list;
+  table headers are not required. Accept only the resulting validated
+  structured payload. Reject missing, duplicate, or unknown labels; never
+  infer an answer or treat the raw text as evidence.
 - Leave every option initially unset. Do not add `recommended`, `default`,
   “recommended” label text, or any equivalent preselection to approvals,
   factual observations, connection choices, or validation outcomes. Continue

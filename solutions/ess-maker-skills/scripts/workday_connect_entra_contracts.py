@@ -49,6 +49,30 @@ ENTRA_WORKSHEET_LABELS = (
     "Employee assignment",
     "Existing configuration",
 )
+ENTRA_WORKSHEET_LABEL_ALIASES = {
+    "Directory": "Directory name",
+    "Entra directory": "Directory name",
+    "Enterprise app": "Enterprise application",
+    "Application name": "Enterprise application",
+    "App ID": "Application ID",
+    "Reply URL": "Selected Reply URL",
+    "Name ID source": "NameID source",
+    "Certificate thumbprint": (
+        "Certificate thumbprint (active certificate row)"
+    ),
+    "Certificate expiration": (
+        "Certificate expiration date (active certificate row)"
+    ),
+    "Certificate expiration date": (
+        "Certificate expiration date (active certificate row)"
+    ),
+    "Certificate expiry": (
+        "Certificate expiration date (active certificate row)"
+    ),
+    "Certificate expiry date": (
+        "Certificate expiration date (active certificate row)"
+    ),
+}
 
 
 def parse_entra_return_worksheet(
@@ -59,6 +83,7 @@ def parse_entra_return_worksheet(
         worksheet,
         labels=ENTRA_WORKSHEET_LABELS,
         label="Microsoft Entra administrator return worksheet",
+        label_aliases=ENTRA_WORKSHEET_LABEL_ALIASES,
     )
     confirmed = {
         "Yes, confirmed": "confirmed",
@@ -596,8 +621,9 @@ def build_entra_handoff(
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Collect the completed five-column administrator table in one "
-                "response. The legacy labeled worksheet remains accepted. Do "
+                "Collect the administrator values in one response as either "
+                "the completed table or a labeled list. Table headers are not "
+                "required for a labeled list. Do "
                 "not accept blank required values or ask for passwords, client "
                 "secrets, tokens, cookies, certificate contents, or private "
                 "keys. After submission, show the capture location and a "

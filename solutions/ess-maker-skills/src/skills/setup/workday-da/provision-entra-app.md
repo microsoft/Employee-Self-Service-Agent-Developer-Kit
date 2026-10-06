@@ -238,12 +238,13 @@ After **Yes**, run:
 python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
-Then collect the completed five-column table from the Entra administrator.
-The **Your tenant values** column must include every required non-secret value
-or outcome. Object IDs, the scope GUID, derived tenant URLs, and complete URI
-lists are not required. A reply such as "done", "all good", "continue", or
-"proceed" is not evidence and must not be converted into administrator
-attestation.
+Then collect the Entra administrator's values in one response. Accept either
+the completed five-column table or a simple `Label: value` list containing the
+same information. The customer does not need to reproduce the table headers,
+columns, or row formatting. Values may be in any order. Object IDs, the scope
+GUID, derived tenant URLs, and complete URI lists are not required. A reply
+such as "done", "all good", "continue", or "proceed" is not evidence and must
+not be converted into administrator attestation.
 
 The VS Code question UI renders an array of questions as a sequential wizard.
 Do not submit one question per worksheet field. Use one
@@ -252,19 +253,19 @@ Do not submit one question per worksheet field. Use one
 ```json
 [
   {
-    "header": "Entra return table",
-    "question": "Paste the completed Microsoft Entra administrator table in one response, including the header and every row. Do not include credentials, tokens, certificate contents, or private keys."
+    "header": "Entra administrator details",
+    "question": "Paste the Microsoft Entra administrator values in one response. You can paste the completed table or provide one Label: value per line; table headers are not required. Do not include credentials, tokens, certificate contents, or private keys."
   }
 ]
 ```
 
-The response is a strict five-column table, not free-form evidence. Preserve it
-unchanged. The controller reads only the exact **Information to capture**
-labels and **Your tenant values** cells, rejects missing, duplicate, or unknown
-labels, maps only the listed successful choices, and validates the structured
-verification payload. The legacy exact labeled worksheet remains accepted for
-resume compatibility. Never parse, rename, infer, or normalize an answer in
-the skill.
+Preserve the response unchanged. The controller accepts the generated
+five-column table or a labeled list, recognizes common customer-facing label
+variants and capitalization, rejects missing, duplicate, or unknown labels,
+maps only the listed successful choices, and validates the structured
+verification payload. Never require the customer to add table headers or
+reformat a recognizable labeled list. Never infer a missing answer or treat
+unlabeled prose as evidence.
 
 For the certificate expiration, accept the date exactly as the administrator
 copies it from the portal. Do not ask for an ISO timestamp or require a time or
@@ -320,7 +321,7 @@ On resume, use the Entra administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 
-Write the administrator's exact table response directly to
+Write the administrator's exact response directly to
 `.local/connect/workday-da/entra-return-worksheet.txt`, then run:
 
 ```powershell

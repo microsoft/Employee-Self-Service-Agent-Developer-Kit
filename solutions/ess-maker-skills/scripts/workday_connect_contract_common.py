@@ -170,6 +170,7 @@ def _parse_labeled_worksheet(
     labels: tuple[str, ...],
     label: str,
     multiline_labels: frozenset[str] = frozenset(),
+    label_aliases: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     if not isinstance(worksheet, str) or not worksheet.strip():
         raise WorkdayConnectContractError(f"{label} is required.")
@@ -188,22 +189,43 @@ def _parse_labeled_worksheet(
             label=label,
             multiline_labels=multiline_labels,
         )
+    normalized_labels = {
+        re.sub(r"[^a-z0-9]+", " ", candidate.casefold()).strip(): candidate
+        for candidate in labels
+    }
+    for alias, canonical in (label_aliases or {}).items():
+        if canonical not in labels:
+            raise ValueError(f"Unknown canonical worksheet label: {canonical}")
+        normalized_alias = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            alias.casefold(),
+        ).strip()
+        existing = normalized_labels.get(normalized_alias)
+        if existing is not None and existing != canonical:
+            raise ValueError(f"Ambiguous worksheet label alias: {alias}")
+        normalized_labels[normalized_alias] = canonical
     values: dict[str, str] = {}
     current_label: str | None = None
     for line_number, raw_line in enumerate(worksheet.splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
-        matched_label = next(
-            (candidate for candidate in labels if line.startswith(candidate + ":")),
-            None,
+        supplied_label, separator, supplied_value = line.partition(":")
+        normalized_label = re.sub(
+            r"[^a-z0-9]+",
+            " ",
+            re.sub(r"^(?:[-*]|\d+[.)])\s*", "", supplied_label).casefold(),
+        ).strip()
+        matched_label = (
+            normalized_labels.get(normalized_label) if separator else None
         )
         if matched_label is not None:
             if matched_label in values:
                 raise WorkdayConnectContractError(
                     f"{label} contains duplicate label '{matched_label}'."
                 )
-            values[matched_label] = line[len(matched_label) + 1 :].strip()
+            values[matched_label] = supplied_value.strip()
             current_label = matched_label
             continue
         if current_label in multiline_labels:
@@ -212,7 +234,7 @@ def _parse_labeled_worksheet(
             )
             continue
         raise WorkdayConnectContractError(
-            f"{label} line {line_number} does not use a recognized exact label."
+            f"{label} line {line_number} does not use a recognized label."
         )
     missing = [candidate for candidate in labels if candidate not in values]
     if missing:

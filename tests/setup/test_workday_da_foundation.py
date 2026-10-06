@@ -108,7 +108,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "renders an array of questions as a sequential wizard" in entra
     assert "containing exactly one free-form question" in entra
     assert "Do not replay the full worksheet" in entra
-    assert '"header": "Entra return table"' in entra
+    assert '"header": "Entra administrator details"' in entra
     assert "Certificate valid from" not in entra
     assert "Do not\nsay only \"paste a revised worksheet\"" in entra
     for removed_header in (
@@ -209,6 +209,9 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
 
     assert "only exception" in normalized_skill
     assert "controller's worksheet parser" in normalized_skill
+    assert "table headers are not required" in normalized_skill
+    assert "table headers are not required" in " ".join(entra.split())
+    assert "including the header and every row" not in entra
     assert "--verification-worksheet-file" in entra
     assert "entra-verification.json" not in entra
     assert "--response-worksheet-file" in tenant

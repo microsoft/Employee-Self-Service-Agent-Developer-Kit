@@ -418,9 +418,10 @@ def test_entra_handoff_can_request_explicit_creation():
         "five-column-markdown-table",
         "labeled-worksheet",
     ]
-    assert "completed five-column administrator table" in (
+    assert "completed table or a labeled list" in (
         handoff["responseForm"]["note"]
     )
+    assert "Table headers are not required" in handoff["responseForm"]["note"]
     assert "Basic SAML Configuration" in capture_by_field[
         "replyUrl"
     ]["portalLocation"]
@@ -498,6 +499,32 @@ def test_entra_certificate_expiration_accepts_maker_friendly_dates(
     parsed = parse_entra_return_worksheet(_state(), worksheet)
 
     assert parsed["certificate"]["validTo"] == expected
+
+
+def test_entra_customer_labeled_list_needs_no_table_headers() -> None:
+    worksheet = """Directory: Workday MSFT DPT6
+Application name: Workday MSFT DPT6
+App ID: d64a50b6-f92c-43af-be17-53132d75b94d
+Reply URL: https://impl.workday.com/microsoft_dpt6/login-saml.htmld
+Name ID source: user.userprincipalname
+SAML signing: Sign SAML response and assertion
+Certificate thumbprint: 905236D91F87B87FDD6AD3A832909751D7C403EA
+Certificate expiry date: 6/23/2028, 9:43:11 AM
+SAML configuration: Yes, confirmed
+Signing certificate: Yes, confirmed
+Authorized connector: Yes, confirmed
+Permissions and consent: Yes, permissions and consent are confirmed
+Employee assignment: Yes, access is confirmed or assignment is not required
+Existing configuration: Preserved without changes
+"""
+
+    parsed = parse_entra_return_worksheet(_state(), worksheet)
+
+    assert parsed["selectedDirectory"]["displayName"] == "Workday MSFT DPT6"
+    assert parsed["application"]["appId"] == (
+        "d64a50b6-f92c-43af-be17-53132d75b94d"
+    )
+    assert parsed["certificate"]["validTo"] == "2028-06-23"
 
 
 @pytest.mark.parametrize(
