@@ -117,6 +117,7 @@ SETUP_SOURCE_PRIORITY = {
 }
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
+    "copilotstudio.preview.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
     "copilotstudio.test.microsoft.com": "test",
 }

@@ -99,17 +99,14 @@ def test_validation_context_normalizes_nullable_identifiers() -> None:
     }
 
 
-def test_post_runtime_profile_uses_dataverse_and_run_history() -> None:
+def test_post_runtime_profile_uses_dataverse_without_run_history() -> None:
     requirements = registry.profile_requirements(
         "workday-da:post-runtime"
     )
 
     assert requirements.requires_dataverse_endpoint is True
-    assert requirements.clients == frozenset({
-        registry.DATAVERSE,
-        registry.PP_ADMIN,
-    })
-    assert requirements.pp_admin_flow_required is True
+    assert requirements.clients == frozenset({registry.DATAVERSE})
+    assert requirements.pp_admin_flow_required is False
 
 
 def test_setup_readiness_requires_only_agentbuilder_audience() -> None:

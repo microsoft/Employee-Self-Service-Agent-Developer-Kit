@@ -159,6 +159,9 @@ def _workday_state():
     state["identifiers"]["workdaySamlEntityId"] = (
         "http://www.workday.com/contoso_impl"
     )
+    state["identifiers"]["entraAppIdUri"] = (
+        "api://44444444-4444-4444-4444-444444444444"
+    )
     state["identifiers"]["signingCertificate"] = {
         "thumbprint": "AA11",
         "validFrom": "2026-01-01T00:00:00Z",
@@ -226,7 +229,7 @@ Existing configuration: Preserved without changes
 
 def _workday_worksheet() -> str:
     return """SAML row settings: Yes, all four values match exactly
-Certificate: The new certificate created from the Entra Base64 file
+Certificate: The certificate transferred from the completed Entra handoff
 Certificate expiration: Yes, the expiration date matches exactly
 OAuth client ID: safe-client-id
 API client: An existing approved client was verified
@@ -248,6 +251,58 @@ Remediated domain:
 Remediation scenario:
 Authorization retest:
 """
+
+
+def _worksheet_table(packet: dict, worksheet: str) -> str:
+    values = {}
+    current_label = None
+    expected_labels = packet["responseForm"]["collection"]["labels"]
+    for raw_line in worksheet.splitlines():
+        if not raw_line:
+            continue
+        matched = next(
+            (
+                label
+                for label in expected_labels
+                if raw_line.startswith(label + ":")
+            ),
+            None,
+        )
+        if matched is not None:
+            values[matched] = raw_line[len(matched) + 1 :].strip()
+            current_label = matched
+        elif current_label == "Additional domain mappings":
+            values[current_label] += "\n" + raw_line.strip()
+        else:
+            raise AssertionError(f"Unexpected worksheet line: {raw_line}")
+
+    def cell(value: str) -> str:
+        return value.replace("|", "\\|").replace("\n", "<br>")
+
+    lines = [
+        (
+            "| Information to capture | Where to find it | What to record | "
+            "Example value | Your tenant values |"
+        ),
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for instruction in packet["captureInstructions"]:
+        information = instruction["information"]
+        lines.append(
+            "| "
+            + " | ".join(
+                cell(value)
+                for value in (
+                    information,
+                    instruction["portalLocation"],
+                    instruction["instruction"],
+                    instruction["exampleValue"],
+                    values[information],
+                )
+            )
+            + " |"
+        )
+    return "\n".join(lines)
 
 
 def test_entra_handoff_selects_only_exact_service_provider_id():
@@ -286,6 +341,17 @@ def test_entra_handoff_selects_only_exact_service_provider_id():
         != (handoff["identifiers"]["entraAppIdUri"])
     )
     assert "planHash" not in handoff
+
+
+def test_entra_handoff_builds_guided_packet_without_graph_discovery():
+    handoff = build_entra_handoff(_state())
+
+    assert handoff["target"]["mode"] == "administrator-selection"
+    assert handoff["requiresRediscovery"] is False
+    assert "directoryDisplayName" not in handoff["scope"]
+    assert handoff["captureInstructions"]
+    assert handoff["informationToReturn"]
+    assert handoff["identifiers"]["entraAppIdUri"] is None
 
 
 def test_entra_handoff_rejects_missing_exact_discovery():
@@ -348,7 +414,13 @@ def test_entra_handoff_can_request_explicit_creation():
     assert handoff["responseForm"]["collection"]["validator"] == (
         "parse_entra_return_worksheet"
     )
-    assert "completed administrator worksheet" in handoff["responseForm"]["note"]
+    assert handoff["responseForm"]["collection"]["acceptedFormats"] == [
+        "five-column-markdown-table",
+        "labeled-worksheet",
+    ]
+    assert "administrator values in one response" in (
+        handoff["responseForm"]["note"]
+    )
     assert "Basic SAML Configuration" in capture_by_field[
         "replyUrl"
     ]["portalLocation"]
@@ -378,6 +450,80 @@ def test_entra_labeled_worksheet_parses_to_validated_evidence() -> None:
         "outcome": "confirmed",
         "provenance": "administrator-attestation",
     }
+
+
+def test_entra_completed_capture_table_parses_to_validated_evidence() -> None:
+    packet = build_entra_handoff(_state())
+    assert [
+        row["information"] for row in packet["captureInstructions"]
+    ] == packet["responseForm"]["collection"]["labels"]
+    assert all(row["exampleValue"] for row in packet["captureInstructions"])
+
+    parsed = parse_entra_return_worksheet(
+        _state(),
+        _worksheet_table(packet, _entra_worksheet()),
+    )
+
+    result = validate_entra_verification(_state(), parsed)
+    assert result["identifiers"]["entraAppId"] == (
+        "44444444-4444-4444-4444-444444444444"
+    )
+
+
+@pytest.mark.parametrize(
+    ("supplied", "expected"),
+    [
+        ("January 1, 2027", "2027-01-01"),
+        ("1 Jan 2027", "2027-01-01"),
+        ("2027-01-01T17:45:00-08:00", "2027-01-01"),
+        ("31/01/2027", "2027-01-31"),
+        ("10/5/2027", "10/5/2027"),
+    ],
+)
+def test_entra_certificate_expiration_accepts_maker_friendly_dates(
+    supplied: str,
+    expected: str,
+) -> None:
+    worksheet = _entra_worksheet().replace(
+        (
+            "Certificate expiration date (active certificate row): "
+            "2027-01-01"
+        ),
+        (
+            "Certificate expiration date (active certificate row): "
+            f"{supplied}"
+        ),
+    )
+
+    parsed = parse_entra_return_worksheet(_state(), worksheet)
+
+    assert parsed["certificate"]["validTo"] == expected
+
+
+def test_entra_customer_labeled_list_needs_no_table_headers() -> None:
+    worksheet = """Directory: Workday MSFT DPT6
+Application name: Workday MSFT DPT6
+App ID: d64a50b6-f92c-43af-be17-53132d75b94d
+Reply URL: https://impl.workday.com/microsoft_dpt6/login-saml.htmld
+Name ID source: user.userprincipalname
+SAML signing: Sign SAML response and assertion
+Certificate thumbprint: 905236D91F87B87FDD6AD3A832909751D7C403EA
+Certificate expiry date: 6/23/2028, 9:43:11 AM
+SAML configuration: Yes, confirmed
+Signing certificate: Yes, confirmed
+Authorized connector: Yes, confirmed
+Permissions and consent: Yes, permissions and consent are confirmed
+Employee assignment: Yes, access is confirmed or assignment is not required
+Existing configuration: Preserved without changes
+"""
+
+    parsed = parse_entra_return_worksheet(_state(), worksheet)
+
+    assert parsed["selectedDirectory"]["displayName"] == "Workday MSFT DPT6"
+    assert parsed["application"]["appId"] == (
+        "d64a50b6-f92c-43af-be17-53132d75b94d"
+    )
+    assert parsed["certificate"]["validTo"] == "2028-06-23"
 
 
 @pytest.mark.parametrize(
@@ -707,7 +853,7 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     certificate_question = packet["certificateSelectionQuestion"]
     assert "Which certificate is selected" in certificate_question["question"]
     assert (
-        "The new certificate created from the Entra Base64 file"
+        "The certificate transferred from the completed Entra handoff"
         in certificate_question["options"]
     )
     assert (
@@ -729,6 +875,10 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
         "Identify which sign-in provider the enabled Workday SAML row"
     )
     assert any("REST and SOAP hosts" in action for action in packet["actions"])
+    assert any(
+        "already transferred during the completed Entra handoff" in action
+        for action in packet["actions"]
+    )
     assert "certificateName" not in packet["responseForm"]["required"]
     assert "client secrets" in packet["responseForm"]["note"]
     assert packet["responseForm"]["collection"]["mode"] == (
@@ -737,11 +887,40 @@ def test_workday_packet_uses_service_provider_id_not_app_id_uri():
     assert packet["responseForm"]["collection"]["validator"] == (
         "parse_workday_admin_return_worksheet"
     )
+    assert packet["responseForm"]["collection"]["acceptedFormats"] == [
+        "five-column-markdown-table",
+        "labeled-worksheet",
+    ]
     assert packet["engagementQuestion"].startswith("Have you looped in")
     assert packet["completionQuestion"].startswith("Has the Workday")
     assert any(
         "OAuth client ID" in item for item in packet["informationToReturn"]
     )
+
+
+def test_workday_legacy_certificate_choice_remains_accepted() -> None:
+    worksheet = _workday_worksheet().replace(
+        "The certificate transferred from the completed Entra handoff",
+        "The new certificate created from the Entra Base64 file",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["certificateSelectionOutcome"] == (
+        "entra-signing-certificate-selected"
+    )
+
+
+def test_workday_packet_preserves_ambiguous_displayed_certificate_date():
+    state = _workday_state()
+    state["identifiers"]["signingCertificate"]["validTo"] = "10/5/2027"
+
+    packet = build_workday_admin_packet(state)
+
+    assert packet["referenceValues"]["certificateValidTo"] == "10/5/2027"
 
 
 def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
@@ -757,6 +936,57 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["evidence"]["optionalDomains"] == []
 
 
+def test_workday_customer_labeled_response_accepts_common_labels() -> None:
+    worksheet = _workday_worksheet()
+    for canonical, customer_label in {
+        "SAML row settings": "SAML configuration",
+        "Certificate expiration": "Certificate expiry date",
+        "OAuth client ID": "Client ID",
+        "Client grant type": "Grant type",
+        "Workday owned scope": "Include Workday Owned Scope",
+        "OAuth token URL": "Token URL",
+        "REST base URL": "REST URL",
+        "SOAP base URL": "SOAP URL",
+        "Authentication policy": "Auth policy",
+        "Network readiness": "Network access",
+        "Rollout": "Employee population",
+        "Functional-area scopes": "Functional areas",
+        "Additional domain mappings": "Domain mappings",
+        "Authorization": "Authorization result",
+        "Remediated domain": "Affected domain",
+        "Remediation scenario": "Affected scenario",
+        "Authorization retest": "Retest result",
+    }.items():
+        worksheet = worksheet.replace(
+            f"{canonical}:",
+            f"{customer_label}:",
+        )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["oauthClientId"] == "safe-client-id"
+    assert parsed["rolloutType"] == "entire-workforce"
+
+
+def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    assert [
+        row["information"] for row in packet["captureInstructions"]
+    ] == packet["responseForm"]["collection"]["labels"]
+    assert all(row["exampleValue"] for row in packet["captureInstructions"])
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _worksheet_table(packet, _workday_worksheet()),
+    )
+
+    result = validate_workday_admin_response(_workday_state(), parsed)
+    assert result["identifiers"]["oauthClientId"] == "safe-client-id"
+
+
 def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
         "Optional domains: No additional domains are required\n"
@@ -769,6 +999,33 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     parsed = parse_workday_admin_return_worksheet(
         _workday_state(),
         worksheet,
+    )
+
+    assert parsed["optionalDomains"] == [
+        {
+            "domain": "Worker Data",
+            "scenario": "custom worker lookup",
+        },
+        {
+            "domain": "Absence",
+            "scenario": "custom leave lookup",
+        },
+    ]
+
+
+def test_workday_capture_table_parses_multiline_optional_domains() -> None:
+    worksheet = _workday_worksheet().replace(
+        "Optional domains: No additional domains are required\n"
+        "Additional domain mappings:\n",
+        "Optional domains: Yes, additional supported scenarios require domains\n"
+        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Absence | custom leave lookup\n",
+    )
+    packet = build_workday_admin_packet(_workday_state())
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        _worksheet_table(packet, worksheet),
     )
 
     assert parsed["optionalDomains"] == [
@@ -1015,6 +1272,16 @@ def test_partial_administrator_evidence_rejects_secret_material() -> None:
     assert "secret or certificate material" in (
         result["fieldErrors"]["certificateThumbprint"]
     )
+
+
+def test_partial_entra_evidence_normalizes_maker_friendly_certificate_date() -> None:
+    result = validate_administrator_partial_evidence(
+        _state(),
+        "entra",
+        {"certificateValidTo": "January 1, 2027 at 5:00 PM"},
+    )
+
+    assert result["validFields"]["certificateValidTo"] == "2027-01-01"
 
 
 def test_workday_admin_response_rejects_certificate_date_drift():
@@ -1396,6 +1663,54 @@ def test_employee_evidence_rejects_maker_and_invalid_timestamp():
                 "scenarioName": "Read-only scenario",
                 "testUserCategory": "Environment Maker",
                 "timestamp": "2026-09-25T00:00:00Z",
+                "outcome": "passed",
+            }
+        )
+
+    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
+        validate_employee_evidence(
+            {
+                "testUserCategory": "non-maker employee",
+                "timestamp": "not-a-time",
+                "outcome": "passed",
+            }
+        )
+
+
+def test_employee_evidence_does_not_require_scenario_name():
+    assert validate_employee_evidence(
+        {
+            "testUserCategory": "non-maker employee",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "outcome": "passed",
+        }
+    ) == {
+        "testUserCategory": "non-maker employee",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
+
+def test_maker_validation_evidence_is_accepted() -> None:
+    assert validate_employee_evidence(
+        {
+            "testUserCategory": "maker",
+            "timestamp": "2026-09-25T00:00:00Z",
+            "outcome": "passed",
+        }
+    ) == {
+        "testUserCategory": "maker",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
+
+def test_maker_validation_rejects_invalid_timestamp() -> None:
+    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
+        validate_employee_evidence(
+            {
+                "testUserCategory": "maker",
+                "timestamp": "not-a-time",
                 "outcome": "passed",
             }
         )

@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Guided, plain-English experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.33",
+  "version": "0.4.34",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {

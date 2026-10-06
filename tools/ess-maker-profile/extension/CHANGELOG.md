@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.34 (POC)
+
+- **Customize landing page** opens `/landing-page` and appears immediately after **Push to Copilot Studio** at the bottom of the **Customization** tree. Customization actions are always clickable; the Getting started walkthrough asks users to complete setup first. The detailed tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
+
 ## 0.4.33 (POC)
 
 - **Honor the current installer mode on every activation.** The extension now
