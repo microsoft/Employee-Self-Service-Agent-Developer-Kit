@@ -53,6 +53,24 @@ single/multi-turn sets are unsupported in this feature; never flatten, skip, or
 silently convert their cases. Explain the restriction before generating files
 and offer an explicit choice to create single-response cases instead.
 
+## Expected-response authoring
+
+During maker edits and additions, treat the user's description of the desired
+response as behavioral intent, not final `expectedOutput` text. Never copy that
+description verbatim into the evaluation row. Reason over the requested outcome
+and write a concise, observable assertion, normally in the form **"The agent
+should ..."**. Name the actual behavior, such as explaining a requirement,
+displaying specified information, asking for clarification, refusing a restricted
+request, or guiding the user to a next step. Do not use the vague assertion
+"The agent should respond"; do not invent facts or add behavior the user did
+not request.
+
+For example, if the user says `tell them manager approval is required`, save an
+assertion such as `The agent should explain that manager approval is required
+and guide the user to the applicable next step.` Do not save the user's sentence
+as the expected response. Prompt edits remain literal unless the user asks for
+help rewriting the prompt.
+
 ## CSV synchronization
 
 When only synchronizing a selected set's CSV, use the strict export CLI:
@@ -126,6 +144,16 @@ only rows whose prompt or expected response actually changed. Never repeat an
 unchanged generated-case table later in the same flow.
 
 ## Post-generation quality report
+
+If the validator returns `status=authentication_required`, do not fabricate or
+display a quality score and do not silently start manual scoring. Follow the
+validator's **Authentication recovery** contract: explain the effective GitHub
+credential requirement, invoke its structured authentication/manual-scoring
+choice, and preserve its explicit `authenticationRetry` or
+`manualFallbackAuthorized` continuation input when re-invoking the validator for
+the exact selected set. Retry at most once after authentication. Manual scoring
+is allowed only when the user declines authentication or that authenticated
+retry still fails.
 
 Immediately after the generated-case preview, invoke the validator without a
 separate progress message or preamble. When it returns, render the following
