@@ -8,15 +8,20 @@ The only writable lifecycle state is:
 .local/connect/workday-da/config.json
 ```
 
-`scripts/workday_connect_store.py` owns locking, migration, validation, atomic
-writes, and phase transitions. Skills must use `scripts/workday_connect.py`;
-they must not edit this file directly or create a Markdown state mirror.
+`scripts/workday_connect_store.py` owns locking, migration backup and
+invocation, validation, atomic writes, and durable phase transitions.
+`scripts/workday_connect_migrations.py` owns every pure legacy and schema-v2
+through schema-v9 transformation; it never reads or writes the state file.
+`scripts/workday_connect_state_policy.py` owns shared pure reset, invalidation,
+and tenant-foundation comparisons used by persistence and migration. Skills
+must use `scripts/workday_connect.py`; they must not edit this file directly
+or create a Markdown state mirror.
 
-## Schema version 9
+## Schema version 10
 
 ```json
 {
-  "schemaVersion": 9,
+  "schemaVersion": 10,
   "provider": "workday",
   "status": "in-progress",
   "scope": {},
@@ -110,13 +115,18 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2 through schema-v8, or legacy row-based state, is backed up to
-`config.pre-v9.json` before one-time migration. Schema-v6 administrator
+Schema-v2 through schema-v9, or legacy row-based state, is backed up to
+`config.pre-v10.json` before one-time migration. Schema-v6 administrator
 evidence is preserved as safe partial evidence, while Entra and downstream
 phases reopen for the expanded directory, application-pairing, federation, and
 least-privilege checks. A previously complete runtime phase is reopened when
 it lacks live Workday runtime-template wiring or topic-activation evidence.
 Schema-v8 package verification evidence moves from Preflight to Connections
 so an existing installation is reused without repeating package installation.
+Schema-v9 completed employee evidence with a valid timezone-qualified
+timestamp is converted to a grandfathered `maker-smoke-test` completion
+record. In-progress employee runtime-evidence attempts are cleared and resume
+at Maker validation because run-history windows cannot identify the
+conversation that initiated a flow.
 Legacy Markdown task files, when present, are historical snapshots and are
 never rewritten.

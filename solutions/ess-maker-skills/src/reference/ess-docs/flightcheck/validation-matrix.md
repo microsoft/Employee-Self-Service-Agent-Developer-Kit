@@ -221,7 +221,7 @@ not coupled to a Connect lifecycle.
 | `workday-da:package-ready`          | Selected-agent Workday runtime package installation                                                                          |
 | `workday-da:dataverse-ready`        | Workday runtime package, Dataverse workflow inventory, and runtime connection-reference readiness                            |
 | `workday-da:external-prerequisites` | Entra, Workday tenant, permission, and network prerequisites                                                                 |
-| `workday-da:post-runtime`           | Reviewed runtime-flow inventory and recorded employee Test pane evidence                                                     |
+| `workday-da:post-runtime`           | Reviewed runtime-flow inventory                                                                                              |
 | `workday-da:post-connection`        | Connection-reference, delegated authorization, and Workday endpoint readiness                                                |
 | `workday-da:post-agent-wiring`      | Workday topic, wiring, guided flow attachment, and endpoint validation for the selected DA                                   |
 | `workday-da:final`                  | Complete Workday DA readiness contract across all profile boundaries                                                         |
@@ -234,7 +234,7 @@ not coupled to a Connect lifecycle.
 | WD-DA-TOPIC-001  | Complete reviewed out-of-box Workday topic inventory is present and active                                                                                                                   | Critical | Native AgentBuilder components API                     | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
 | WD-DA-WIRING-001 | Conversation Start invokes the reviewed active runtime-template topic immediately before User Context Validate, and User Context does not retain the obsolete nested runtime-template call   | Critical | Native AgentBuilder components API                     | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
 | WD-DA-ATTACH-001 | Guided attestation that the reviewed Workday flows are attached to the selected ESS HR DA with the required parameter-sharing settings                                                       | High     | Manual Copilot Studio verification                     | [workday](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday)               |
-| WD-DA-RUN-001    | Each reviewed expected flow has exactly one successful terminal candidate in the bounded employee Test pane evidence window; the operator label is not treated as a platform correlation key | Critical | Bounded Power Automate run-history evidence            | [workday](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday)               |
+| WD-DA-RUN-001    | Retired compatibility checkpoint. Bounded Power Automate run-history windows cannot prove which conversation initiated a run and are not accepted as Workday scenario evidence.              | Retired  | Not used by Workday DA readiness profiles              | [workday](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday)               |
 
 ## 5. Workday Deep Validation (WD-xxx)
 

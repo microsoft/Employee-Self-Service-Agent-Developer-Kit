@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import uuid
 
 
-STATE_SCHEMA_VERSION = 9
+STATE_SCHEMA_VERSION = 10
 CONTROLLER_CONTRACT_VERSION = 4
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
@@ -150,12 +150,14 @@ PHASE_DEFINITIONS = (
     ),
     PhaseDefinition(
         identifier=Phase.EMPLOYEE_VALIDATION,
-        title="Employee validation",
+        title="Maker validation",
         what_happens=(
-            "Publish the configured agent.",
-            "Run a real Workday scenario as a signed-in non-maker employee.",
-            "Confirm employee context and Workday data work without an "
-            "unexpected repeated sign-in.",
+            "Smoke-test an enabled read-only Workday scenario in the Copilot "
+            "Studio Test pane without publishing the agent.",
+            "Complete the guided Workday connection lifecycle when the maker "
+            "scenario returns the expected employee context and Workday data.",
+            "Show publishing, deployment, employee-owned connections, and "
+            "non-maker Microsoft 365 Chat validation as post-skill next steps.",
         ),
         prerequisite=Phase.RUNTIME,
     ),
@@ -188,7 +190,7 @@ PHASE_REQUIRED_ACTIONS = {
             "workday-topics-activated",
         }
     ),
-    Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
+    Phase.EMPLOYEE_VALIDATION.value: frozenset({"maker-smoke-test"}),
 }
 ADMINISTRATOR_PHASES = frozenset(
     {
@@ -998,10 +1000,10 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
     if value["status"] == PhaseStatus.COMPLETE.value:
         required_actions = PHASE_REQUIRED_ACTIONS[phase_id]
         completed_actions = set(value["completedActions"])
-        missing_actions = sorted(required_actions - completed_actions)
         evidence_actions = {
             str(record.get("action") or "") for record in value["evidence"]
         }
+        missing_actions = sorted(required_actions - completed_actions)
         missing_evidence = sorted(required_actions - evidence_actions)
         if missing_actions or missing_evidence:
             details = []
@@ -1204,11 +1206,11 @@ def _validate_tenant_foundation(value: Any) -> None:
     certificate = value["identifiers"].get("signingCertificate")
     if not isinstance(certificate, dict) or any(
         not str(certificate.get(key) or "").strip()
-        for key in ("thumbprint", "validFrom", "validTo")
+        for key in ("thumbprint", "validTo")
     ):
         raise WorkdayConnectModelError(
             "Workday tenantFoundation signingCertificate must contain "
-            "thumbprint, validFrom, and validTo."
+            "thumbprint and validTo."
         )
     missing_endpoints = sorted(
         key
@@ -1336,14 +1338,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
         PhaseStatus.COMPLETE.value: "Complete",
     }
     current_phase = next_phase_id(state)
-    current_index = next(
-        (
-            index
-            for index, definition in enumerate(PHASE_DEFINITIONS)
-            if definition.identifier.value == current_phase
-        ),
-        None,
-    )
     rows = [
         "### Workday connection progress",
         "",
@@ -1352,7 +1346,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
     ]
     for index, definition in enumerate(PHASE_DEFINITIONS, start=1):
         status = state["phases"][definition.identifier.value]["status"]
-        phase_index = index - 1
         if status == PhaseStatus.COMPLETE.value:
             label = labels[status]
         elif definition.identifier.value == current_phase:
@@ -1361,11 +1354,6 @@ def progress_text(state: Mapping[str, Any]) -> str:
                 if status == PhaseStatus.BLOCKED.value
                 else "Current"
             )
-        elif (
-            current_index is not None
-            and phase_index == current_index + 1
-        ):
-            label = "Next"
         else:
             label = "Pending"
         rows.append(f"| {index} | {definition.title} | {label} |")

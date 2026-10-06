@@ -814,10 +814,9 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
     ),
     ProfileSpec(
         name="workday-da:post-runtime",
-        description="Post-runtime Workday read-path validation.",
+        description="Post-runtime Workday flow validation.",
         checkpoint_ids=(
             "WD-DA-FLOW-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(
@@ -870,7 +869,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(

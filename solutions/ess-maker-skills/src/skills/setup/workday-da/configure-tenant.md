@@ -7,6 +7,13 @@ the administrator's non-secret response, derives deterministic endpoints, and
 records evidence. All Workday tenant changes are performed by the Workday
 administrator.
 
+This phase starts only after Microsoft Entra sign-off is complete. Treat the
+recorded Entra identifiers, certificate metadata, and already transferred
+Base64 certificate as fixed inputs. Do not direct the maker back to the Entra
+administrator, ask that administrator to repeat a task, or require access to
+the Entra portal from this phase. A Workday-side mismatch remains a Workday
+phase blocker unless the controller independently reports Entra target drift.
+
 Generate one administrator handoff:
 
 ```powershell
@@ -39,16 +46,18 @@ administrator finished configuration.
   Microsoft Entra federation** and the greenfield handoff below.
 - For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
   showing certificate, tenant-security, or API-client changes. Explain that the
-  enabled row belongs to an existing federation and must not be replaced. Ask
-  the Workday and identity administrators to decide whether a separate
-  Microsoft Entra row can be added safely. Do not show the completion question
-  or response form. Preserve the current phase.
+  enabled row belongs to an existing federation and must not be replaced. The
+  Workday administrator must determine, through the customer's Workday
+  governance process, whether a separate Microsoft Entra row can be added
+  safely for the target environment. Do not reopen Entra, re-engage the Entra
+  administrator, show the completion question, or show the response form.
+  Preserve the current Workday phase.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
   contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
   `pingidentity.com`, or an organization-specific Ping host. Stop and ask the
-  identity administrator to identify the enabled row; do not render either
-  mutation handoff, the completion question, or the evidence form.
+  Workday administrator to identify the enabled row in Workday; do not render
+  either mutation handoff, the completion question, or the evidence form.
 
 If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
@@ -56,9 +65,27 @@ before the completion question and preserve the current phase.
 Render the selected branch as one standalone section titled **Workday
 administrator handoff - share this whole section**. It must contain the
 administrator role, exact Workday tenant and environment, packet reference
-values, every applicable numbered task, and the packet's
-`informationToReturn` checklist. The maker must be able to forward that one
-section without copying values from earlier chat messages.
+values, one capture table, and every applicable numbered task. The maker must
+be able to forward that one section without copying values from earlier chat
+messages.
+
+Before the numbered tasks, render every entry from the packet's
+`captureInstructions` as one table with these exact columns:
+
+| Information to capture | Where to find it | What to record | Example value | Your tenant values |
+| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
+
+Use each entry's `information`, `portalLocation`, `instruction`, and
+`exampleValue` values for the first four columns. Leave every cell in **Your
+tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
+line break inside a cell. Tell the administrator to complete that final column
+and return the whole table to the maker, who will paste it into the agent chat.
+Never render internal `fields` names. This table is both the capture guide and
+the return worksheet. Do not render the packet's `informationToReturn` list or
+a second worksheet. Keep the numbered tasks focused on actions; do not repeat
+table locations, capture instructions, or return-value lists unless necessary
+to perform the change. Do not ask for a field after completion unless it
+appeared as a row in the shareable table.
 
 After rendering the complete handoff, record that it was presented and is
 waiting for the administrator:
@@ -75,12 +102,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Providers** row whose **Used for Environments** value matches the employee
    environment being connected. Confirm that it is the intended Microsoft
    Entra row. Do not replace another provider's row.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
-   **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Return to the enabled
-   Microsoft Entra row and select that key in its **X509 Certificate** field.
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered through the approved customer channel during the
+   completed Entra handoff. In Workday, run **Create x509 Public Key**, paste
+   that public certificate, give it a customer-chosen recognizable name, and
+   save it. Return to the enabled Microsoft Entra row and select that key in
+   its **X509 Certificate** field. Do not open Entra or request another
+   certificate transfer.
 
    Use `certificateSelectionQuestion` and `certificateValidityQuestion` from
    the packet to populate the corresponding fields in the consolidated form.
@@ -89,16 +117,17 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Certificate.”
 
    Handle the answer as follows:
-   - **The new certificate created from the Entra Base64 file** - record
+   - **The certificate transferred from the completed Entra handoff** - record
      `certificateSelectionOutcome` as
      `entra-signing-certificate-selected`. If the displayed expiration date
      exactly matches the verified Entra expiration date shown in the form,
      record
      `certificateValidityOutcome` as
      `matches-verified-entra-certificate`.
-   - **A different existing Workday certificate** - stop. Do not replace or
-     reuse it until the Workday and identity administrators confirm it is the
-     same active Entra signing certificate.
+   - **A different existing Workday certificate** - stop. Do not reuse it.
+     Select the Workday public key created from the transferred certificate,
+     or keep the Workday phase blocked while the Workday administrator resolves
+     the mismatch.
    - **No certificate is selected** - ask the administrator to select the new
      Workday public key created from the Entra Base64 certificate, then return
      to this question.
@@ -131,12 +160,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Do not treat the functional-area scopes from step 4 as domain permissions.
    Add another domain only when it is tied to a named supported scenario.
    Do not return employee membership lists.
-6. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the tenant’s
-   REST base URL ending exactly at `/ccx/api` and its SOAP service base URL
-   ending exactly at `/ccx/service`. The tenant name is collected separately;
-   do not append it to the SOAP base URL.
-   Do not return a client secret, password, token, cookie, or certificate body.
+6. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 7. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -157,12 +185,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    confirm there is no enabled SAML identity-provider row for the employee
    environment being connected. Do not modify a row owned by another
    federation.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. In Workday, run
    **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Never collect the
-   certificate body in chat.
+   customer-chosen recognizable name, and save it. Do not open Entra, request
+   another certificate transfer, or collect the certificate body in chat.
 3. **Create the Microsoft Entra row.** Add a SAML identity-provider row for the
    employee environment. Set its Issuer to the packet's exact expected
    Microsoft Entra issuer, select the newly created public key in **X509
@@ -183,12 +210,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    security group, and grant **Get** on **Worker Data: Public Worker Reports**
    and **Integration Permissions**. Never default a limited/test rollout to All
    Employees. Add optional domains only for a named supported scenario.
-7. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the REST
-   base URL ending exactly at `/ccx/api` and the SOAP service base URL ending
-   exactly at `/ccx/service`. Record the tenant name separately; do not append
-   it to the SOAP base URL. Do not return a client secret, password, token,
-   cookie, or certificate body.
+7. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 8. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -204,17 +230,10 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
     identity-provider SSO service URL, and sign-on redirect URL match the
     expected values.
 
-End the shareable handoff with **Information to return to the maker** and show
-every item from the packet's `informationToReturn` list. Do not defer this
-checklist until after completion; the administrator must know what to return
-before starting the tasks.
-
-Then render a section titled **Workday administrator return worksheet**. Use
-the customer-facing headers, questions, and choices from the worksheet
-definition below. Render them as one copyable worksheet that the administrator
-can complete and return through the customer's approved collaboration channel.
-Do not submit the definition as a multi-question `vscode_askQuestions` call;
-VS Code renders that array as a sequential wizard.
+End the shareable handoff after the applicable numbered tasks. The capture
+table already tells the administrator what to return and where to find it, so
+do not repeat an **Information to return to the maker** checklist or a separate
+return worksheet.
 
 After an applicable handoff is shown, ask exactly:
 
@@ -232,12 +251,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 ```
 
 If the administrator reports that the provider state changed from the branch
-selected above, return to provider discovery instead of forcing the current
-form.
+selected above, repeat provider discovery within this Workday phase using the
+same recorded Entra reference values. Do not return to the Entra phase or ask
+the Entra administrator to participate again.
 
-Collect the completed worksheet in one response. Do not ask for these values
-as a sequence of separate chat or form questions. The worksheet retains all
-required evidence:
+Collect the Workday administrator's details in one response. Do not ask for
+these values as a sequence of separate chat or form questions. The response
+must contain all required evidence:
 
 - confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
   Provider ID, identity-provider SSO service URL, and sign-on redirect URL
@@ -264,8 +284,10 @@ required evidence:
   remediation was required; when it was, the affected domain, named scenario,
   and successful retest outcome.
 
-Use this exact worksheet definition, substituting the packet's expected
-issuer, Service Provider ID, and verified certificate expiration date:
+The worksheet definition below is an internal mapping reference for the exact
+successful values accepted by the controller. Do not render it after the
+handoff table. Substitute the packet's expected issuer, Service Provider ID,
+and verified certificate expiration date when building the table:
 
 ```json
 [
@@ -283,7 +305,7 @@ issuer, Service Provider ID, and verified certificate expiration date:
     "header": "Certificate",
     "question": "Which certificate is selected on the enabled Microsoft Entra SAML row in Workday?",
     "options": [
-      { "label": "The new certificate created from the Entra Base64 file" },
+      { "label": "The certificate transferred from the completed Entra handoff" },
       { "label": "A different existing Workday certificate" },
       { "label": "No certificate is selected" },
       { "label": "I'm not sure" }
@@ -454,17 +476,23 @@ After the administrator confirms completion, use one
 ```json
 [
   {
-    "header": "Workday administrator return worksheet",
-    "question": "Paste the completed Workday administrator return worksheet in one response. Keep every field label with its answer. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
+    "header": "Workday administrator details",
+    "question": "Paste the completed Workday administrator details in one response. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
   }
 ]
 ```
 
-The response is a strict labeled worksheet, not free-form evidence. Preserve
-the exact labels and answers unchanged. The controller rejects missing,
-duplicate, or unknown labels and maps only the listed successful choices into
-the structured response object described below. Never parse, rename, infer,
-or normalize an answer in the skill:
+Preserve the response unchanged. The controller recognizes the generated table
+and common customer-facing labels and capitalization, rejects missing,
+duplicate, or unknown labels, and maps only the listed successful choices into
+the structured response object described below. Do not ask the customer to
+reformat a recognizable response. Never infer a missing answer or treat
+unlabeled prose as evidence:
+
+Certificate comparisons are date-only. Do not ask either administrator for a
+timestamp, time, or timezone. Accept the portal's displayed certificate date
+in a common numeric or month-name format; the controller ignores any supplied
+time component.
 
 - an applicable Microsoft Entra branch plus
   **Yes, all four values match exactly** ->
@@ -475,7 +503,7 @@ or normalize an answer in the skill:
 - a different or uncertain Issuer, Service Provider ID, SSO service URL, or
   sign-on redirect URL -> stop for administrator remediation instead of
   submitting successful evidence;
-- **The new certificate created from the Entra Base64 file** ->
+- **The certificate transferred from the completed Entra handoff** ->
   `certificateSelectionOutcome: entra-signing-certificate-selected`;
 - matching certificate expiration date ->
   `certificateValidityOutcome: matches-verified-entra-certificate`;
@@ -554,7 +582,7 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the exact labeled response directly to
+key. Write the exact table response directly to
 `.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
 interpolate administrator-entered values into a generated shell command. Pass
 the worksheet once:

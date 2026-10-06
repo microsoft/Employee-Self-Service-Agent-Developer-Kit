@@ -426,6 +426,31 @@ def test_target_url_resolves_ids_and_ring() -> None:
     assert target["agentSelection"] == "copilot-studio-url"
 
 
+@pytest.mark.parametrize(
+    "host",
+    (
+        "copilotstudio.microsoft.com",
+        "copilotstudio.preview.microsoft.com",
+    ),
+)
+def test_production_and_preview_hosts_resolve_to_prod_ring(host: str) -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=(
+            f"https://{host}/environments/{ENVIRONMENT_ID}/"
+            f"bots/{AGENT_ID}/overview"
+        ),
+        environment_id=None,
+        agent_id=None,
+        ring=None,
+        require_agent=True,
+    )
+
+    assert target["environmentId"] == ENVIRONMENT_ID
+    assert target["agentId"] == AGENT_ID
+    assert target["ring"] == "prod"
+    assert target["agentSelection"] == "copilot-studio-url"
+
+
 def test_target_rejects_conflicting_ring() -> None:
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,

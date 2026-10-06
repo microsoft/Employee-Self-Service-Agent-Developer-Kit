@@ -291,30 +291,6 @@ is incomplete, keep Runtime active and show the controller's actual blocker.
 
 ## Agent binding after flow activation
 
-Only after runtime apply has activated the reviewed flows, first initialize
-the Workday runtime templates from the native agent's Conversation Start by
-running the guarded action in
-`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
-This scoped action must complete and
-`record-runtime-template-wiring` must record
-`runtime-template-configured` before changing the Admin User Context topic.
-The guarded action runs this live verification command itself; do not invoke
-it a second time here:
-
-```powershell
-python scripts/workday_connect.py record-runtime-template-wiring
-```
-
-Then wire the native agent's local `[Admin] - User Context - Setup` topic to
-`Workday [System] - 1: Set User Context V2` using the existing guarded
-checkpoint, scoped dry-run, approval, and push pattern in
-`src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the
-recorded Power Platform maker as `--preferred-username` so the native push
-cannot silently reuse another cached account. This scoped push changes only
-the setup redirect; Workday topics remain inactive until connection sharing is
-complete. Do not run a separate readiness checkpoint here; the controller
-evaluates the required live coverage after attachment and topic activation.
-
 Topic metadata can report stale or transient component-reference diagnostics
 even when the installed package and runtime flows are functioning. Record those
 diagnostics for support, but do not treat them alone as proof of a broken
@@ -401,6 +377,30 @@ This command proves that every Workday topic included with the agent is
 enabled. Topic diagnostics are retained as supporting detail but do not change
 the activation result or create a package-repair blocker by themselves.
 
+Only after topic activation is verified, initialize the Workday runtime
+templates from the native agent's Conversation Start by running the guarded
+action in
+`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
+This scoped action must complete and
+`record-runtime-template-wiring` must record
+`runtime-template-configured` before changing the Admin User Context topic.
+The guarded action runs this live verification command itself; do not invoke
+it a second time here:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+Then wire the native agent's local `[Admin] - User Context - Setup` topic to
+`Workday [System] - 1: Set User Context V2` using the existing guarded
+checkpoint, scoped dry-run, approval, and push pattern in
+`src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the
+recorded Power Platform maker as `--preferred-username` so the native push
+cannot silently reuse another cached account. This scoped push changes only
+the setup redirect and preserves the already verified Workday topic activation
+state. Do not run a separate readiness checkpoint here; the controller
+evaluates the required live coverage after attachment and topic activation.
+
 Then run:
 
 ```powershell
@@ -414,10 +414,10 @@ mapped topic. It completes the runtime phase only when the target-bound flow
 attachment is confirmed, every Workday topic is Active, and the automatic
 configuration checks are accepted. It retains any topic
 diagnostics for support correlation without presenting them as runtime failure
-evidence. The signed-in employee scenario remains the functional confirmation
-that the Workday runtime works. Do not substitute an unscoped "done" response
-for the structured confirmation, run separate readiness commands, or ask for
-the flow-connection confirmation twice.
+evidence. The maker's Copilot Studio Test pane scenario remains the functional
+confirmation that the Workday runtime works. Do not substitute an unscoped
+"done" response for the structured confirmation, run separate readiness
+commands, or ask for the flow-connection confirmation twice.
 
 If runtime discovery reports that the selected package has no reviewed flow
 catalog, record a manual handoff. Do not claim that connection references,

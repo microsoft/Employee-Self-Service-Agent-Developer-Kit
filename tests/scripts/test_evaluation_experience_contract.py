@@ -175,7 +175,7 @@ def test_append_uses_authoring_helper_and_preserves_case_identity():
         "evaluation_authoring.py add",
         '--evaluation-folder "{set-folder}"',
         '--input "{new prompt}"',
-        '--expected-output "{new expected response}"',
+        '--expected-output "{reasoned behavioral assertion}"',
         "file plus row index",
         "Preserve duplicate inputs",
         "100 cases",
@@ -185,6 +185,37 @@ def test_append_uses_authoring_helper_and_preserves_case_identity():
         "Preserve parent identity",
     ):
         assert fragment in text
+
+
+def test_expected_response_edits_reason_over_user_intent_instead_of_copying():
+    contract = _normalized(_contract("experience-contract"))
+    update = _normalized(_skill("update"))
+    for text in (contract, update):
+        assert "Never copy" in text
+        assert "verbatim" in text
+        assert "The agent should ..." in text
+        assert "observable assertion" in text
+        assert '"The agent should respond"' in text
+    assert 'What should the agent do for "{case label}"?' in update
+    assert "What should the new expected response be" not in update
+    assert '--expected-output "{reasoned behavioral assertion}"' in update
+    assert "not the user's verbatim description" in update
+    assert "tell them manager approval is required" in contract
+    assert "The agent should explain that manager approval is required" in contract
+
+
+def test_quality_authentication_requires_recovery_before_manual_scoring():
+    contract = _normalized(_contract("experience-contract"))
+    assert "status=authentication_required" in contract
+    assert "do not silently start manual scoring" in contract
+    assert "structured authentication/manual-scoring choice" in contract
+    assert "at most once after authentication" in contract
+    assert "authenticationRetry" in contract
+    assert "manualFallbackAuthorized" in contract
+    assert (
+        "Manual scoring is allowed only when the user declines authentication "
+        "or that authenticated retry still fails"
+    ) in contract
 
 
 @pytest.mark.parametrize(
