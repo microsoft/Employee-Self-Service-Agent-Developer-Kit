@@ -142,27 +142,25 @@ def ensure_migration_baseline(
             if not migration.get("flightcheckBaselineRequired"):
                 return
             ready = migration.get("legacyReady") is True
-            if ready and not store.prepare_migration_employee_test_attempt():
+            if ready:
+                store.complete_flightcheck_migration()
                 return
             state = store.load()
-            if ready:
-                profile_names = ("workday-da:final",)
-            else:
-                profile_names = tuple(
-                    profile_name
-                    for profile_name, phase_id in (
-                        ("workday-da:setup-readiness", "preflight"),
-                        (
-                            "workday-da:external-prerequisites",
-                            "workday-admin",
-                        ),
-                        ("workday-da:package-ready", "connections"),
-                        ("workday-da:dataverse-ready", "runtime"),
-                        ("workday-da:post-connection", "runtime"),
-                        ("workday-da:post-agent-wiring", "runtime"),
-                    )
-                    if state["phases"][phase_id]["status"] == "complete"
+            profile_names = tuple(
+                profile_name
+                for profile_name, phase_id in (
+                    ("workday-da:setup-readiness", "preflight"),
+                    (
+                        "workday-da:external-prerequisites",
+                        "workday-admin",
+                    ),
+                    ("workday-da:package-ready", "connections"),
+                    ("workday-da:dataverse-ready", "runtime"),
+                    ("workday-da:post-connection", "runtime"),
+                    ("workday-da:post-agent-wiring", "runtime"),
                 )
+                if state["phases"][phase_id]["status"] == "complete"
+            )
             if not profile_names:
                 store.complete_flightcheck_migration()
                 return
@@ -176,11 +174,10 @@ def ensure_migration_baseline(
                         source_profile=active_profile,
                         migration_baseline=True,
                     )
-                    if not ready:
-                        store.record_validation_profile(
-                            PROFILE_POLICIES[active_profile].phase_id,
-                            summary,
-                        )
+                    store.record_validation_profile(
+                        PROFILE_POLICIES[active_profile].phase_id,
+                        summary,
+                    )
             except WorkdayConnectFlightCheckError as exc:
                 store.block_flightcheck_migration(
                     exc.phase_id
@@ -201,18 +198,6 @@ def ensure_migration_baseline(
                 wrapped.profile_blocker_persisted = True
                 wrapped.customer_remediation = exc.customer_remediation
                 raise wrapped from exc
-            if ready:
-                final_summary = summary
-                for profile_name, policy in PROFILE_POLICIES.items():
-                    summary = derived_profile_summary(
-                        final_summary,
-                        profile_name,
-                        migration_baseline=True,
-                    )
-                    store.record_validation_profile(
-                        policy.phase_id,
-                        summary,
-                    )
             store.complete_flightcheck_migration()
     except WorkdayConnectStoreError as exc:
         exc.profile_blocker_persisted = True

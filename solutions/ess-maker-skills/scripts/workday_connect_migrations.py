@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from workday_connect_model import (
@@ -320,6 +321,72 @@ def _upgrade_structured_state(
             for record in (phase.get("evidence") or [])
             if isinstance(record, dict)
         }
+        if phase_id == "employee-validation":
+            legacy_evidence = next(
+                (
+                    record
+                    for record in (phase.get("evidence") or [])
+                    if isinstance(record, dict)
+                    and record.get("action") == "signed-in-scenario"
+                ),
+                None,
+            )
+            try:
+                legacy_timestamp = datetime.fromisoformat(
+                    str((legacy_evidence or {}).get("timestamp") or "").replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+                legacy_timestamp_valid = (
+                    legacy_timestamp.tzinfo is not None
+                    and legacy_timestamp.utcoffset() is not None
+                )
+            except ValueError:
+                legacy_timestamp_valid = False
+            if (
+                "signed-in-scenario" in completed
+                and "signed-in-scenario" in evidence_actions
+                and legacy_timestamp_valid
+            ):
+                phase["completedActions"] = [
+                    action
+                    for action in phase["completedActions"]
+                    if action != "signed-in-scenario"
+                ]
+                if "maker-smoke-test" not in phase["completedActions"]:
+                    phase["completedActions"].append("maker-smoke-test")
+                phase["evidence"] = [
+                    record
+                    for record in phase["evidence"]
+                    if not (
+                        isinstance(record, dict)
+                        and record.get("action") == "signed-in-scenario"
+                    )
+                ]
+                if not any(
+                    isinstance(record, dict)
+                    and record.get("action") == "maker-smoke-test"
+                    for record in phase["evidence"]
+                ):
+                    phase["evidence"].append(
+                        {
+                            "action": "maker-smoke-test",
+                            "outcome": str(
+                                legacy_evidence.get("outcome") or "verified"
+                            ),
+                            "timestamp": legacy_timestamp.astimezone(
+                                timezone.utc
+                            ).isoformat().replace("+00:00", "Z"),
+                            "legacyCompletionAction": "signed-in-scenario",
+                        }
+                    )
+                completed = set(phase["completedActions"])
+                evidence_actions = {
+                    str(record.get("action") or "")
+                    for record in phase["evidence"]
+                    if isinstance(record, dict)
+                }
         if not required <= completed or not required <= evidence_actions:
             phase["status"] = PhaseStatus.ACTIVE.value
             phase["updatedAt"] = utc_now()
@@ -389,7 +456,15 @@ def _upgrade_readiness_state(
         normalized,
         source_version=source_version,
     )
-    baseline_required = any(
+    employee_phase = state["phases"]["employee-validation"]
+    if employee_phase["status"] != PhaseStatus.COMPLETE.value:
+        reset_phase(employee_phase)
+        if state["phases"]["runtime"]["status"] == PhaseStatus.COMPLETE.value:
+            employee_phase["status"] = PhaseStatus.ACTIVE.value
+            employee_phase["updatedAt"] = utc_now()
+        state["status"] = "in-progress"
+    preserved_ready = legacy_ready and state["status"] == "ready"
+    baseline_required = not legacy_ready and any(
         state["phases"][phase_id]["status"] == PhaseStatus.COMPLETE.value
         for phase_id in ("preflight", "workday-admin", "runtime")
     )
@@ -402,12 +477,12 @@ def _upgrade_readiness_state(
             "legacyReady": legacy_ready,
         }
     )
+    if preserved_ready:
+        migration["flightcheckBaselineOutcome"] = "legacy-ready-preserved"
+    elif legacy_ready:
+        migration["flightcheckBaselineOutcome"] = "employee-validation-required"
     state["migration"] = migration
     if baseline_required:
-        if legacy_ready:
-            employee_phase = state["phases"]["employee-validation"]
-            employee_phase["status"] = PhaseStatus.ACTIVE.value
-            employee_phase["updatedAt"] = utc_now()
         state["status"] = "in-progress"
     state["updatedAt"] = utc_now()
     return validate_state(state)
@@ -441,6 +516,19 @@ def _upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_readiness_state(document, source_version=8)
 
 
+def _upgrade_v9_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    state = _upgrade_structured_state(document, source_version=9)
+    employee_phase = state["phases"]["employee-validation"]
+    if employee_phase["status"] != PhaseStatus.COMPLETE.value:
+        reset_phase(employee_phase)
+        if state["phases"]["runtime"]["status"] == PhaseStatus.COMPLETE.value:
+            employee_phase["status"] = PhaseStatus.ACTIVE.value
+            employee_phase["updatedAt"] = utc_now()
+        state["status"] = "in-progress"
+        state["updatedAt"] = utc_now()
+    return validate_state(state)
+
+
 _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     2: _upgrade_v2_state,
     3: _upgrade_v3_state,
@@ -449,11 +537,12 @@ _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     6: _upgrade_v6_state,
     7: _upgrade_v7_state,
     8: _upgrade_v8_state,
+    9: _upgrade_v9_state,
 }
 
 
 def migrate_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a validated schema-v9 state without performing any I/O."""
+    """Return a validated schema-v10 state without performing any I/O."""
     source_version = document.get("schemaVersion")
     if "schemaVersion" in document and not isinstance(
         source_version,

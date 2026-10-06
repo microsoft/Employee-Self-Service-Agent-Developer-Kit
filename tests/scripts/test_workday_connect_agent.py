@@ -1770,9 +1770,11 @@ def test_record_agent_binding_rejects_manual_boolean_evidence(
         )
 
 
-def test_record_validation_failure_blocks_employee_phase(
+def test_record_validation_failure_is_retired(
     tmp_path: Path,
 ) -> None:
+    import pytest
+
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
@@ -1825,19 +1827,18 @@ def test_record_validation_failure_blocks_employee_phase(
         encoding="utf-8",
     )
 
-    result = workday_connect._record_validation_failure(
-        SimpleNamespace(evidence_file=evidence_file),
-        store,
-    )
+    with pytest.raises(
+        workday_connect.WorkdayConnectStoreError,
+        match="failure recording has been retired",
+    ):
+        workday_connect._record_validation_failure(
+            SimpleNamespace(evidence_file=evidence_file),
+            store,
+        )
 
-    assert result["recorded"] is True
-    assert result["remediationId"] == "WD-E2E-006"
     phase = store.load()["phases"]["employee-validation"]
-    assert phase["status"] == "blocked"
-    assert phase["blocker"]["remediationId"] == "WD-E2E-006"
-    assert phase["blocker"]["errorType"] == "workday-access"
-    assert phase["blocker"]["failureSurface"] == "workday-response"
-    assert phase["blocker"]["capturedAt"] == attempt["startedAt"]
+    assert phase["status"] == "active"
+    assert phase["blocker"] is None
 
 
 def test_invalid_validation_retry_preserves_stable_failure_evidence(
@@ -1914,10 +1915,11 @@ def test_invalid_validation_retry_preserves_stable_failure_evidence(
     assert blocker["operation"] == "record-validation"
 
 
-def test_employee_success_runs_runtime_and_final_readiness(
+def test_employee_success_runtime_correlation_is_retired(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
+    import pytest
+
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
@@ -1957,12 +1959,6 @@ def test_employee_success_runs_runtime_and_final_readiness(
     attempt = store.begin_employee_test_attempt()["phases"][
         "employee-validation"
     ]["employeeTestAttempt"]
-    observed = []
-    monkeypatch.setattr(
-        workday_connect,
-        "_run_final_readiness",
-        lambda _store: observed.append("workday-da:final") or {},
-    )
     evidence_file = tmp_path / "employee.json"
     evidence_file.write_text(
         json.dumps(
@@ -1975,35 +1971,29 @@ def test_employee_success_runs_runtime_and_final_readiness(
         encoding="utf-8",
     )
 
-    result = workday_connect._record_validation(
-        SimpleNamespace(evidence_file=evidence_file),
-        store,
-    )
+    with pytest.raises(
+        workday_connect.WorkdayConnectStoreError,
+        match="runtime-evidence validation has been retired",
+    ):
+        workday_connect._record_validation(
+            SimpleNamespace(evidence_file=evidence_file),
+            store,
+        )
 
     state = store.load()
-    assert result["verified"] is True
-    assert observed == ["workday-da:final"]
-    assert state["status"] == "ready"
-    validation_evidence = state["phases"]["employee-validation"]["evidence"][0]
-    assert validation_evidence["action"] == "signed-in-scenario"
-    assert validation_evidence["outcome"] == "passed"
-    assert validation_evidence["testUserCategory"] == "non-maker employee"
-    assert validation_evidence["timestamp"] == attempt["startedAt"]
-    assert "scenarioName" not in validation_evidence
+    assert state["status"] == "in-progress"
+    assert state["phases"]["employee-validation"]["evidence"] == []
     assert (
         state["phases"]["employee-validation"]["employeeTestAttempt"][
             "status"
         ]
-        == "succeeded"
+        == "active"
     )
 
 
 def test_maker_success_completes_without_runtime_evidence_correlation(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    import pytest
-
     import workday_connect
     import workday_connect_model as model
     from workday_connect_store import WorkdayConnectStore
@@ -2038,11 +2028,6 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
             )
         store.set_phase_status(phase_id, "complete")
     store.begin_employee_test_attempt()
-    monkeypatch.setattr(
-        workday_connect,
-        "_run_final_readiness",
-        lambda _store: pytest.fail("maker validation must not correlate runs"),
-    )
     evidence_file = tmp_path / "maker-validation.json"
     evidence_file.write_text(
         json.dumps(
@@ -2070,3 +2055,4 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
     evidence = state["phases"]["employee-validation"]["evidence"][0]
     assert evidence["action"] == "maker-smoke-test"
     assert evidence["testUserCategory"] == "maker"
+    assert evidence["timestamp"] == "2026-10-06T01:00:00Z"

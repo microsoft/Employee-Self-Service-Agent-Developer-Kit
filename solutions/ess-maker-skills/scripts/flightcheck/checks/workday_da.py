@@ -10,7 +10,6 @@ employee-test evidence contracts used by the Workday DA profiles.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any
@@ -37,15 +36,12 @@ from workday_connect_model import (
 
 from ..agent_scope import active_agent, validate_agent_slug
 from ..runner import CheckResult, Priority, Role, Status
-from .workday import _WD_SUCCESS_RESPONSE_ACTION, _classify_run
 
 
 _DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
 _WORKDAY_CATALOG_PATH = (
     Path(__file__).resolve().parents[2] / "workday_connect_catalog.json"
 )
-_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS = 120
-_RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS = 15 * 60
 _DA_IT_AGENT_SCHEMAS = {
     _DA_IT_PARENT_SCHEMA,
     "gptagent_copilotforemployeeselfserviceit",
@@ -1075,316 +1071,18 @@ def _check_agent_flow_attachment(runner) -> list[CheckResult]:
     )]
 
 
-def _parse_utc(value: str, label: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"{label} must be UTC ISO-8601.") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"{label} must include a timezone.")
-    return parsed
-
-
-def _run_start_time(run: dict[str, Any]) -> datetime:
-    properties = run.get("properties")
-    if not isinstance(properties, dict):
-        raise ValueError("Flow run properties must be an object.")
-    value = str(properties.get("startTime") or "")
-    if not value:
-        raise ValueError("Flow run startTime is required.")
-    return _parse_utc(value, "Flow run startTime")
-
-
-def _classify_employee_runtime_run(run: dict[str, Any]) -> str:
-    """Require the reviewed Copilot success action for employee evidence."""
-    properties = run.get("properties")
-    if not isinstance(properties, dict):
-        raise ValueError("Flow run properties must be an object.")
-    if properties.get("status") == "Succeeded":
-        response = properties.get("response")
-        if (
-            not isinstance(response, dict)
-            or response.get("name") != _WD_SUCCESS_RESPONSE_ACTION
-        ):
-            return "caught_failure"
-        return "success"
-    return _classify_run(run)
-
-
-def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
-    checkpoint_id = "WD-DA-RUN-001"
-    description = "Bounded employee scenario runtime evidence"
-    pp_admin = getattr(runner, "pp_admin", None)
-    env_id = str(getattr(runner, "env_id", "") or "")
-    attempt_id = str(
-        getattr(runner, "runtime_evidence_attempt_id", "") or ""
-    ).strip()
-    start_value = str(
-        getattr(runner, "runtime_evidence_start", "") or ""
-    ).strip()
-    end_value = str(
-        getattr(runner, "runtime_evidence_end", "") or ""
-    ).strip()
-    expected_flow_ids = {
-        str(value).casefold()
-        for value in (
-            getattr(runner, "runtime_evidence_flow_ids", ()) or ()
-        )
-        if str(value).strip()
-    }
-    if not all((attempt_id, start_value, end_value, expected_flow_ids)):
-        return [_da_result(
-            checkpoint_id,
-            Status.NOT_CONFIGURED.value,
-            description,
-            "No complete employee scenario evidence window was supplied. "
-            "Generic recent Workday run health is not accepted as employee "
-            "scenario proof.",
-            remediation=(
-                "Run the required signed-in employee scenario, record its "
-                "opaque evidence label, UTC start/end, and reviewed expected "
-                "flow IDs, then rerun this profile."
-            ),
-            automation_type="passive",
-        )]
-    if pp_admin is None or not env_id:
-        return [_da_result(
-            checkpoint_id,
-            Status.SKIPPED.value,
-            description,
-            "Power Automate run history is unavailable for the employee "
-            "evidence window.",
-            remediation=(
-                "Authenticate with Power Platform access and rerun."
-            ),
-            roles=[Role.POWER_PLATFORM_ADMIN.value],
-            automation_type="passive",
-        )]
-    try:
-        start = _parse_utc(start_value, "Runtime evidence start")
-        end = _parse_utc(end_value, "Runtime evidence end")
-        if end < start:
-            raise ValueError(
-                "Runtime evidence end must not precede its start."
-            )
-        if (
-            end - start
-        ).total_seconds() > _RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS:
-            raise ValueError(
-                "Runtime evidence window must not exceed "
-                f"{_RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS // 60} minutes."
-            )
-        lower = start - timedelta(
-            seconds=_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS
-        )
-        upper = end + timedelta(
-            seconds=_RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS
-        )
-        runtime, by_name = _runtime_flow_inventory(runner)
-        reviewed_ids: set[str] = set()
-        for name in runtime["flowNames"]:
-            for flow in by_name.get(name.casefold()) or []:
-                flow_id = _flow_id(flow)
-                if not flow_id:
-                    continue
-                try:
-                    reviewed_ids.add(str(uuid.UUID(flow_id)))
-                except ValueError as exc:
-                    raise ValueError(
-                        f"Reviewed runtime flow {name!r} has an invalid ID."
-                    ) from exc
-        canonical_expected_flow_ids: set[str] = set()
-        for flow_id in expected_flow_ids:
-            try:
-                canonical_expected_flow_ids.add(str(uuid.UUID(flow_id)))
-            except ValueError as exc:
-                raise ValueError(
-                    f"Runtime evidence flow ID {flow_id!r} is invalid."
-                ) from exc
-        expected_flow_ids = canonical_expected_flow_ids
-        unexpected = expected_flow_ids - reviewed_ids
-        if unexpected:
-            raise ValueError(
-                "Runtime evidence names flow IDs outside the reviewed "
-                "Workday runtime catalog: "
-                + ", ".join(sorted(unexpected))
-            )
-    except ValueError as exc:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            str(exc),
-            remediation=(
-                "Record the employee scenario against the reviewed runtime "
-                "flows with a valid UTC evidence window."
-            ),
-            automation_type="passive",
-        )]
-
-    flow_outcomes: dict[str, list[str]] = {}
-    flow_run_ids: dict[str, list[str]] = {}
-    try:
-        for flow_id in sorted(expected_flow_ids):
-            get_runs_since = getattr(
-                pp_admin,
-                "get_flow_runs_since",
-                None,
-            )
-            runs = (
-                get_runs_since(env_id, flow_id, lower)
-                if callable(get_runs_since)
-                else pp_admin.get_flow_runs(env_id, flow_id)
-            )
-            if isinstance(runs, dict) and "_error" in runs:
-                raise RuntimeError(
-                    "Power Automate run history access failed."
-                )
-            if not isinstance(runs, list):
-                raise ValueError(
-                    f"Run history for {flow_id} returned an invalid shape."
-                )
-            candidates = []
-            for run in runs:
-                if not isinstance(run, dict):
-                    raise ValueError(
-                        f"Run history for {flow_id} contains a non-object row."
-                    )
-                run_start = _run_start_time(run)
-                if lower <= run_start <= upper:
-                    candidates.append(run)
-            flow_outcomes[flow_id] = [
-                _classify_employee_runtime_run(run) for run in candidates
-            ]
-            flow_run_ids[flow_id] = [
-                str(run.get("name") or "") for run in candidates
-            ]
-    except (
-        requests.RequestException,
-        OSError,
-        RuntimeError,
-        ValueError,
-    ) as exc:
-        return [_da_result(
-            checkpoint_id,
-            Status.ERROR.value,
-            description,
-            "Employee runtime evidence could not be read: "
-            f"{_safe_error_summary(exc)}",
-            remediation=(
-                "Restore Power Automate run-history access and rerun."
-            ),
-            automation_type="passive",
-        )]
-
-    ambiguous = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if len(outcomes) > 1
-    ]
-    pending = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if outcomes == ["pending"]
-    ]
-    failed = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if outcomes
-        and "success" not in outcomes
-    ]
-    evidence = {
-        "operatorEvidenceLabel": attempt_id,
-        "windowStart": start.isoformat(),
-        "windowEnd": end.isoformat(),
-        "clockSkewSeconds": _RUNTIME_EVIDENCE_CLOCK_SKEW_SECONDS,
-        "maximumWindowSeconds": _RUNTIME_EVIDENCE_MAX_WINDOW_SECONDS,
-        "correlationMode": "unique-run-in-bounded-window-by-reviewed-flow-id",
-        "migrationBaseline": bool(
-            getattr(
-                runner,
-                "runtime_evidence_migration_baseline",
-                False,
-            )
-        ),
-        "flowOutcomes": flow_outcomes,
-        "flowRunIds": flow_run_ids,
-    }
-    if ambiguous:
-        return [_da_result(
-            checkpoint_id,
-            Status.BLOCKED.value,
-            description,
-            "The employee scenario evidence window contains multiple "
-            "candidate "
-            "runs for: "
-            + ", ".join(ambiguous)
-            + ".",
-            remediation=(
-                "Repeat the employee scenario in a clean, bounded window and "
-                "record only its reviewed expected flows."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    if pending:
-        return [_da_result(
-            checkpoint_id,
-            Status.BLOCKED.value,
-            description,
-            "The employee scenario evidence window contains a non-terminal or "
-            "inconclusive run for: "
-            + ", ".join(pending)
-            + ".",
-            remediation=(
-                "Wait for the employee scenario run to reach a terminal "
-                "state, then rerun this profile with the same evidence "
-                "window."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    observed_flow_ids = [
-        flow_id for flow_id, outcomes in flow_outcomes.items()
-        if outcomes
-    ]
-    if not observed_flow_ids:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            "No reviewed Workday runtime flow ran in the bounded employee "
-            "evidence window.",
-            remediation=(
-                "Confirm the employee scenario invoked a reviewed flow, "
-                "then repeat the scenario and capture a fresh evidence window."
-            ),
-            automation_type="passive",
-            evidence=evidence,
-        )]
-    if failed:
-        return [_da_result(
-            checkpoint_id,
-            Status.FAILED.value,
-            description,
-            "The unique candidate run failed for: "
-            + ", ".join(failed)
-            + ".",
-            remediation=(
-                "Open the candidate Power Automate runs, fix the reported "
-                "Workday or template failure, and repeat the employee scenario."
-            ),
-            roles=[Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value],
-            automation_type="passive",
-            evidence=evidence,
-        )]
+def _check_correlated_runtime_evidence(_runner) -> list[CheckResult]:
     return [_da_result(
-        checkpoint_id,
-        Status.PASSED.value,
-        description,
-        f"Evidence label '{attempt_id}' identified one successful terminal "
-        f"run for each reviewed flow exercised in the bounded window "
-        f"({len(observed_flow_ids)} of {len(expected_flow_ids)} eligible). "
-        "A scenario is not required to invoke every attached runtime flow. "
-        "The label is an "
-        "operator reference, not a Power Automate correlation key.",
+        "WD-DA-RUN-001",
+        Status.NOT_CONFIGURED.value,
+        "Retired employee runtime-evidence correlation",
+        "Bounded Power Automate run-history windows cannot prove which "
+        "conversation initiated a run and are no longer accepted as Workday "
+        "scenario evidence.",
+        remediation=(
+            "Complete the guided lifecycle with a successful maker scenario "
+            "in the Copilot Studio Test pane. Publishing and non-maker "
+            "validation are post-skill activities."
+        ),
         automation_type="passive",
-        evidence=evidence,
     )]

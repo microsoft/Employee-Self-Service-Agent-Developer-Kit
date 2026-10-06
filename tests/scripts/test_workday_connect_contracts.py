@@ -1705,6 +1705,17 @@ def test_maker_validation_evidence_is_accepted() -> None:
     }
 
 
+def test_maker_validation_rejects_invalid_timestamp() -> None:
+    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
+        validate_employee_evidence(
+            {
+                "testUserCategory": "maker",
+                "timestamp": "not-a-time",
+                "outcome": "passed",
+            }
+        )
+
+
 def test_employee_failure_evidence_derives_safe_canonical_fields():
     for remediation_id, contract in (
         contracts.EMPLOYEE_VALIDATION_REMEDIATIONS.items()

@@ -681,13 +681,6 @@ def _transition_phase_state(
         evidence_actions = {
             str(record.get("action") or "") for record in phase["evidence"]
         }
-        if (
-            phase_id == "employee-validation"
-            and "signed-in-scenario" in completed
-            and "signed-in-scenario" in evidence_actions
-        ):
-            completed.add("maker-smoke-test")
-            evidence_actions.add("maker-smoke-test")
         missing = sorted((required - completed) | (required - evidence_actions))
         if missing:
             raise WorkdayConnectStoreError(
@@ -1894,23 +1887,12 @@ class WorkdayConnectStore:
             phase = state["phases"]["employee-validation"]
             attempt = phase.get("employeeTestAttempt")
             migration = dict(state.get("migration") or {})
-            if migration.get("legacyReady") is True and (
-                migration.get("flightcheckBaselineOutcome") != "accepted"
-            ):
-                final_profile = (phase.get("validationProfiles") or {}).get(
-                    "workday-da:final"
+            legacy_ready = migration.get("legacyReady") is True
+            if legacy_ready and phase["status"] != PhaseStatus.COMPLETE.value:
+                raise WorkdayConnectStoreError(
+                    "Complete maker validation before accepting the migrated "
+                    "Workday Ready state."
                 )
-                if (
-                    not isinstance(attempt, dict)
-                    or attempt.get("status") != "validating"
-                    or not isinstance(final_profile, Mapping)
-                    or final_profile.get("accepted") is not True
-                ):
-                    raise WorkdayConnectStoreError(
-                        "Complete a bounded employee test attempt and the final "
-                        "readiness profile before accepting the migrated Ready "
-                        "state."
-                    )
             if isinstance(attempt, dict) and attempt.get("status") == "validating":
                 attempt["status"] = "succeeded"
                 attempt["completedAt"] = attempt["completedAt"] or utc_now()
@@ -1918,11 +1900,8 @@ class WorkdayConnectStore:
             completed_actions = set(phase["completedActions"])
             if (
                 phase["status"] != PhaseStatus.COMPLETE.value
-                and (
-                    PHASE_REQUIRED_ACTIONS["employee-validation"]
-                    <= completed_actions
-                    or "signed-in-scenario" in completed_actions
-                )
+                and PHASE_REQUIRED_ACTIONS["employee-validation"]
+                <= completed_actions
             ):
                 _transition_phase_state(
                     state,
@@ -1932,7 +1911,9 @@ class WorkdayConnectStore:
                 )
             self._refresh_validation_profile_fingerprints(state)
             migration["flightcheckBaselineRequired"] = False
-            migration["flightcheckBaselineOutcome"] = "accepted"
+            migration["flightcheckBaselineOutcome"] = (
+                "legacy-ready-preserved" if legacy_ready else "accepted"
+            )
             migration["flightcheckBaselineAt"] = utc_now()
             state["migration"] = migration
 

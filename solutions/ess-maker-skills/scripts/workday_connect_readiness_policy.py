@@ -160,9 +160,9 @@ PROFILE_POLICIES: dict[str, ProfilePolicy] = {
     ),
     "workday-da:post-runtime": ProfilePolicy(
         phase_id="employee-validation",
-        checkpoints=("WD-DA-FLOW-001", "WD-DA-RUN-001"),
+        checkpoints=("WD-DA-FLOW-001",),
         families={},
-        clients=("dataverse", "pp_admin"),
+        clients=("dataverse",),
     ),
     "workday-da:final": ProfilePolicy(
         phase_id="employee-validation",
@@ -183,10 +183,9 @@ PROFILE_POLICIES: dict[str, ProfilePolicy] = {
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
-            "WD-DA-RUN-001",
         ),
         families={},
-        clients=("agentbuilder", "dataverse", "pp_admin"),
+        clients=("agentbuilder", "dataverse"),
     ),
 }
 

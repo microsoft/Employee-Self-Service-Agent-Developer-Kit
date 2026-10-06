@@ -181,6 +181,10 @@ def validate_employee_evidence(
         raise WorkdayConnectContractError(
             "Employee validation outcome must be passed or verified."
         )
+    result["timestamp"] = _normalized_timestamp(
+        result["timestamp"],
+        "Employee validation timestamp",
+    )
     category = result["testUserCategory"].casefold()
     if category == "maker":
         return result
@@ -195,10 +199,6 @@ def validate_employee_evidence(
         raise WorkdayConnectContractError(
             "Employee validation must use a signed-in non-maker employee."
         )
-    result["timestamp"] = _normalized_timestamp(
-        result["timestamp"],
-        "Employee validation timestamp",
-    )
     return result
 
 

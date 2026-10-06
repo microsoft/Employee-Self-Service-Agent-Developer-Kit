@@ -38,7 +38,6 @@ from workday_connect_evidence_contracts import (
     WorkdayConnectContractError,
     validate_agent_binding_evidence,
     validate_employee_evidence,
-    validate_employee_failure_evidence,
 )
 from workday_connect_flightcheck import (
     WorkdayConnectFlightCheckError,
@@ -51,7 +50,6 @@ from workday_connect_preflight import (
 )
 from workday_connect_readiness import (
     ensure_migration_baseline,
-    run_final_readiness,
     run_profile_gate,
 )
 from workday_connect_runtime import (
@@ -301,10 +299,6 @@ def _run_profile_gate(
         profile_name,
         profile_runner=run_profile,
     )
-
-
-def _run_final_readiness(store: WorkdayConnectStore) -> dict[str, Any]:
-    return run_final_readiness(store, profile_runner=run_profile)
 
 
 def _ensure_migration_baseline(store: WorkdayConnectStore) -> None:
@@ -1116,50 +1110,22 @@ def _record_validation(
                 ],
                 "status": store.status(),
             }
-        attempt = phase.get("employeeTestAttempt")
-        if (
-            isinstance(attempt, Mapping)
-            and attempt.get("status") == "succeeded"
-            and phase["status"] == "complete"
-        ):
-            return {"verified": True, "replayed": True, "status": store.status()}
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "success."
-            )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
+        raise WorkdayConnectStoreError(
+            "Signed-in employee runtime-evidence validation has been retired. "
+            "Complete the guided lifecycle with the maker's successful "
+            "Copilot Studio Test pane scenario."
         )
-        store.complete_action(
-            "employee-validation",
-            "signed-in-scenario",
-            evidence=evidence,
-        )
-        _run_final_readiness(store)
-        store.finalize_employee_validation_success()
-        return {"verified": True, "status": store.status()}
 
 
 def _begin_employee_test(
     _args: argparse.Namespace,
-    store: WorkdayConnectStore,
+    _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    state = store.begin_employee_test_attempt()
-    attempt = state["phases"]["employee-validation"][
-        "employeeTestAttempt"
-    ]
-    return {
-        "attempt": {
-            "scenarioId": attempt["scenarioId"],
-            "status": attempt["status"],
-            "startedAt": attempt["startedAt"],
-        },
-        "status": store.status(),
-    }
+    raise WorkdayConnectStoreError(
+        "Employee runtime-evidence windows have been retired. Complete the "
+        "guided lifecycle with the maker's successful Copilot Studio Test "
+        "pane scenario."
+    )
 
 
 def _abandon_employee_test(
@@ -1180,47 +1146,13 @@ def _abandon_employee_test(
 
 
 def _record_validation_failure(
-    args: argparse.Namespace,
-    store: WorkdayConnectStore,
+    _args: argparse.Namespace,
+    _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    evidence = validate_employee_failure_evidence(
-        _json_input(
-            args,
-            "evidence",
-            "employee validation failure evidence",
-        )
+    raise WorkdayConnectStoreError(
+        "Employee runtime-evidence failure recording has been retired. "
+        "Resolve maker Test pane failures before completing maker validation."
     )
-    with store.employee_validation_guard():
-        attempt = store.load()["phases"]["employee-validation"].get(
-            "employeeTestAttempt"
-        )
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "failure."
-            )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
-        )
-        store.finalize_employee_validation_failure(
-            blocker={
-                "operation": "record-validation-failure",
-                "remediationId": evidence["remediationId"],
-                "errorType": evidence["failureCategory"],
-                "failureSurface": evidence["failureSurface"],
-                "message": evidence["remediation"],
-                "remediation": evidence["remediation"],
-                "capturedAt": evidence["timestamp"],
-            }
-        )
-    return {
-        "recorded": True,
-        "remediationId": evidence["remediationId"],
-        "status": store.status(),
-    }
 
 
 def _preflight(

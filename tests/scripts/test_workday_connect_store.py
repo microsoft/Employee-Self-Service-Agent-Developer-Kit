@@ -21,7 +21,7 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 9
+    assert state["schemaVersion"] == 10
     assert state["lifecycle"]["retryCount"] == 0
     assert state["lifecycle"]["resumeCount"] == 0
     assert state["lifecycle"]["journal"] == []
@@ -64,7 +64,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v9.json").exists()
+    assert path.with_name("config.pre-v10.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -146,11 +146,11 @@ def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["lifecycle"]["correlationId"]
     assert upgraded["lifecycle"]["journal"] == []
     assert upgraded["migration"]["source"] == "workday-connect-state-v5"
-    assert path.with_name("config.pre-v9.json").exists()
+    assert path.with_name("config.pre-v10.json").exists()
 
 
 def test_v6_state_migrates_with_administrator_progress(
@@ -172,12 +172,12 @@ def test_v6_state_migrates_with_administrator_progress(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["phases"]["entra"]["administrator"]["substage"] == (
         "not-started"
     )
     assert upgraded["migration"]["source"] == "workday-connect-state-v6"
-    assert path.with_name("config.pre-v9.json").exists()
+    assert path.with_name("config.pre-v10.json").exists()
 
 
 @pytest.mark.parametrize("source_version", [2, 3, 4, 5, 6])
@@ -1315,7 +1315,7 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
 
@@ -1351,7 +1351,7 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["status"] == "in-progress"
     assert upgraded["phases"]["entra"]["status"] == "pending"
     assert upgraded["phases"]["runtime"]["status"] == "pending"
@@ -1418,16 +1418,16 @@ def test_v4_migration_captures_complete_tenant_foundation(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["migration"]["source"] == "workday-connect-state-v4"
     assert upgraded["tenantFoundation"]["scope"] == {
         "entraTenantId": "tenant-id",
         "workdayTenant": "contoso",
     }
-    assert path.with_name("config.pre-v9.json").exists()
+    assert path.with_name("config.pre-v10.json").exists()
 
 
-def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
+def test_v7_ready_state_preserves_valid_employee_completion(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -1460,9 +1460,13 @@ def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
         phase.pop("employeeTestAttempt", None)
         for action in historical_v7_actions[phase_id]:
             phase["completedActions"].append(action)
-            phase["evidence"].append(
-                {"action": action, "outcome": "verified"}
-            )
+            evidence = {"action": action, "outcome": "verified"}
+            if (
+                phase_id == "employee-validation"
+                and action == "signed-in-scenario"
+            ):
+                evidence["timestamp"] = "2026-09-28T12:00:00Z"
+            phase["evidence"].append(evidence)
         phase["status"] = "complete"
     document["status"] = "ready"
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
@@ -1471,13 +1475,14 @@ def test_v7_ready_state_requests_one_flightcheck_migration_baseline(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 9
-    assert upgraded["status"] == "in-progress"
+    assert upgraded["schemaVersion"] == 10
+    assert upgraded["status"] == "ready"
+    assert upgraded["phases"]["employee-validation"]["status"] == "complete"
+    assert upgraded["migration"]["flightcheckBaselineRequired"] is False
     assert (
-        upgraded["phases"]["employee-validation"]["status"]
-        == "active"
+        upgraded["migration"]["flightcheckBaselineOutcome"]
+        == "legacy-ready-preserved"
     )
-    assert upgraded["migration"]["flightcheckBaselineRequired"] is True
     assert upgraded["migration"]["legacyReady"] is True
     assert upgraded["phases"]["runtime"]["status"] == "complete"
     assert upgraded["phases"]["connections"]["completedActions"] == [
@@ -1536,22 +1541,19 @@ def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
 
     with pytest.raises(
         WorkdayConnectStoreError,
-        match="bounded employee test attempt",
+        match="Complete maker validation",
     ):
         store.complete_flightcheck_migration()
 
 
-def test_v7_ready_migration_requires_final_readiness_after_preparing_attempt(
+def test_v9_incomplete_employee_attempt_reopens_maker_validation(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
-    from workday_connect_store import (
-        WorkdayConnectStore,
-        WorkdayConnectStoreError,
-    )
+    from workday_connect_store import WorkdayConnectStore
 
     document = model.default_state()
-    document["schemaVersion"] = 7
+    document["schemaVersion"] = 9
     runtime_plan = {
         "phase": "runtime",
         "scope": {"environmentId": "environment-id"},
@@ -1584,29 +1586,84 @@ def test_v7_ready_migration_requires_final_readiness_after_preparing_attempt(
             phase["completedActions"].append(action)
             phase["evidence"].append(evidence)
         phase["status"] = "complete"
-    document["status"] = "ready"
+    employee = document["phases"]["employee-validation"]
+    employee["status"] = "active"
+    employee["completedActions"] = []
+    employee["evidence"] = []
+    employee["employeeTestAttempt"] = {
+        "attemptId": "legacy-attempt",
+        "scenarioId": "workday-signed-in-employee-read",
+        "status": "validating",
+        "startedAt": "2026-09-28T12:00:00Z",
+        "completedAt": "2026-09-28T12:01:00Z",
+        "expectedFlowIds": ["flow-id"],
+        "clockSkewSeconds": 120,
+        "targetFingerprint": "legacy-fingerprint",
+        "correlationMode": "bounded-window-flow-set",
+        "outcome": "",
+    }
+    document["status"] = "in-progress"
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
     store = WorkdayConnectStore(tmp_path)
-    store.load()
-
-    assert store.prepare_migration_employee_test_attempt() is True
-    with pytest.raises(
-        WorkdayConnectStoreError,
-        match="final readiness profile",
-    ):
-        store.complete_flightcheck_migration()
-
     state = store.load()
-    assert (
-        state["phases"]["employee-validation"]["employeeTestAttempt"][
-            "status"
-        ]
-        == "validating"
-    )
+    employee = state["phases"]["employee-validation"]
+
+    assert state["schemaVersion"] == 10
     assert state["status"] == "in-progress"
-    assert state["migration"]["flightcheckBaselineRequired"] is True
+    assert employee["status"] == "active"
+    assert employee["completedActions"] == []
+    assert employee["evidence"] == []
+    assert employee["employeeTestAttempt"] is None
+    assert employee["validationProfiles"] == {}
+    assert state["migration"]["source"] == "workday-connect-state-v9"
+    assert path.with_name("config.pre-v10.json").exists()
+
+
+def test_v9_completed_employee_evidence_migrates_to_v10_ready(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 9
+    for phase_id, phase in document["phases"].items():
+        actions = (
+            ("signed-in-scenario",)
+            if phase_id == "employee-validation"
+            else model.PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        for action in actions:
+            evidence = {"action": action, "outcome": "verified"}
+            if action == "signed-in-scenario":
+                evidence["timestamp"] = "2026-09-28T12:00:00Z"
+            phase["completedActions"].append(action)
+            phase["evidence"].append(evidence)
+        phase["status"] = "complete"
+    document["status"] = "ready"
+    path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+
+    assert state["schemaVersion"] == 10
+    assert state["status"] == "ready"
+    employee = state["phases"]["employee-validation"]
+    assert employee["status"] == "complete"
+    assert employee["completedActions"] == ["maker-smoke-test"]
+    assert employee["evidence"] == [
+        {
+            "action": "maker-smoke-test",
+            "outcome": "verified",
+            "timestamp": "2026-09-28T12:00:00Z",
+            "legacyCompletionAction": "signed-in-scenario",
+        }
+    ]
+    assert state["migration"]["source"] == "workday-connect-state-v9"
+    assert path.with_name("config.pre-v10.json").exists()
 
 
 def test_v7_migration_repairs_malformed_backup(tmp_path: Path) -> None:
@@ -1619,7 +1676,7 @@ def test_v7_migration_repairs_malformed_backup(tmp_path: Path) -> None:
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
-    backup = path.with_name("config.pre-v9.json")
+    backup = path.with_name("config.pre-v10.json")
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
     backup.write_text('{"schemaVersion": 7}', encoding="utf-8")
@@ -1656,7 +1713,7 @@ def test_v8_package_evidence_moves_from_preflight_to_connections(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["phases"]["preflight"]["completedActions"] == [
         "verify-target"
     ]
@@ -1666,7 +1723,7 @@ def test_v8_package_evidence_moves_from_preflight_to_connections(
     connections = upgraded["phases"]["connections"]
     assert connections["completedActions"] == ["verify-package"]
     assert connections["evidence"] == [package_evidence]
-    assert path.with_name("config.pre-v9.json").exists()
+    assert path.with_name("config.pre-v10.json").exists()
 
 
 def test_v8_package_action_without_evidence_is_safely_reopened(
@@ -1687,7 +1744,7 @@ def test_v8_package_action_without_evidence_is_safely_reopened(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 9
+    assert upgraded["schemaVersion"] == 10
     assert upgraded["phases"]["preflight"]["status"] == "complete"
     assert upgraded["phases"]["preflight"]["completedActions"] == [
         "verify-target"
@@ -1695,7 +1752,7 @@ def test_v8_package_action_without_evidence_is_safely_reopened(
     assert upgraded["phases"]["connections"]["completedActions"] == []
 
 
-def test_v8_ready_state_requires_flightcheck_migration_baseline(
+def test_v8_ready_state_preserves_valid_employee_completion(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -1728,9 +1785,13 @@ def test_v8_ready_state_requires_flightcheck_migration_baseline(
         phase.pop("employeeTestAttempt", None)
         for action in historical_v8_actions[phase_id]:
             phase["completedActions"].append(action)
-            phase["evidence"].append(
-                {"action": action, "outcome": "verified"}
-            )
+            evidence = {"action": action, "outcome": "verified"}
+            if (
+                phase_id == "employee-validation"
+                and action == "signed-in-scenario"
+            ):
+                evidence["timestamp"] = "2026-09-28T12:00:00Z"
+            phase["evidence"].append(evidence)
         phase["status"] = "complete"
     document["status"] = "ready"
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
@@ -1739,13 +1800,17 @@ def test_v8_ready_state_requires_flightcheck_migration_baseline(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 9
-    assert upgraded["status"] == "in-progress"
+    assert upgraded["schemaVersion"] == 10
+    assert upgraded["status"] == "ready"
     assert upgraded["migration"]["source"] == "workday-connect-state-v8"
     assert upgraded["migration"]["legacyReady"] is True
-    assert upgraded["migration"]["flightcheckBaselineRequired"] is True
+    assert upgraded["migration"]["flightcheckBaselineRequired"] is False
+    assert (
+        upgraded["migration"]["flightcheckBaselineOutcome"]
+        == "legacy-ready-preserved"
+    )
     assert upgraded["phases"]["runtime"]["status"] == "complete"
-    assert upgraded["phases"]["employee-validation"]["status"] == "active"
+    assert upgraded["phases"]["employee-validation"]["status"] == "complete"
 
 
 def test_operation_guard_rejects_overlapping_mutating_session(

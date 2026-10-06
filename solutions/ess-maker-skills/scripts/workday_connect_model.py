@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import uuid
 
 
-STATE_SCHEMA_VERSION = 9
+STATE_SCHEMA_VERSION = 10
 CONTROLLER_CONTRACT_VERSION = 4
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
@@ -1003,13 +1003,6 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         evidence_actions = {
             str(record.get("action") or "") for record in value["evidence"]
         }
-        if (
-            phase_id == Phase.EMPLOYEE_VALIDATION.value
-            and "signed-in-scenario" in completed_actions
-            and "signed-in-scenario" in evidence_actions
-        ):
-            completed_actions.add("maker-smoke-test")
-            evidence_actions.add("maker-smoke-test")
         missing_actions = sorted(required_actions - completed_actions)
         missing_evidence = sorted(required_actions - evidence_actions)
         if missing_actions or missing_evidence:

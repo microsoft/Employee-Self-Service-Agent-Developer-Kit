@@ -254,33 +254,12 @@ def _config_projection(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _runtime_arguments(state: Mapping[str, Any]) -> list[str]:
-    phase = (state.get("phases") or {}).get("employee-validation") or {}
-    attempt = phase.get("employeeTestAttempt") or {}
-    arguments: list[str] = []
-    attempt_id = _text(attempt.get("attemptId"))
-    start = _text(attempt.get("startedAt"))
-    end = _text(attempt.get("completedAt"))
-    if attempt_id:
-        arguments.extend(("--runtime-evidence-attempt-id", attempt_id))
-    if start:
-        arguments.extend(("--runtime-evidence-start", start))
-    if end:
-        arguments.extend(("--runtime-evidence-end", end))
-    for flow_id in attempt.get("expectedFlowIds") or []:
-        if _text(flow_id):
-            arguments.extend(("--runtime-evidence-flow-id", _text(flow_id)))
-    return arguments
-
-
 def _command(
     root: Path,
     state: Mapping[str, Any],
     profile_name: str,
     output_dir: Path,
     config_path: Path,
-    *,
-    migration_baseline: bool,
 ) -> list[str]:
     context = _agent_context(state)
     maker = (
@@ -316,10 +295,6 @@ def _command(
             command.extend((option, context[field]))
     if _text(maker):
         command.extend(("--preferred-username", _text(maker)))
-    if profile_name in {"workday-da:post-runtime", "workday-da:final"}:
-        command.extend(_runtime_arguments(state))
-        if migration_baseline:
-            command.append("--runtime-evidence-migration-baseline")
     return command
 
 
@@ -836,7 +811,6 @@ def run_profile(
                     profile_name,
                     output_dir,
                     config_path,
-                    migration_baseline=migration_baseline,
                 ),
                 cwd=root,
                 capture_output=True,
