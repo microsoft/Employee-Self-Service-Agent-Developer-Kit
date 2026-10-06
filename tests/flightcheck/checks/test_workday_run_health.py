@@ -318,6 +318,7 @@ class TestEdgeCases:
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Skipped"
         assert "No Workday flows discovered" in r.result
+        assert "WD-CONN-001" in r.remediation
 
     def test_no_pp_admin_is_skipped(self) -> None:
         from flightcheck.checks.workday import _check_workday_run_health

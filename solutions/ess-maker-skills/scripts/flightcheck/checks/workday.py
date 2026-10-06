@@ -3889,7 +3889,11 @@ def _check_workday_run_health_passive(runner, prior_results=None) -> list[CheckR
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday flow run health",
             result="No Workday flows discovered — no run history to evaluate.",
-            remediation="",
+            remediation=(
+                "If this environment should run Workday, confirm the Workday solution "
+                "and its flows are installed here (see WD-CONN-001). If Workday isn't "
+                "deployed in this environment, this SKIP is expected and can be ignored."
+            ),
             roles=roles,
         )]
 
