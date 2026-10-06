@@ -2,7 +2,8 @@
 
 # Connect Workday to the ESS HR agent
 
-Guide the customer through one resumable Workday connection lifecycle. Use
+Guide the customer through one resumable Workday connection lifecycle per
+DEV, TEST, and PROD target. Use
 `scripts/workday_connect.py` and
 `.local/connect/workday-da/config.json` internally; do not create, copy,
 update, or infer status from a Markdown checklist.
@@ -100,11 +101,14 @@ work. Publishing and non-maker validation happen after this guided lifecycle.
 
 - A different Power Platform environment, ESS HR agent, or maker account must
   not by itself require the Entra or Workday administrators to repeat setup.
-- Do not silently trust stored Entra evidence or perform a maker-authenticated
-  Graph reread. Use the guided Entra administrator handoff to confirm the
-  selected directory, exact application pairing, and required settings. After
-  the structured response validates against the recorded tenant foundation,
-  reuse the stored Workday administrator evidence and continue at Connections.
+- For a controller-verified Test or Production promotion in the same
+  AgentBuilder ALM family and Microsoft Entra tenant, reuse the recorded tenant
+  foundation and continue at Connections. The promoted target discovery is the
+  fresh target proof; do not repeat the Entra or Workday administrator handoff.
+- For an unrelated environment or any target that cannot be proven as the
+  promoted sibling, do not silently trust stored Entra evidence or perform a
+  maker-authenticated Graph reread. Keep setup blocked until the exact target
+  and tenant relationship can be verified.
 - Ask the administrator to repeat only missing, changed, or unhealthy settings.
   A different environment, agent, or maker account may require current
   confirmation, but it must not make the administrator repeat healthy tenant
@@ -134,6 +138,59 @@ people:
 Do not combine both administrator guides into one conversation handoff. Each
 administrator receives only the standalone section for their phase.
 
+## DEV, TEST, and PROD journey
+
+Use `/connect-workday` or `/connect` with Workday selected for every realm.
+Natural-language statements such as **I promoted the agent to Test** or **the
+agent is now in Production** enter this same lifecycle. Do not introduce or
+suggest realm-specific slash commands such as `/connect-workday-test` or
+`/connect-workday-prod`.
+
+On every invocation, use the controller's `activeTargetRealm` and `targets`
+status. Never infer the active realm from conversation text alone.
+
+1. Complete DEV through the maker's successful Copilot Studio Test pane
+   scenario.
+2. After DEV is Ready, if the maker says the agent was promoted to Test or
+   chooses to configure Test, run automatic promoted-target discovery:
+
+   ```powershell
+   python scripts/workday_connect.py discover-realm-target --realm test
+   ```
+
+3. If automatic discovery cannot prove one environment, show the safe
+   environment names or URLs returned by the controller and ask the maker to
+   select one. Leave the choice unset, then rerun with the selected friendly
+   value:
+
+   ```powershell
+   python scripts/workday_connect.py discover-realm-target --realm test --environment "{ENVIRONMENT_NAME_OR_URL}"
+   ```
+
+4. After TEST is Ready, use the same flow for Production:
+
+   ```powershell
+   python scripts/workday_connect.py discover-realm-target --realm prod
+   ```
+
+   Use `--environment` only when automatic discovery requests a selection.
+
+Do not ask the maker for an environment ID, BotId, flow ID, authorization team
+name, ALM family ID, or deployed commit. The controller obtains and verifies
+those values. A URL is acceptable only as the maker's friendly environment
+selection when automatic proof is insufficient.
+
+Promoted-target discovery must prove the exact sibling realm, direct agent
+identity, ALM family, supported schema, deployed commit, tenant, environment,
+and Dataverse URL. It then activates an independent realm snapshot and reuses
+the verified tenant foundation. Package readiness, physical connections,
+runtime wiring, topics, and Maker validation remain target-specific and must
+be completed separately in that active realm.
+
+If discovery reports `foundationReused: true`, continue at Connections without
+showing either administrator phase. If it is false, do not claim the
+foundation was reused; follow the controller's current phase and blocker.
+
 ## Start or resume
 
 Before running status, show this readiness briefing on every invocation. A
@@ -160,6 +217,20 @@ Run:
 ```powershell
 python scripts/workday_connect.py status
 ```
+
+If this invocation carries an explicit promotion intent, use the returned
+target registry before the normal ready-state completion branch:
+
+- For Test, require the DEV target to be `ready`, then run
+  `discover-realm-target --realm test`.
+- For Production, require the TEST target to be `ready`, then run
+  `discover-realm-target --realm prod`.
+
+If the prerequisite realm is not Ready, keep that realm active and explain
+that its Maker validation must finish before configuring the next realm. If
+discovery succeeds, render the newly active target's status and continue from
+its current phase. Do not show the previous realm's completion message and do
+not ask the general integration-selection question again.
 
 The controller runs automatic readiness checks at the relevant phase
 boundaries. Present only the resulting customer-safe readiness
@@ -192,7 +263,7 @@ Do not render internal action IDs, hashes, or the full JSON state. Do not
 replace the phase explanation with only `Current phase: {title}`.
 
 If controller status is `ready`, skip the availability question and show the
-completion message below.
+realm-aware completion message below.
 
 For a non-ready lifecycle, determine the current phase's required participants
 from `nextPhaseId`:
@@ -281,15 +352,24 @@ question; answer the side question, then resume the same blocker.
 
 Only show the following after controller status is `ready`:
 
-> Your ESS HR agent is connected to Workday, and the maker smoke test passed
-> in the Copilot Studio Test pane.
+> Your ESS HR agent is connected to Workday in **{ACTIVE_REALM}**, and the
+> maker smoke test passed in that realm's Copilot Studio Test pane.
 >
 > **Next steps after this guided setup:**
 >
 > 1. Publish and deploy the agent when ready.
-> 2. Have each non-maker employee establish their own Workday connections in
->    Microsoft 365 Chat.
-> 3. Validate an enabled Workday scenario with the published agent.
+> 2. If this is Development and the agent has been promoted, return here and
+>    say **I promoted the agent to Test**.
+> 3. If this is Test and the agent has been promoted, return here and say
+>    **I promoted the agent to Production**.
+> 4. For the final release realm, have each non-maker employee establish their
+>    own Workday connections in Microsoft 365 Chat and validate an enabled
+>    Workday scenario with the published agent.
 >
-> These are deployment and adoption steps outside the Workday setup lifecycle;
-> you do not need to return their results to this skill.
+> Promotion is performed by the maker outside this skill. Publishing,
+> employee-owned connections, and non-maker validation are deployment and
+> adoption steps outside the guided realm lifecycle.
+
+Show only the numbered item relevant to the active realm. Do not tell a DEV
+maker to perform Production release validation, and do not offer Production
+until TEST is Ready.

@@ -19,6 +19,7 @@ from agentbuilder import (
     TEST_REALM,
     AgentBuilderClient,
     AgentBuilderError,
+    AgentBuilderHTTPError,
     authenticate_agent_inventory,
     derive_environment_host,
     environment_id_from_host,
@@ -125,6 +126,88 @@ def _environment_url_from_inventory(
             "URL."
         )
     return _normalize_environment_url(value)
+
+
+def _environment_id(environment: Mapping[str, Any]) -> str:
+    return str(
+        environment.get("id")
+        or environment.get("environmentId")
+        or ""
+    ).strip()
+
+
+def _environment_display_name(environment: Mapping[str, Any]) -> str:
+    properties = environment.get("properties")
+    if not isinstance(properties, Mapping):
+        properties = {}
+    return str(
+        environment.get("displayName")
+        or environment.get("name")
+        or properties.get("displayName")
+        or properties.get("environmentName")
+        or ""
+    ).strip()
+
+
+def _environment_candidates(
+    environments: list[dict[str, Any]],
+    *,
+    source_environment_id: str,
+    environment_id: str | None,
+    environment_url: str | None,
+    environment_selector: str | None,
+) -> list[tuple[str, str, str]]:
+    requested_id = str(environment_id or "").strip()
+    requested_url = (
+        _normalize_environment_url(environment_url)
+        if environment_url
+        else ""
+    )
+    selector = str(environment_selector or "").strip().casefold()
+    candidates: list[tuple[str, str, str]] = []
+    for environment in environments:
+        candidate_id = _environment_id(environment)
+        if not candidate_id:
+            continue
+        normalized_id = _normalize_guid(
+            candidate_id,
+            "Visible environment ID",
+        )
+        if normalized_id.casefold() == source_environment_id.casefold():
+            continue
+        try:
+            candidate_url = _environment_url_from_inventory(
+                [environment],
+                normalized_id,
+            )
+        except WorkdayConnectRealmError:
+            continue
+        display_name = _environment_display_name(environment)
+        if requested_id and normalized_id.casefold() != _normalize_guid(
+            requested_id,
+            "Target environment ID",
+        ).casefold():
+            continue
+        if requested_url and candidate_url != requested_url:
+            continue
+        if selector and selector not in {
+            normalized_id.casefold(),
+            candidate_url.casefold(),
+            display_name.casefold(),
+        }:
+            continue
+        candidates.append((normalized_id, candidate_url, display_name))
+    return candidates
+
+
+def _candidate_labels(
+    candidates: list[tuple[str, str, str]],
+) -> str:
+    labels = [
+        display_name or environment_url
+        for _environment_id_value, environment_url, display_name in candidates
+    ]
+    return ", ".join(sorted(dict.fromkeys(labels), key=str.casefold))
 
 
 def discover_realm_target(
@@ -326,8 +409,9 @@ def discover_and_record_realm_target(
     store: WorkdayConnectStore,
     *,
     realm: str,
-    environment_id: str,
-    environment_url: str,
+    environment_id: str | None = None,
+    environment_url: str | None = None,
+    environment_selector: str | None = None,
     account_hint: str | None = None,
     authenticator: Callable[..., tuple[str, str]] = authenticate_agent_inventory,
     client_factory: Callable[..., AgentBuilderClient] = AgentBuilderClient,
@@ -410,16 +494,6 @@ def discover_and_record_realm_target(
             ring,
             api_version=api_version,
         )
-        inventory_url = _environment_url_from_inventory(
-            environments,
-            _normalize_guid(environment_id, "Target environment ID"),
-        )
-        supplied_url = _normalize_environment_url(environment_url)
-        if inventory_url != supplied_url:
-            raise WorkdayConnectRealmError(
-                "The supplied Dataverse URL does not match the URL proven for "
-                "the target environment ID."
-            )
         source_client = client_factory(
             source_host,
             token,
@@ -427,25 +501,75 @@ def discover_and_record_realm_target(
             tenant_id=tenant_id,
             api_version=api_version,
         )
-        target_client = client_factory(
-            derive_environment_host(environment_id, ring),
-            token,
-            ring=ring,
-            tenant_id=tenant_id,
-            api_version=source_client.api_version,
-        )
-        identity = discover_realm_target(
-            source_client,
-            target_client,
-            source_agent_id=source_agent_id,
-            source_agent_slug=source_agent_slug,
-            realm=realm,
-            environment_id=environment_id,
-            environment_url=inventory_url,
-            expected_source_family_id=str(
-                source_identity.get("almFamilyId") or ""
+        candidates = _environment_candidates(
+            environments,
+            source_environment_id=_normalize_guid(
+                source_environment_id,
+                "Recorded Dev environment ID",
             ),
+            environment_id=environment_id,
+            environment_url=environment_url,
+            environment_selector=environment_selector,
         )
+        explicit_selection = bool(
+            environment_id or environment_url or environment_selector
+        )
+        if not candidates:
+            if environment_id and environment_url:
+                raise WorkdayConnectRealmError(
+                    "The supplied Dataverse URL does not match the URL proven "
+                    "for the target environment ID."
+                )
+            raise WorkdayConnectRealmError(
+                "The promoted Workday target environment is not visible. "
+                "Confirm maker access or select the environment by name or URL."
+            )
+        discovered: list[dict[str, str]] = []
+        for candidate_id, candidate_url, _display_name in candidates:
+            target_client = client_factory(
+                derive_environment_host(candidate_id, ring),
+                token,
+                ring=ring,
+                tenant_id=tenant_id,
+                api_version=source_client.api_version,
+            )
+            try:
+                discovered.append(
+                    discover_realm_target(
+                        source_client,
+                        target_client,
+                        source_agent_id=source_agent_id,
+                        source_agent_slug=source_agent_slug,
+                        realm=realm,
+                        environment_id=candidate_id,
+                        environment_url=candidate_url,
+                        expected_source_family_id=str(
+                            source_identity.get("almFamilyId") or ""
+                        ),
+                    )
+                )
+            except AgentBuilderHTTPError as exc:
+                if not explicit_selection and exc.status_code == 404:
+                    continue
+                raise
+        if len(discovered) != 1:
+            labels = _candidate_labels(candidates)
+            if not discovered:
+                detail = (
+                    " No matching promoted agent was found in the selected "
+                    "environment."
+                    if explicit_selection
+                    else ""
+                )
+            else:
+                detail = " More than one environment matched the promoted agent."
+            choices = f" Available environments: {labels}." if labels else ""
+            raise WorkdayConnectRealmError(
+                "Automatic promoted-target discovery could not identify one "
+                f"{str(realm).title()} environment.{detail}{choices} "
+                "Select the environment by name or URL and retry."
+            )
+        identity = discovered[0]
     except WorkdayConnectRealmError:
         raise
     except (AgentBuilderError, ValueError) as exc:
@@ -453,17 +577,21 @@ def discover_and_record_realm_target(
             "The promoted Workday target could not be verified. Confirm "
             "maker access, environment selection, and deployment state."
         ) from exc
-    persisted = store.record_target_discovery(
+    store.record_target_discovery(
         str(realm).casefold(),
         identity,
         ring=ring,
     )
-    persisted = store.activate_target(str(realm).casefold())
+    store.activate_target(str(realm).casefold())
+    persisted, foundation_reused = (
+        store.initialize_promoted_target_from_foundation()
+    )
     return {
         "realm": str(realm).casefold(),
         "targetStatus": persisted["targets"][
             str(realm).casefold()
         ]["deploymentStatus"],
+        "foundationReused": foundation_reused,
         "status": store.status(),
     }
 

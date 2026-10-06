@@ -198,8 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("test", "prod"),
         required=True,
     )
-    discover_target.add_argument("--environment-id", required=True)
-    discover_target.add_argument("--dataverse-url", required=True)
+    discover_target.add_argument("--environment")
+    discover_target.add_argument("--environment-id")
+    discover_target.add_argument("--dataverse-url")
     discover_target.add_argument("--maker-username")
 
     tenant = subparsers.add_parser("set-workday-tenant")
@@ -321,6 +322,7 @@ def _discover_realm_target(
         realm=args.realm,
         environment_id=args.environment_id,
         environment_url=args.dataverse_url,
+        environment_selector=getattr(args, "environment", None),
         account_hint=args.maker_username,
     )
 

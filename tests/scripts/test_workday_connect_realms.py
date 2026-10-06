@@ -409,6 +409,71 @@ def test_records_and_activates_promoted_target(
     )
 
 
+def test_automatically_discovers_promoted_target_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workday_connect_realms as realms
+    from agentbuilder import AgentBuilderHTTPError
+    from workday_connect_store import WorkdayConnectStore
+
+    wrong_environment_id = "00000000-0000-4000-8000-00000000aaaa"
+    wrong_url = "https://contoso-other.crm.dynamics.com"
+
+    class MissingAgentClient(FakeClient):
+        def get_agent(self, _agent_id: str) -> dict[str, Any]:
+            raise AgentBuilderHTTPError("Direct agent lookup", 404)
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    config = tmp_path / ".local" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        json.dumps(
+            {
+                "ring": "test",
+                "environmentId": DEV_ENVIRONMENT_ID,
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000004000800000000000111.1."
+                    "environment.api.test.powerplatform.com"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    clients = iter((FakeClient(), MissingAgentClient(), FakeClient()))
+    monkeypatch.setattr(
+        realms,
+        "derive_environment_host",
+        lambda *_args: "https://target.environment.api.test.powerplatform.com",
+    )
+
+    result = realms.discover_and_record_realm_target(
+        tmp_path,
+        store,
+        realm="test",
+        authenticator=lambda *_args, **_kwargs: ("token", TENANT_ID),
+        environment_loader=lambda *_args, **_kwargs: [
+            {
+                "id": wrong_environment_id,
+                "displayName": "Other environment",
+                "instanceUrl": wrong_url,
+            },
+            {
+                "id": TEST_ENVIRONMENT_ID,
+                "displayName": "ESS Test",
+                "instanceUrl": TEST_URL,
+            },
+        ],
+        client_factory=lambda *_args, **_kwargs: next(clients),
+    )
+
+    assert result["realm"] == "test"
+    assert result["foundationReused"] is False
+    assert store.load()["scope"]["environmentId"] == TEST_ENVIRONMENT_ID
+
+
 def test_target_switching_preserves_realm_specific_progress(
     tmp_path: Path,
 ) -> None:
@@ -458,6 +523,55 @@ def test_target_switching_preserves_realm_specific_progress(
         },
         {"realm": "prod", "status": "not-deployed", "active": False},
     ]
+
+
+def test_maker_validation_completion_is_scoped_to_active_realm(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    store.record_target_discovery(
+        "test",
+        _identity(
+            environment_id=TEST_ENVIRONMENT_ID,
+            environment_url=TEST_URL,
+            agent_id=TEST_AGENT_ID,
+            commit_sha="abc123",
+        ),
+        ring="test",
+    )
+    store.activate_target("test")
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+        "employee-validation",
+    ):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+
+    test_state = store.load()
+    assert test_state["status"] == "ready"
+    assert test_state["targets"]["test"]["deploymentStatus"] == "ready"
+
+    store.activate_target("dev")
+    dev_state = store.load()
+    assert dev_state["status"] == "in-progress"
+    assert dev_state["phases"]["employee-validation"]["status"] == "pending"
+    assert dev_state["targets"]["test"]["phases"]["employee-validation"][
+        "status"
+    ] == "complete"
 
 
 def test_replayed_discovery_preserves_target_progress(
@@ -652,3 +766,25 @@ def test_controller_handler_returns_realm_discovery_contract(
     )
 
     assert result == expected
+
+
+def test_controller_allows_automatic_or_friendly_environment_discovery() -> None:
+    import workday_connect
+
+    automatic = workday_connect.build_parser().parse_args(
+        ["discover-realm-target", "--realm", "test"]
+    )
+    selected = workday_connect.build_parser().parse_args(
+        [
+            "discover-realm-target",
+            "--realm",
+            "prod",
+            "--environment",
+            "ESS Production",
+        ]
+    )
+
+    assert automatic.environment is None
+    assert automatic.environment_id is None
+    assert automatic.dataverse_url is None
+    assert selected.environment == "ESS Production"

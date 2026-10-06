@@ -1182,6 +1182,67 @@ def _set_foundation_data(store, *, workday_tenant: str = "contoso") -> None:
     )
 
 
+def test_promoted_target_reuses_complete_tenant_foundation(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    _set_foundation_data(store)
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.capture_tenant_foundation()
+    dev_state = store.load()
+
+    store.record_target_discovery(
+        "test",
+        {
+            "environmentId": "test-environment-id",
+            "environmentUrl": "https://contoso-test.crm.dynamics.com",
+            "tenantId": "tenant-id",
+            "agentId": "test-agent-id",
+            "agentSchemaName": "gptagent_copilotforemployeeselfservicehr",
+            "agentSlug": "ess-hr",
+            "almFamilyId": "family-id",
+            "commitSha": "abc123",
+            "sourceAgentId": "dev-agent-id",
+        },
+        ring="test",
+    )
+    store.activate_target("test")
+    initialized, reused = store.initialize_promoted_target_from_foundation()
+
+    assert reused is True
+    assert initialized["activeTargetRealm"] == "test"
+    assert initialized["phases"]["preflight"]["status"] == "complete"
+    assert initialized["phases"]["entra"]["status"] == "complete"
+    assert initialized["phases"]["workday-admin"]["status"] == "complete"
+    assert initialized["phases"]["connections"]["status"] == "pending"
+    assert initialized["targets"]["test"]["deploymentStatus"] == (
+        "partially-configured"
+    )
+    assert initialized["targets"]["dev"]["phases"]["entra"] == (
+        dev_state["phases"]["entra"]
+    )
+    assert any(
+        evidence["action"] == "tenant-foundation-reused"
+        for evidence in initialized["phases"]["entra"]["evidence"]
+    )
+
+
 def test_pre_v7_migration_preserves_existing_valid_tenant_foundation(
     tmp_path: Path,
 ) -> None:

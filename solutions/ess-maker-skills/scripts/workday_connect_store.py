@@ -1440,6 +1440,114 @@ class WorkdayConnectStore:
 
         return self._mutate(mutation)
 
+    def initialize_promoted_target_from_foundation(
+        self,
+    ) -> tuple[dict[str, Any], bool]:
+        """Start a promoted target after verified tenant setup phases."""
+        reused = False
+
+        def mutation(state: dict[str, Any]) -> None:
+            nonlocal reused
+            realm = state["activeTargetRealm"]
+            if realm == "dev":
+                return
+            foundation = state.get("tenantFoundation")
+            if not isinstance(foundation, Mapping):
+                return
+            target = state["targets"].get(realm)
+            identity = (
+                target.get("identity")
+                if isinstance(target, Mapping)
+                and isinstance(target.get("identity"), Mapping)
+                else {}
+            )
+            if (
+                str(identity.get("tenantId") or "").casefold()
+                != str(
+                    (foundation.get("scope") or {}).get("entraTenantId")
+                    or ""
+                ).casefold()
+                or not _foundation_matches_current_entra(state, foundation)
+            ):
+                raise WorkdayConnectStoreError(
+                    "The promoted target does not match the recorded Workday "
+                    "tenant foundation."
+                )
+            if (
+                state.get("identifiers")
+                != foundation.get("identifiers")
+                or state.get("endpoints") != foundation.get("endpoints")
+            ):
+                raise WorkdayConnectStoreError(
+                    "The recorded Workday tenant foundation changed before "
+                    "the promoted target could be initialized."
+                )
+            already_initialized = all(
+                state["phases"][phase_id]["status"]
+                == PhaseStatus.COMPLETE.value
+                for phase_id in ("preflight", "entra", "workday-admin")
+            )
+            if already_initialized:
+                reused = True
+                return
+
+            preflight = state["phases"]["preflight"]
+            _reset_phase(preflight)
+            preflight["status"] = PhaseStatus.COMPLETE.value
+            preflight["completedActions"] = ["verify-target"]
+            preflight["evidence"] = [
+                {
+                    "action": "verify-target",
+                    "outcome": "verified",
+                    "realm": realm,
+                    "provenance": "agentbuilder-realm-discovery",
+                    "capturedAt": utc_now(),
+                }
+            ]
+            preflight["updatedAt"] = utc_now()
+
+            snapshots = foundation.get("phases") or {}
+            for phase_id in ("entra", "workday-admin"):
+                snapshot = snapshots.get(phase_id)
+                if not isinstance(snapshot, Mapping):
+                    raise WorkdayConnectStoreError(
+                        "The recorded Workday tenant foundation is missing "
+                        f"{phase_id} evidence."
+                    )
+                phase = state["phases"][phase_id]
+                _reset_phase(phase)
+                phase["status"] = PhaseStatus.COMPLETE.value
+                phase["completedActions"] = copy.deepcopy(
+                    list(snapshot.get("completedActions") or [])
+                )
+                phase["evidence"] = copy.deepcopy(
+                    list(snapshot.get("evidence") or [])
+                )
+                phase["evidence"].append(
+                    {
+                        "action": "tenant-foundation-reused",
+                        "outcome": "verified",
+                        "realm": realm,
+                        "provenance": "verified-promoted-target",
+                        "foundationCapturedAt": foundation["capturedAt"],
+                        "capturedAt": utc_now(),
+                    }
+                )
+                administrator = snapshot.get("administrator")
+                phase["administrator"] = (
+                    copy.deepcopy(dict(administrator))
+                    if isinstance(administrator, Mapping)
+                    else default_administrator_state()
+                )
+                phase["administrator"]["substage"] = "evidence-validated"
+                phase["administrator"]["invalidFields"] = []
+                phase["administrator"]["updatedAt"] = utc_now()
+                phase["updatedAt"] = utc_now()
+            reused = True
+
+        state = self._mutate(mutation)
+        return state, reused
+
     def restore_workday_foundation(self) -> tuple[dict[str, Any], bool]:
         """Reuse Workday administrator evidence after a fresh Entra reread."""
         reused = False
