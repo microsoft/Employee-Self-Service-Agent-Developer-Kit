@@ -81,6 +81,13 @@ test('landing-page action sends the skill-triggering query', () => {
     assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
+test('topic actions send explicit intent through the not-yet-available gates', () => {
+    const create = ACTIONS.find(a => a.id === 'create');
+    const update = ACTIONS.find(a => a.id === 'update');
+    assert.strictEqual(create.query, 'Create a topic');
+    assert.strictEqual(update.query, 'Update a topic');
+});
+
 test('setup has no requirements', () => {
     const setup = ACTIONS.find(a => a.id === 'setup');
     assert.deepStrictEqual(setup.requires, []);

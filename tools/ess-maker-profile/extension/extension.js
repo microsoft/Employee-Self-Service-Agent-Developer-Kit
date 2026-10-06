@@ -110,8 +110,8 @@ const GUIDED_LAYOUT = {
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
     { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: 'Customize my landing page', requires: ['setup'] },
-    { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
+    { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: 'Create a topic',            requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: 'Update a topic',            requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
     { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
@@ -1586,8 +1586,8 @@ function activate(context) {
     // Legacy command IDs from 0.1.0 (still referenced by the walkthrough).
     const legacyMap = {
         'essMaker.runSetup': '/setup',
-        'essMaker.runCreate': '/create',
-        'essMaker.runUpdate': '/update',
+        'essMaker.runCreate': 'Create a topic',
+        'essMaker.runUpdate': 'Update a topic',
         'essMaker.runScan': '/scan',
         'essMaker.runFlightcheck': '/flightcheck',
         'essMaker.runPush': '/push',
