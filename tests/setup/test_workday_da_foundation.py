@@ -144,7 +144,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     normalized = " ".join(tenant.split())
 
     assert "one administrator handoff" in tenant
-    assert "Workday administrator return table" in tenant
+    assert "Workday administrator details" in tenant
     assert "both the capture guide and the return worksheet" in normalized
     assert "share this whole section" in tenant
     assert "Your tenant values" in tenant
@@ -167,14 +167,14 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert '"header": "Certificate name"' not in tenant
     assert "containing exactly one free-form question" in tenant
-    assert '"header": "Workday administrator return table"' in tenant
+    assert '"header": "Workday administrator details"' in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
     assert "Do not add `recommended`" in tenant
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
-    assert "strict five-column table" in tenant
+    assert "reformat a recognizable response" in tenant
     assert "rejects missing, duplicate, or unknown labels" in normalized
     assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant
@@ -209,8 +209,8 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
 
     assert "only exception" in normalized_skill
     assert "controller's worksheet parser" in normalized_skill
-    assert "table headers are not required" in normalized_skill
-    assert "table headers are not required" in " ".join(entra.split())
+    assert "reformat it" in normalized_skill
+    assert "reformat a recognizable response" in " ".join(entra.split())
     assert "including the header and every row" not in entra
     assert "--verification-worksheet-file" in entra
     assert "entra-verification.json" not in entra

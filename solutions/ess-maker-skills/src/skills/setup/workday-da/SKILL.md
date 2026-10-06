@@ -32,11 +32,11 @@ it is not a customer-executed phase and must not be shown as an extra step.
 - Use structured `vscode_askQuestions` forms for choices and short customer
   evidence. The Entra and Workday administrator handoffs are the only
   exception: collect all required administrator values in one response and
-  pass the untouched text to the controller's worksheet parser. For Entra,
-  accept either the completed table or a recognizable `Label: value` list;
-  table headers are not required. Accept only the resulting validated
-  structured payload. Reject missing, duplicate, or unknown labels; never
-  infer an answer or treat the raw text as evidence.
+  pass the untouched text to the controller's worksheet parser. Accept the
+  generated table or a recognizable labeled response without asking the
+  customer to reformat it. Accept only the resulting validated structured
+  payload. Reject missing, duplicate, or unknown labels; never infer an answer
+  or treat the raw text as evidence.
 - Leave every option initially unset. Do not add `recommended`, `default`,
   “recommended” label text, or any equivalent preselection to approvals,
   factual observations, connection choices, or validation outcomes. Continue

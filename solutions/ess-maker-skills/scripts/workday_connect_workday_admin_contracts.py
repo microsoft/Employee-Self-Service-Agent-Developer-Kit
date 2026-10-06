@@ -82,6 +82,33 @@ WORKDAY_ADMIN_WORKSHEET_LABELS = (
     "Remediation scenario",
     "Authorization retest",
 )
+WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
+    "SAML settings": "SAML row settings",
+    "SAML configuration": "SAML row settings",
+    "Certificate expiry": "Certificate expiration",
+    "Certificate expiry date": "Certificate expiration",
+    "Client ID": "OAuth client ID",
+    "OAuth application client ID": "OAuth client ID",
+    "API client status": "API client",
+    "Grant type": "Client grant type",
+    "Include Workday Owned Scope": "Workday owned scope",
+    "Token URL": "OAuth token URL",
+    "REST URL": "REST base URL",
+    "SOAP URL": "SOAP base URL",
+    "Auth policy": "Authentication policy",
+    "Network access": "Network readiness",
+    "Employee rollout": "Rollout",
+    "Employee population": "Rollout",
+    "Public Worker Reports": "Public worker reports",
+    "Integration Permissions": "Integration permissions",
+    "Functional areas": "Functional-area scopes",
+    "Functional area scopes": "Functional-area scopes",
+    "Domain mappings": "Additional domain mappings",
+    "Authorization result": "Authorization",
+    "Affected domain": "Remediated domain",
+    "Affected scenario": "Remediation scenario",
+    "Retest result": "Authorization retest",
+}
 
 
 def _optional_domain_mappings(value: str) -> list[dict[str, str]]:
@@ -108,6 +135,7 @@ def parse_workday_admin_return_worksheet(
         labels=WORKDAY_ADMIN_WORKSHEET_LABELS,
         label="Workday administrator return worksheet",
         multiline_labels=frozenset({"Additional domain mappings"}),
+        label_aliases=WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES,
     )
     _worksheet_choice(
         values,
@@ -741,8 +769,7 @@ def build_workday_admin_packet(
                 "validator": "parse_workday_admin_return_worksheet",
             },
             "note": (
-                "Return the completed five-column table in one response. The "
-                "legacy labeled worksheet remains accepted. Do not paste "
+                "Return the administrator details in one response. Do not paste "
                 "passwords, client secrets, tokens, cookies, certificate "
                 "contents, or private keys. For missing or invalid values, "
                 "show one mini-worksheet with only those fields and their "

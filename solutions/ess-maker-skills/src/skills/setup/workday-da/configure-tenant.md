@@ -255,9 +255,9 @@ selected above, repeat provider discovery within this Workday phase using the
 same recorded Entra reference values. Do not return to the Entra phase or ask
 the Entra administrator to participate again.
 
-Collect the completed five-column table in one response. Do not ask for these
-values as a sequence of separate chat or form questions. The table retains all
-required evidence:
+Collect the Workday administrator's details in one response. Do not ask for
+these values as a sequence of separate chat or form questions. The response
+must contain all required evidence:
 
 - confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
   Provider ID, identity-provider SSO service URL, and sign-on redirect URL
@@ -476,19 +476,18 @@ After the administrator confirms completion, use one
 ```json
 [
   {
-    "header": "Workday administrator return table",
-    "question": "Paste the completed Workday administrator table in one response, including the header and every row. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
+    "header": "Workday administrator details",
+    "question": "Paste the completed Workday administrator details in one response. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
   }
 ]
 ```
 
-The response is a strict five-column table, not free-form evidence. Preserve it
-unchanged. The controller reads only the exact **Information to capture**
-labels and **Your tenant values** cells, rejects missing, duplicate, or unknown
-labels, and maps only the listed successful choices into the structured
-response object described below. The legacy exact labeled worksheet remains
-accepted for resume compatibility. Never parse, rename, infer, or normalize an
-answer in the skill:
+Preserve the response unchanged. The controller recognizes the generated table
+and common customer-facing labels and capitalization, rejects missing,
+duplicate, or unknown labels, and maps only the listed successful choices into
+the structured response object described below. Do not ask the customer to
+reformat a recognizable response. Never infer a missing answer or treat
+unlabeled prose as evidence:
 
 Certificate comparisons are date-only. Do not ask either administrator for a
 timestamp, time, or timezone. Accept the portal's displayed certificate date

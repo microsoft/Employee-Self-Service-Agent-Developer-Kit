@@ -418,10 +418,9 @@ def test_entra_handoff_can_request_explicit_creation():
         "five-column-markdown-table",
         "labeled-worksheet",
     ]
-    assert "completed table or a labeled list" in (
+    assert "administrator values in one response" in (
         handoff["responseForm"]["note"]
     )
-    assert "Table headers are not required" in handoff["responseForm"]["note"]
     assert "Basic SAML Configuration" in capture_by_field[
         "replyUrl"
     ]["portalLocation"]
@@ -935,6 +934,41 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["identifiers"]["oauthClientId"] == "safe-client-id"
     assert result["evidence"]["rolloutType"] == "entire-workforce"
     assert result["evidence"]["optionalDomains"] == []
+
+
+def test_workday_customer_labeled_response_accepts_common_labels() -> None:
+    worksheet = _workday_worksheet()
+    for canonical, customer_label in {
+        "SAML row settings": "SAML configuration",
+        "Certificate expiration": "Certificate expiry date",
+        "OAuth client ID": "Client ID",
+        "Client grant type": "Grant type",
+        "Workday owned scope": "Include Workday Owned Scope",
+        "OAuth token URL": "Token URL",
+        "REST base URL": "REST URL",
+        "SOAP base URL": "SOAP URL",
+        "Authentication policy": "Auth policy",
+        "Network readiness": "Network access",
+        "Rollout": "Employee population",
+        "Functional-area scopes": "Functional areas",
+        "Additional domain mappings": "Domain mappings",
+        "Authorization": "Authorization result",
+        "Remediated domain": "Affected domain",
+        "Remediation scenario": "Affected scenario",
+        "Authorization retest": "Retest result",
+    }.items():
+        worksheet = worksheet.replace(
+            f"{canonical}:",
+            f"{customer_label}:",
+        )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["oauthClientId"] == "safe-client-id"
+    assert parsed["rolloutType"] == "entire-workforce"
 
 
 def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:

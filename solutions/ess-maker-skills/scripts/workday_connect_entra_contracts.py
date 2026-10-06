@@ -621,9 +621,7 @@ def build_entra_handoff(
                 "validator": "parse_entra_return_worksheet",
             },
             "note": (
-                "Collect the administrator values in one response as either "
-                "the completed table or a labeled list. Table headers are not "
-                "required for a labeled list. Do "
+                "Collect the administrator values in one response. Do "
                 "not accept blank required values or ask for passwords, client "
                 "secrets, tokens, cookies, certificate contents, or private "
                 "keys. After submission, show the capture location and a "

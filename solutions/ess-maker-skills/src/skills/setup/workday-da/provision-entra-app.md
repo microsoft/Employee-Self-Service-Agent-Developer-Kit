@@ -238,13 +238,10 @@ After **Yes**, run:
 python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
-Then collect the Entra administrator's values in one response. Accept either
-the completed five-column table or a simple `Label: value` list containing the
-same information. The customer does not need to reproduce the table headers,
-columns, or row formatting. Values may be in any order. Object IDs, the scope
-GUID, derived tenant URLs, and complete URI lists are not required. A reply
-such as "done", "all good", "continue", or "proceed" is not evidence and must
-not be converted into administrator attestation.
+Then collect the Entra administrator's values in one response. Object IDs, the
+scope GUID, derived tenant URLs, and complete URI lists are not required. A
+reply such as "done", "all good", "continue", or "proceed" is not evidence and
+must not be converted into administrator attestation.
 
 The VS Code question UI renders an array of questions as a sequential wizard.
 Do not submit one question per worksheet field. Use one
@@ -254,17 +251,16 @@ Do not submit one question per worksheet field. Use one
 [
   {
     "header": "Entra administrator details",
-    "question": "Paste the Microsoft Entra administrator values in one response. You can paste the completed table or provide one Label: value per line; table headers are not required. Do not include credentials, tokens, certificate contents, or private keys."
+    "question": "Paste the completed Microsoft Entra administrator details in one response. Do not include credentials, tokens, certificate contents, or private keys."
   }
 ]
 ```
 
-Preserve the response unchanged. The controller accepts the generated
-five-column table or a labeled list, recognizes common customer-facing label
-variants and capitalization, rejects missing, duplicate, or unknown labels,
-maps only the listed successful choices, and validates the structured
-verification payload. Never require the customer to add table headers or
-reformat a recognizable labeled list. Never infer a missing answer or treat
+Preserve the response unchanged. The controller recognizes the generated table
+and common customer-facing labels and capitalization, rejects missing,
+duplicate, or unknown labels, maps only the listed successful choices, and
+validates the structured verification payload. Do not ask the customer to
+reformat a recognizable response. Never infer a missing answer or treat
 unlabeled prose as evidence.
 
 For the certificate expiration, accept the date exactly as the administrator
