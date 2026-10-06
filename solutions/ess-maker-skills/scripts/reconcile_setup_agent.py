@@ -125,7 +125,7 @@ def _probe_native_agent(
     kit_root: Path,
     host: str | None,
     api_version: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str, BaseException | None]:
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     token, tenant_id = authenticate_flightcheck(
         ring,
@@ -145,7 +145,19 @@ def _probe_native_agent(
         tenant_id=tenant_id,
         api_version=api_version,
     )
-    return client.get_agent(agent_id)
+    changeset = client.fetch_components(agent_id)
+    bot = changeset.get("bot")
+    if not isinstance(bot, dict):
+        raise ValueError("Component fetch did not return bot identity.")
+    fetched_id = _normalize_guid(
+        str(bot.get("cdsBotId") or ""),
+        "Fetched component agent ID",
+    )
+    if fetched_id.casefold() != agent_id.casefold():
+        raise ValueError(
+            "Component fetch returned identity for a different agent."
+        )
+    return bot, "minimalbot-components", None
 
 
 def _resolve_dataverse_url(
@@ -251,39 +263,173 @@ def _failure_result(
     }
 
 
-def _identity_summary(
+def _uncertain_product_identity(
+    evidence: str,
+    observation: str,
+    cause_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "outcome": "uncertain",
+        "stage": "schema-identity",
+        "source": evidence,
+        "observation": observation,
+        "error": {
+            "causes": [
+                {
+                    "type": cause_type,
+                    "message": message,
+                }
+            ]
+        },
+    }
+
+
+def _found_identity_result(
     backend: str,
+    evidence: str,
+    identity: dict[str, Any],
+    schema_name: str | None,
+    product_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "backend": backend,
+        "outcome": "found",
+        "evidence": evidence,
+        "identity": identity,
+    }
+    if product_identity is not None:
+        result["productIdentity"] = product_identity
+    else:
+        result["productFamily"] = classify_schema_name(schema_name)
+    return result
+
+
+def _native_identity_summary(
     agent: dict[str, Any],
     *,
     evidence: str,
 ) -> dict[str, Any]:
-    schema_name = str(
-        agent.get("schemaName") or agent.get("schemaname") or ""
-    ).strip()
-    display_name = str(
-        agent.get("fullBotName")
-        or agent.get("displayName")
-        or agent.get("name")
-        or ""
-    ).strip()
-    managed = agent.get("ismanaged")
-    if managed is None:
-        managed = agent.get("isManaged")
-    if managed is None and isinstance(agent.get("managedProperties"), dict):
-        managed = agent["managedProperties"].get("isManaged")
+    identity: dict[str, Any] = {}
+    display_name = agent.get("displayName")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
 
-    identity: dict[str, Any] = {"schemaName": schema_name}
-    if display_name:
-        identity["displayName"] = display_name
+    managed_properties = agent.get("managedProperties")
+    if isinstance(managed_properties, dict):
+        managed = managed_properties.get("isManaged")
+        if isinstance(managed, bool):
+            identity["isManaged"] = managed
+
+    if "schemaName" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The native BotEntity did not include schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaName"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The native BotEntity returned a null schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The native BotEntity returned a non-string schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The native BotEntity returned an empty schemaName.",
+        )
+    return _found_identity_result(
+        "native", evidence, identity, schema_name, product_identity
+    )
+
+
+def _dataverse_identity_summary(
+    agent: dict[str, Any],
+    *,
+    evidence: str,
+) -> dict[str, Any]:
+    identity: dict[str, Any] = {}
+    display_name = agent.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
+    managed = agent.get("ismanaged")
     if isinstance(managed, bool):
         identity["isManaged"] = managed
-    return {
-        "backend": backend,
-        "outcome": "found",
-        "evidence": evidence,
-        "productFamily": classify_schema_name(schema_name),
-        "identity": identity,
-    }
+
+    if "schemaname" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The Dataverse bot record did not include schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaname"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The Dataverse bot record returned a null schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The Dataverse bot record returned a non-string schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The Dataverse bot record returned an empty schemaname.",
+        )
+    return _found_identity_result(
+        "dataverse", evidence, identity, schema_name, product_identity
+    )
 
 
 def probe_native_identity(
@@ -299,7 +445,7 @@ def probe_native_identity(
     normalized_environment = _normalize_guid(environment_id, "Environment ID")
     normalized_agent = _normalize_guid(agent_id, "Agent ID")
     try:
-        agent = _probe_native_agent(
+        agent, evidence, product_identity_error = _probe_native_agent(
             normalized_environment,
             normalized_agent,
             ring,
@@ -315,11 +461,17 @@ def probe_native_identity(
         requests.RequestException,
     ) as exc:
         return _failure_result("native", exc)
-    return _identity_summary(
-        "native",
+    result = _native_identity_summary(
         agent,
-        evidence="minimalbot-direct",
+        evidence=evidence,
     )
+    if product_identity_error is not None:
+        result["productIdentity"] = {
+            "outcome": "uncertain",
+            "stage": "component-identity",
+            "error": _exception_evidence(product_identity_error),
+        }
+    return result
 
 
 def probe_dataverse_identity(
@@ -382,8 +534,7 @@ def probe_dataverse_identity(
         requests.RequestException,
     ) as exc:
         return _failure_result("dataverse", exc)
-    return _identity_summary(
-        "dataverse",
+    return _dataverse_identity_summary(
         agent,
         evidence="dataverse-direct",
     )
@@ -424,10 +575,13 @@ def reconcile_selected_agent(
 
 def known_native_identity(schema_name: str) -> dict[str, Any]:
     """Classify identity already proven by a native MinimalBot operation."""
-    return _identity_summary(
+    normalized_schema = schema_name.strip()
+    return _found_identity_result(
         "native",
-        {"schemaName": schema_name},
-        evidence="provided-native",
+        "provided-native",
+        {"schemaName": normalized_schema},
+        normalized_schema,
+        None,
     )
 
 

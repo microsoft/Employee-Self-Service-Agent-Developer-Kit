@@ -25,6 +25,9 @@
 .PARAMETER WorkflowId
     One or more workflow GUIDs (the 'workflowid' of each cloud flow the agent calls).
 
+.PARAMETER PreferredUsername
+    Environment Maker username that must be used for Dataverse authentication.
+
 .PARAMETER TeamName
     Optional display name for the access team.
 
@@ -57,6 +60,7 @@ param(
     [Parameter(Mandatory = $true)][string]   $OrgUrl,
     [Parameter(Mandatory = $true)][guid]     $BotId,
     [Parameter(Mandatory = $true)][guid[]]   $WorkflowId,
+    [string] $PreferredUsername,
     [string] $TeamName,
     [guid]   $AdministratorId,
     [guid]   $BusinessUnitId,
@@ -100,25 +104,38 @@ function Test-DataverseToken {
 }
 
 function Get-DataverseToken {
-    param([string]$Resource)
+    param(
+        [string]$Resource,
+        [string]$PreferredUsername
+    )
     $tok = $null
-    try {
-        $tok = az account get-access-token --resource $Resource --query accessToken -o tsv 2>$null
-    } catch {
-        $tok = $null
-    }
-    if (-not [string]::IsNullOrWhiteSpace($tok) -and (Test-DataverseToken -Resource $Resource -Token $tok)) {
-        return $tok
+    if ([string]::IsNullOrWhiteSpace($PreferredUsername)) {
+        try {
+            $tok = az account get-access-token --resource $Resource --query accessToken -o tsv 2>$null
+        } catch {
+            $tok = $null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($tok) -and (Test-DataverseToken -Resource $Resource -Token $tok)) {
+            return $tok
+        }
     }
 
-    Write-Host "  Azure CLI token was unavailable or rejected; using the kit's Dataverse sign-in." -ForegroundColor Yellow
+    if ($PreferredUsername) {
+        Write-Host "  Using the kit's Dataverse sign-in for $PreferredUsername." -ForegroundColor Yellow
+    } else {
+        Write-Host "  Azure CLI token was unavailable or rejected; using the kit's Dataverse sign-in." -ForegroundColor Yellow
+    }
     $helper = Join-Path $PSScriptRoot 'get_dataverse_token.py'
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python -or -not (Test-Path $helper)) {
         throw "Could not acquire a valid Dataverse token. Install Python, then run the kit setup or sign in with an account that can access $Resource."
     }
 
-    $output = @(& $python.Source $helper --environment $Resource 2>&1)
+    $helperArgs = @('--environment', $Resource)
+    if ($PreferredUsername) {
+        $helperArgs += @('--preferred-username', $PreferredUsername)
+    }
+    $output = @(& $python.Source $helper @helperArgs 2>&1)
     if ($LASTEXITCODE -ne 0) {
         $safeError = ($output | Where-Object { $_ -notmatch '^ESS_DATAVERSE_TOKEN=' }) -join [Environment]::NewLine
         throw "Kit Dataverse authentication failed: $safeError"
@@ -171,7 +188,9 @@ function Invoke-Dv {
 
 # --------------------------------------------------------------------------------------------
 Write-Step "Connecting to $OrgUrl"
-$script:Token = Get-DataverseToken -Resource $OrgUrl
+$script:Token = Get-DataverseToken `
+    -Resource $OrgUrl `
+    -PreferredUsername $PreferredUsername
 $who = Invoke-Dv -Path 'WhoAmI'
 Write-Ok "Authenticated. UserId $($who.UserId), OrgId $($who.OrganizationId)"
 

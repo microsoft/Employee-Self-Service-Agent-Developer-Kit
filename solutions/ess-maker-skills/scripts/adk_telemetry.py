@@ -79,7 +79,10 @@ from flightcheck import telemetry as _fc  # noqa: E402
 #        attribution — ADO 7943642.
 # 1.5.0: added derived ``connector`` (workday|servicenow|"") on
 #        adk.flightcheck.run/result + adk.capability.use — ADO 7943641.
-SCHEMA_VERSION = "1.5.0"
+# 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
+# 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
+#        declarative_agent | unknown) — ADO 7830949.
+SCHEMA_VERSION = "1.7.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -97,6 +100,7 @@ EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
+EVENT_CONNECT_LIFECYCLE = "adk.connect.lifecycle"
 EVENT_CLIENT = "adk.client.event"
 
 CLIENT_EVENTS_SCHEMA_VERSION = 2
@@ -212,6 +216,7 @@ ADK_CAPABILITIES = (
     "troubleshoot",
     "backup_template_configs",
     "restore_template_configs",
+    "analytics",
     "push",
     "publishing",
     "flightcheck",
@@ -268,6 +273,58 @@ _CONNECTOR_SET = frozenset(CONNECTORS)
 CONNECTOR_LEGACY = "legacy"
 CONNECTOR_UNKNOWN = "unknown"
 
+CONNECT_LIFECYCLE_EVENTS = (
+    "invoked",
+    "plan_generated",
+    "roles_attested",
+    "phase_started",
+    "phase_paused",
+    "phase_resumed",
+    "phase_completed",
+    "blocked",
+    "completed",
+    "abandoned",
+)
+_CONNECT_LIFECYCLE_EVENT_SET = frozenset(CONNECT_LIFECYCLE_EVENTS)
+CONNECT_LIFECYCLE_EVENT_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_OUTCOMES = (
+    "success",
+    "blocked",
+    "failure",
+    "cancelled",
+)
+_CONNECT_LIFECYCLE_OUTCOME_SET = frozenset(CONNECT_LIFECYCLE_OUTCOMES)
+CONNECT_LIFECYCLE_OUTCOME_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_PHASES = (
+    "preflight",
+    "entra",
+    "workday_admin",
+    "connections",
+    "runtime",
+    "employee_validation",
+)
+_CONNECT_LIFECYCLE_PHASE_SET = frozenset(CONNECT_LIFECYCLE_PHASES)
+CONNECT_LIFECYCLE_PHASE_UNKNOWN = "unknown"
+CONNECT_LIFECYCLE_BLOCKER_CATEGORIES = (
+    "auth",
+    "permissions",
+    "connection",
+    "runtime",
+    "validation",
+    "state",
+    "timeout",
+    "platform",
+    "unknown",
+)
+_CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET = frozenset(
+    CONNECT_LIFECYCLE_BLOCKER_CATEGORIES
+)
+_CONNECT_LIFECYCLE_CORRELATION_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_CONNECT_LIFECYCLE_REMEDIATION_RE = re.compile(r"^WD-E2E-\d{3}$")
+
 
 def normalize_connector(connector: str) -> str:
     """Normalize a ``connector`` value to the canonical enum.
@@ -285,6 +342,42 @@ def normalize_connector(connector: str) -> str:
     if c == CONNECTOR_LEGACY:
         return CONNECTOR_LEGACY
     return CONNECTOR_UNKNOWN
+
+
+def normalize_connect_lifecycle_event(event: str) -> str:
+    normalized = str(event or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_EVENT_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_EVENT_UNKNOWN
+
+
+def normalize_connect_lifecycle_outcome(outcome: str) -> str:
+    normalized = str(outcome or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_OUTCOME_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_OUTCOME_UNKNOWN
+
+
+def normalize_connect_lifecycle_phase(phase: str) -> str:
+    normalized = str(phase or "").strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_PHASE_SET:
+        return normalized
+    return CONNECT_LIFECYCLE_PHASE_UNKNOWN
+
+
+def normalize_connect_lifecycle_blocker_category(category: str) -> str:
+    normalized = str(category or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized in _CONNECT_LIFECYCLE_BLOCKER_CATEGORY_SET:
+        return normalized
+    return "unknown"
 
 
 # Outcomes the spec treats as errors (must carry error_* fields).
@@ -621,8 +714,16 @@ def common_dimensions(
         "adk_version": _fc.get_adk_version(),
         "toolkit_git_sha": _fc.get_toolkit_git_sha(),
         "toolkit_git_branch": _fc.get_toolkit_git_branch(),
+        "agent_type": _fc.classify_agent_type(_fc.get_toolkit_git_branch()),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
+
+
+# Re-export the closed taxonomy for scripts and tests that import this module.
+AGENT_TYPE_CUSTOM = _fc.AGENT_TYPE_CUSTOM
+AGENT_TYPE_DECLARATIVE = _fc.AGENT_TYPE_DECLARATIVE
+AGENT_TYPE_UNKNOWN = _fc.AGENT_TYPE_UNKNOWN
+AGENT_TYPES = _fc.AGENT_TYPES
 
 
 def _scrub(text: str, limit: int = 200) -> str:
@@ -1333,6 +1434,59 @@ def emit_capability_use(
     data["adk_capability"] = normalize_capability(adk_capability)
     data["connector"] = normalize_connector(connector)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
+
+
+def emit_connect_lifecycle(
+    lifecycle_event: str,
+    *,
+    connector: str = "",
+    phase: str = "",
+    outcome: str = "",
+    duration_ms: int = 0,
+    retry_count: int = 0,
+    resume_count: int = 0,
+    blocker_category: str = "",
+    remediation_id: str = "",
+    correlation_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    normalized_correlation = str(correlation_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_correlation):
+        normalized_correlation = ""
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    if not _CONNECT_LIFECYCLE_CORRELATION_RE.fullmatch(normalized_agent_id):
+        normalized_agent_id = ""
+    normalized_remediation_id = str(remediation_id or "").strip().upper()
+    if not _CONNECT_LIFECYCLE_REMEDIATION_RE.fullmatch(
+        normalized_remediation_id
+    ):
+        normalized_remediation_id = ""
+    data.update(
+        {
+            "agent_id": normalized_agent_id,
+            "connector": normalize_connector(connector),
+            "lifecycle_event": normalize_connect_lifecycle_event(
+                lifecycle_event
+            ),
+            "phase": normalize_connect_lifecycle_phase(phase),
+            "outcome": normalize_connect_lifecycle_outcome(outcome),
+            "duration_ms": max(0, int(duration_ms)),
+            "retry_count": max(0, int(retry_count)),
+            "resume_count": max(0, int(resume_count)),
+            "blocker_category": (
+                normalize_connect_lifecycle_blocker_category(
+                    blocker_category
+                )
+            ),
+            "remediation_id": normalized_remediation_id,
+            "correlation_id": normalized_correlation,
+        }
+    )
+    return _emit(EVENT_CONNECT_LIFECYCLE, data, block=block)
 
 
 def emit_flightcheck_run(

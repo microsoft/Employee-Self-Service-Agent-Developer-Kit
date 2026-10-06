@@ -1,0 +1,793 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+import json
+import sys
+
+import pytest
+
+
+SCRIPTS = (
+    Path(__file__).resolve().parents[2] / "solutions" / "ess-maker-skills" / "scripts"
+)
+sys.path.insert(0, str(SCRIPTS))
+
+import workday_connect_runtime as runtime  # noqa: E402
+from workday_connect_model import default_state  # noqa: E402
+
+
+BOT_ID = "11111111-1111-1111-1111-111111111111"
+WORKDAY_CONNECTION = "22222222-2222-2222-2222-222222222222"
+DATAVERSE_CONNECTION = "33333333-3333-3333-3333-333333333333"
+
+
+def _state():
+    state = default_state()
+    state["scope"].update(
+        {
+            "dataverseUrl": "https://org.crm.dynamics.com",
+            "packageFlavor": "runtime",
+            "ring": "prod",
+            "agent": {"botId": BOT_ID},
+        }
+    )
+    state["operators"]["powerPlatformMaker"] = {"username": "maker@contoso.com"}
+    state["phases"]["connections"]["status"] = "complete"
+    return state
+
+
+def _connections():
+    return {
+        "value": [
+            {
+                "name": WORKDAY_CONNECTION,
+                "properties": {
+                    "apiId": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+                    "displayName": "Workday",
+                    "statuses": [{"status": "Connected"}],
+                },
+            },
+            {
+                "name": DATAVERSE_CONNECTION,
+                "properties": {
+                    "apiId": (
+                        "/providers/Microsoft.PowerApps/apis/"
+                        "shared_commondataserviceforapps"
+                    ),
+                    "displayName": "Dataverse",
+                    "statuses": [{"status": "Connected"}],
+                },
+            },
+        ]
+    }
+
+
+def _pac_runner(command, **_kwargs):
+    if command[1:3] == ["auth", "list"]:
+        return SimpleNamespace(
+            returncode=0,
+            stdout="[1] * maker@contoso.com Public\n",
+            stderr="",
+        )
+    if command[1:3] == ["connectivity", "list-connections"]:
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(_connections()),
+            stderr="",
+        )
+    raise AssertionError(command)
+
+
+def _pac_runner_with_connections(payload):
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    return runner
+
+
+def _records():
+    catalog = runtime.load_catalog()
+    logical_names = [
+        catalog["connectionReferences"]["workday"]["logicalName"],
+        catalog["connectionReferences"]["dataverse"]["logicalName"],
+    ]
+    flow_names = catalog["packages"]["runtime"]["flowNames"]
+    flows = {
+        name: {
+            "workflowid": f"44444444-4444-4444-4444-{index:012d}",
+            "name": name,
+            "statecode": 0,
+            "statuscode": 1,
+            "category": 5,
+        }
+        for index, name in enumerate(flow_names, start=1)
+    }
+    return {
+        "references": {
+            logical_names[0]: {
+                "connectionreferenceid": "ref-workday",
+                "connectionreferencelogicalname": logical_names[0],
+                "connectionid": None,
+            },
+            logical_names[1]: {
+                "connectionreferenceid": "ref-dataverse",
+                "connectionreferencelogicalname": logical_names[1],
+                "connectionid": None,
+            },
+            "agent-workday": {
+                "connectionreferencelogicalname": (
+                    "contoso.55555555-5555-5555-5555-555555555555.shared_workdaysoap"
+                ),
+                "connectionreferencedisplayname": "ESS HR Workday",
+                "connectionid": "agent-workday-connection",
+                "connectionparametersetconfig": '{"values":{}}',
+            },
+            "agent-dataverse": {
+                "connectionreferencelogicalname": (
+                    "contoso."
+                    "66666666-6666-6666-6666-666666666666."
+                    "shared_commondataserviceforapps"
+                ),
+                "connectionreferencedisplayname": "Microsoft Dataverse",
+                "connectionid": "agent-dataverse-connection",
+                "connectionparametersconfig": '{"values":{}}',
+            },
+        },
+        "solution": {
+            "solutionid": "77777777-7777-7777-7777-777777777777",
+            "uniquename": "msdyn_EssWorkdayRuntime",
+        },
+        "flows": flows,
+    }
+
+
+def _query_for(records):
+    def query(_url, _token, entity_set, _select, filter_expr=None):
+        if entity_set == "connectionreferences":
+            return list(records["references"].values())
+        if entity_set == "solutions":
+            return [records["solution"]]
+        if entity_set == "solutioncomponents":
+            return [
+                {"objectid": flow["workflowid"], "componenttype": 29}
+                for flow in records["flows"].values()
+            ]
+        if entity_set == "workflows":
+            return list(records["flows"].values())
+        raise AssertionError(entity_set)
+
+    return query
+
+
+def _discovery_dependencies(records):
+    return {
+        "query": _query_for(records),
+        "pac_resolver": lambda: Path("pac.exe"),
+        "runner": _pac_runner,
+    }
+
+
+def _identity(_token, *, preferred_username):
+    return {
+        "username": preferred_username,
+        "tenantId": "tenant-id",
+    }
+
+
+def test_runtime_plan_uses_one_dataverse_token_and_exact_targets():
+    records = _records()
+    token_calls = []
+
+    result = runtime.run_runtime_operation(
+        _state(),
+        apply=False,
+        token_provider=lambda url, preferred_username: (
+            token_calls.append((url, preferred_username)) or "token"
+        ),
+        identity_provider=_identity,
+        **_discovery_dependencies(records),
+    )
+
+    assert token_calls == [("https://org.crm.dynamics.com", "maker@contoso.com")]
+    bindings = result["plan"]["connectionBindings"]
+    assert {value["connectionId"] for value in bindings.values()} == {
+        WORKDAY_CONNECTION,
+        DATAVERSE_CONNECTION,
+    }
+    assert result["approvalSummary"]["connections"] == [
+        "Workday",
+        "Dataverse",
+    ]
+    serialized_summary = __import__("json").dumps(
+        result["approvalSummary"],
+        sort_keys=True,
+    )
+    assert WORKDAY_CONNECTION not in serialized_summary
+    assert DATAVERSE_CONNECTION not in serialized_summary
+    assert len(result["plan"]["flows"]) == 3
+    assert "userContext" not in result["plan"]
+    assert "token" not in json.dumps(result).casefold()
+
+
+def test_runtime_plan_requires_verified_physical_connections():
+    state = _state()
+    state["phases"]["connections"]["status"] = "pending"
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="connection sign-ins",
+    ):
+        runtime.run_runtime_operation(
+            state,
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            **_discovery_dependencies(_records()),
+        )
+
+
+def test_physical_connection_verification_returns_selected_connection_ids():
+    result = runtime.verify_physical_connections(
+        _state(),
+        pac_resolver=lambda: Path("pac.exe"),
+        runner=_pac_runner,
+    )
+
+    assert result == {
+        "makerUsername": "maker@contoso.com",
+        "connectionIds": {
+            "workday": WORKDAY_CONNECTION,
+            "dataverse": DATAVERSE_CONNECTION,
+        },
+        "connections": [
+            {
+                "connector": "shared_workdaysoap",
+                "displayName": "Workday",
+            },
+            {
+                "connector": "shared_commondataserviceforapps",
+                "displayName": "Dataverse",
+            },
+        ],
+    }
+
+
+def test_physical_connection_verification_reports_dataverse_before_workday():
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections({"value": []}),
+        )
+
+    assert raised.value.details["connector"] == (
+        "shared_commondataserviceforapps"
+    )
+
+
+def test_physical_connection_verification_reports_workday_after_dataverse():
+    payload = {
+        "value": [
+            value
+            for value in _connections()["value"]
+            if value["name"] == DATAVERSE_CONNECTION
+        ]
+    }
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner_with_connections(payload),
+        )
+
+    assert raised.value.details["connector"] == "shared_workdaysoap"
+
+
+@pytest.mark.parametrize(
+    ("connector_name", "duplicate_id", "display_name"),
+    [
+        (
+            "shared_workdaysoap",
+            "88888888-8888-8888-8888-888888888888",
+            "Workday alternate",
+        ),
+        (
+            "shared_commondataserviceforapps",
+            "99999999-9999-9999-9999-999999999999",
+            "Dataverse alternate",
+        ),
+    ],
+)
+def test_physical_connection_ambiguity_exposes_structured_candidates(
+    connector_name: str,
+    duplicate_id: str,
+    display_name: str,
+):
+    payload = _connections()
+    payload["value"].append(
+        {
+            "name": duplicate_id,
+            "properties": {
+                "apiId": (
+                    f"/providers/Microsoft.PowerApps/apis/{connector_name}"
+                ),
+                "displayName": display_name,
+                "statuses": [{"status": "Connected"}],
+            },
+        }
+    )
+
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as raised:
+        runtime.verify_physical_connections(
+            _state(),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=runner,
+        )
+
+    details = raised.value.details
+    candidates = details["candidateConnections"]
+    assert details["connector"] == connector_name
+    assert {value["connectionId"] for value in candidates} == {
+        duplicate_id,
+        (
+            WORKDAY_CONNECTION
+            if connector_name == "shared_workdaysoap"
+            else DATAVERSE_CONNECTION
+        ),
+    }
+    assert duplicate_id not in str(raised.value)
+
+
+def test_runtime_plan_reuses_recorded_connection_ids():
+    state = _state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+    duplicate_workday = "99999999-9999-9999-9999-999999999999"
+    payload = _connections()
+    payload["value"].append(
+        {
+            "name": duplicate_workday,
+            "properties": {
+                "apiId": (
+                    "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
+                ),
+                "displayName": "Workday duplicate",
+                "statuses": [{"status": "Connected"}],
+            },
+        }
+    )
+
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        if command[1:3] == ["connectivity", "list-connections"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(payload),
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    result = runtime.run_runtime_operation(
+        state,
+        apply=False,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=_identity,
+        runner=runner,
+        query=_query_for(_records()),
+        pac_resolver=lambda: Path("pac.exe"),
+    )
+
+    bindings = result["plan"]["connectionBindings"].values()
+    assert next(
+        binding["connectionId"]
+        for binding in bindings
+        if binding["connector"] == "shared_workdaysoap"
+    ) == WORKDAY_CONNECTION
+
+
+def test_runtime_plan_rejects_connection_id_drift_after_verification():
+    state = _state()
+    state["phases"]["connections"]["evidence"] = [
+        {
+            "action": "physical-connections-verified",
+            "outcome": "verified",
+            "connectionIds": {
+                "workday": WORKDAY_CONNECTION,
+                "dataverse": DATAVERSE_CONNECTION,
+            },
+        }
+    ]
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="differs from the connection verified",
+    ):
+        runtime.run_runtime_operation(
+            state,
+            apply=False,
+            workday_connection_id=(
+                "99999999-9999-9999-9999-999999999999"
+            ),
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            **_discovery_dependencies(_records()),
+        )
+
+
+def test_runtime_apply_verifies_all_mutations(monkeypatch, capsys):
+    records = _records()
+    verified_hashes = []
+    recorded_stages = []
+
+    def updater(_url, _token, entity_set, record_id, data):
+        if entity_set == "connectionreferences":
+            for value in records["references"].values():
+                if value["connectionreferenceid"] == record_id:
+                    value.update(data)
+                    return True
+        if entity_set == "workflows":
+            for value in records["flows"].values():
+                if value["workflowid"] == record_id:
+                    value.update(data)
+                    return True
+        raise AssertionError((entity_set, record_id, data))
+
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
+
+    def authorization_runner(command, **_kwargs):
+        assert command[command.index("-PreferredUsername") + 1] == ("maker@contoso.com")
+        assert command[-2] == "-WorkflowId"
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Dataverse authorization is in place.",
+            stderr="",
+        )
+
+    result = runtime.run_runtime_operation(
+        _state(),
+        apply=True,
+        approved_hash="approved",
+        verifier=lambda plan, approved_hash: verified_hashes.append(
+            (plan["planHash"], approved_hash)
+        ),
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=_identity,
+        updater=updater,
+        authorization_runner=authorization_runner,
+        stage_recorder=lambda action, evidence: recorded_stages.append(
+            (action, evidence["outcome"])
+        ),
+        **_discovery_dependencies(records),
+    )
+
+    assert len(verified_hashes) == 1
+    assert len(verified_hashes[0][0]) == 64
+    assert verified_hashes[0][1] == "approved"
+    assert "plan" not in result
+    assert result["applied"]["verified"] is True
+    assert recorded_stages == [
+        ("connection-references-bound", "verified"),
+        ("runtime-flows-active", "verified"),
+        ("delegated-authorization-configured", "verified"),
+    ]
+    assert all(value["connectionid"] for value in records["references"].values())
+    assert all(
+        value["statecode"] == 1 and value["statuscode"] == 2
+        for value in records["flows"].values()
+    )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    expected_flows = set(records["flows"])
+    for flow_name in expected_flows:
+        assert f'[INFO] Running {script} for flow "{flow_name}".' in messages
+        assert (
+            f'[INFO] {script} completed for flow "{flow_name}"; '
+            "Dataverse authorization was verified."
+        ) in messages
+    assert messages.count("Dataverse authorization was verified.") == len(
+        expected_flows
+    )
+    assert "[ERROR]" not in messages
+
+
+def test_runtime_records_verified_stages_before_later_failure(monkeypatch, capsys):
+    records = _records()
+    recorded_stages = []
+
+    def updater(_url, _token, entity_set, record_id, data):
+        collections = {
+            "connectionreferences": records["references"].values(),
+            "workflows": records["flows"].values(),
+        }
+        if entity_set in collections:
+            id_key = (
+                "connectionreferenceid"
+                if entity_set == "connectionreferences"
+                else "workflowid"
+            )
+            for value in collections[entity_set]:
+                if value[id_key] == record_id:
+                    value.update(data)
+                    return True
+        raise AssertionError((entity_set, record_id, data))
+
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh.exe")
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="authorization failed",
+    ):
+        runtime.run_runtime_operation(
+            _state(),
+            apply=True,
+            approved_hash="approved",
+            verifier=lambda *_args: None,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            updater=updater,
+            authorization_runner=lambda *_args, **_kwargs: SimpleNamespace(
+                returncode=1,
+                stdout="[FAIL] denied",
+                stderr="",
+            ),
+            stage_recorder=lambda action, _evidence: recorded_stages.append(action),
+            **_discovery_dependencies(records),
+        )
+
+    assert recorded_stages == [
+        "connection-references-bound",
+        "runtime-flows-active",
+    ]
+    assert all(value["connectionid"] for value in records["references"].values())
+    assert all(
+        value["statecode"] == 1 and value["statuscode"] == 2
+        for value in records["flows"].values()
+    )
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for flow " in messages
+    assert f"[ERROR] {script} failed for flow " in messages
+    assert "explicit [FAIL] result" in messages
+    assert "Dataverse authorization was verified." not in messages
+
+
+def test_runtime_requires_completed_connection_phase():
+    state = _state()
+    state["phases"]["connections"]["status"] = "active"
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="connection sign-ins",
+    ):
+        runtime.run_runtime_operation(
+            state,
+            apply=True,
+            approved_hash="approved",
+            verifier=lambda *_args: None,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            **_discovery_dependencies(_records()),
+        )
+
+
+def test_runtime_plan_rejects_same_named_flow_outside_package():
+    records = _records()
+    first_flow = next(iter(records["flows"].values()))
+    original_id = first_flow["workflowid"]
+
+    def query(_url, _token, entity_set, _select, filter_expr=None):
+        if entity_set == "solutioncomponents":
+            return [
+                {"objectid": flow["workflowid"], "componenttype": 29}
+                for flow in records["flows"].values()
+                if flow["workflowid"] != original_id
+            ]
+        return _query_for(records)(
+            _url,
+            _token,
+            entity_set,
+            _select,
+            filter_expr,
+        )
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="outside the selected installed package",
+    ):
+        runtime.run_runtime_operation(
+            _state(),
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            query=query,
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=_pac_runner,
+        )
+
+
+def test_runtime_connection_inventory_timeout_is_structured():
+    def timed_out(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        raise __import__("subprocess").TimeoutExpired(command, 120)
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="within 2 minutes",
+    ):
+        runtime.run_runtime_operation(
+            _state(),
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            query=_query_for(_records()),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=timed_out,
+        )
+
+
+def test_runtime_ambiguity_reports_only_safe_display_names():
+    records = _records()
+    connections = [
+        {
+            "name": WORKDAY_CONNECTION,
+            "properties": {
+                "apiId": ("/providers/Microsoft.PowerApps/apis/shared_workdaysoap"),
+                "displayName": "Workday Primary",
+                "statuses": [{"status": "Connected"}],
+            },
+        },
+        {
+            "name": "raw-connection-id-that-must-not-appear",
+            "properties": {
+                "apiId": ("/providers/Microsoft.PowerApps/apis/shared_workdaysoap"),
+                "displayName": "Workday Secondary",
+                "statuses": [{"status": "Connected"}],
+            },
+        },
+        {
+            "name": DATAVERSE_CONNECTION,
+            "properties": {
+                "apiId": (
+                    "/providers/Microsoft.PowerApps/apis/"
+                    "shared_commondataserviceforapps"
+                ),
+                "displayName": "Dataverse",
+                "statuses": [{"status": "Connected"}],
+            },
+        },
+    ]
+
+    def runner(command, **_kwargs):
+        if command[1:3] == ["auth", "list"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout="[1] * maker@contoso.com Public\n",
+                stderr="",
+            )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=__import__("json").dumps({"value": connections}),
+            stderr="",
+        )
+
+    with pytest.raises(runtime.WorkdayConnectRuntimeError) as exc_info:
+        runtime.run_runtime_operation(
+            _state(),
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=_identity,
+            query=_query_for(records),
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=runner,
+        )
+
+    message = str(exc_info.value)
+    assert "Workday Primary" in message
+    assert "Workday Secondary" in message
+    assert WORKDAY_CONNECTION not in message
+    assert "raw-connection-id-that-must-not-appear" not in message
+
+
+def test_runtime_rejects_a_different_dataverse_identity():
+    import workday_connect_auth as auth
+
+    def mismatch(_token, *, preferred_username):
+        raise auth.WorkdayConnectIdentityError(
+            "Dataverse authentication used a different account from the "
+            "selected Environment Maker."
+        )
+
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="different account",
+    ):
+        runtime.run_runtime_operation(
+            _state(),
+            apply=False,
+            token_provider=lambda *_args, **_kwargs: "token",
+            identity_provider=mismatch,
+            **_discovery_dependencies(_records()),
+        )
+
+
+def test_runtime_authorization_timeout_is_structured(monkeypatch, capsys):
+    plan = {
+        "scope": {
+            "dataverseUrl": "https://contoso.crm.dynamics.com",
+            "makerUsername": "maker@contoso.com",
+        },
+        "delegatedAuthorization": {
+            "script": "alm/Enable-CosmosDAFlowAuthorization.ps1",
+            "botId": BOT_ID,
+            "workflowIds": ["workflow-id"],
+        },
+    }
+
+    def timed_out(command, **_kwargs):
+        raise __import__("subprocess").TimeoutExpired(command, 600)
+
+    monkeypatch.setattr(runtime.shutil, "which", lambda _name: "pwsh")
+    with pytest.raises(
+        runtime.WorkdayConnectRuntimeError,
+        match="within 10 minutes",
+    ):
+        runtime._run_authorization(
+            plan,
+            runner=timed_out,
+        )
+
+    messages = capsys.readouterr().err
+    script = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+    assert f"[INFO] Running {script} for workflow workflow-id." in messages
+    assert (
+        f"[ERROR] {script} failed for workflow workflow-id: "
+        "execution did not finish within 10 minutes."
+    ) in messages
+    assert "Dataverse authorization was verified." not in messages

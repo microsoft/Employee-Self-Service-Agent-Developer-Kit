@@ -109,8 +109,10 @@ dimension scores to drop — for example, deleting the only negative case drops
 Failure Mode Coverage, or removing a keyword input shifts Diversity.
 
 Invoke the validate subagent on **all remaining** `.mcs.yml` files in the
-affected category (not just the deleted file). After it returns, paste its
-full quality report output verbatim to the user (do not summarize). Then
+affected category (not just the deleted file). After it returns, paste the exact
+compact **Post-generation quality report** scorecard from
+`src/skills/evaluations/experience-contract.md` verbatim, without a separate
+preamble, table, filename callout, or summary. Then
 follow the quality gate + fix flow defined in
 `src/skills/evaluations/quality-fix-flow.md`. The “review step” referred to
 there is Step 6 of this skill.

@@ -2,17 +2,16 @@
 
 # Set Up Dev from a Known Prod Agent
 
-Use this setup path when server-backed inspection identifies the maker's
-Copilot Studio agent URL as Prod. It is a same-tenant, create-only path. Read
-`src/reference/native-alm-import.md` for the import contract and reuse
-`da-existing-dev.md` for attachment and completion handling. Do not generate
-HTTP code or an end-to-end setup script.
+Use this setup path when server-backed inspection identifies the maker's Microsoft Copilot Studio URL as Prod. It is a same-tenant, create-only path.
+Read `src/reference/native-alm-import.md` for the import contract and reuse `da-existing-dev.md` for attachment and completion handling. Do not generate HTTP code or an end-to-end setup script.
+
+Before this file runs its first source inspection, related-Dev validation, export, import, or attachment operation, complete the parent skill's **Confirm people and role availability for the selected path** checkpoint if it was not already completed for the current existing-agent path, environment, and Microsoft login. Use **Existing-agent setup** from `permission-guidance.md`. **Yes, the required people are present** does not replace the exact-agent access checks performed by those operations.
 
 ## Resume from durable evidence
 
 Use only canonical setup state and durable operation records read in this invocation. Do not infer an interrupted step from conversation history.
 
-When canonical setup state shows that attachment started, use its persisted identity and the resume rules in `da-existing-dev.md`; do not inspect, export, or import again.
+When canonical setup state shows that attachment started, check whether `.local/setup/alm-export/active.json` still records unresolved local package cleanup, then use the persisted agent identity and the resume rules in `da-existing-dev.md`; do not inspect, export, or import again. When the cleanup record remains, carry its warning and **Retry local package cleanup** action into every resumed detailed and durable handoff. That action runs only `python scripts/setup_alm_export.py cleanup`; it must not repeat import, attachment, or FlightCheck.
 
 When a matching import record reports `kind: success`, or reports that the service accepted the package but direct Dev verification did not finish, use a fresh [source inspection](#inspect-the-source) to obtain its current ALM-family identity. Rerun the import command with the same target, tenant, and recorded temporary package path:
 
@@ -36,7 +35,7 @@ python scripts/setup_alm_export.py cleanup
 ```
 
 Then attach the cached verified result through [Attach and complete](#attach-and-complete).
-If no matching create receipt exists, stop rather than exporting again.
+If no matching create receipt exists, rerun source inspection. When no directly validated related Dev exists, explain that a previous create cannot be resumed and ask whether to start a new export and create-only import. Continue only after explicit maker approval. The new import uses the ordinary create-only command without a client request UUID. If the service returns conflict, refresh the source realms, validate the exact related Dev agent and ALM family, and offer attachment through the existing conflict path.
 
 ## Inspect the source
 
@@ -67,7 +66,8 @@ python scripts/setup_existing_da.py validate-agent \
   --host "{SOURCE_VALIDATED_HOST}" \
   --ring "{SOURCE_RING}" \
   --api-version "{SOURCE_API_VERSION}" \
-  --agent-id "{RELATED_DEV_AGENT_ID}"
+  --agent-id "{RELATED_DEV_AGENT_ID}" \
+  --require-alm-family
 ```
 
 Use the related Dev only when validation succeeds and `DA_AGENT_VALIDATION_JSON:` returns the same `almFamilyId` as the Prod inspection. Mark **Establish an editable Dev agent** complete, then show:
@@ -85,6 +85,8 @@ Continue here only when no directly validated related Dev exists. Keep **Establi
 > verified Prod agent without changing Prod.
 
 Use the same Power Platform environment as the supplied Prod agent. If the maker explicitly requests another environment, ask for its environment URL and infer its environment ID and service ring. When the URL does not identify the ring, use **Resolve the service ring** in `src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when the environment ID is unclear. Then run:
+
+Before exporting or importing on this create-only branch, complete the parent checkpoint for the current fresh-agent path, resolved target environment, and Microsoft login. Use **Fresh-agent setup** from `permission-guidance.md`; the earlier existing-agent walkthrough does not establish creation access. Then run:
 
 ```text
 python scripts/setup_alm_export.py export \
@@ -106,7 +108,7 @@ Immediately before import, ask:
 > Create a new editable Dev agent in the same Power Platform environment as
 > the supplied Prod agent?
 
-Offer exactly:
+Present these standard choices:
 
 - **Create editable Dev agent**
 - **Go back**
@@ -132,9 +134,7 @@ handling its result, run:
 python scripts/setup_alm_export.py cleanup
 ```
 
-If cleanup fails, report the local cleanup error and stop; the durable import
-result remains the primary operation evidence and can be resumed after cleanup
-succeeds.
+If cleanup fails, preserve and report the local cleanup error. When the import result already proves `kind: success` and the exact Dev identity, continue to attachment and carry the unresolved cleanup warning into the detailed and durable handoffs. Present **Retry local package cleanup** as an additional action while the warning remains; that action runs only `python scripts/setup_alm_export.py cleanup`. Parse `DA_ALM_EXPORT_CLEANUP_JSON:` and remove the warning and action only after `status: removed` or `status: not-found`; otherwise preserve the reported cleanup error and `.local/setup/alm-export/active.json`. Do not repeat export, import, attachment, or FlightCheck. When the import result is not yet proven, retain it as the primary operation evidence and resolve cleanup before another export.
 
 When import returns `kind: conflict`, rerun the read-only source inspection command above with the same source values to refresh `/realms`.
 
@@ -146,22 +146,20 @@ inspection, show:
 > A related editable Dev agent now exists: **{agent display name}**. Use it for
 > this workspace?
 
-Offer exactly **Use related Dev agent** and **Go back**, and offer to attach it through [Attach and complete](#attach-and-complete). Continue only when the maker selects **Use related Dev agent**. For **Go back**, retain the selected account and durable operation evidence and return to the choice surface that supplied the Prod agent: the active-agent choice surface for a recorded local target, or **Do you already have an ESS agent in Copilot Studio?** for a supplied URL. Do not rerun export or import. If no related Dev is returned or the family cannot be proven, stop with the safe conflict outcome from `src/reference/native-alm-import.md`. Do not recover a collision or offer replacement.
+Present **Use related Dev agent** and **Go back** as the standard choices, and offer to attach it through [Attach and complete](#attach-and-complete). Continue only when the maker selects **Use related Dev agent**. For **Go back**, retain the selected account and durable operation evidence and return to the choice surface that supplied the Prod agent: the active-agent choice surface for a recorded local target, or **Do you already have an ESS agent in Copilot Studio?** for a supplied URL. Do not rerun export or import. If no related Dev is returned or the family cannot be proven, stop with the safe conflict outcome from `src/reference/native-alm-import.md`. Do not recover a collision or offer replacement.
 
-For any other result besides `kind: success`, stop and use the outcome guidance
-in `src/reference/native-alm-import.md`; do not retry or replace an agent.
+For any other result besides `kind: success`, use the outcome guidance in `src/reference/native-alm-import.md`. A create-only ambiguous or invalid-success result may proceed through read-only reconciliation and an explicitly approved new create request with a new client request UUID; let the service return conflict when a prior create actually succeeded. The ordinary import above and any safe-failure retry omit that UUID.
 
-If source inspection or export is unavailable or unauthorized, report the
-observed limitation and stop. A maker who already has the editable Dev agent
-can restart `/setup` with that Dev agent's Copilot Studio URL; do not infer the
-relationship from the failed Prod operation.
+If source inspection, related-Dev validation, or export is unauthorized, preserve the operation evidence and follow the exact-agent path under **Existing-agent discovery and access** in `permission-guidance.md`. Retain the selected Prod source while the maker chooses another account, agent, environment, or **Go back**. For another unavailable result, report the observed limitation and stop. A maker who already has the editable Dev agent can restart `/setup` with that Dev agent's Microsoft Copilot Studio URL; do not infer the relationship from the failed Prod operation.
 
 ## Attach and complete
 
 On a validated related-Dev path or successful import result, run the parent's
 selected-agent product-line reconciliation with
 `--known-native-schema "{RETURNED_SCHEMA_NAME}"` for the returned identity,
-then attach it:
+then attach it. Do not invoke `ensure-alm` for an established Prod-to-Dev
+relationship or successful import; those paths already prove the ALM-family
+relationship:
 
 ```text
 python scripts/setup_existing_da.py attach \
@@ -175,4 +173,4 @@ python scripts/setup_existing_da.py attach \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-The earlier source inspection and import or related-Dev validation own ALM-family proof. Attachment validates the returned Dev route and component schema without requiring published Dev configuration. When attachment reports `connectionStatus: workspace-ready`, run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Complete runtime readiness only after its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report there, including when `connectReady` is false. Use **Existing Prod agent; related Dev reused** as the starting point for a validated related-Dev path and **Existing Prod agent; new Dev created** after a successful create-only import. Do not claim Prod changed, Dev was published, or promotion was configured. Do not add cross-tenant support, replacement, collision recovery, export receipts, or telemetry.
+The earlier source inspection and import or related-Dev validation own ALM-family proof. Attachment validates the returned Dev route and component schema without requiring published Dev configuration. When attachment reports `connectionStatus: workspace-ready`, run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Complete runtime readiness only after its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report there, including when `connectReady` is false. Use **Existing Prod agent; related Dev reused** as the starting point for a validated related-Dev path and **Existing Prod agent; new Dev created** after a successful create-only import. When local package cleanup remains unresolved, append its warning and **Retry local package cleanup** action after every detailed handoff and pass that block's body to the parent's durable completion snapshot. Do not claim Prod changed, Dev was published, or promotion was configured. Do not add cross-tenant support, replacement, collision recovery, export receipts, or telemetry.

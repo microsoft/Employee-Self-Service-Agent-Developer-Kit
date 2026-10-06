@@ -201,3 +201,24 @@ def test_cleanup_refuses_when_workspace_changed_after_promotion(tmp_path):
         assert "staging set changed" in str(exc)
     else:
         raise AssertionError("Expected changed workspace staging to be kept")
+
+
+def test_invalid_method_cannot_replace_existing_destination(tmp_path):
+    import pytest
+
+    source = tmp_path / "workspace" / "evaluations" / "compensation"
+    destination = tmp_path / "agent" / "evaluations" / "compensation"
+    _write_set(source)
+    _write_set(destination)
+    parent = source / "compensation.mcs.yml"
+    parent.write_text(
+        "kind: EvaluationSet\ngraders:\n  - kind: GeneralQualityGrader\n",
+        encoding="utf-8",
+    )
+    before = {path.name: path.read_bytes() for path in destination.iterdir()}
+    with pytest.raises(evaluation_promotion.EvaluationPromotionError, match="Compare Meaning only"):
+        evaluation_promotion.promote_workspace_set(
+            source.parent, tmp_path / "agent", "compensation", replace=True
+        )
+    assert {path.name: path.read_bytes() for path in destination.iterdir()} == before
+    assert source.is_dir()

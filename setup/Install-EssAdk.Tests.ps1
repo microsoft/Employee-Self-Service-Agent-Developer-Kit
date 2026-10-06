@@ -473,7 +473,60 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
     # Maker is now the fall-through `else` branch of the launch block (prompt
     # is resolved to maker|developer before any launch code runs), so we
     # assert the maker log copy is present instead of the explicit == check.
-    if ($macInstaller -notmatch 'ESS Maker Profile will run /setup') { throw 'maker launch branch (fall-through else) missing' }
+    # In the guided-rail UX maker mode does not auto-run /setup; it opens the
+    # guided view and the user clicks "Start set up", so we assert that copy.
+    if ($macInstaller -notmatch 'guided Agent Developer Kit view') { throw 'maker launch branch (fall-through else) missing' }
+}
+
+Test 'Install-EssAdk.ps1 confirmation-gates closing running VS Code by PID' {
+    if ($src -notmatch 'Get-Process\s+-Name\s+''Code'',\s*''Code-insiders''') {
+        throw 'Windows installer must enumerate running VS Code processes'
+    }
+    if ($src -notmatch 'Read-Host\s+''(?:Close all running VS Code instances|VS Code needs to restart)') {
+        throw 'Windows installer must ask before closing VS Code'
+    }
+    if ($src -notmatch 'Stop-Process\s+-Id\s+\$current\.Id') {
+        throw 'Windows installer must stop specific VS Code PIDs, not use name-based termination'
+    }
+    if ($src -notmatch 'Confirm-StopRunningCode') {
+        throw 'Windows installer must invoke the VS Code shutdown helper'
+    }
+    if ($src -notmatch 'Get-Process\s+-Id\s+\$process\.Id\s+-ErrorAction\s+SilentlyContinue') {
+        throw 'Windows installer must re-query each VS Code PID before stopping it'
+    }
+    if ($src -notmatch 'Only report a failure if the PID is still alive') {
+        throw 'Windows installer must suppress expected stale-PID shutdown races'
+    }
+}
+
+Test 'bundled ESS Maker Profile is force-reinstalled even when its version is unchanged' {
+    if ($src -notmatch '--install-extension\s+\$vsix\.FullName\s+--force') {
+        throw 'Windows installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($macInstaller -notmatch '--install-extension\s+"\$MAKER_VSIX"\s+--force') {
+        throw 'macOS installer must force-reinstall the bundled VSIX so same-version branch payload changes are picked up'
+    }
+    if ($src -match 'makerProfileCurrent|already installed\) - \$modeLabel') {
+        throw 'Windows installer must not skip the bundled VSIX solely because its version matches'
+    }
+    if ($macInstaller -match 'MAKER_VERSION.*already installed') {
+        throw 'macOS installer must not skip the bundled VSIX solely because its version matches'
+    }
+}
+
+Test 'install-ess-adk.sh confirmation-gates graceful VS Code quit before launch' {
+    if ($macInstaller -notmatch 'pgrep\s+-f\s+''/Visual Studio Code\.app/''') {
+        throw 'macOS installer must detect running VS Code'
+    }
+    if ($macInstaller -notmatch 'read\s+-r\s+-p\s+.*Close all running VS Code instances') {
+        throw 'macOS installer must ask before closing VS Code'
+    }
+    if ($macInstaller -notmatch 'osascript\s+-e\s+''tell application "Visual Studio Code" to quit''') {
+        throw 'macOS installer must request a graceful VS Code quit'
+    }
+    if ($macInstaller -notmatch 'close_running_vscode') {
+        throw 'macOS installer must invoke the VS Code shutdown helper'
+    }
 }
 
 Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {
@@ -503,7 +556,7 @@ Test 'bootstrap-dev-mac.sh exists and pins INSTALL_MODE=developer' {
 
 Test 'bootstrap-lite-mac.sh pins INSTALL_MODE=maker (back-compat shim)' {
     $liteMacSrc = Get-Content (Join-Path $PSScriptRoot 'bootstrap-lite-mac.sh') -Raw
-    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the chat-first experience' }
+    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the guided rail experience' }
 }
 
 foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1', 'bootstrap-dev.ps1')) {
@@ -558,6 +611,216 @@ Test 'bash emitter uses a short send timeout and trips a circuit breaker on fail
     $shSrc = Get-Content $shEmitter -Raw
     if ($shSrc -notmatch 'curl -fsS -m 3') { throw 'bash emitter should use a short (3s) send timeout' }
     if ($shSrc -notmatch 'ESS_TEL_READY=0') { throw 'bash emitter missing circuit breaker' }
+}
+Test 'Install-EssAdk.ps1 skips the Maker/Developer prompt in FlightCheck-only mode' {
+    # Regression: the mode prompt only affects the VS Code launch, but VS Code
+    # is skipped entirely in FlightCheckOnly. Prompting would be confusing UX
+    # in the "just run FlightCheck" bootstrap flow.
+    if ($src -notmatch "FlightCheckOnly\s+-and\s+\`$InstallMode\s+-eq\s+'prompt'\s*\)\s*\{\s*\`$InstallMode\s*=\s*'maker'\s*\}") {
+        throw "FlightCheckOnly must coerce InstallMode from 'prompt' to 'maker' before the interactive prompt"
+    }
+}
+Test 'install-ess-adk.sh skips the Maker/Developer prompt in FlightCheck-only mode' {
+    if ($macInstaller -notmatch '(?s)"\$FLIGHTCHECK_ONLY"\s*==\s*"true"\s*&&\s*"\$INSTALL_MODE"\s*==\s*"prompt".*?INSTALL_MODE="maker"') {
+        throw "FLIGHTCHECK_ONLY must coerce INSTALL_MODE from 'prompt' to 'maker' before the interactive prompt"
+    }
+}
+Test 'bootstrap-flightcheck.ps1 derives SourceBaseUrl from -Branch (no hardcoded main)' {
+    # Regression: bootstrap-flightcheck.ps1 defaulted SourceBaseUrl to a
+    # main-pinned URL, so passing -Branch <feature> downloaded Install-EssAdk.ps1
+    # from main and never exercised the branch under test. Match the other
+    # bootstraps (bootstrap.ps1, bootstrap-lite.ps1, bootstrap-dev.ps1) which
+    # derive SourceBaseUrl from $Branch by default.
+    $bsPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+    $bsSrc = Get-Content $bsPath -Raw
+    if ($bsSrc -match "\[string\]\s*\`$SourceBaseUrl\s*=\s*'https://raw\.githubusercontent\.com/.+/main/setup'") {
+        throw "bootstrap-flightcheck.ps1 must not hardcode SourceBaseUrl default to main/setup"
+    }
+    if ($bsSrc -notmatch 'if\s*\(\s*-not\s+\$SourceBaseUrl\s*\)') {
+        throw "bootstrap-flightcheck.ps1 must fall back to a branch-derived SourceBaseUrl when the caller does not pass one"
+    }
+    if ($bsSrc -notmatch '/\$Branch/setup') {
+        throw "bootstrap-flightcheck.ps1 branch-derived SourceBaseUrl fallback should interpolate `$Branch"
+    }
+}
+
+# ---------------------------------------------------------------------------
+# JSON dump suppression - regression for the "wall of JSON after env list" bug
+# reported by Senthil on 2026-09-29 (ADO 7965470).
+#
+# discover.py emits ENVIRONMENT_LIST_JSON: / AGENT_DISCOVERY_JSON: lines
+# on stdout for programmatic consumers (setup skills parse them). When the
+# installer echoes discover.py output verbatim to the user, the maker sees an
+# unreadable single-line JSON blob right after the environment/agent tables.
+# Both echo sites must filter those marker lines while still passing the
+# human-readable table through.
+# ---------------------------------------------------------------------------
+Write-Host "`nJSON dump suppression (Install-EssAdk.ps1 + install-ess-adk.sh):" -ForegroundColor Cyan
+
+Test 'Install-EssAdk.ps1 filters ENVIRONMENT_LIST_JSON from user-visible env-list echo' {
+    # Both PS echo sites (env-list and agent-list) must filter the marker lines.
+    $filterHits = [regex]::Matches($src, "if\s*\(\s*\`$line\s+-match\s+'\^\(ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON\):'\s*\)\s*\{\s*continue\s*\}").Count
+    if ($filterHits -lt 2) {
+        throw "expected 2 marker-line filters (env-list + agent-list echoes), found $filterHits"
+    }
+}
+
+Test 'Install-EssAdk.ps1 filters AGENT_DISCOVERY_JSON from user-visible agent-list echo' {
+    # Agent-list echo must not naively call Write-Host on every line.
+    if ($src -match "\`$agentListArgs\s*=[^\n]*\n[^\n]*Invoke-Native[^\n]*\n\s*foreach\s*\(\s*\`$line\s+in\s+\`$output\s*\)\s*\{\s*Write-Host\s+\`$line\s*\}") {
+        throw 'agent-list echo still writes every discover.py line unfiltered'
+    }
+}
+
+Test 'install-ess-adk.sh filters JSON marker lines from both env-list and agent-list echo' {
+    if ($macInstaller -notmatch "ENV_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
+        throw 'env-list echo in install-ess-adk.sh does not filter JSON marker lines'
+    }
+    if ($macInstaller -notmatch "AGENT_OUTPUT`".*grep -Ev.*ENVIRONMENT_LIST_JSON\|AGENT_DISCOVERY_JSON\|SELECTED_ENV_JSON\|SELECTED_AGENT_JSON") {
+        throw 'agent-list echo in install-ess-adk.sh does not filter JSON marker lines'
+    }
+}
+
+Test 'PS filter regex behaviorally drops all four discover.py marker lines and keeps human rows' {
+    # Behavioral test: exercise the actual filter pattern against representative
+    # discover.py output. Guards against the class of bug that shipped as
+    # `ESS_AGENT_DISCOVERY_JSON` (source-only tests passed while the real output
+    # kept leaking) - this test only depends on the regex extracted from
+    # Install-EssAdk.ps1 and the observed marker names, not on any spelling
+    # inside the test file itself.
+    $filterRegex = '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):'
+    if ($src -notmatch [regex]::Escape($filterRegex)) {
+        throw "Install-EssAdk.ps1 no longer contains the expected filter regex literal; update this test if the marker list intentionally changed"
+    }
+    $sampleLines = @(
+        'ENVIRONMENT_LIST_JSON:[{"id":"env1","name":"Contoso"}]',
+        'AGENT_DISCOVERY_JSON:[{"botid":"9b28","name":"da"}]',
+        'SELECTED_ENV_JSON:{"id":"env1"}',
+        'SELECTED_AGENT_JSON:{"botid":"9b28"}',
+        'Found 4 agent(s):',
+        '  Contoso  |  msdyn_copilotforemployeeselfservicehr',
+        'Page 1: 4 records -> Total: 4'
+    )
+    $kept = @($sampleLines | Where-Object { $_ -notmatch $filterRegex })
+    $leaked = @($sampleLines | Where-Object { $_ -match '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' } | Where-Object { $_ -notmatch $filterRegex })
+    if ($leaked.Count -ne 0) {
+        throw "filter let $($leaked.Count) marker line(s) through: $($leaked -join '; ')"
+    }
+    if ($kept.Count -ne 3) {
+        throw "filter dropped human-readable rows too aggressively; kept $($kept.Count) of 3 expected: $($kept -join ' / ')"
+    }
+}
+
+Test 'bash filter pattern behaviorally drops all four discover.py marker lines and keeps human rows' {
+    # Same behavioral guard for install-ess-adk.sh: extract the exact grep -Ev
+    # pattern from the source and exercise it against representative output.
+    $bashPattern = '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):'
+    if ($macInstaller -notmatch [regex]::Escape($bashPattern)) {
+        throw "install-ess-adk.sh no longer contains the expected grep -Ev pattern; update this test if the marker list intentionally changed"
+    }
+    $sampleLines = @(
+        'ENVIRONMENT_LIST_JSON:[{"id":"env1"}]',
+        'AGENT_DISCOVERY_JSON:[{"botid":"9b28"}]',
+        'SELECTED_ENV_JSON:{"id":"env1"}',
+        'SELECTED_AGENT_JSON:{"botid":"9b28"}',
+        'Found 4 agent(s):',
+        'human row'
+    )
+    $kept = @($sampleLines | Where-Object { $_ -notmatch $bashPattern })
+    if ($kept.Count -ne 2) {
+        throw "bash-equivalent filter kept $($kept.Count) of 2 human lines: $($kept -join ' / ')"
+    }
+    foreach ($line in $sampleLines[0..3]) {
+        if ($line -notmatch $bashPattern) {
+            throw "bash-equivalent filter failed to match marker line: $line"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# FC-only installer must pass --ring on every FlightCheck invocation.
+# Without --ring, flightcheck/cli.py --scope full aborts with
+# "The Power Platform environment ring is unavailable" because the config
+# authored by the FC-only installer only has dataverseEndpoint (no
+# powerPlatformApiEndpoint from which the ring could be inferred). The
+# FC-only installer uses BAP prod (api.bap.microsoft.com) for env discovery,
+# so prod is the default ring; PMs can override to preprod/test via -Ring
+# / --ring.
+# ---------------------------------------------------------------------------
+
+Test 'Install-EssAdk.ps1 accepts a -Ring parameter (prod|preprod|test) defaulting to prod' {
+    if ($src -notmatch "ValidateSet\('prod',\s*'preprod',\s*'test'\)\]\s*\r?\n\s*\[string\]\s*\`$Ring\s*=\s*'prod'") {
+        throw "Install-EssAdk.ps1 must declare -Ring with ValidateSet('prod','preprod','test') defaulting to 'prod'"
+    }
+}
+
+Test 'Install-EssAdk.ps1 forwards $Ring on every FC-only FlightCheck invocation' {
+    $invocations = [regex]::Matches($src, 'scripts/flightcheck/cli\.py[^\r\n]*')
+    if ($invocations.Count -lt 3) {
+        throw "expected at least 3 FlightCheck invocations in Install-EssAdk.ps1, found $($invocations.Count)"
+    }
+    foreach ($m in $invocations) {
+        if ($m.Value -notmatch '--ring\s+\$Ring') {
+            throw "FlightCheck invocation must forward `$Ring, not a hardcoded ring literal: $($m.Value)"
+        }
+    }
+}
+
+Test 'Install-EssAdk.ps1 lowercases $Ring before forwarding (ValidateSet is case-insensitive; cli.py argparse choices are not)' {
+    if ($src -notmatch '\$Ring\s*=\s*\$Ring\.ToLowerInvariant\(\)') {
+        throw "Install-EssAdk.ps1 must normalize `$Ring to lowercase before forwarding, otherwise `-Ring Prod` binds to the PS ValidateSet but is rejected by cli.py's case-sensitive argparse choices"
+    }
+}
+
+Test 'bootstrap-flightcheck-mac.sh validates --ring at bootstrap (fail fast, mirrors Windows ValidateSet behavior)' {
+    $macBootstrap = Get-Content (Join-Path $PSScriptRoot 'bootstrap-flightcheck-mac.sh') -Raw
+    if ($macBootstrap -notmatch '(?s)case\s+"\$RING_ARG"\s+in[^)]*prod\|preprod\|test[^\n]*\n\s*\*\)') {
+        throw "bootstrap-flightcheck-mac.sh must validate --ring against prod|preprod|test at bootstrap time (matches Windows -Ring ValidateSet fail-fast behavior)"
+    }
+}
+
+
+Test 'install-ess-adk.sh accepts a RING env var (prod|preprod|test) defaulting to prod' {
+    if ($macInstaller -notmatch 'RING="\$\{RING:-prod\}"') {
+        throw "install-ess-adk.sh must default RING to prod via `${RING:-prod}"
+    }
+    if ($macInstaller -notmatch '(?s)case\s+"\$RING"\s+in[^)]*prod\|preprod\|test') {
+        throw "install-ess-adk.sh must validate RING against prod|preprod|test"
+    }
+}
+
+Test 'install-ess-adk.sh only validates RING in FlightCheck-only mode (does not regress regular installs)' {
+    if ($macInstaller -notmatch '(?s)if\s*\[\[\s*"\$FLIGHTCHECK_ONLY"\s*==\s*"true"\s*\]\]\s*;\s*then\s*case\s+"\$RING"\s+in.*?esac\s*\nfi') {
+        throw "install-ess-adk.sh must gate the RING validation case on FLIGHTCHECK_ONLY == true so that stray RING env vars do not break regular installs"
+    }
+}
+
+Test 'install-ess-adk.sh forwards $RING on the FC-only FlightCheck invocation' {
+    if ($macInstaller -notmatch 'scripts/flightcheck/cli\.py[^\r\n]*--ring\s+"\$RING"') {
+        throw '"scripts/flightcheck/cli.py" call in install-ess-adk.sh must forward $RING, not a hardcoded ring literal'
+    }
+}
+
+Test 'bootstrap-flightcheck.ps1 accepts -Ring and forwards it to Install-EssAdk.ps1' {
+    $bsPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck.ps1'
+    $bsSrc = Get-Content $bsPath -Raw
+    if ($bsSrc -notmatch "ValidateSet\('prod',\s*'preprod',\s*'test'\)\]\s*\r?\n\s*\[string\]\s*\`$Ring\s*=\s*'prod'") {
+        throw "bootstrap-flightcheck.ps1 must declare -Ring with ValidateSet('prod','preprod','test') defaulting to 'prod'"
+    }
+    if ($bsSrc -notmatch 'Ring\s*=\s*\$Ring') {
+        throw "bootstrap-flightcheck.ps1 must forward -Ring in the installer args hashtable"
+    }
+}
+
+Test 'bootstrap-flightcheck-mac.sh accepts --ring and exports RING for install-ess-adk.sh' {
+    $bsMacPath = Join-Path $PSScriptRoot 'bootstrap-flightcheck-mac.sh'
+    $bsMacSrc = Get-Content $bsMacPath -Raw
+    if ($bsMacSrc -notmatch '--ring\)\s+RING_ARG="\$2"') {
+        throw "bootstrap-flightcheck-mac.sh must accept --ring <value>"
+    }
+    if ($bsMacSrc -notmatch 'export\s+RING="\$RING_ARG"') {
+        throw "bootstrap-flightcheck-mac.sh must export RING so install-ess-adk.sh sees it"
+    }
 }
 
 # Summary

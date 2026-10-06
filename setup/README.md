@@ -14,11 +14,11 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, the installer asks in the terminal which experience you want — **Maker** (chat-first, big-button layout — recommended) or **Developer** (default VS Code view with Copilot Chat in the side panel). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
+Once complete, the installer asks in the terminal which experience you want — **Maker** (guided rail layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, follow the **Getting started** walkthrough — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
-## Maker Mode (Chat-First Layout) and Developer Mode
+## Maker Mode (Guided Rail Layout) and Developer Mode
 
 The one-shot installer (`bootstrap.ps1` / `bootstrap-mac.sh`) asks you to choose between **Maker** and **Developer** in the terminal before VS Code launches, so mode selection is a one-line choice from the main installer — no separate command needed. Maker was previously called "Lite" and Developer was previously called "Standard"; the old names still work for pinned scripts and previously-installed users.
 
@@ -27,7 +27,7 @@ For scripts and docs that need to pin the choice up front (bypassing the termina
 **Windows** (PowerShell):
 
 ```powershell
-# Maker mode (chat-first)
+# Maker mode (guided rail)
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 
 # Developer mode (default VS Code layout)
@@ -37,7 +37,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 **macOS** (Terminal):
 
 ```bash
-# Maker mode (chat-first)
+# Maker mode (guided rail)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 
 # Developer mode (default VS Code layout)
@@ -47,11 +47,11 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 > `bootstrap-lite.ps1` / `bootstrap-lite-mac.sh` are kept at their original URLs for back-compat with existing docs and links, and now pin **Maker** mode (the renamed Lite mode).
 
 Maker mode is the same install as Developer mode plus the **ESS Maker Profile** extension applying:
-- A chat-only layout with all developer surfaces hidden
-- Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
-- A built-in tutorial explaining each button
+- A guided layout: a focused activity-bar rail with the walkthrough and chat, developer surfaces tucked away
+- A **Customization** rail listing common tasks (Customize landing page, Create a topic, Update a topic, Scan for issues, Run a flightcheck, Generate tests, Push to Copilot Studio)
+- A built-in **Getting started** walkthrough explaining each step
 
-You can switch between Maker mode and Developer mode at any time using the toggle buttons in the Quick Actions panel.
+Run `/setup` yourself in Copilot Chat when you're ready — it isn't triggered automatically. You can restore the default VS Code layout at any time with **ESS Maker: Restore Developer Layout** from the Command Palette.
 
 ## GitHub Codespaces (no local install)
 
@@ -110,6 +110,24 @@ Re-run the same command — it will ask if you want to reconfigure:
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
+### Targeting a non-prod ring
+
+The FlightCheck-only installer targets the Power Platform **prod** service ring by default (where customer environments live). To validate a **preprod** or **test** environment, pass `-Ring` / `--ring`:
+
+**Windows** (PowerShell):
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -Ring preprod
+```
+
+**macOS** (Terminal):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --ring preprod
+```
+
+Accepted values: `prod`, `preprod`, `test`.
+
 ### Running FlightCheck again (after initial setup)
 
 Once you've run the installer once, you can re-run FlightCheck directly without going through setup again. The HTML report opens in your default browser when the run finishes — pass `--no-open` to skip (useful for CI / headless / SSH sessions).
@@ -133,11 +151,11 @@ cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
 | `Install-EssAdk.ps1` | Windows orchestrator. Installs toolchain via winget, pip dependencies, clones repo, installs extensions, launches VS Code. With `-FlightCheckOnly`, installs minimal toolchain and runs FlightCheck. |
 | `install-ess-adk.sh` | macOS orchestrator. Same as above but uses Homebrew. Set `FLIGHTCHECK_ONLY=true` for FlightCheck-only mode. |
 | `bootstrap.ps1` | Windows one-liner entry point (asks Maker vs Developer in the terminal before VS Code launches). |
-| `bootstrap-lite.ps1` | Windows one-liner entry point (Maker mode - chat-first layout; previously named "Lite"). |
+| `bootstrap-lite.ps1` | Windows one-liner entry point (Maker mode - guided rail layout; previously named "Lite"). |
 | `bootstrap-dev.ps1` | Windows one-liner entry point (Developer mode - default VS Code layout; previously named "Standard"). |
 | `bootstrap-flightcheck.ps1` | Windows one-liner entry point (FlightCheck only). |
 | `bootstrap-mac.sh` | macOS one-liner entry point (asks Maker vs Developer in the terminal before VS Code launches). |
-| `bootstrap-lite-mac.sh` | macOS one-liner entry point (Maker mode - chat-first layout; previously named "Lite"). |
+| `bootstrap-lite-mac.sh` | macOS one-liner entry point (Maker mode - guided rail layout; previously named "Lite"). |
 | `bootstrap-dev-mac.sh` | macOS one-liner entry point (Developer mode - default VS Code layout; previously named "Standard"). |
 | `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure` (optional Windows path). |
@@ -233,7 +251,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipEx
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipClone           # skip git clone (toolchain only)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLaunch          # don't open VS Code at the end
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -InstallMode maker     # pin Maker mode (chat-first)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -InstallMode maker     # pin Maker mode (guided rail)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -InstallMode developer # pin Developer mode (default VS Code layout)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipMakerProfile      # legacy alias: coerced to Developer mode
 ```
@@ -248,7 +266,7 @@ From this folder:
 # Full installer (asks Maker or Developer in the terminal before VS Code launches):
 bash install-ess-adk.sh
 
-# Pin Maker mode (chat-first layout):
+# Pin Maker mode (guided rail layout):
 INSTALL_MODE=maker bash install-ess-adk.sh
 
 # Pin Developer mode (default VS Code layout):

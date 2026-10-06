@@ -1,93 +1,86 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# DA-5 — Validate Workday Readiness
 
-Role: **Environment Maker** with a signed-in Workday test user. This step
-re-confirms the extension package, reviews every setup area, and requires a
-real Workday scenario before the environment is marked ready. It owns
-master-checklist row **DA5.1**.
+# Phase 6 - Maker validation
 
-Every **Message** block is the exact text to show the user. Copy it verbatim. Do
-not rephrase, add commentary, or tell the user what tools you are calling or what
-files you are reading.
+This is the final guided Workday setup phase. It ends after the maker
+successfully validates one enabled read-only Workday scenario in the Copilot
+Studio Test pane. Publishing, deployment, and non-maker employee validation
+are next steps outside this skill lifecycle.
 
----
+The skill cannot perform the Test pane interaction on the maker's behalf. The
+skill cannot publish or deploy the agent; those are post-skill next steps.
 
-## DA5.1 — Validate a signed-in Workday scenario
+## Run the maker smoke test
 
-**Re-confirm the extension package.**
+Ask the maker to:
 
+1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
+2. open a new Test pane conversation without publishing the agent;
+3. use the maker's configured Workday connection to run one enabled read-only
+   scenario, such as checking a vacation balance; and
+4. confirm that the agent identifies the maker's Workday user and returns real
+   Workday data without an unexpected repeated sign-in.
+
+Use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "Maker smoke test",
+    "question": "Did the Workday scenario succeed in the Copilot Studio Test pane?",
+    "options": [
+      { "label": "Yes, the Test pane scenario passed" },
+      { "label": "No, the Test pane scenario needs remediation" }
+    ],
+    "allowFreeformInput": false
+  }
+]
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001 --connect-config ".local/connect/workday-da/config.json"
+
+Leave the selection unset.
+Do not mark the passing option as recommended.
+
+If the maker selects **No**, stop before publishing. Ask what failed, show only
+the remediation relevant to that observed surface, and repeat the maker smoke
+test after the issue is corrected. Do not start an employee evidence window or
+ask a non-maker employee to test.
+
+If the maker selects **Yes**, write this safe evidence to
+`.local/connect/workday-da/maker-validation.json` using a structured file-write
+tool:
+
+```json
+{
+  "testUserCategory": "maker",
+  "timestamp": "{timezone-qualified current timestamp}",
+  "outcome": "passed"
+}
 ```
 
-Show the result per [`shared/checklist-updater.md`](shared/checklist-updater.md)
-§U.0.
+Then run:
 
-If the current result is not `PASSED`, do not continue from the persisted
-DA1.1 state:
+```powershell
+python scripts/workday_connect.py record-validation --evidence-file ".local\connect\workday-da\maker-validation.json"
+```
 
-- `FAILED` → update DA1.1 with `GATE="prog"`,
-  `CHECKPOINT_RESULT="FAILED"` so it becomes `blocked`.
-- `WARNING` / `SKIPPED` → update DA1.1 with `GATE="prog"` and that result so
-  it becomes `in-progress`.
+The controller marks the guided lifecycle complete immediately. It also clears
+any earlier pending validation attempt. Do not run `begin-employee-test`, wait
+for Power Automate run-history evidence, rerun final runtime correlation, or
+ask the maker or employee to repeat a successful scenario.
 
-Tell the user the package must be restored or reverified, then return to the
-orchestrator. Do not complete DA5.1.
+## Finish with post-skill next steps
 
-**Summarize the Entra and tenant configuration recorded so far.** Read
-`.local/connect/workday-da/config.json` and render what's known:
+After the controller returns `lifecycleComplete: true`, tell the maker:
 
-**Message:**
+> Workday setup is complete, and the maker Test pane scenario passed.
+>
+> **Next steps:**
+>
+> 1. Publish and deploy the agent when ready.
+> 2. Have each non-maker employee establish their own Workday connections in
+>    Microsoft 365 Chat.
+> 3. Validate an enabled Workday scenario with the published agent.
 
-Here's where your Workday connection stands:
-
-| Area | Status |
-| --- | --- |
-| Workday extension package | {✅/❌ from WD-DA-PKG-001} |
-| Workday single sign-on (Entra) | {✅ if DA2.1–DA2.7 are all `done`, else "in progress"} |
-| Workday tenant configuration | {✅ if DA3.1–DA3.4 are all `done`, else "in progress"} |
-| Power Platform and agent integration | {✅ if DA4.1–DA4.8 are all `done`, else "in progress"} |
-
-**End message.**
-
-If any of DA1.1, DA2.1–DA2.7, DA3.1–DA3.4, or DA4.1–DA4.8 is not `done`,
-tell the user which step to finish and stop here — do not present the
-connection as ready.
-
-**Message:**
-
-The configuration checklist is complete. Now validate the actual employee
-path:
-
-1. Publish the ESS HR agent.
-2. Use a test employee who is assigned to the Workday Entra application and
-   has valid Workday access.
-3. Start a new conversation so stale user-flow state is not reused.
-4. Run one enabled Workday scenario, such as checking a vacation balance.
-5. Confirm the agent identifies the signed-in employee and returns real
-   Workday data without asking for another unexpected sign-in.
-
-Did the scenario complete successfully?
-
-**End message.**
-
-On success, record the scenario, test user category (never credentials), time,
-and result as evidence. First merge provider `status: "ready"` into the
-provider config, then update **DA5.1** with `GATE="manual"`, `ACK=true`. This
-write order ensures an interruption cannot leave a completed row while the
-public readiness signal is missing. Return to the orchestrator.
-
-On failure, leave DA5.1 `in-progress`. Run
-`python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`
-to recheck the environment and DA package. That scope does not prove the live
-connection, flow authorization, employee-context wiring, or topic execution,
-so also revisit the DA4 connection, flow, authorization, topic, and firewall
-evidence. If connection parameters recently changed, reconnect the Workday
-connection and retry with a fresh conversation or test user.
-
----
-
-## Done
-
-Return control to the orchestrator (`SKILL.md`) — every configuration row
-should now be `done`.
+Do not wait for those results, record them as lifecycle evidence, or keep the
+Workday skill open. They are deployment and adoption validation outside this
+guided setup lifecycle.

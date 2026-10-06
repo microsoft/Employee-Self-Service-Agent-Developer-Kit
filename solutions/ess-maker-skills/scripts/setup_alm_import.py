@@ -44,6 +44,7 @@ from setup_existing_da import (
 IMPORT_RECORDS = Path(".local/setup/alm-import")
 MAX_MANIFEST_BYTES = 1024 * 1024
 SAFE_RETRY_STATUSES = frozenset({"pre-dispatch-failure", "rejected"})
+CREATE_RECOVERY_STATUSES = frozenset({"ambiguous", "invalid-success"})
 
 
 class AlmImportSetupError(RuntimeError):
@@ -154,6 +155,7 @@ def _operation_identity(
     package: AlmPackageInfo,
     replacement: dict[str, Any] | None,
     expected_alm_family_id: str | None,
+    client_request_id: str | None,
 ) -> dict[str, Any]:
     identity = {
         "environmentId": _normalize_environment_id(environment_id),
@@ -174,6 +176,8 @@ def _operation_identity(
     }
     if expected_alm_family_id is not None:
         identity["expectedAlmFamilyId"] = expected_alm_family_id
+    if client_request_id is not None:
+        identity["clientRequestId"] = client_request_id
     return identity
 
 
@@ -247,6 +251,48 @@ def _load_import_records(
     return records
 
 
+def _validate_create_recovery_request(
+    kit_root: Path,
+    identity: dict[str, Any],
+) -> None:
+    """Require one eligible base receipt before a distinct create recovery."""
+    if "clientRequestId" not in identity:
+        return
+
+    base_identity = dict(identity)
+    base_identity.pop("clientRequestId")
+    base_path = _record_path(kit_root, base_identity)
+    if not base_path.exists():
+        raise AlmImportSetupError(
+            "A distinct create recovery request requires a matching "
+            "ambiguous or invalid-success create receipt."
+        )
+    base_record = _read_record(base_path, base_identity)
+    if base_record.get("status") not in CREATE_RECOVERY_STATUSES:
+        raise AlmImportSetupError(
+            "A distinct create recovery request is not allowed for this "
+            "completed create receipt."
+        )
+
+    for _record_path_value, record in _load_import_records(
+        kit_root / IMPORT_RECORDS
+    ):
+        prior_identity = record.get("input")
+        if (
+            not isinstance(prior_identity, dict)
+            or "clientRequestId" not in prior_identity
+            or prior_identity == identity
+        ):
+            continue
+        prior_base_identity = dict(prior_identity)
+        prior_base_identity.pop("clientRequestId")
+        if prior_base_identity == base_identity:
+            raise AlmImportSetupError(
+                "A distinct create recovery request already exists for this "
+                "create receipt."
+            )
+
+
 def _resume_create_after_cleanup(
     client: AgentBuilderClient,
     *,
@@ -310,6 +356,7 @@ def _resume_create_after_cleanup(
                 client,
                 environment_id=environment_id,
                 agent_id=imported["cdsBotId"],
+                require_alm_family=True,
                 selection_source="create-recovery",
                 setup_source="alm-import",
             )
@@ -645,6 +692,7 @@ def import_package_once(
     retry_safe_failure: bool = False,
     resume_create_after_cleanup: bool = False,
     expected_alm_family_id: str | None = None,
+    client_request_id: str | None = None,
 ) -> dict[str, Any]:
     """Run or resume one guarded import without materializing a workspace."""
     normalized_environment_id = _normalize_environment_id(environment_id)
@@ -652,7 +700,23 @@ def import_package_once(
     expected_family = (
         str(expected_alm_family_id or "").strip().casefold() or None
     )
+    normalized_request_id = (
+        _normalize_guid(client_request_id, "Client request ID")
+        if client_request_id
+        else None
+    )
+    if normalized_request_id is not None and (
+        replacement_agent_id or confirmed_replacement_agent_id
+    ):
+        raise AlmImportSetupError(
+            "Client request IDs apply only to create imports."
+        )
     if resume_create_after_cleanup:
+        if normalized_request_id is not None:
+            raise AlmImportSetupError(
+                "Create recovery from an existing receipt cannot start a new "
+                "client request."
+            )
         return _requested_create_recovery(
             client,
             environment_id=normalized_environment_id,
@@ -693,6 +757,7 @@ def import_package_once(
             client,
             environment_id=normalized_environment_id,
             agent_id=normalized_replacement_id,
+            require_alm_family=True,
             selection_source="explicit-replacement",
             setup_source="alm-import",
         )
@@ -704,14 +769,15 @@ def import_package_once(
         raise AlmImportSetupError(
             "Expected ALM-family validation applies only to create imports."
         )
-
     identity = _operation_identity(
         client,
         environment_id=normalized_environment_id,
         package=package,
         replacement=replacement,
         expected_alm_family_id=expected_family,
+        client_request_id=normalized_request_id,
     )
+    _validate_create_recovery_request(resolved_kit_root, identity)
     record_path = _record_path(resolved_kit_root, identity)
     existing = (
         _read_record(record_path, identity)
@@ -956,6 +1022,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--expected-alm-family-id")
     parser.add_argument(
+        "--client-request-id",
+        help=(
+            "New UUID for an explicitly approved import attempt. "
+            "It creates a distinct receipt."
+        ),
+    )
+    parser.add_argument(
         "--retry-safe-failure",
         action="store_true",
         help=(
@@ -994,6 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
             retry_safe_failure=args.retry_safe_failure,
             resume_create_after_cleanup=args.resume_create_after_cleanup,
             expected_alm_family_id=args.expected_alm_family_id,
+            client_request_id=args.client_request_id,
         )
     except (
         AgentBuilderError,

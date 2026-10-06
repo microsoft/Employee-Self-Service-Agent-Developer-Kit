@@ -263,7 +263,8 @@ def extract_components(components, output_dir):
         if os.path.isfile(stale_path):
             os.remove(stale_path)
 
-    evaluation_exports = regenerate_evaluation_exports(output_dir)
+    # Refresh preserves historical service formats; feature mutations validate strictly.
+    evaluation_exports = regenerate_evaluation_exports(output_dir, strict=False)
 
     return {
         "written": written,

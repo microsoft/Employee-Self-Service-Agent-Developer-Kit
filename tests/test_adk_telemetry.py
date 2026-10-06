@@ -461,7 +461,7 @@ def test_common_dimensions_shape():
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
         "session_id", "surface", "adk_version",
-        "toolkit_git_sha", "toolkit_git_branch",
+        "toolkit_git_sha", "toolkit_git_branch", "agent_type",
         "timestamp",
     ):
         assert key in dims
@@ -492,6 +492,19 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["toolkit_git_sha"] == "abcdef0"
     assert dims["toolkit_git_branch"] == "other"
+    assert dims["agent_type"] == adk.AGENT_TYPE_UNKNOWN
+
+
+def test_common_dimensions_agent_type_maps_from_branch(monkeypatch):
+    for branch, expected in (
+        ("main-ca", adk.AGENT_TYPE_CUSTOM),
+        ("main", adk.AGENT_TYPE_DECLARATIVE),
+        ("other", adk.AGENT_TYPE_UNKNOWN),
+    ):
+        monkeypatch.setenv("ESS_ADK_GIT_BRANCH", branch)
+        _fc.get_toolkit_git_branch.cache_clear()
+        dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+        assert dims["agent_type"] == expected
 
 
 def test_build_event_is_common_schema_4_0():
@@ -626,6 +639,66 @@ def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     assert envelopes[0]["name"] == "adk.capability.use"
     assert envelopes[0]["data"]["adk_capability"] == "evaluation_validate"
     assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
+
+
+def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
+    captured_post,
+):
+    correlation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    agent_id = "7f7c8f9c-1234-4abc-9def-0123456789ab"
+
+    adk.emit_connect_lifecycle(
+        "phase-completed",
+        connector="workday",
+        phase="employee-validation",
+        outcome="success",
+        duration_ms=1250,
+        retry_count=2,
+        resume_count=1,
+        blocker_category="permissions",
+        remediation_id="WD-E2E-006",
+        correlation_id=correlation_id,
+        agent_id=agent_id,
+        block=True,
+    )
+
+    envelope = captured_post[0][1][0]
+    assert envelope["name"] == "adk.connect.lifecycle"
+    assert envelope["data"]["connector"] == "workday"
+    assert envelope["data"]["lifecycle_event"] == "phase_completed"
+    assert envelope["data"]["phase"] == "employee_validation"
+    assert envelope["data"]["outcome"] == "success"
+    assert envelope["data"]["duration_ms"] == 1250
+    assert envelope["data"]["retry_count"] == 2
+    assert envelope["data"]["resume_count"] == 1
+    assert envelope["data"]["blocker_category"] == "permissions"
+    assert envelope["data"]["remediation_id"] == "WD-E2E-006"
+    assert envelope["data"]["correlation_id"] == correlation_id
+    assert envelope["data"]["agent_id"] == agent_id
+
+
+def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
+    adk.emit_connect_lifecycle(
+        "future-event",
+        phase="Runtime / https://example.test/path",
+        outcome="future-outcome",
+        blocker_category="C:\\customer\\secret.txt",
+        remediation_id="customer-specific-value",
+        correlation_id="not-a-guid",
+        agent_id="owner@customer.example",
+        block=True,
+    )
+
+    data = captured_post[0][1][0]["data"]
+    assert data["lifecycle_event"] == "unknown"
+    assert data["outcome"] == "unknown"
+    assert data["phase"] == "unknown"
+    assert data["blocker_category"] == "unknown"
+    assert "example" not in data["phase"]
+    assert "customer" not in data["blocker_category"]
+    assert data["remediation_id"] == ""
+    assert data["correlation_id"] == ""
+    assert data["agent_id"] == ""
 
 
 def test_api_call_error_outcome_carries_error_fields(captured_post):
@@ -1694,6 +1767,7 @@ def test_wired_capabilities_are_in_canonical_list():
         # emit_capability_use(...) from the Python entry points
         "setup", "evaluation_validate",
         "backup_template_configs", "restore_template_configs",
+        "analytics",
         "push",
         # emit_flightcheck_*() event family
         "flightcheck",
@@ -2113,10 +2187,9 @@ def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
     assert captured_post[0][1][0]["data"]["connector"] == "workday"
 
 
-def test_schema_version_bump_records_connector_dim():
-    # The connector dimension was added in 1.5.0. Older cubes / dashboards
-    # can version-gate on this to know whether "connector" will be present.
-    assert adk.SCHEMA_VERSION == "1.5.0"
+def test_schema_version_bump_records_agent_type_dim():
+    # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
+    assert adk.SCHEMA_VERSION == "1.7.0"
 
 
 # --- emit_capability.py shim --connector plumbing -------------------------

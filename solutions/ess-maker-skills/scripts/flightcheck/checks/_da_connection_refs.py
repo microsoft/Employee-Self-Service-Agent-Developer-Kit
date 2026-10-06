@@ -4,7 +4,8 @@
 """Canonical reader for Declarative Agent connection references (minimalBots
 components API), shared so the DA connection checks cannot drift apart.
 
-Consumers:
+Intended consumers (this reader ships ahead of them; the wiring lands in the
+stacked DA re-point PRs, so nothing in this branch imports it yet):
   * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
     Workday SOAP reference, via ``read_active_agent_connection_references``.
   * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
@@ -19,8 +20,12 @@ Read shape: ``POST .../components`` -> ``connectionReferenceChanges`` (cassette
 
 Fail-loudly contract:
   * a missing ``connectionReferenceChanges`` key means genuine absence -> ``[]``;
-  * a present-but-malformed shape raises ``ValueError`` so the owning check
-    degrades to a WARNING rather than reporting a confident but wrong verdict;
+  * a present-but-malformed shape raises ``ValueError``; how to surface it is
+    the consuming check's decision (catch and report a WARNING, or let it
+    propagate so the runner records an ERROR) - this reader's only contract is
+    "do not swallow it." No consumer imports this reader on this branch yet, so
+    the runner's uncaught-raise -> ERROR mapping is documented runner behavior,
+    not exercised here;
   * a read that cannot be attempted at all (no AgentBuilder client, or no
     configured agent botId) returns ``None`` so the caller SKIPs.
 """
@@ -29,6 +34,8 @@ from __future__ import annotations
 
 import json
 from typing import Any
+
+from ..agent_scope import active_agent_bot_id
 
 
 WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
@@ -60,7 +67,9 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
     components API.
 
     Raises ``ValueError`` for a malformed ``connectionReferenceChanges`` shape
-    so the owning check reports a WARNING instead of overclaiming.
+    so the owning check can surface it (as a WARNING, or an uncaught raise the
+    runner records as ERROR) instead of overclaiming; that choice belongs to
+    the consumer.
     """
     changeset = client.fetch_components(bot_id) or {}
     changes = changeset.get("connectionReferenceChanges")
@@ -73,20 +82,45 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
 
     refs: list[dict[str, Any]] = []
     for change in changes:
-        item = (
-            change.get("connectionReference")
-            if isinstance(change, dict)
-            else None
-        )
-        if not isinstance(item, dict):
+        # Surface a malformed individual entry instead of silently skipping it
+        # (PR #304 review): a non-dict change, or a ``connectionReference`` that
+        # is present but not an object, no longer matches the validated
+        # contract, so raise and let the owning check decide how to surface it.
+        # An absent or null ``connectionReference`` is tolerated (a
+        # non-connection change) and skipped - ``.get`` returns ``None`` for
+        # both the missing-key and explicit-null cases.
+        if not isinstance(change, dict):
+            raise ValueError(
+                "Component fetch returned a malformed "
+                "connectionReferenceChanges entry."
+            )
+        item = change.get("connectionReference")
+        if item is None:
             continue
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Component fetch returned a malformed connectionReference entry."
+            )
+        # A dict that parses but lacks its identity fields is just as
+        # misleading as a non-dict (PR #304 review F-1): a row with a
+        # null/blank connectionReferenceLogicalName or connectorId gets
+        # silently skipped or misclassified by downstream consumers,
+        # recreating the confident "not found" verdict this reader exists to
+        # prevent. The validated payload always supplies both as non-empty
+        # strings; only connectionId may legitimately be null (an unbound
+        # reference), so require the two identity fields and raise on absence.
+        logical_name = _require_identity_field(
+            item.get("connectionReferenceLogicalName"),
+            "connectionReferenceLogicalName",
+        )
+        connector_id = _require_identity_field(
+            item.get("connectorId"), "connectorId"
+        )
         refs.append(
             {
                 "botid": bot_id,
-                "connectionreferencelogicalname": item.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": item.get("connectorId"),
+                "connectionreferencelogicalname": logical_name,
+                "connectorid": connector_id,
                 "connectionid": item.get("connectionId"),
                 "sharedconnectionparameters": item.get(
                     "sharedConnectionParameters"
@@ -96,20 +130,38 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
     return refs
 
 
+def _require_identity_field(value: Any, field_name: str) -> str:
+    """Return ``value`` as a non-empty string, or raise ``ValueError``.
+
+    A connection reference's identity fields (``connectionReferenceLogicalName``,
+    ``connectorId``) must be present and non-blank; a null/blank/non-string
+    value is a malformed payload, not a legitimate absence.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"Component fetch returned a connectionReference with a missing or "
+            f"malformed {field_name}."
+        )
+    return value
+
+
 def read_active_agent_connection_references(runner) -> list[dict[str, Any]] | None:
     """The single active agent's DA connection references (config
     ``agent.botId``), or ``None`` when the AgentBuilder client or the
-    active-agent botId is unavailable.
+    selected-agent botId is unavailable.
 
-    Used by ``DV-CONN-001`` (checks/workday_extension.py), which validates the
-    Workday SOAP connection reference on the agent under check. Scoping this to
-    the active agent — not every configured agent — keeps the check from
+    Intended for ``DV-CONN-001`` (checks/workday_extension.py), which validates
+    the Workday SOAP connection reference on the agent under check. Scoping this
+    to the active agent — not every configured agent — keeps the check from
     reporting on a Workday reference that belongs to a different agent.
     Raises ``ValueError`` for malformed components payloads.
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
+    agent_id = active_agent_bot_id(
+        config,
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
     if client is None or not agent_id:
         return None
     return _bot_connection_references(client, agent_id)
@@ -120,7 +172,7 @@ def _all_agents_connection_references(runner) -> list[dict[str, Any]] | None:
     single-agent config), preserving per-agent rows, or ``None`` when the
     AgentBuilder client is unavailable or no agent botId is configured.
 
-    Used by the Workday shared-parameter sweep, which must inspect each
+    Intended for the Workday shared-parameter sweep, which must inspect each
     configured agent's own Workday reference rather than only the active one.
     Raises ``ValueError`` for malformed components payloads.
     """
@@ -143,7 +195,7 @@ def read_all_agents_connection_references(
     logical name (first occurrence wins, order preserved), or ``None`` when the
     AgentBuilder client is unavailable or no agent botId is configured.
 
-    Used by ``ENV-004`` (checks/environment.py), which is environment-wide
+    Intended for ``ENV-004`` (checks/environment.py), which is environment-wide
     across every agent under check and reports one row per distinct logical
     name. The per-agent (non-de-duped) view is ``_all_agents_connection_references``,
     which the Workday shared-parameter sweep uses instead.

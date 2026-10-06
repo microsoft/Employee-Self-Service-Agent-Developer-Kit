@@ -46,8 +46,8 @@ except ImportError:
     sys.exit(1)
 
 
-# Shared public client ID used across the ADK's MSAL flows.
-CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+# Shared first-party public client used across the kit's MSAL flows.
+CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 PP_API_BASE = "https://api.powerplatform.com"
 # The Power Platform API uses its own audience, distinct from the BAP /
@@ -267,7 +267,18 @@ class PowerPlatformClient:
             params={"api-version": API_VERSION}, timeout=60,
         )
         if resp.status_code in (401, 403):
-            return {"_error": "insufficient_permissions", "_status": resp.status_code}
+            request_id = (
+                resp.headers.get("x-ms-request-id")
+                or resp.headers.get("request-id")
+                or resp.headers.get("x-ms-correlation-request-id")
+            )
+            result = {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+            if request_id:
+                result["_request_id"] = request_id
+            return result
         if resp.status_code == 404:
             return []
         resp.raise_for_status()
