@@ -24,7 +24,11 @@ def _client() -> PowerPlatformClient:
     return client
 
 
-def test_authenticate_uses_preferred_cached_account(monkeypatch) -> None:
+def test_authenticate_uses_preferred_cached_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     selected_accounts = []
 
     class FakeCache:
@@ -157,4 +161,17 @@ def test_app_management_permission_error_is_explicit() -> None:
     assert _client().list_environment_application_packages(pp.MOCK_ENV_ID) == {
         "_error": "insufficient_permissions",
         "_status": 403,
+    }
+
+
+@responses.activate
+def test_capacity_permission_error_preserves_request_id() -> None:
+    response = pp.get_currency_allocations(status=403)
+    response["headers"] = {"x-ms-request-id": "capacity-request-403"}
+    responses.add(**response)
+
+    assert _client().get_currency_allocations(pp.MOCK_ENV_ID) == {
+        "_error": "insufficient_permissions",
+        "_status": 403,
+        "_request_id": "capacity-request-403",
     }

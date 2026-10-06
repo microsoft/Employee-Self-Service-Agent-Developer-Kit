@@ -99,8 +99,12 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 # Bump when the emitted field set changes so dashboards can version-gate.
 # 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
 # 1.2: added ``toolkitGitSha`` + ``toolkitGitBranch`` for precise
-# upgrade-posture and CA-vs-DA attribution — ADO 7943642.
-TELEMETRY_SCHEMA_VERSION = "1.2"
+#      upgrade-posture and CA-vs-DA attribution — ADO 7943642.
+# 1.3: added derived ``connector`` (workday|servicenow|"") on run + check —
+#      ADO 7943641.
+# 1.4: added ``agentType`` to check events plus profile/realm/blocking,
+#      severity, and automation dimensions — ADO 7955324.
+TELEMETRY_SCHEMA_VERSION = "1.4"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -740,6 +744,29 @@ def get_toolkit_git_branch() -> str:
         return "unknown"
 
 
+# --- Agent-type classification (ADO 7830949 / 7955324) --------------------
+AGENT_TYPE_CUSTOM = "custom_agent"
+AGENT_TYPE_DECLARATIVE = "declarative_agent"
+AGENT_TYPE_UNKNOWN = "unknown"
+AGENT_TYPES = frozenset({
+    AGENT_TYPE_CUSTOM,
+    AGENT_TYPE_DECLARATIVE,
+    AGENT_TYPE_UNKNOWN,
+})
+
+
+def classify_agent_type(git_branch: str) -> str:
+    """Map a bounded toolkit branch to the CA/DA telemetry taxonomy."""
+    if not git_branch:
+        return AGENT_TYPE_UNKNOWN
+    normalized = git_branch.strip().lower()
+    if normalized == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if normalized == "main":
+        return AGENT_TYPE_DECLARATIVE
+    return AGENT_TYPE_UNKNOWN
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -791,8 +818,8 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 # ``overall``: it splits the NOT_READY verdict into "a check couldn't even run"
 # (``errored`` — an unhandled exception inside a check, runner.py:135) vs.
 # "checks ran and reported failures" (``failed``). Precedence is errored ->
-# failed -> warnings -> ready so the donut surfaces checks that could not be
-# evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
+# failed -> blocked -> warnings -> ready so the donut surfaces checks that
+# could not be evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
 # attribute WHY a check errored (auth vs runtime vs network) — the exception
 # text is never emitted (EUII risk) — so the bucket is deliberately just
 # "errored", not "runtime error". Aria renders the raw value as the slice
@@ -800,21 +827,130 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
 RUN_OUTCOME_READY = "Ready"
 RUN_OUTCOME_WARNINGS = "Ready with warnings"
 RUN_OUTCOME_FAILED = "Failed"
+RUN_OUTCOME_BLOCKED = "Blocked"
 RUN_OUTCOME_ERRORED = "Blocked (check errored)"
+# BLOCKED is a distinct hard gate: an essential platform capability was
+# unavailable (release-blocking), not a check that failed its assertion or
+# crashed. Without this slice a blocked-only run fell through to
+# RUN_OUTCOME_READY, so the donut said "Ready" for a run the runner scored
+# NOT_READY with exit code 1 (ADO 7943641 carry-over).
+RUN_OUTCOME_BLOCKED = "Blocked (gate)"
 
 
 def derive_run_outcome(run_result: Any) -> str:
-    """Bucket a run into a single verdict slice (errored > failed > warnings > ready)."""
+    """Bucket a run into a single verdict slice.
+
+    Precedence: errored > failed > blocked > warnings > ready. ``errored`` and
+    ``failed`` rank above ``blocked`` only to keep the pre-existing slice
+    ordering stable; all three are NOT_READY. ``blocked`` stays above
+    ``warnings`` because a blocked essential capability is a release gate while
+    warnings are advisory.
+    """
     errors = getattr(run_result, "errors", 0) or 0
     failed = getattr(run_result, "failed", 0) or 0
+    blocked = getattr(run_result, "blocked", 0) or 0
     warnings = getattr(run_result, "warnings", 0) or 0
     if errors > 0:
         return RUN_OUTCOME_ERRORED
     if failed > 0:
         return RUN_OUTCOME_FAILED
+    if blocked > 0:
+        return RUN_OUTCOME_BLOCKED
     if warnings > 0:
         return RUN_OUTCOME_WARNINGS
     return RUN_OUTCOME_READY
+
+
+# --- Connector attribution (ADO 7943641) ----------------------------------
+# Derive a bounded ``connector`` value (workday | servicenow | "") from the
+# run scope (for the run event) and from the check's category (for each check
+# event) so Aria can split adoption / reliability by backend HR system
+# instead of collapsing everything under the FlightCheck-wide donut.
+#
+# Emitted at telemetry time (not stamped on the CheckResult in-process)
+# because 1DS RTA cubes cannot compute one dimension from another; the
+# derivation stays here alongside classify_tenant / derive_run_outcome.
+
+# Scopes explicitly bound to a single connector. "full" spans multiple
+# connectors -> "" (drill down via the check-level connector dimension).
+# Local / infra / auth / etc. are not connector-scoped.
+_WORKDAY_SCOPES = frozenset({
+    "workday", "workdaytenant", "workdayextension",
+    # Also connector-scoped for Workday even though the naming doesn't lead
+    # with the "workday" token: the "Workday DA" scope (workdayda) and the
+    # topic-authoring scope (topics, which SCOPE_MAP labels "Workday Topics")
+    # both exercise Workday paths exclusively. Missing these here left real
+    # Workday runs emitting connector="" (ADO 7943641 review).
+    "workdayda", "topics",
+})
+_SERVICENOW_SCOPES = frozenset({"servicenow"})
+
+# Leading connector tokens for the wrapped run scopes ("profile:<name>" and
+# "checkpoint:<id>") and for connector-led profile names / checkpoint IDs.
+# Profile runs pass scope="profile:workday-da:final" and checkpoint runs pass
+# scope="checkpoint:WD-CONN-012"; without unwrapping, every DA profile run and
+# every single-checkpoint run emitted connector="" (ADO 7943641 carry-over).
+_WORKDAY_LEAD_TOKENS = frozenset({"workday", "wd"})
+_SERVICENOW_LEAD_TOKENS = frozenset({"servicenow", "sn"})
+
+# Check categories from checks/*.py. Category strings are set at CheckResult
+# construction time (e.g. category="Workday", "Workday Tenant", "ServiceNow").
+# Match on the leading token so future subcategories ("Workday Workflows",
+# "Workday Extension", "ServiceNow HRSD") inherit the same attribution
+# without requiring a taxonomy edit here.
+_WORKDAY_CATEGORY_PREFIX = "workday"
+_SERVICENOW_CATEGORY_PREFIX = "servicenow"
+
+
+def derive_connector_from_scope(scope: str) -> str:
+    """Return "workday" / "servicenow" / "" for a FlightCheck ``--scope`` value.
+
+    "full" and other cross-connector scopes return "" (empty). The per-check
+    ``connector`` field carries the finer-grained attribution.
+    """
+    if not scope:
+        return ""
+    s = str(scope).strip().lower()
+    # Unwrap the single-purpose run prefixes so a "profile:" / "checkpoint:"
+    # run attributes the same as a bare "--scope <connector>" run.
+    if s.startswith("profile:"):
+        s = s[len("profile:"):]
+    elif s.startswith("checkpoint:"):
+        s = s[len("checkpoint:"):]
+    if s in _WORKDAY_SCOPES:
+        return "workday"
+    if s in _SERVICENOW_SCOPES:
+        return "servicenow"
+    # Connector-led profile names ("workday-da:final") and checkpoint IDs
+    # ("wd-conn-012") carry the connector in their leading token. Cross-connector
+    # or non-connector scopes ("full", "dv-conn-001", "env-001") fall through
+    # to "" and drill down via the per-check connector dimension.
+    lead = re.split(r"[-:]", s, maxsplit=1)[0]
+    if lead in _WORKDAY_LEAD_TOKENS:
+        return "workday"
+    if lead in _SERVICENOW_LEAD_TOKENS:
+        return "servicenow"
+    return ""
+
+
+def derive_connector_from_category(category: str) -> str:
+    """Return "workday" / "servicenow" / "" for a CheckResult ``category``.
+
+    Matches the leading token so "Workday", "Workday Tenant", "Workday
+    Extension", "Workday Workflows", "ServiceNow", "ServiceNow HRSD", etc.
+    all attribute correctly. Cross-cutting categories (Environment,
+    Authentication, Prerequisites, Local Files, Publishing, External
+    Systems, Licensing, Solution, Topics, Configuration) return "" — they
+    aren't scoped to a single backend.
+    """
+    if not category:
+        return ""
+    c = str(category).strip().lower()
+    if c.startswith(_WORKDAY_CATEGORY_PREFIX):
+        return "workday"
+    if c.startswith(_SERVICENOW_CATEGORY_PREFIX):
+        return "servicenow"
+    return ""
 
 
 def _run_data(
@@ -829,7 +965,9 @@ def _run_data(
     agent_count: int,
     scope: str,
     invocation_source: str,
+    agent_type: str,
 ) -> dict[str, Any]:
+    validation_context = getattr(run_result, "validation_context", {}) or {}
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -843,14 +981,19 @@ def _run_data(
         "adkVersion": get_adk_version(),
         "toolkitGitSha": get_toolkit_git_sha(),
         "toolkitGitBranch": get_toolkit_git_branch(),
+        "agentType": agent_type,
         "scope": scope,
+        "profile": getattr(run_result, "profile", ""),
+        "validationRealm": validation_context.get("realm", ""),
         "invocationSource": invocation_source,
+        "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
         "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),
         "failed": getattr(run_result, "failed", 0),
+        "blocked": getattr(run_result, "blocked", 0),
         "warnings": getattr(run_result, "warnings", 0),
         "notConfigured": getattr(run_result, "not_configured", 0),
         "manual": getattr(run_result, "manual", 0),
@@ -868,9 +1011,11 @@ def _check_data(
     run_id: str,
     instance_id: str,
     tenant_id: str,
+    agent_type: str,
     tenant_name: str = "",
 ) -> dict[str, Any]:
     # Identifiers + enums ONLY. Never `result` / `remediation` (EUII risk).
+    _category = getattr(check, "category", "")
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
         "env": env,
@@ -879,10 +1024,14 @@ def _check_data(
         "tenantId": tenant_id,
         "tenantClass": classify_tenant(tenant_id),
         "tenantName": tenant_name,
+        "agentType": agent_type,
         "checkpointId": getattr(check, "checkpoint_id", ""),
-        "category": getattr(check, "category", ""),
+        "category": _category,
+        "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
+        "severity": getattr(check, "severity", ""),
+        "automationType": getattr(check, "automation_type", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),
     }
 
@@ -903,6 +1052,7 @@ def build_events(
 ) -> list[dict[str, Any]]:
     """Build the run envelope + one envelope per check (testable, no IO)."""
     run_id = run_id or str(uuid.uuid4())
+    agent_type = classify_agent_type(get_toolkit_git_branch())
     events = [
         _build_event(
             EVENT_RUN,
@@ -918,6 +1068,7 @@ def build_events(
                 agent_count=agent_count,
                 scope=scope,
                 invocation_source=invocation_source,
+                agent_type=agent_type,
             ),
         )
     ]
@@ -933,6 +1084,7 @@ def build_events(
                     instance_id=instance_id,
                     tenant_id=tenant_id,
                     tenant_name=tenant_name,
+                    agent_type=agent_type,
                 ),
             )
         )
@@ -1006,6 +1158,7 @@ def selftest() -> int:
             "adkVersion": get_adk_version(),
             "toolkitGitSha": get_toolkit_git_sha(),
             "toolkitGitBranch": get_toolkit_git_branch(),
+            "agentType": classify_agent_type(get_toolkit_git_branch()),
         },
     )
     print(f"Posting selftest event to env='{env}' "

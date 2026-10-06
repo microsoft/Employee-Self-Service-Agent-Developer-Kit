@@ -392,6 +392,11 @@ def render_report(results: list[dict], agent_name: str, total_cases: int) -> Non
     print(f"  Date    : {now}")
     print("  Model   : Copilot default")
     print("=" * 65)
+    print(
+        "This reviews the test set's positive, negative, and boundary coverage, "
+        "not whether your agent passes the tests in your tenant. "
+        "Run the evaluation in Copilot Studio to learn that."
+    )
 
     for r in results:
         category = r["category"]

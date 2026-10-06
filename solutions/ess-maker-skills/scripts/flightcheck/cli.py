@@ -32,15 +32,22 @@ Scopes:
 import argparse
 import json
 import os
+import re
 import sys
+import uuid
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Ensure scripts/ is on the path so we can import auth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from flightcheck.runner import (
+    CheckResult,
     FlightCheckRunner,
+    Priority,
+    Role,
+    ValidationContext,
     save_results,
     Status,
     bucket_results,
@@ -48,7 +55,7 @@ from flightcheck.runner import (
     BUCKET_MANUAL,
     BUCKET_PASSED,
 )
-from flightcheck.agent_scope import validate_agent_slug
+from flightcheck.agent_scope import active_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
@@ -57,7 +64,11 @@ from flightcheck.azure_arm_client import AzureArmClient
 from agentbuilder import (
     AgentBuilderClient,
     ConnectivityClient,
+    DEFAULT_API_VERSION,
     authenticate_flightcheck,
+    derive_environment_host,
+    environment_id_from_host,
+    normalize_environment_id,
     ring_from_environment_host,
     validate_environment_host,
 )
@@ -72,7 +83,9 @@ from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
-from flightcheck.checks.workday_da import run_workday_da_checks
+from flightcheck.checks.workday_da import (
+    run_workday_da_package_check,
+)
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -84,6 +97,11 @@ from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
 from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck import consent
+
+
+_RUNTIME_EVIDENCE_LABEL_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+)
 
 
 SCOPE_MAP = {
@@ -104,7 +122,7 @@ SCOPE_MAP = {
         ("Workday", run_workday_checks),
         ("Workday Extension", run_workday_extension_checks),
     ],
-    "workdayda": [("Workday DA", run_workday_da_checks)],
+    "workdayda": [("Workday DA", run_workday_da_package_check)],
     "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
@@ -147,10 +165,12 @@ NATIVE_NO_DATAVERSE_SCOPE_MAP = {
         ("Native Agent", run_native_agent_checks),
         ("Environment", run_capacity_check),
         ("Local Files", run_local_file_checks),
+        ("Publishing", run_publishing_checks),
     ],
     "environment": [("Environment", run_capacity_check)],
     "servicenow": [("Native Agent", run_native_agent_checks)],
     "workday": [("Native Agent", run_native_agent_checks)],
+    "publishing": [("Publishing", run_publishing_checks)],
 }
 NATIVE_CONNECTOR_FILTERS = {
     "servicenow": ("shared_service-now",),
@@ -686,18 +706,11 @@ def _resolve_target_selection(args, runner):
         _resolve_servicenow_connection(args, runner)
 
 
-def _active_agent_config(config: dict) -> dict:
-    active_slug = str(config.get("activeAgent") or "")
-    agents = config.get("agents")
-    if isinstance(agents, list):
-        for agent in agents:
-            if (
-                isinstance(agent, dict)
-                and str(agent.get("slug") or "") == active_slug
-            ):
-                return agent
-    agent = config.get("agent")
-    return agent if isinstance(agent, dict) else {}
+def _active_agent_config(
+    config: dict,
+    explicit_slug: str | None = None,
+) -> dict:
+    return active_agent(config, explicit_slug)
 
 
 def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
@@ -708,6 +721,245 @@ def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
         return True
     active = _active_agent_config(config)
     return str(active.get("releaseLine") or "").casefold() == "da"
+
+
+def _create_alm_import_target(
+    args,
+    *,
+    source_host: str,
+    token: str,
+    tenant_id: str,
+    ring: str,
+    api_version: str,
+):
+    """Create the explicit cross-environment client for the mutating probe."""
+    if not bool(getattr(args, "alm_import_probe", False)):
+        return None
+
+    target_environment_id = str(
+        getattr(args, "alm_import_target_environment_id", "") or ""
+    ).strip()
+    if not target_environment_id:
+        raise ValueError(
+            "--alm-import-target-environment-id is required with "
+            "--alm-import-probe"
+        )
+
+    target_host = derive_environment_host(target_environment_id, ring)
+    target_host = validate_environment_host(target_host, ring)
+    if target_host.rstrip("/").lower() == source_host.rstrip("/").lower():
+        raise ValueError(
+            "ALM import target must be a different environment from the source"
+        )
+
+    return AgentBuilderClient(
+        target_host,
+        token,
+        ring=ring,
+        tenant_id=tenant_id,
+        api_version=api_version,
+    )
+
+
+def _validation_context_from_args(
+    args,
+    config: dict,
+    env_url: str,
+    env_id: str | None,
+) -> ValidationContext:
+    explicit_slug = str(getattr(args, "agent_slug", "") or "").strip()
+    configured_slug = str(config.get("activeAgent") or "").strip()
+    active = _active_agent_config(config, explicit_slug or None)
+    selected_slug = explicit_slug or configured_slug
+    if selected_slug and not active:
+        raise ValueError(
+            f"Selected agent {selected_slug!r} does not resolve to a "
+            "configured agent."
+        )
+    requested_schema = str(
+        getattr(args, "agent_schema_name", "") or ""
+    ).strip()
+    resolved_schema = str(active.get("schemaName") or "").strip()
+    if (
+        requested_schema
+        and resolved_schema
+        and requested_schema.casefold() != resolved_schema.casefold()
+    ):
+        raise ValueError(
+            "--agent-schema-name does not match the selected configured agent."
+        )
+    requested_tenant_id = str(
+        getattr(args, "tenant_id", "") or ""
+    ).strip()
+    resolved_tenant_id = str(
+        config.get("tenantId")
+        or active.get("tenantId")
+        or ""
+    ).strip()
+    if (
+        requested_tenant_id
+        and resolved_tenant_id
+        and requested_tenant_id.casefold()
+        != resolved_tenant_id.casefold()
+    ):
+        raise ValueError(
+            "--tenant-id does not match the authenticated profile target."
+        )
+    return ValidationContext(
+        realm=getattr(args, "validation_realm", None) or config.get("realm", ""),
+        environment_id=env_id or config.get("environmentId", ""),
+        environment_url=env_url or config.get("dataverseEndpoint", ""),
+        agent_slug=str(active.get("slug") or explicit_slug),
+        agent_schema_name=resolved_schema or requested_schema,
+        agent_id=active.get("botId", ""),
+        tenant_id=resolved_tenant_id or requested_tenant_id,
+    )
+
+
+def _requested_validation_context_from_args(args) -> dict[str, str]:
+    """Return caller-supplied target identifiers without config fallback."""
+    return {
+        "realm": str(getattr(args, "validation_realm", "") or "").strip(),
+        "environmentId": str(
+            getattr(args, "environment_id", "") or ""
+        ).strip(),
+        "environmentUrl": str(
+            getattr(args, "environment_url", "") or ""
+        ).strip(),
+        "agentSlug": str(getattr(args, "agent_slug", "") or "").strip(),
+        "agentSchemaName": str(
+            getattr(args, "agent_schema_name", "") or ""
+        ).strip(),
+        "agentId": "",
+        "tenantId": str(getattr(args, "tenant_id", "") or "").strip(),
+    }
+
+
+def _profile_target_matches_config(args, config: dict) -> None:
+    """Reject an explicit profile target that contradicts workspace state."""
+    requested_url = str(
+        getattr(args, "environment_url", "") or ""
+    ).strip()
+    configured_url = str(config.get("dataverseEndpoint") or "").strip()
+    if requested_url and configured_url:
+        requested_host = (urlparse(requested_url).hostname or "").casefold()
+        configured_host = (urlparse(configured_url).hostname or "").casefold()
+        if not requested_host or requested_host != configured_host:
+            raise ValueError(
+                "--environment-url does not match the configured Dataverse "
+                "environment."
+            )
+
+    requested_environment_id = str(
+        getattr(args, "environment_id", "") or ""
+    ).strip()
+    configured_environment_id = str(
+        config.get("environmentId") or ""
+    ).strip()
+    if requested_environment_id and configured_environment_id:
+        if (
+            normalize_environment_id(requested_environment_id)
+            != normalize_environment_id(configured_environment_id)
+        ):
+            raise ValueError(
+                "--environment-id does not match the configured Power "
+                "Platform environment."
+            )
+
+    requested_tenant_id = str(
+        getattr(args, "tenant_id", "") or ""
+    ).strip()
+    if requested_tenant_id:
+        try:
+            requested_tenant_id = str(uuid.UUID(requested_tenant_id))
+        except ValueError as exc:
+            raise ValueError("--tenant-id must be a GUID.") from exc
+    configured_tenant_id = str(config.get("tenantId") or "").strip()
+    if configured_tenant_id:
+        try:
+            configured_tenant_id = str(uuid.UUID(configured_tenant_id))
+        except ValueError as exc:
+            raise ValueError(
+                "Configured tenantId must be a GUID."
+            ) from exc
+    if (
+        requested_tenant_id
+        and configured_tenant_id
+        and requested_tenant_id.casefold() != configured_tenant_id.casefold()
+    ):
+        raise ValueError(
+            "--tenant-id does not match the configured tenant."
+        )
+
+
+def _resolve_environment_ring(
+    config: dict,
+    *,
+    explicit_ring: str | None = None,
+) -> str:
+    """Resolve one supported ring and reject contradictory environment state."""
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    requested_ring = str(explicit_ring or "").strip().casefold()
+    host = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    inferred_ring = None
+    if host:
+        inferred_ring = ring_from_environment_host(host)
+
+    candidates = {
+        ring
+        for ring in (requested_ring, configured_ring, inferred_ring)
+        if ring
+    }
+    if not candidates:
+        raise ValueError(
+            "The Power Platform environment ring is unavailable. Confirm "
+            "whether the environment uses prod, preprod, or test, then rerun "
+            "FlightCheck with --ring."
+        )
+    if not candidates <= {"prod", "preprod", "test"}:
+        raise ValueError(
+            "The Power Platform environment ring must be prod, preprod, or "
+            "test."
+        )
+    if len(candidates) != 1:
+        raise ValueError(
+            "The supplied ring, configured ring, and Power Platform endpoint "
+            "do not identify the same environment ring."
+        )
+    return candidates.pop()
+
+
+_POWER_PLATFORM_ADMIN_ORIGINS = {
+    "https://admin.powerplatform.microsoft.com",
+    "https://admin.preprod.powerplatform.microsoft.com",
+    "https://admin.test.powerplatform.microsoft.com",
+    "https://admin.preview.powerplatform.microsoft.com",
+}
+
+
+def _resolve_power_platform_admin_origin(
+    config: dict,
+    *,
+    explicit_origin: str | None = None,
+) -> str | None:
+    """Resolve a retained, canonical Power Platform admin portal origin."""
+    configured_origins = config.get("portalOrigins")
+    configured_origin = (
+        configured_origins.get("powerPlatformAdmin")
+        if isinstance(configured_origins, dict)
+        else None
+    )
+    origin = str(explicit_origin or configured_origin or "").strip().rstrip("/")
+    if not origin:
+        return None
+    if origin.casefold() not in {
+        candidate.casefold() for candidate in _POWER_PLATFORM_ADMIN_ORIGINS
+    }:
+        raise ValueError(
+            "The Power Platform admin origin must be a recognized Microsoft "
+            "Power Platform admin portal origin."
+        )
+    return origin
 
 
 _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
@@ -733,6 +985,7 @@ _PROVIDER_CONNECT_CONFIG_KEYS = frozenset({
     "tokenHost",
     "vertical",
     "verticals",
+    "workdaySamlEntityId",
 })
 
 
@@ -752,6 +1005,35 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     if not isinstance(overlay, dict):
         raise ValueError(f"{connect_config_path} must contain a JSON object")
 
+    if overlay.get("schemaVersion") in {2, 3, 4, 5, 6, 7}:
+        scope = overlay.get("scope", {})
+        identifiers = overlay.get("identifiers", {})
+        endpoints = overlay.get("endpoints", {})
+        for section_name, section in (
+            ("scope", scope),
+            ("identifiers", identifiers),
+            ("endpoints", endpoints),
+        ):
+            if not isinstance(section, dict):
+                raise ValueError(
+                    f"{connect_config_path} field {section_name!r} "
+                    "must be a JSON object"
+                )
+        overlay = {
+            **overlay,
+            **identifiers,
+            **endpoints,
+            "tenant": scope.get("workdayTenant"),
+            "tenantId": scope.get("entraTenantId"),
+            "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
+            "appIdUri": identifiers.get("entraAppIdUri"),
+            "tokenEndpoint": (
+                endpoints.get("tokenEndpoint")
+                or endpoints.get("oauthTokenUrl")
+                or overlay.get("tokenEndpoint")
+            ),
+        }
+
     for key in _PROVIDER_CONNECT_CONFIG_KEYS:
         if key in overlay:
             merged[key] = overlay[key]
@@ -763,6 +1045,164 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     return merged
 
 
+def _run_exit_code(result) -> int:
+    """Map a completed run to a process exit code (1 = not ready, 0 = ready).
+
+    BLOCKED is a hard release gate (it forces overall = NOT_READY), so it must
+    fail the exit code alongside FAILED and ERROR. Centralizing the rule here
+    keeps every entry point (checkpoint / profile / full run) consistent, so a
+    blocked essential capability can never exit 0 and read as success to a
+    CI/Connect caller keying on the exit code.
+    """
+    return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
+
+
+def _runtime_evidence_values(args) -> dict[str, object]:
+    """Validate and normalize the standalone runtime-evidence arguments."""
+    label = str(
+        getattr(args, "runtime_evidence_attempt_id", "") or ""
+    ).strip()
+    if label and not _RUNTIME_EVIDENCE_LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "--runtime-evidence-attempt-id must be an opaque label of 1-128 "
+            "letters, numbers, dots, colons, hyphens, or underscores."
+        )
+    return {
+        "runtime_evidence_attempt_id": label,
+        "runtime_evidence_start": str(
+            getattr(args, "runtime_evidence_start", "") or ""
+        ).strip(),
+        "runtime_evidence_end": str(
+            getattr(args, "runtime_evidence_end", "") or ""
+        ).strip(),
+        "runtime_evidence_flow_ids": tuple(
+            str(value).strip()
+            for value in (
+                getattr(args, "runtime_evidence_flow_id", None) or ()
+            )
+            if str(value).strip()
+        ),
+        "runtime_evidence_migration_baseline": bool(
+            getattr(args, "runtime_evidence_migration_baseline", False)
+        ),
+    }
+
+
+def _apply_runtime_evidence_args(runner, args) -> None:
+    for name, value in _runtime_evidence_values(args).items():
+        setattr(runner, name, value)
+
+
+def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
+    """Emit anonymous outcome telemetry for a completed run (best-effort).
+
+    Shared by the --checkpoint and --profile paths so both single-purpose
+    "connect" runs surface on the Aria dashboards the same way a --scope run
+    does. Never raises: telemetry must not change the run's exit code. The
+    caller passes the run ``scope`` (e.g. ``checkpoint:<id>`` or
+    ``profile:<name>``); everything else is derived from the shared run state.
+    """
+    if getattr(args, "no_telemetry", False):
+        return
+    # Explicit --invocation-source wins; otherwise these single-purpose runs
+    # attribute to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
+    _inv_source = getattr(args, "invocation_source", None) or "connect"
+    _tele_debug = os.environ.get(
+        "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+    ).strip().lower() in ("1", "on", "true", "yes")
+    # Resolve the active agent from config (may be empty for Entra-only
+    # checkpoints run before /setup writes a full config).
+    _agents = config.get("agents", [])
+    if not _agents:
+        _agent_entry = config.get("agent", {})
+        if _agent_entry:
+            _agents = [_agent_entry]
+    _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
+    _active_agent = next(
+        (a for a in _agents if a.get("slug") == _active),
+        _agents[0] if _agents else {},
+    )
+    # Best-effort tenant display name (OII; privacy-approved). Reuses the
+    # already-authenticated Graph client when one was needed; never re-auths.
+    # Falls back to the persisted ``.local/.tenant_name`` cache when the
+    # live lookup is unavailable (e.g. infra-only scope where ``graph`` is
+    # None, or Graph auth failed for lack of ``Organization.Read.All``
+    # consent) so previously-resolved tenants keep their name on the event
+    # instead of emitting blank. Same-tenant guard is enforced inside the
+    # cache helper.
+    tenant_name = ""
+    try:
+        if graph is not None:
+            tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
+    except Exception:  # noqa: BLE001 — telemetry name is best-effort
+        tenant_name = ""
+    try:
+        from flightcheck import telemetry
+
+        if not tenant_name and (tenant_id or ""):
+            tenant_name = telemetry.get_cached_tenant_name(tenant_id or "")
+        elif tenant_name and (tenant_id or ""):
+            telemetry.cache_tenant_name(tenant_id or "", tenant_name)
+
+        _tele = telemetry.emit_flightcheck_telemetry(
+            result,
+            tenant_id=tenant_id or "",
+            tenant_name=tenant_name,
+            agent_id=_active_agent.get("botId", ""),
+            scope=scope,
+            agent_count=len(_agents),
+            invocation_source=_inv_source,
+        )
+        if _tele_debug:
+            print(
+                f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                f"events={_tele.get('events')} status={_tele.get('status')} "
+                f"reason={_tele.get('reason')}"
+            )
+    except Exception as _tele_err:  # never break the run
+        if _tele_debug:
+            print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+    # Additive adk.* event family (spec Feature #7403772), mirroring the
+    # --scope emit so these runs also count toward the adk.* cubes.
+    try:
+        import adk_telemetry as _adk
+        from flightcheck.telemetry import derive_connector_from_category
+
+        _agent_id = _active_agent.get("botId", "")
+        if tenant_id or tenant_name:
+            _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
+        _ridx = _adk.next_run_index(_agent_id)
+        # The first result row's category is the run's connector (or "" for
+        # cross-cutting checkpoints like Environment / Authentication).
+        # Derived here rather than passed by the caller so the CLI runtime
+        # path matches the same connector attribution as the legacy
+        # ESSMakerKit.FlightCheck.* events (ADO 7943641 review).
+        _connector = ""
+        if result.results:
+            _connector = derive_connector_from_category(
+                getattr(result.results[0], "category", "") or ""
+            )
+        _adk.emit_flightcheck_run(
+            agent_id=_agent_id, run_index=_ridx, connector=_connector
+        )
+        _result_map = {
+            "READY": "pass",
+            "READY_WITH_WARNINGS": "partial",
+            "NOT_READY": "fail",
+        }
+        _adk.emit_flightcheck_result(
+            agent_id=_agent_id,
+            run_index=_ridx,
+            result=_result_map.get(result.overall, "fail"),
+            duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            connector=_connector,
+        )
+        _adk.flush(timeout=3)
+    except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+        pass
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -772,8 +1212,9 @@ def _run_single_checkpoint(args):
     owning category functions in canonical order to hydrate shared state, then
     relies on the runner's target filter to keep just the requested rows.
 
-    Always calls sys.exit(): 0 when the checkpoint passes / is manual /
-    not-configured, 1 when it fails or errors, 2 for an unknown ID.
+    Always calls sys.exit(): 0 when the checkpoint passes or requires guided
+    verification, 1 when it fails, is blocked, errors, or cannot be evaluated,
+    and 2 for an unknown ID.
     """
     from flightcheck import registry
 
@@ -794,25 +1235,51 @@ def _run_single_checkpoint(args):
     needed = plan.clients
 
     # --- Per-checkpoint config / Dataverse-endpoint gate (not the global one) ---
-    config = {}
     config_path = os.path.join(".local", "config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    elif plan.requires_config:
+    if not os.path.exists(config_path) and plan.requires_config:
         print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     try:
+        config = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            if not isinstance(config, dict):
+                raise ValueError(
+                    f"{config_path} must contain a JSON object"
+                )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
+        _profile_target_matches_config(args, config)
+        _runtime_evidence_values(args)
     except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"ERROR: Unable to load --connect-config: {e}")
+        print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
 
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if plan.requires_dataverse_endpoint and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
+
+    resolved_ring = None
+    power_platform_admin_origin = None
+    if target == "ENV-CAPACITY-001":
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=getattr(args, "ring", None),
+            )
+            power_platform_admin_origin = _resolve_power_platform_admin_origin(
+                config,
+                explicit_origin=getattr(
+                    args,
+                    "power_platform_admin_origin",
+                    None,
+                ),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
 
     quiet_auth = getattr(args, "quiet_auth", False)
     if not quiet_auth:
@@ -835,7 +1302,63 @@ def _run_single_checkpoint(args):
     pva = None
     powerplatform = None
     agentbuilder = None
+    alm_import_target = None
     connectivity = None
+    preferred_username = str(
+        getattr(args, "preferred_username", "") or ""
+    ).strip() or None
+    canonical_username = preferred_username
+    account_verification_required = (
+        preferred_username is not None or len(needed) > 1
+    )
+    target_tenant_id = str(
+        getattr(args, "tenant_id", "")
+        or config.get("tenantId")
+        or ""
+    ).strip()
+    client_availability: dict[str, dict[str, object]] = {
+        client_name: {
+            "required": True,
+            "available": False,
+            "authenticatedAccountVerified": False,
+            "reason": "authentication was not attempted",
+        }
+        for client_name in sorted(needed)
+    }
+
+    def mark_available(client_name: str) -> None:
+        state = client_availability[client_name]
+        state["available"] = True
+        state["reason"] = ""
+
+    def mark_unavailable(
+        client_name: str,
+        error: BaseException | str,
+    ) -> None:
+        state = client_availability[client_name]
+        state["available"] = False
+        state["reason"] = _safe_client_error_reason(error)
+
+    def verify_authenticated_account(
+        client_name: str,
+        account: str | None,
+    ) -> str | None:
+        nonlocal canonical_username
+        if not account and account_verification_required:
+            raise ValueError(
+                f"{client_name} could not verify the authenticated account."
+            )
+        if not account:
+            return None
+        if canonical_username is None:
+            canonical_username = account
+            return account
+        if account.casefold() != canonical_username.casefold():
+            raise ValueError(
+                f"{client_name} authenticated a different account than the "
+                "other clients in this checkpoint run."
+            )
+        return account
 
     # Tenant discovery feeds Graph / Power Platform / PVA auth. Normally read
     # from the Dataverse environment's auth challenge; when this checkpoint
@@ -852,23 +1375,60 @@ def _run_single_checkpoint(args):
         from auth import discover_tenant
         if env_url:
             try:
-                tenant_id = discover_tenant(env_url)
+                tenant_id = str(uuid.UUID(discover_tenant(env_url)))
             except Exception as e:
-                print(f"  Tenant discovery: WARNING — {e}")
-                tenant_id = "organizations"
+                print(
+                    "ERROR: Unable to resolve a concrete tenant for the "
+                    f"checkpoint target ({type(e).__name__})."
+                )
+                sys.exit(1)
+            if (
+                target_tenant_id
+                and target_tenant_id.casefold()
+                != tenant_id.casefold()
+            ):
+                print(
+                    "ERROR: The Dataverse environment belongs to a different "
+                    "tenant than the configured profile target."
+                )
+                sys.exit(1)
         else:
-            tenant_id = "organizations"
+            if not target_tenant_id:
+                if spec.requires_config:
+                    print(
+                        "ERROR: A concrete tenantId is required for this "
+                        "checkpoint when no Dataverse endpoint is configured."
+                    )
+                    sys.exit(1)
+                tenant_id = "organizations"
+            else:
+                try:
+                    tenant_id = str(uuid.UUID(target_tenant_id))
+                except ValueError:
+                    print("ERROR: Configured tenantId must be a GUID.")
+                    sys.exit(1)
 
     if registry.DATAVERSE in needed and env_url:
         from auth import authenticate
         if not quiet_auth:
             print("Authenticating to Dataverse...")
         try:
-            dv_token = authenticate(env_url)
+            dv_token, dv_username = authenticate(
+                env_url,
+                preferred_username=canonical_username,
+                return_account_identity=True,
+            )
+            verify_authenticated_account("Dataverse", dv_username)
+            mark_available(registry.DATAVERSE)
             if not quiet_auth:
                 print("  Dataverse: OK")
+        except SystemExit as e:
+            print("  Dataverse: WARNING — authentication did not complete")
+            mark_unavailable(registry.DATAVERSE, e)
+            dv_token = None
         except Exception as e:
             print(f"  Dataverse: WARNING — {e}")
+            mark_unavailable(registry.DATAVERSE, e)
             dv_token = None
 
     if registry.GRAPH in needed:
@@ -876,11 +1436,17 @@ def _run_single_checkpoint(args):
             print("Authenticating to Microsoft Graph...")
         graph = GraphClient(tenant_id)
         try:
-            graph.authenticate()
+            graph.authenticate(preferred_username=canonical_username)
+            verify_authenticated_account(
+                "Microsoft Graph",
+                getattr(graph, "signed_in_username", None),
+            )
+            mark_available(registry.GRAPH)
             if not quiet_auth:
                 print("  Graph: OK")
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
+            mark_unavailable(registry.GRAPH, e)
             graph = None
 
     if registry.PP_ADMIN in needed:
@@ -888,61 +1454,174 @@ def _run_single_checkpoint(args):
             print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
-            pp_admin.authenticate()
+            auth_kwargs = {"preferred_username": canonical_username}
+            if getattr(plan, "pp_admin_flow_required", True) is False:
+                auth_kwargs["include_flow"] = False
+            pp_admin.authenticate(**auth_kwargs)
+            verify_authenticated_account(
+                "Power Platform Admin API",
+                getattr(pp_admin, "signed_in_username", None),
+            )
+            mark_available(registry.PP_ADMIN)
             if not quiet_auth:
                 print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")
+            mark_unavailable(registry.PP_ADMIN, e)
             pp_admin = None
 
     env_id = args.environment_id or config.get("environmentId") or None
     if not env_id and registry.PP_ADMIN in needed and env_url:
-        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+        if pp_admin is None:
+            print(
+                "ERROR: Power Platform Admin access is required to resolve "
+                "the target environment ID."
+            )
+            sys.exit(1)
+        try:
+            env_id = pp_admin.find_environment_id_by_dataverse_url(env_url)
+        except Exception as e:
+            print(
+                "ERROR: Unable to resolve the target environment ID "
+                f"({type(e).__name__})."
+            )
+            sys.exit(1)
+        if not env_id:
+            print(
+                "ERROR: Unable to prove that the Dataverse URL belongs to "
+                "a Power Platform environment visible to this account."
+            )
+            sys.exit(1)
+    elif env_id and pp_admin is not None and env_url:
+        resolved_env_id = pp_admin.find_environment_id_by_dataverse_url(
+            env_url
+        )
+        if not resolved_env_id:
+            print(
+                "ERROR: Unable to prove that the Dataverse URL belongs to "
+                "the configured Power Platform environment."
+            )
+            sys.exit(1)
+        if normalize_environment_id(
+            str(resolved_env_id)
+        ) != normalize_environment_id(str(env_id)):
+            print(
+                "ERROR: The Dataverse URL resolves to a different Power "
+                "Platform environment than the configured profile target."
+            )
+            sys.exit(1)
 
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
         native_host = config.get("powerPlatformApiEndpoint", "")
         if not native_host:
             print(
-                "ERROR: No powerPlatformApiEndpoint in .local/config.json. "
+                "  Native AgentBuilder APIs: WARNING — no "
+                "powerPlatformApiEndpoint in .local/config.json. "
                 "Run /setup again."
             )
-            sys.exit(1)
         try:
             native_ring = ring_from_environment_host(native_host)
             native_host = validate_environment_host(native_host, native_ring)
+            if env_id:
+                native_environment_id = environment_id_from_host(
+                    native_host,
+                    native_ring,
+                )
+                if native_environment_id.casefold() != str(
+                    uuid.UUID(str(env_id))
+                ).casefold():
+                    raise ValueError(
+                        "The native AgentBuilder endpoint belongs to a "
+                        "different environment than the checkpoint target."
+                    )
+            else:
+                env_id = environment_id_from_host(
+                    native_host,
+                    native_ring,
+                )
         except ValueError as e:
             print(f"ERROR: {e}")
             sys.exit(1)
         if not quiet_auth:
             print("Authenticating to native AgentBuilder APIs...")
         try:
-            native_token, native_tenant_id = authenticate_flightcheck(
+            native_auth = authenticate_flightcheck(
                 native_ring,
+                account_hint=canonical_username,
                 include_connectivity=registry.CONNECTIVITY in needed,
+                allow_write=bool(getattr(args, "alm_import_probe", False)),
+                emit_account_identity=False,
+                return_account_identity=True,
             )
+            (
+                native_token,
+                native_tenant_id,
+                native_username,
+            ) = native_auth
+            verify_authenticated_account(
+                "Native AgentBuilder APIs",
+                native_username,
+            )
+            expected_tenant_id = tenant_id or str(
+                config.get("tenantId") or ""
+            ).strip()
+            if expected_tenant_id:
+                try:
+                    expected_tenant_id = str(uuid.UUID(expected_tenant_id))
+                except ValueError:
+                    print("ERROR: Configured tenantId must be a GUID.")
+                    sys.exit(1)
+                if (
+                    native_tenant_id.casefold()
+                    != expected_tenant_id.casefold()
+                ):
+                    print(
+                        "ERROR: Native AgentBuilder authentication resolved "
+                        "a different tenant than the checkpoint target."
+                    )
+                    sys.exit(1)
             tenant_id = native_tenant_id
+            api_version = config.get(
+                "agentBuilderApiVersion",
+                DEFAULT_API_VERSION,
+            )
             agentbuilder = AgentBuilderClient(
                 native_host,
                 native_token,
                 ring=native_ring,
                 tenant_id=native_tenant_id,
-                api_version=config.get(
-                    "agentBuilderApiVersion", "2024-10-01"
-                ),
+                api_version=api_version,
+            )
+            alm_import_target = _create_alm_import_target(
+                args,
+                source_host=native_host,
+                token=native_token,
+                tenant_id=native_tenant_id,
+                ring=native_ring,
+                api_version=api_version,
             )
             if registry.CONNECTIVITY in needed:
                 connectivity = ConnectivityClient(
                     native_token,
                     ring=native_ring,
-                    api_version=config.get(
-                        "agentBuilderApiVersion", "2024-10-01"
-                    ),
+                    api_version=api_version,
                 )
+                mark_available(registry.CONNECTIVITY)
+            if registry.AGENTBUILDER in needed:
+                mark_available(registry.AGENTBUILDER)
             if not quiet_auth:
                 print("  Native AgentBuilder APIs: OK")
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
         except Exception as e:
             print(f"  Native AgentBuilder APIs: WARNING — {e}")
+            if registry.AGENTBUILDER in needed:
+                mark_unavailable(registry.AGENTBUILDER, e)
+            if registry.CONNECTIVITY in needed:
+                mark_unavailable(registry.CONNECTIVITY, e)
             agentbuilder = None
+            alm_import_target = None
             connectivity = None
 
     if registry.PVA in needed:
@@ -951,10 +1630,12 @@ def _run_single_checkpoint(args):
         pva = PVAClient(tenant_id, env_url)
         try:
             pva.authenticate()
+            mark_available(registry.PVA)
             if not quiet_auth:
                 print("  Copilot Studio: OK")
         except Exception as e:
             print(f"  Copilot Studio: WARNING — {e}")
+            mark_unavailable(registry.PVA, e)
             pva = None
 
     if registry.POWERPLATFORM in needed:
@@ -962,19 +1643,38 @@ def _run_single_checkpoint(args):
             print("Authenticating to Power Platform API (capacity allocation)...")
         powerplatform = PowerPlatformClient(tenant_id)
         try:
-            powerplatform.authenticate()
+            if canonical_username:
+                powerplatform.authenticate(
+                    preferred_username=canonical_username
+                )
+            else:
+                powerplatform.authenticate()
+            verify_authenticated_account(
+                "Power Platform API",
+                getattr(powerplatform, "signed_in_username", None),
+            )
+            mark_available(registry.POWERPLATFORM)
             if not quiet_auth:
                 print("  Power Platform API: OK")
         except Exception as e:
             print(f"  Power Platform API: WARNING — {e}")
+            mark_unavailable(registry.POWERPLATFORM, e)
             powerplatform = None
 
     # --- Build runner with the target filter (hydrate-then-filter) ---
     runner = FlightCheckRunner(
         scope=f"checkpoint:{target}",
-        target_matcher=lambda cid: registry.matches(target, cid),
+        target_matcher=lambda cid: (
+            registry.matches(target, cid)
+            or cid.startswith("CHECKPOINT-CLIENT-")
+            or cid.startswith("CHECKPOINT-CONTRACT-")
+        ),
     )
+    runner.execution_targets = (target,)
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         explicit_agent_slug
         or config.get("activeAgent")
@@ -990,7 +1690,13 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
     runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
+    _apply_runtime_evidence_args(runner, args)
+    runner.results.extend(
+        _client_blockers(client_availability, "CHECKPOINT")
+    )
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -1001,6 +1707,10 @@ def _run_single_checkpoint(args):
 
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
+    runner.register(
+        "FlightCheck Checkpoint",
+        _single_checkpoint_contract_check(target),
+    )
 
     if not quiet_auth:
         print("\nRunning checkpoint...\n")
@@ -1021,92 +1731,868 @@ def _run_single_checkpoint(args):
     # FlightChecks that gate individual setup/connect steps (ADO 7587431).
     # Without this, checkpoint runs were invisible to the Aria dashboards even
     # though they exercise the same checks a full run does.
-    if not getattr(args, "no_telemetry", False):
-        # Explicit --invocation-source wins; otherwise checkpoint mode attributes
-        # the run to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
-        _inv_source = getattr(args, "invocation_source", None) or "connect"
-        _tele_debug = os.environ.get(
-            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
-        ).strip().lower() in ("1", "on", "true", "yes")
-        # Resolve the active agent from config (may be empty for Entra-only
-        # checkpoints run before /setup writes a full config).
-        _agents = config.get("agents", [])
-        if not _agents:
-            _agent_entry = config.get("agent", {})
-            if _agent_entry:
-                _agents = [_agent_entry]
-        _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
-        _active_agent = next(
-            (a for a in _agents if a.get("slug") == _active),
-            _agents[0] if _agents else {},
-        )
-        # Best-effort tenant display name (OII; privacy-approved). Reuses the
-        # already-authenticated Graph client when one was needed; never re-auths.
-        # Falls back to the persisted ``.local/.tenant_name`` cache when the
-        # live lookup is unavailable (e.g. infra-only scope where ``graph`` is
-        # None, or Graph auth failed for lack of ``Organization.Read.All``
-        # consent) so previously-resolved tenants keep their name on the event
-        # instead of emitting blank. Same-tenant guard is enforced inside the
-        # cache helper.
-        tenant_name = ""
-        try:
-            if graph is not None:
-                tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
-        except Exception:  # noqa: BLE001 — telemetry name is best-effort
-            tenant_name = ""
-        try:
-            from flightcheck import telemetry
+    _emit_run_telemetry(
+        result, args, config, graph, tenant_id, scope=f"checkpoint:{target}"
+    )
 
-            if not tenant_name and (tenant_id or ""):
-                tenant_name = telemetry.get_cached_tenant_name(tenant_id or "")
-            elif tenant_name and (tenant_id or ""):
-                telemetry.cache_tenant_name(tenant_id or "", tenant_name)
+    # BLOCKED is a hard release gate (forces overall = NOT_READY), so it must
+    # fail the exit code just like FAILED/ERROR — otherwise a CI/Connect caller
+    # keying on the exit code reads a blocked essential capability as success.
+    sys.exit(_run_exit_code(result))
 
-            _tele = telemetry.emit_flightcheck_telemetry(
-                result,
-                tenant_id=tenant_id or "",
-                tenant_name=tenant_name,
-                agent_id=_active_agent.get("botId", ""),
-                scope=f"checkpoint:{target}",
-                agent_count=len(_agents),
-                invocation_source=_inv_source,
-            )
-            if _tele_debug:
-                print(
-                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
-                    f"events={_tele.get('events')} status={_tele.get('status')} "
-                    f"reason={_tele.get('reason')}"
-                )
-        except Exception as _tele_err:  # never break the run
-            if _tele_debug:
-                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
 
-        # Additive adk.* event family (spec Feature #7403772), mirroring the
-        # --scope emit so checkpoint runs also count toward the adk.* cubes.
-        try:
-            import adk_telemetry as _adk
+def _single_checkpoint_contract_check(target: str):
+    """Fail closed when a requested checkpoint cannot be evaluated."""
+    from flightcheck import registry
 
-            _agent_id = _active_agent.get("botId", "")
-            if tenant_id or tenant_name:
-                _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
-            _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
-            _result_map = {
-                "READY": "pass",
-                "READY_WITH_WARNINGS": "partial",
-                "NOT_READY": "fail",
+    def check(runner) -> list[CheckResult]:
+        target_rows = [
+            row
+            for row in runner.results
+            if registry.matches(target, row.checkpoint_id)
+        ]
+        rows: list[CheckResult] = []
+        if not target_rows:
+            rows.append(CheckResult(
+                checkpoint_id="CHECKPOINT-CONTRACT-MISSING",
+                category="FlightCheck Checkpoint",
+                priority=Priority.CRITICAL.value,
+                status=Status.BLOCKED.value,
+                description="Requested checkpoint emitted no result",
+                result=(
+                    f"Checkpoint {target} emitted no validation row."
+                ),
+                remediation=(
+                    "Restore checkpoint dispatch and rerun the checkpoint."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
+            return rows
+
+        if all(
+            row.status in {
+                Status.NOT_CONFIGURED.value,
+                Status.SKIPPED.value,
             }
-            _adk.emit_flightcheck_result(
-                agent_id=_agent_id,
-                run_index=_ridx,
-                result=_result_map.get(result.overall, "fail"),
-                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
-            )
-            _adk.flush(timeout=3)
-        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
-            pass
+            for row in target_rows
+        ):
+            rows.append(CheckResult(
+                checkpoint_id="CHECKPOINT-CONTRACT-UNRESOLVED",
+                category="FlightCheck Checkpoint",
+                priority=Priority.CRITICAL.value,
+                status=Status.BLOCKED.value,
+                description="Requested checkpoint is unresolved",
+                result=(
+                    f"Checkpoint {target} produced only NotConfigured or "
+                    "Skipped rows."
+                ),
+                remediation=(
+                    "Provide the required target context or evidence and "
+                    "rerun the checkpoint."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
 
-    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
+        if any(
+            row.status == Status.MANUAL.value
+            for row in target_rows
+        ):
+            rows.append(CheckResult(
+                checkpoint_id="CHECKPOINT-CONTRACT-GUIDED",
+                category="FlightCheck Checkpoint",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description="Requested checkpoint requires guided evidence",
+                result=(
+                    f"Guided verification remains for checkpoint {target}."
+                ),
+                remediation=(
+                    "Reconcile the Manual row with the owning administrator "
+                    "before accepting this checkpoint."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
+        return rows
+
+    return check
+
+
+def _client_blockers(
+    availability: dict[str, dict[str, object]],
+    prefix: str,
+) -> list[CheckResult]:
+    blockers: list[CheckResult] = []
+    for client_name, state in sorted(availability.items()):
+        if state.get("available") is True:
+            continue
+        label = client_name.replace("_", " ").title()
+        blockers.append(CheckResult(
+            checkpoint_id=f"{prefix}-CLIENT-{client_name.upper()}",
+            category="FlightCheck Profile",
+            priority=Priority.CRITICAL.value,
+            status=Status.BLOCKED.value,
+            description=f"{label} client availability",
+            result=(
+                f"{label} authentication was required by this profile but "
+                f"could not be completed: {state.get('reason') or 'unavailable'}"
+            ),
+            remediation=(
+                "Restore access for the required client, confirm the preferred "
+                "account, and rerun the same FlightCheck profile."
+            ),
+            remediation_id="FLIGHTCHECK-REQUIRED-CLIENT",
+            evidence={
+                "client": client_name,
+                "required": True,
+                "available": False,
+            },
+            roles=[Role.ESS_MAKER.value],
+        ))
+    return blockers
+
+
+def _profile_client_blockers(
+    availability: dict[str, dict[str, object]],
+) -> list[CheckResult]:
+    return _client_blockers(availability, "PROFILE")
+
+
+def _safe_client_error_reason(error: BaseException | str) -> str:
+    """Return a stable client failure reason without backend response text."""
+    if isinstance(error, str):
+        return error
+    status_code = getattr(
+        getattr(error, "response", None),
+        "status_code",
+        None,
+    )
+    status_hint = (
+        f" (HTTP {status_code})" if status_code is not None else ""
+    )
+    return f"{type(error).__name__}{status_hint}"
+
+
+def _profile_family_cardinality_check(
+    family_contract: dict[str, dict[str, int]],
+):
+    from flightcheck import registry
+
+    def check(runner) -> list[CheckResult]:
+        rows: list[CheckResult] = []
+        for family, contract in sorted(family_contract.items()):
+            minimum = int(contract.get("minimum") or 0)
+            emitted = sum(
+                1
+                for result in runner.results
+                if registry.matches(family, result.checkpoint_id)
+                and result.status in {
+                    Status.PASSED.value,
+                    Status.FAILED.value,
+                }
+            )
+            if emitted >= minimum:
+                continue
+            rows.append(CheckResult(
+                checkpoint_id=f"PROFILE-FAMILY-{family}",
+                category="FlightCheck Profile",
+                priority=Priority.CRITICAL.value,
+                status=Status.BLOCKED.value,
+                description=f"{family} profile family cardinality",
+                result=(
+                    f"The profile declared family {family}, but emitted "
+                    f"{emitted} resolved validation row(s); at least "
+                    f"{minimum} are required."
+                ),
+                remediation=(
+                    "Restore the prerequisite inventory or client access so "
+                    f"{family} emits its required validation rows, then rerun."
+                ),
+                remediation_id="FLIGHTCHECK-FAMILY-CARDINALITY",
+                evidence={
+                    "family": family,
+                    "minimum": minimum,
+                    "emitted": emitted,
+                },
+                roles=[Role.ESS_MAKER.value],
+            ))
+        return rows
+
+    return check
+
+
+def _profile_checkpoint_contract_check(
+    profile,
+):
+    """Block missing/unresolved fixed profile rows and flag guided rows."""
+    from flightcheck import registry
+
+    fixed_ids = tuple(
+        checkpoint_id
+        for checkpoint_id in profile.checkpoint_ids
+        if (
+            (spec := registry.resolve(checkpoint_id)) is None
+            or not spec.is_family
+        )
+    )
+
+    def check(runner) -> list[CheckResult]:
+        by_id: dict[str, list[CheckResult]] = {}
+        for result in runner.results:
+            by_id.setdefault(result.checkpoint_id, []).append(result)
+        missing = [
+            checkpoint_id for checkpoint_id in fixed_ids
+            if checkpoint_id not in by_id
+        ]
+        unresolved = [
+            checkpoint_id for checkpoint_id in fixed_ids
+            if checkpoint_id in by_id
+            and all(
+                row.status in {
+                    Status.NOT_CONFIGURED.value,
+                    Status.SKIPPED.value,
+                }
+                for row in by_id[checkpoint_id]
+            )
+        ]
+        guided = [
+            checkpoint_id for checkpoint_id in fixed_ids
+            if any(
+                row.status == Status.MANUAL.value
+                for row in by_id.get(checkpoint_id, [])
+            )
+        ]
+        rows: list[CheckResult] = []
+        if missing:
+            rows.append(CheckResult(
+                checkpoint_id="PROFILE-CHECKPOINT-MISSING",
+                category="FlightCheck Profile",
+                priority=Priority.CRITICAL.value,
+                status=Status.BLOCKED.value,
+                description="Required profile checkpoints emitted no row",
+                result=(
+                    "Required profile checkpoints emitted no result: "
+                    + ", ".join(sorted(missing))
+                    + "."
+                ),
+                remediation=(
+                    "Restore checkpoint dispatch and rerun the profile."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
+        if unresolved:
+            rows.append(CheckResult(
+                checkpoint_id="PROFILE-CHECKPOINT-UNRESOLVED",
+                category="FlightCheck Profile",
+                priority=Priority.CRITICAL.value,
+                status=Status.BLOCKED.value,
+                description="Required profile checkpoints are unresolved",
+                result=(
+                    "Required profile checkpoints remain NotConfigured or "
+                    "Skipped: "
+                    + ", ".join(sorted(unresolved))
+                    + "."
+                ),
+                remediation=(
+                    "Provide the required target context or evidence and "
+                    "rerun the profile."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
+        if guided:
+            rows.append(CheckResult(
+                checkpoint_id="PROFILE-CHECKPOINT-GUIDED",
+                category="FlightCheck Profile",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description="Guided profile checkpoints require evidence",
+                result=(
+                    "Guided verification remains for: "
+                    + ", ".join(sorted(guided))
+                    + "."
+                ),
+                remediation=(
+                    "Reconcile each Manual row with the owning administrator "
+                    "before accepting this profile."
+                ),
+                roles=[Role.ESS_MAKER.value],
+            ))
+        return rows
+
+    return check
+
+
+def _run_profile(args):
+    """Run a named validation profile and emit the versioned result contract."""
+    from flightcheck import registry
+
+    profile_name = args.profile
+    profile = registry.resolve_profile(profile_name)
+    if profile is None:
+        print(f"ERROR: Unknown profile {profile_name!r}.")
+        print("Valid profiles:")
+        for item in registry.list_profiles():
+            print(f"  {item.name}")
+        sys.exit(2)
+
+    plan = registry.profile_requirements(profile_name)
+    needed = plan.clients
+    if bool(getattr(args, "runtime_reachability", False)):
+        print(
+            "ERROR: --runtime-reachability is not allowed with --profile. "
+            "Profiles are strictly read-only."
+        )
+        sys.exit(2)
+    if bool(getattr(args, "alm_import_probe", False)):
+        print(
+            "ERROR: --alm-import-probe is not allowed with --profile. "
+            "Profiles are strictly read-only."
+        )
+        sys.exit(2)
+
+    config_path = os.path.join(".local", "config.json")
+    if not os.path.exists(config_path) and plan.requires_config:
+        print("ERROR: .local/config.json not found. Run /setup first.")
+        sys.exit(1)
+
+    try:
+        config = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            if not isinstance(config, dict):
+                raise ValueError(
+                    f"{config_path} must contain a JSON object"
+                )
+        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+        _profile_target_matches_config(args, config)
+        _runtime_evidence_values(args)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to resolve the profile target: {e}")
+        sys.exit(1)
+
+    env_url = args.environment_url or config.get("dataverseEndpoint", "")
+    if plan.requires_dataverse_endpoint and not env_url:
+        print("ERROR: No dataverseEndpoint in .local/config.json.")
+        sys.exit(1)
+    try:
+        _validation_context_from_args(
+            args,
+            config,
+            env_url,
+            args.environment_id or config.get("environmentId") or None,
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        print(
+            "Pass --validation-realm dev|test|prod (or set \"realm\" in "
+            ".local/config.json) for profile runs."
+        )
+        sys.exit(1)
+
+    quiet_auth = getattr(args, "quiet_auth", False)
+    if not quiet_auth:
+        print()
+        print("=" * 64)
+        print("  ESS FLIGHTCHECK — Validation Profile")
+        print("=" * 64)
+        print(f"  Profile:     {profile_name}")
+        if env_url:
+            print(f"  Environment: {env_url}")
+        print(f"  Clients:     {', '.join(sorted(needed)) or '(none)'}")
+        print("=" * 64)
+        print()
+
+    dv_token = None
+    tenant_id = None
+    graph = None
+    pp_admin = None
+    pva = None
+    powerplatform = None
+    agentbuilder = None
+    alm_import_target = None
+    connectivity = None
+    configured_tenant_id = str(
+        getattr(args, "tenant_id", "")
+        or config.get("tenantId")
+        or ""
+    ).strip() or None
+    tenant_id = configured_tenant_id
+
+    preferred_username = str(
+        getattr(args, "preferred_username", "") or ""
+    ).strip() or None
+    canonical_username = preferred_username
+    account_verification_required = (
+        preferred_username is not None or len(needed) > 1
+    )
+    client_availability: dict[str, dict[str, object]] = {
+        client_name: {
+            "required": True,
+            "available": False,
+            "reason": "authentication was not attempted",
+        }
+        for client_name in sorted(needed)
+    }
+
+    def mark_available(client_name: str, account: str | None = None) -> None:
+        state = client_availability[client_name]
+        state["available"] = True
+        state["reason"] = ""
+        if account:
+            state["authenticatedAccountVerified"] = True
+
+    def mark_unavailable(
+        client_name: str,
+        error: BaseException | str,
+    ) -> None:
+        state = client_availability[client_name]
+        state["available"] = False
+        state["authenticatedAccountVerified"] = False
+        state["reason"] = _safe_client_error_reason(error)
+
+    def verified_account(
+        client_name: str,
+        account: str | None,
+    ) -> str | None:
+        nonlocal canonical_username
+        if not account and account_verification_required:
+            raise ValueError(
+                f"{client_name} could not verify the authenticated account "
+                "required for a multi-client profile."
+            )
+        if not account:
+            return None
+        if canonical_username is None:
+            canonical_username = account
+            return account
+        if account.casefold() != canonical_username.casefold():
+            raise ValueError(
+                f"{client_name} authenticated a different account than the "
+                "other clients in this profile."
+            )
+        return account
+
+    if needed & {
+        registry.GRAPH,
+        registry.PP_ADMIN,
+        registry.PVA,
+        registry.DATAVERSE,
+        registry.POWERPLATFORM,
+    }:
+        from auth import discover_tenant
+        if env_url:
+            try:
+                tenant_id = str(
+                    uuid.UUID(discover_tenant(env_url))
+                )
+            except Exception as e:
+                print(
+                    "ERROR: Unable to resolve a concrete tenant for the "
+                    f"Dataverse profile target ({type(e).__name__})."
+                )
+                sys.exit(1)
+            if (
+                configured_tenant_id
+                and configured_tenant_id.casefold()
+                != tenant_id.casefold()
+            ):
+                print(
+                    "ERROR: The Dataverse environment belongs to a different "
+                    "tenant than the configured profile target."
+                )
+                sys.exit(1)
+        else:
+            if not configured_tenant_id:
+                print(
+                    "ERROR: A concrete tenantId is required for this "
+                    "profile when no Dataverse endpoint is configured."
+                )
+                sys.exit(1)
+            try:
+                tenant_id = str(uuid.UUID(configured_tenant_id))
+            except ValueError:
+                print("ERROR: Configured tenantId must be a GUID.")
+                sys.exit(1)
+
+    if registry.DATAVERSE in needed and env_url:
+        from auth import authenticate
+        if not quiet_auth:
+            print("Authenticating to Dataverse...")
+        try:
+            dv_token, dv_username = authenticate(
+                env_url,
+                preferred_username=canonical_username,
+                return_account_identity=True,
+            )
+            mark_available(
+                registry.DATAVERSE,
+                verified_account("Dataverse", dv_username),
+            )
+            if not quiet_auth:
+                print("  Dataverse: OK")
+        except SystemExit as e:
+            print("  Dataverse: WARNING — authentication did not complete")
+            mark_unavailable(registry.DATAVERSE, e)
+            dv_token = None
+        except Exception as e:
+            print(f"  Dataverse: WARNING — {e}")
+            mark_unavailable(registry.DATAVERSE, e)
+            dv_token = None
+
+    if registry.GRAPH in needed:
+        if not quiet_auth:
+            print("Authenticating to Microsoft Graph...")
+        graph = GraphClient(tenant_id)
+        try:
+            graph.authenticate(preferred_username=canonical_username)
+            mark_available(
+                registry.GRAPH,
+                verified_account(
+                    "Microsoft Graph",
+                    getattr(graph, "signed_in_username", None),
+                ),
+            )
+            if not quiet_auth:
+                print("  Graph: OK")
+        except Exception as e:
+            print(f"  Graph: WARNING — {e}")
+            mark_unavailable(registry.GRAPH, e)
+            graph = None
+
+    if registry.PP_ADMIN in needed:
+        if not quiet_auth:
+            print("Authenticating to Power Platform Admin API...")
+        pp_admin = PPAdminClient(tenant_id)
+        try:
+            auth_kwargs = {"preferred_username": canonical_username}
+            if getattr(plan, "pp_admin_flow_required", True) is False:
+                auth_kwargs["include_flow"] = False
+            pp_admin.authenticate(**auth_kwargs)
+            mark_available(
+                registry.PP_ADMIN,
+                verified_account(
+                    "Power Platform Admin API",
+                    getattr(pp_admin, "signed_in_username", None),
+                ),
+            )
+            if not quiet_auth:
+                print("  Power Platform: OK")
+        except Exception as e:
+            print(f"  Power Platform: WARNING — {e}")
+            mark_unavailable(registry.PP_ADMIN, e)
+            pp_admin = None
+
+    env_id = args.environment_id or config.get("environmentId") or None
+    controller_binding = (
+        getattr(args, "invocation_source", None) == "connect"
+        and bool(getattr(args, "connect_config", None))
+        and bool(getattr(args, "environment_id", None))
+        and bool(getattr(args, "environment_url", None))
+    )
+    if not env_id and registry.PP_ADMIN in needed and env_url:
+        if pp_admin is not None:
+            try:
+                env_id = pp_admin.find_environment_id_by_dataverse_url(
+                    env_url
+                )
+            except Exception as e:
+                mark_unavailable(registry.PP_ADMIN, e)
+                pp_admin = None
+            if pp_admin is not None and not env_id:
+                mark_unavailable(
+                    registry.PP_ADMIN,
+                    "Dataverse environment binding could not be resolved",
+                )
+                pp_admin = None
+    elif env_id and pp_admin is not None and env_url:
+        try:
+            resolved_env_id = pp_admin.find_environment_id_by_dataverse_url(
+                env_url
+            )
+        except Exception as e:
+            mark_unavailable(registry.PP_ADMIN, e)
+            pp_admin = None
+            resolved_env_id = None
+        if pp_admin is None:
+            resolved_env_id = None
+        if not resolved_env_id:
+            if pp_admin is not None and not controller_binding:
+                mark_unavailable(
+                    registry.PP_ADMIN,
+                    "Dataverse environment binding could not be resolved",
+                )
+                pp_admin = None
+        elif normalize_environment_id(
+            str(resolved_env_id)
+        ) != normalize_environment_id(str(env_id)):
+            print(
+                "ERROR: The Dataverse URL resolves to a different Power "
+                "Platform environment than the configured profile target."
+            )
+            sys.exit(1)
+
+    if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
+        native_host = config.get("powerPlatformApiEndpoint", "")
+        native_config_error = None
+        if not native_host:
+            native_config_error = (
+                "powerPlatformApiEndpoint is missing from workspace config"
+            )
+        else:
+            try:
+                native_ring = ring_from_environment_host(native_host)
+                native_host = validate_environment_host(
+                    native_host,
+                    native_ring,
+                )
+                native_environment_id = environment_id_from_host(
+                    native_host,
+                    native_ring,
+                )
+                expected_environment_id = (
+                    str(uuid.UUID(str(env_id)))
+                    if env_id
+                    else ""
+                )
+                if (
+                    expected_environment_id
+                    and native_environment_id.casefold()
+                    != expected_environment_id.casefold()
+                ):
+                    raise ValueError(
+                        "powerPlatformApiEndpoint belongs to a different "
+                        "environment than the profile target."
+                    )
+                if not env_id:
+                    env_id = native_environment_id
+            except ValueError as e:
+                native_config_error = str(e)
+        if native_config_error:
+            print(
+                "  Native AgentBuilder APIs: WARNING — "
+                f"{native_config_error}"
+            )
+            if registry.AGENTBUILDER in needed:
+                mark_unavailable(
+                    registry.AGENTBUILDER,
+                    native_config_error,
+                )
+            if registry.CONNECTIVITY in needed:
+                mark_unavailable(
+                    registry.CONNECTIVITY,
+                    native_config_error,
+                )
+        else:
+            if not quiet_auth:
+                print("Authenticating to native AgentBuilder APIs...")
+            try:
+                native_auth = authenticate_flightcheck(
+                    native_ring,
+                    account_hint=canonical_username,
+                    include_connectivity=registry.CONNECTIVITY in needed,
+                    allow_write=False,
+                    emit_account_identity=False,
+                    return_account_identity=True,
+                )
+                (
+                    native_token,
+                    native_tenant_id,
+                    native_username,
+                ) = native_auth
+                verified_native_username = verified_account(
+                    "Native AgentBuilder APIs",
+                    native_username,
+                )
+                expected_native_tenant_id = (
+                    tenant_id or configured_tenant_id
+                )
+                if expected_native_tenant_id:
+                    try:
+                        expected_native_tenant_id = str(
+                            uuid.UUID(str(expected_native_tenant_id))
+                        )
+                    except ValueError as exc:
+                        raise ValueError(
+                            "Configured tenantId must be a GUID."
+                        ) from exc
+                if (
+                    expected_native_tenant_id
+                    and native_tenant_id.casefold()
+                    != expected_native_tenant_id.casefold()
+                ):
+                    raise ValueError(
+                        "Native AgentBuilder authentication resolved a "
+                        "different tenant than the profile target."
+                    )
+                if not tenant_id:
+                    tenant_id = native_tenant_id
+                api_version = config.get(
+                    "agentBuilderApiVersion",
+                    DEFAULT_API_VERSION,
+                )
+                agentbuilder = AgentBuilderClient(
+                    native_host,
+                    native_token,
+                    ring=native_ring,
+                    tenant_id=native_tenant_id,
+                    api_version=api_version,
+                )
+                alm_import_target = _create_alm_import_target(
+                    args,
+                    source_host=native_host,
+                    token=native_token,
+                    tenant_id=native_tenant_id,
+                    ring=native_ring,
+                    api_version=api_version,
+                )
+                if registry.CONNECTIVITY in needed:
+                    connectivity = ConnectivityClient(
+                        native_token,
+                        ring=native_ring,
+                        api_version=api_version,
+                    )
+                    mark_available(
+                        registry.CONNECTIVITY,
+                        verified_native_username,
+                    )
+                if registry.AGENTBUILDER in needed:
+                    mark_available(
+                        registry.AGENTBUILDER,
+                        verified_native_username,
+                    )
+                if not quiet_auth:
+                    print("  Native AgentBuilder APIs: OK")
+            except Exception as e:
+                print(f"  Native AgentBuilder APIs: WARNING — {e}")
+                if registry.AGENTBUILDER in needed:
+                    mark_unavailable(registry.AGENTBUILDER, e)
+                if registry.CONNECTIVITY in needed:
+                    mark_unavailable(registry.CONNECTIVITY, e)
+                agentbuilder = None
+                alm_import_target = None
+                connectivity = None
+
+    if registry.PVA in needed:
+        if not quiet_auth:
+            print("Authenticating to Copilot Studio (Island Gateway)...")
+        pva = PVAClient(tenant_id, env_url)
+        try:
+            pva.authenticate()
+            mark_available(registry.PVA)
+            if not quiet_auth:
+                print("  Copilot Studio: OK")
+        except Exception as e:
+            print(f"  Copilot Studio: WARNING — {e}")
+            mark_unavailable(registry.PVA, e)
+            pva = None
+
+    if registry.POWERPLATFORM in needed:
+        if not quiet_auth:
+            print("Authenticating to Power Platform API (capacity allocation)...")
+        powerplatform = PowerPlatformClient(tenant_id)
+        try:
+            powerplatform.authenticate(
+                preferred_username=canonical_username
+            )
+            mark_available(
+                registry.POWERPLATFORM,
+                verified_account(
+                    "Power Platform API",
+                    getattr(powerplatform, "signed_in_username", None),
+                ),
+            )
+            if not quiet_auth:
+                print("  Power Platform API: OK")
+        except Exception as e:
+            print(f"  Power Platform API: WARNING — {e}")
+            mark_unavailable(registry.POWERPLATFORM, e)
+            powerplatform = None
+
+    try:
+        resolved_config = dict(config)
+        if tenant_id:
+            resolved_config["tenantId"] = tenant_id
+        validation_context = _validation_context_from_args(
+            args, resolved_config, env_url, env_id
+        )
+        requested_validation_context = (
+            _requested_validation_context_from_args(args)
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        print("Pass --validation-realm dev|test|prod (or set \"realm\" in "
+              ".local/config.json) for profile runs.")
+        sys.exit(1)
+
+    runner = FlightCheckRunner(
+        scope=f"profile:{profile_name}",
+        target_matcher=lambda cid: (
+            registry.profile_matches(profile_name, cid)
+            or cid.startswith("PROFILE-CLIENT-")
+            or cid.startswith("PROFILE-FAMILY-")
+            or cid.startswith("PROFILE-CHECKPOINT-")
+        ),
+    )
+    runner.execution_targets = profile.checkpoint_ids
+    runner.workday_da_profile = profile_name.startswith("workday-da:")
+    runner.config = config
+    runner.agent_slug = validation_context.agent_slug
+    runner.env_url = env_url
+    runner.dv_token = dv_token
+    runner.env_id = env_id
+    runner.graph = graph
+    runner.pp_admin = pp_admin
+    runner.pva = pva
+    runner.powerplatform = powerplatform
+    runner.azure_arm = None
+    runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
+    runner.alm_import_probe = False
+    runner.connectivity = connectivity
+    runner.runtime_reachability = False
+    runner.runtime_reachability_declined = False
+    runner.preserve_workday_manual_rows = True
+    _apply_runtime_evidence_args(runner, args)
+    runner.results.extend(_profile_client_blockers(client_availability))
+
+    for label, fn in plan.ordered_fns:
+        runner.register(label, fn)
+    family_contract = registry.profile_family_contract(profile_name)
+    if family_contract:
+        runner.register(
+            "FlightCheck Profile",
+            _profile_family_cardinality_check(family_contract),
+        )
+    runner.register(
+        "FlightCheck Profile",
+        _profile_checkpoint_contract_check(profile),
+    )
+
+    if not quiet_auth:
+        print("\nRunning profile...\n")
+    result = runner.run()
+    result.profile = profile_name
+    result.profile_checkpoints = list(profile.checkpoint_ids)
+    result.profile_families = family_contract
+    result.requested_validation_context = requested_validation_context
+    result.validation_context = validation_context.to_dict()
+    result.client_availability = client_availability
+
+    _print_prioritized_summary(result, verbose_manual=True)
+    save_results(result, args.output)
+
+    if not result.results:
+        print(f"\nNOTE: profile {profile_name} produced no result rows.")
+        sys.exit(1)
+
+    # Profile runs are a "connect" invocation source too; emit outcome
+    # telemetry so they surface on the Aria dashboards alongside --scope and
+    # --checkpoint runs (best-effort; never affects exit).
+    _emit_run_telemetry(
+        result, args, config, graph, tenant_id, scope=f"profile:{profile_name}"
+    )
+
+    sys.exit(_run_exit_code(result))
 
 
 def main():
@@ -1122,7 +2608,7 @@ def main():
     parser.add_argument(
         "--scope", default=None,
         choices=["full"] + list(SCOPE_MAP.keys()),
-        help="Validation scope (default: full). Mutually exclusive with --checkpoint.",
+        help="Validation scope (default: full). Mutually exclusive with --checkpoint/--profile.",
     )
     parser.add_argument(
         "--output", default="workspace/flightcheck",
@@ -1137,6 +2623,29 @@ def main():
         help="Override the Power Platform environment ID (used by environment_picker.py)",
     )
     parser.add_argument(
+        "--tenant-id",
+        help=(
+            "Explicit Microsoft Entra tenant GUID for checkpoint/profile "
+            "target validation. Must match configured and discovered tenant "
+            "state when those values are available."
+        ),
+    )
+    parser.add_argument(
+        "--ring",
+        choices=["prod", "preprod", "test"],
+        help=(
+            "Confirm the Power Platform service ring when it cannot be "
+            "resolved from local setup state."
+        ),
+    )
+    parser.add_argument(
+        "--power-platform-admin-origin",
+        help=(
+            "Retain the resolved Power Platform admin portal origin for "
+            "ring-correct remediation links."
+        ),
+    )
+    parser.add_argument(
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
     )
@@ -1145,7 +2654,57 @@ def main():
         help="Run exactly one checkpoint (or a family, e.g. WD-FLOW-*) by ID and "
              "report only its result. Hydrates the checkpoint's declared "
              "prerequisites and initialises only the clients it needs. Mutually "
-             "exclusive with --scope.",
+             "exclusive with --scope/--profile.",
+    )
+    parser.add_argument(
+        "--profile",
+        help="Run a named validation profile, e.g. workday-da:setup-readiness. "
+             "Profile runs need a realm (--validation-realm, or a \"realm\" key "
+             "in .local/config.json) and emit the versioned Connect result "
+             "contract in results.json.",
+    )
+    parser.add_argument(
+        "--validation-realm",
+        choices=["dev", "test", "prod"],
+        help="Realm for a --profile validation context. Required with --profile "
+             "unless .local/config.json supplies a \"realm\" value.",
+    )
+    parser.add_argument(
+        "--agent-schema-name",
+        help="Agent schema name for a --profile validation context.",
+    )
+    parser.add_argument(
+        "--runtime-evidence-attempt-id",
+        help=(
+            "Opaque operator evidence label for workday-da:post-runtime, "
+            "workday-da:final, or WD-DA-RUN-001. This is not a Power Automate "
+            "or Copilot Studio correlation identifier."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-evidence-start",
+        help="UTC ISO-8601 start of the employee Test pane evidence window.",
+    )
+    parser.add_argument(
+        "--runtime-evidence-end",
+        help="UTC ISO-8601 end of the employee Test pane evidence window.",
+    )
+    parser.add_argument(
+        "--runtime-evidence-flow-id",
+        action="append",
+        default=[],
+        help=(
+            "Reviewed Workday runtime flow ID expected to run during the "
+            "recorded Test pane attempt. Repeat for each expected flow."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-evidence-migration-baseline",
+        action="store_true",
+        help=(
+            "Mark the supplied runtime evidence window as migration-derived "
+            "from previously captured ready state."
+        ),
     )
     parser.add_argument(
         "--connect-config",
@@ -1155,6 +2714,14 @@ def main():
             ".local/config.json for this run. Connect/setup skills use this "
             "when their validation state intentionally lives outside the "
             "foundation config."
+        ),
+    )
+    parser.add_argument(
+        "--preferred-username",
+        default=None,
+        help=(
+            "Prefer this account for checkpoint/profile authentication. "
+            "Clients that expose the authenticated account reject a mismatch."
         ),
     )
     parser.add_argument(
@@ -1196,12 +2763,32 @@ def main():
         ),
     )
     parser.add_argument(
+        "--alm-import-probe",
+        action="store_true",
+        help=(
+            "Enable the PUB-002 AgentBuilder ALM import write-probe. This is a "
+            "MUTATING action: it exports the configured agent's ALM package and "
+            "imports it, creating a throwaway agent in the target environment. "
+            "Omitted by default, so PUB-002 stays read-only and reports SKIPPED. "
+            "Requires --alm-import-target-environment-id for a separate "
+            "disposable environment where creating an agent is safe."
+        ),
+    )
+    parser.add_argument(
+        "--alm-import-target-environment-id",
+        help=(
+            "Power Platform environment ID that receives PUB-002's imported "
+            "package. Required with --alm-import-probe and must differ from "
+            "the configured source environment."
+        ),
+    )
+    parser.add_argument(
         "--invocation-source", default=None,
         choices=["adk", "installer", "cli", "connect"],
         help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
              "installer, cli=direct Python CLI, connect=incremental single-checkpoint "
-             "run from a connect/setup skill). Default: cli for --scope runs, connect "
-             "for --checkpoint runs.",
+             "or profile run from a connect/setup skill). Default: cli for --scope "
+             "runs, connect for --checkpoint/--profile runs.",
     )
     parser.add_argument(
         "--workday-app-id", default=None,
@@ -1230,13 +2817,18 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.alm_import_probe and not args.alm_import_target_environment_id:
+        parser.error(
+            "--alm-import-target-environment-id is required with "
+            "--alm-import-probe"
+        )
     if args.agent_slug is not None:
         try:
             validate_agent_slug(args.agent_slug)
         except ValueError as e:
             parser.error(f"invalid --agent-slug: {e}")
 
-    # --- Single-checkpoint mode (additive; leaves all --scope behavior intact) ---
+    # --- Targeted modes (additive; leave --scope behavior intact) ---
     if args.list_checkpoints:
         _print_checkpoint_list()
         sys.exit(0)
@@ -1249,11 +2841,18 @@ def main():
         sys.exit(0)
 
     if args.checkpoint:
-        if args.scope is not None:
-            print("ERROR: --checkpoint and --scope are mutually exclusive.")
+        if args.scope is not None or args.profile:
+            print("ERROR: --checkpoint is mutually exclusive with --scope/--profile.")
             sys.exit(2)
         _run_single_checkpoint(args)
         return  # _run_single_checkpoint always exits; defensive only.
+
+    if args.profile:
+        if args.scope is not None:
+            print("ERROR: --profile and --scope are mutually exclusive.")
+            sys.exit(2)
+        _run_profile(args)
+        return  # _run_profile always exits; defensive only.
 
     # Normal scope mode: --scope defaults to "full" when omitted. (Default is
     # None on the parser so checkpoint-mode can detect an explicit --scope.)
@@ -1289,6 +2888,21 @@ def main():
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
+    resolved_ring = None
+    power_platform_admin_origin = None
+    if args.scope in {"full", "environment"}:
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=args.ring,
+            )
+            power_platform_admin_origin = _resolve_power_platform_admin_origin(
+                config,
+                explicit_origin=args.power_platform_admin_origin,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
     native_supported_scopes = (
         set(NATIVE_NO_DATAVERSE_SCOPE_MAP)
         | set(NATIVE_NO_DATAVERSE_LOCAL_SCOPES)
@@ -1339,6 +2953,7 @@ def main():
     print()
 
     agentbuilder = None
+    alm_import_target = None
     connectivity = None
     powerplatform = None
     azure_arm = None
@@ -1366,7 +2981,14 @@ def main():
             from auth import authenticate, discover_tenant
 
             print("Authenticating to Dataverse (runtime-reachability probe)...")
-            dv_token = authenticate(env_url)
+            dv_token = authenticate(
+                env_url,
+                preferred_username=getattr(
+                    args,
+                    "preferred_username",
+                    None,
+                ),
+            )
             tenant_id = discover_tenant(env_url)
 
             print("Authenticating to Power Platform Admin API...")
@@ -1399,7 +3021,12 @@ def main():
             )
             sys.exit(1)
 
-        needs_agent_readiness = args.scope in {"full", "servicenow", "workday"}
+        needs_agent_readiness = args.scope in {
+            "full",
+            "servicenow",
+            "workday",
+            "publishing",
+        }
         if needs_agent_readiness:
             environment_host = str(
                 config.get("powerPlatformApiEndpoint") or ""
@@ -1423,14 +3050,36 @@ def main():
             token, tenant_id = authenticate_flightcheck(
                 ring,
                 include_connectivity=True,
+                allow_write=bool(args.alm_import_probe),
+            )
+            api_version = config.get(
+                "agentBuilderApiVersion",
+                DEFAULT_API_VERSION,
             )
             agentbuilder = AgentBuilderClient(
                 environment_host,
                 token,
                 ring=ring,
                 tenant_id=tenant_id,
+                api_version=api_version,
             )
-            connectivity = ConnectivityClient(token, ring=ring)
+            try:
+                alm_import_target = _create_alm_import_target(
+                    args,
+                    source_host=environment_host,
+                    token=token,
+                    tenant_id=tenant_id,
+                    ring=ring,
+                    api_version=api_version,
+                )
+            except ValueError as exc:
+                print(f"ERROR: {exc}")
+                sys.exit(1)
+            connectivity = ConnectivityClient(
+                token,
+                ring=ring,
+                api_version=api_version,
+            )
             print("  AgentBuilder and connection inventory: OK")
         else:
             tenant_id = "organizations"
@@ -1450,7 +3099,10 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(env_url)
+        dv_token = authenticate(
+            env_url,
+            preferred_username=getattr(args, "preferred_username", None),
+        )
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")
@@ -1596,6 +3248,9 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
+    runner.power_platform_admin_origin = power_platform_admin_origin
     runner.agent_slug = (
         getattr(args, "agent_slug", None)
         or config.get("activeAgent")
@@ -1611,7 +3266,9 @@ def main():
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
     runner.agentbuilder = agentbuilder
+    runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
         args.scope
     )
@@ -1708,12 +3365,20 @@ def main():
         # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
         try:
             import adk_telemetry as _adk
+            from flightcheck.telemetry import derive_connector_from_scope
 
             _agent_id = active_agent.get("botId", "")
             if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
-            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            # Derive connector from the CLI scope so scope-based runs get the
+            # same attribution as the legacy flightcheck events (ADO 7943641
+            # review). "full" and cross-cutting scopes return "" — the finer
+            # per-check attribution lives on the check events, not run events.
+            _connector = derive_connector_from_scope(args.scope)
+            _adk.emit_flightcheck_run(
+                agent_id=_agent_id, run_index=_ridx, connector=_connector
+            )
             _result_map = {
                 "READY": "pass",
                 "READY_WITH_WARNINGS": "partial",
@@ -1724,6 +3389,7 @@ def main():
                 run_index=_ridx,
                 result=_result_map.get(result.overall, "fail"),
                 duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+                connector=_connector,
             )
             _adk.flush(timeout=3)
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
@@ -1740,8 +3406,10 @@ def main():
     if not args.no_open and result.manual > 0:
         open_report_in_browser(args.output)
 
-    # Exit code
-    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
+    # Exit code. BLOCKED is a hard release gate (forces overall = NOT_READY),
+    # so it must fail the exit code alongside FAILED/ERROR; otherwise a blocked
+    # essential capability would exit 0 and read as success to a CI caller.
+    sys.exit(_run_exit_code(result))
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):
@@ -1782,19 +3450,23 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
         print(f"  [WARN]  Ready with warnings -- {result.warnings} "
               "warning(s) to verify")
     else:
-        # Headline counts only the blocking items (failures + errors).
-        # Warnings live in the manual-verification section and aren't
-        # blockers, so counting them here would overstate the action
-        # load.
-        failing = result.failed + result.errors
+        # Headline counts the blocking items: failures, errors, and
+        # blocked essential capabilities. A blocked row is a hard release
+        # gate (runner scores the run NOT_READY), so omitting it made a
+        # blocked-only run print "0 issues need attention" while still
+        # exiting non-zero. Warnings stay out — they live in the
+        # manual-verification section and aren't blockers.
+        failing = result.failed + result.errors + result.blocked
         word = "issue" if failing == 1 else "issues"
-        print(f"  [FAIL]  Not ready -- {failing} {word} need "
+        verb = "needs" if failing == 1 else "need"
+        print(f"  [FAIL]  Not ready -- {failing} {word} {verb} "
               "attention")
 
     print()
     # Counts strip — every status in one line so the operator can
     # cross-reference with the detail sections below.
     print(f"  Failed: {result.failed}   Errored: {result.errors}   "
+          f"Blocked: {result.blocked}   "
           f"Warnings: {result.warnings}   Manual: {result.manual}   "
           f"NotConfigured: {result.not_configured}   "
           f"Skipped: {result.skipped}   Passed: {result.passed}")
@@ -1879,6 +3551,7 @@ def _status_tag(status: str) -> str:
     """
     return {
         Status.FAILED.value: "[FAIL]",
+        Status.BLOCKED.value: "[BLK ]",
         Status.ERROR.value: "[ERR ]",
         Status.WARNING.value: "[WARN]",
         Status.MANUAL.value: "[MAN ]",

@@ -336,6 +336,23 @@ class TestManualConnSecSuppression:
         assert "WD-WF-CAT-001" in ids
         assert "WD-RUN-001" in ids
 
+    def test_profile_mode_preserves_declared_manual_rows(self) -> None:
+        from types import SimpleNamespace
+
+        from flightcheck.checks.workday import (
+            _suppress_manual_conn_sec_when_runs_healthy,
+        )
+        from flightcheck.runner import Status
+
+        runner = SimpleNamespace(preserve_workday_manual_rows=True)
+        out = _suppress_manual_conn_sec_when_runs_healthy(
+            self._build(Status.PASSED.value),
+            runner,
+        )
+
+        ids = {row.checkpoint_id for row in out}
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
     def test_failed_run_health_keeps_manual_conn_sec(self) -> None:
         from flightcheck.checks.workday import _suppress_manual_conn_sec_when_runs_healthy
         from flightcheck.runner import Status

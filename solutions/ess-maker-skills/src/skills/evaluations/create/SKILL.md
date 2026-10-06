@@ -2,13 +2,13 @@
 
 This skill guides the agent through generating Copilot Studio evaluation test
 sets from the user's agent topics, writing synchronized `.mcs.yml` and CSV
-artifacts, and pushing the `.mcs.yml` representation directly to Copilot Studio
-via Dataverse. Test cases are stored as `botcomponent` records with
-`componenttype=19` in a parent→child hierarchy (EvaluationSet → EvaluationData).
+artifacts. Run and Request Review use the shared selected-set deployment flow;
+generation alone does not push or run the set.
 
-Generate and validate evaluation files locally, then push them when the user
-asks, following the dry-run, push, and deployment-verification steps.
-Evaluation push is available in this workspace.
+Read `src/skills/evaluations/experience-contract.md` before beginning. It owns
+coverage copy, method admission, the complete case preview, and four maker
+actions. Explicit evaluation push remains available through
+`src/skills/evaluations/deployment-flow.md`.
 
 ## Rules
 
@@ -16,8 +16,10 @@ Evaluation push is available in this workspace.
 - ALWAYS read all topic files in the agent folder to understand what the agent does before generating tests.
 - Write evaluation files to `{agent.folder}/evaluations/` as synchronized
   `.mcs.yml` and CSV artifacts generated from the same cases.
-- Use the existing starter test sets in `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/` as exemplar patterns for each test category.
-- Follow the standard mutation pipeline: **checkpoint → write files → scan → dry run → push → verify**.
+- Use the existing starter test sets in `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/` for prompt/response style, never for method selection.
+- New sets use only Compare Meaning and single-response `EvaluationData`.
+- Follow checkpoint, local write, method admission, CSV synchronization, preview,
+  and quality review. Deployment occurs only for an explicitly selected action.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress through this skill's steps. Create a todo list at the start with all the steps, mark each in-progress as you start it, and mark completed when done.
 
 ---
@@ -80,8 +82,16 @@ Evaluation push is available in this workspace.
 
 ### 2a. Scan for existing evaluation sets
 
-Before asking the user what to generate, scan `{agent.folder}/evaluations/` for
-existing EvaluationSet parent files. The known categories and their folder names are:
+Before asking what to generate, discover workspace and current-agent sets:
+
+```text
+python scripts/evaluation_review.py --list-all
+```
+
+Use actual `kind: EvaluationSet` parents, including arbitrary slugs, General
+Knowledge, and suffixed overflow folders. Ignore `exports/` and orphan child
+files. Keep same-name sets from different sources as separate choices. The
+following category names are generation defaults, not a discovery allowlist:
 
 | Category | Folder name |
 |----------|-------------|
@@ -91,10 +101,10 @@ existing EvaluationSet parent files. The known categories and their folder names
 | Sensitive Topics | `sensitive-topics` |
 | Emotional Intelligence | `emotional-intelligence` |
 | Integration Data | `integration-data` |
-| Multi-Turn | `multi-turn` |
 
-For each category, check if a directory with that name exists under `evaluations/`
-AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing**.
+Mark applicable categories as existing or missing using actual discovered
+parents, and show all additional named sets with their source and case count.
+Do not infer parent identity from the folder or parent filename.
 
 ### 2b. Present scope options based on what exists
 
@@ -143,31 +153,44 @@ AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing*
 > | Sensitive Topics | {✅ exists (X tests) / ❌ missing} |
 > | Emotional Intelligence | {✅ exists (X tests) / ❌ missing} |
 > | Integration Data | {✅ exists (X tests) / ❌ missing} |
-> | Multi-Turn | {✅ exists (X tests) / ❌ missing} |
 >
-> I can generate the **{M} missing** category/categories ({list missing names}),
-> generate for a **specific area** (e.g., just the {first area label from the list above} topics), or regenerate
-> everything from scratch. What would you prefer?
+> You can **Edit this existing set**, **Add test cases to this set**, generate
+> the **{M} missing** category/categories, **Create a new set**, or **Keep it
+> unchanged**. Which set and action would you like?
 
-For the test count, count the number of child `.mcs.yml` files in each existing
-category folder (excluding the parent EvaluationSet file which shares the folder name).
+Use the discovered parent and case count, not a same-filename convention.
 
 **If ALL categories exist:**
 
 > Your agent already has evaluation sets for all {E} categories ({total} test
-> cases total). Would you like to **regenerate** a specific category, or is
-> there a new category you'd like to add?
+> cases total). Choose **Edit this existing set**, **Add test cases to this set**,
+> **Create a new set**, or **Keep it unchanged**.
+
+Use structured choices with exact set name, source, and case count. If all
+canonical categories are missing but custom sets exist, show these same
+existing-set choices rather than treating the workspace as empty.
 
 ### 2c. Process user's answer
 
 Based on the user's answer:
+- **Edit this existing set** / **Add test cases to this set**: Carry the exact
+  selected folder/source and action to `src/skills/evaluations/update/SKILL.md`.
+  Stop this generator; do not fall through to overwrite or regeneration.
+- **Keep it unchanged** / cancel: Do not mutate, export, or deploy anything.
 - **"Generate missing"** / **"just the missing ones"**: Generate only the missing categories
-- **"Full evaluation"** / **"regenerate everything"**: Delete existing sets first (with confirmation), then generate all categories
+- **"Full evaluation"**: Generate applicable missing categories. For explicit
+  replacement, show the exact affected set/cases, obtain replacement approval,
+  and preserve existing deletion restrictions; never default to deleting sets.
 - **Specific area** (e.g., "just ServiceNow ITSM" or "just Workday"): Generate TopicTriggering tests for only the topics in that area. If topics in that area call external systems (workflows or shared system topics), also offer to generate IntegrationData tests for that area. Other categories (RAI, SensitiveTopic, etc.) still apply to all topics as usual.
 - **Specific categories**: Generate only what the user picked (if a named category already exists, confirm overwrite)
 - **Specific topics**: If the user names specific topics, generate TopicTriggering tests for only those topics
 
 Also ask: "Does your agent have **knowledge sources** loaded (documents, SharePoint, etc.)? This helps me decide whether to include knowledge-based tests."
+
+For a new set, confirm its display name and unique destination before writing.
+After the chosen generation scope and names are confirmed, render **Before
+generating cases** from `src/skills/evaluations/experience-contract.md` once.
+Only then continue to Step 3. Do not emit that message for edit/keep/cancel.
 
 ---
 
@@ -180,10 +203,10 @@ There are two kinds:
 
 **EvaluationSet (parent)** — one per test category. Defines the graders.
 
-For **ALL categories that have `expectedOutput`**, ALWAYS include BOTH graders —
-`GeneralQualityGrader` AND `CompareMeaningGrader`. The CompareMeaningGrader compares
-the agent's actual response against the expected response semantically. Without it,
-you only get general quality scores and miss whether the agent behaved correctly.
+For ALL new single-response sets, include exactly one `CompareMeaningGrader`.
+Every row requires a meaningful `input` and `expectedOutput`. Compare Meaning
+compares the agent's response with the expected behavior, including grounded
+clarification or refusal. Do not fall back to General Quality for missing data.
 
 Use these thresholds per category:
 
@@ -200,9 +223,8 @@ Use these thresholds per category:
 ```yaml
 # For most categories (threshold 0.7):
 kind: EvaluationSet
+displayName: "{Confirmed set name}"
 graders:
-  - kind: GeneralQualityGrader
-
   - kind: CompareMeaningGrader
     threshold: 0.7
 ```
@@ -210,15 +232,14 @@ graders:
 ```yaml
 # For Ambiguous Prompts (threshold 0.5):
 kind: EvaluationSet
+displayName: "{Confirmed set name}"
 graders:
-  - kind: GeneralQualityGrader
-
   - kind: CompareMeaningGrader
     threshold: 0.5
 ```
 
-All categories — including General Knowledge — should include `expectedOutput`
-and both graders. The `expectedOutput` for General Knowledge tests should describe
+All categories — including General Knowledge — require `expectedOutput`
+and only Compare Meaning. The `expectedOutput` for General Knowledge tests should describe
 the key information the agent should surface from its knowledge sources.
 
 **EvaluationData (child)** — one per test case. Contains the test input and expected output:
@@ -234,17 +255,9 @@ extensionData:
   displayOrder: "{timestamp}"
 ```
 
-For `GeneralQuality` tests (no expected response), omit `expectedOutput`:
-
-```yaml
-kind: EvaluationData
-rows:
-  - source: Imported
-    input: "What can you help me with"
-
-extensionData:
-  displayOrder: "{timestamp}"
-```
+Missing or whitespace-only expected responses are not runnable. Resolve them
+from source context or ask for the required content; never invent assertions
+or silently omit a row to pass method admission.
 
 ### Naming convention
 
@@ -269,12 +282,13 @@ for its child `.mcs.yml` files. Create the `exports/` folder when needed.
   `Prompt,Expected response,Test Method Type,Passing Score`.
 - CompareMeaning rows use `CompareMeaning` and the set threshold converted to
   a 0–100 score (`0.7` → `70`, `0.5` → `50`).
-- GeneralQuality header:
-  `Prompt,Expected response,Test Method Type`.
-- GeneralQuality rows use `GeneralQuality`.
-- Use a real RFC-4180 CSV writer, not string concatenation.
-- Prefix any cell beginning with `=`, `+`, `-`, or `@` with an apostrophe to
-  prevent spreadsheet formula injection.
+- Use `evaluation_csv.generate_set_csv` (also called by the presentation helper)
+  for the complete selected set. It owns RFC-4180 writing, formula-injection
+  protection, actual export naming, and validation before old-export cleanup.
+- For CSV-only synchronization, use the `evaluation_csv.py --evaluation-folder`
+  command in the shared **CSV synchronization** contract and its returned `csv`
+  path. Feature export remains strict.
+- Validate before exporting; do not manually construct a second CSV writer.
 
 The YAML and CSV are two representations of one case list. Never generate or
 edit one without synchronizing the other. CSV files are local/shareable
@@ -290,7 +304,8 @@ category generates more than 100 child test cases, **split it into multiple sets
    `topic-triggering-3/`) for the overflow.
 3. Each overflow folder gets its own parent EvaluationSet file with a matching
    `displayName` suffix (e.g., `"Topic Triggering 2"`).
-4. All split sets use the same grader configuration as the original.
+4. All split sets use exactly one CompareMeaningGrader and the same threshold
+   as the original. Validate every split parent and all its rows.
 
 This most commonly affects **TopicTriggering** when the agent has many topics with
 multiple trigger queries each.
@@ -302,8 +317,8 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 #### TopicTriggering
 
 TopicTriggering enforces a strict minimum per topic (≥1 positive, ≥1 boundary,
-≥1 negative). Other categories below — AmbiguousTopic, IntegrationData,
-MultiTurn — use a flexible mix of the same three variant types. RAI,
+≥1 negative). Other categories below — AmbiguousTopic and IntegrationData —
+use a flexible mix of the same three variant types. RAI,
 SensitiveTopic, and EQTopic are single-type categories and do not use this
 pattern.
 
@@ -329,11 +344,19 @@ and negative variants (≥1 of each type per topic):
 
 | Type | Example |
 |------|---------|
-| Out-of-scope | "Book a flight to New York" / "What's the weather today?" |
+| Outside this scenario, supported elsewhere | A request grounded in a different configured topic; the agent should route to and handle that capability |
+| Outside the configured agent | A request from a genuinely unsupported domain; the agent should follow its configured fallback or redirection behavior |
 | Cross-domain mixing | "Create an IT ticket AND show my company code" |
 | Privacy boundary | "What is Sarah's job title?" / "Show me John's salary" |
 | Write-on-read-only | "Update my hire date" / "Change my employee ID" |
 | Multi-intent confusion | "Check my PTO balance and also reset my password" |
+
+Scope is relative to the evidence in Step 1, not merely the selected evaluation
+goal. A request outside the selected topic or set can still be a valid ESS
+capability. Ground that case in another configured user-facing topic and expect
+the agent to route to and complete that capability; never expect a refusal merely
+because it is outside this set. Treat a request as outside the configured agent
+only when no discovered topic, instruction, or supported scenario covers it.
 
 **Utterance type rule — natural language vs. keyword:**
 
@@ -392,7 +415,8 @@ natural-language sentences — they will all share the same structure and score 
 Redundancy. Apply the utterance type rule:
 - First privacy negative in the set → natural language: "What is Sarah's salary?"
 - Second privacy negative → keyword: "Sarah tkts" / "John salary" / "manager ticket"
-- Third+ → different failure mode entirely (write-on-read-only, cross-domain, out-of-scope)
+- Third+ → different failure mode entirely (write-on-read-only, cross-domain,
+  outside-scenario routing, or outside-agent behavior)
 
 - For **read-only data topics** (Get Employee ID, Get Hire Date): add a
   **write-on-read-only** case — "Update my hire date" / "Change my employee ID"
@@ -408,10 +432,20 @@ Redundancy. Apply the utterance type rule:
   case — "Create a ticket and also show my pay stub"
   - `expectedOutput`: The agent should handle one intent or ask the user to
     separate the requests
-- For **general or broad topics**: add an **out-of-scope** case — a request
-  completely outside the agent's domain (e.g., "Book a flight to New York",
-  "What's the weather?", "Help me with my taxes")
-  - `expectedOutput`: The agent should politely decline or redirect
+- For **general or broad topics**, choose a scope-boundary case supported by the
+  discovered evidence:
+  - **Outside this scenario but supported elsewhere:** select a materially
+    different configured topic (for example, an IT request in an HR-policy set).
+    `expectedOutput`: the agent should route to and handle that configured
+    capability, not decline it.
+  - **Outside the configured agent:** select a request with no matching topic,
+    instruction, or supported scenario. Vary the domain across the set, such as
+    entertainment trivia, consumer shopping advice, recipe planning, personal
+    investing, or schoolwork. `expectedOutput`: use the agent's configured
+    fallback/redirection behavior.
+  - Do not use travel booking as the default unsupported example; travel can be
+    a valid employee-service capability. Do not repeat the same canned outside
+    domain in multiple cases.
 - Not every topic needs a negative — skip negative cases for topics where no
   natural negative variant exists (e.g., generic greeting or fallback topics)
 
@@ -456,9 +490,10 @@ them improved compare-meaning scores from 67% to 82%+ in controlled experiments.
    - **Boundary** — ambiguous prompts with typos or casual phrasing (e.g.,
      "update my stuf" or "halp with tkt"). `expectedOutput`: the agent still
      asks a clarifying question despite the imperfect input
-   - **Negative** — completely off-domain prompts that should NOT trigger
-     clarification (e.g., "Book a flight"). `expectedOutput`: the agent
-     declines rather than asking which topic the user means
+   - **Negative** — prompts outside the overlapping domains that should NOT
+     trigger clarification. Use a different configured topic to test successful
+     routing, or a genuinely unsupported and non-repeated domain to test the
+     configured fallback. Do not assume travel is unsupported.
 
 #### RAI
 
@@ -507,7 +542,7 @@ For each integration topic, generate a mix of positive, boundary, and negative c
 
 **Only generate if** the user confirmed they have knowledge sources.
 
-Include both `GeneralQualityGrader` and `CompareMeaningGrader` (threshold **0.7**) in
+Include only `CompareMeaningGrader` (threshold **0.7**) in
 the parent EvaluationSet — knowledge answers should surface the key information
 from the agent's knowledge sources.
 
@@ -517,125 +552,16 @@ from the agent's knowledge sources.
 
 #### MultiTurn (Conversational)
 
-Multi-turn tests use a **different YAML kind** from single-response tests. Copilot
-Studio evaluates multi-turn tests as full conversations — each test case contains
-multiple question-response pairs that run sequentially in a single session. They
-appear in Copilot Studio under the **"Conversational chat (preview)"** data type.
-
-**CRITICAL**: Children MUST use `kind: MultiTurnEvaluationCase` (NOT `EvaluationData`).
-Using `EvaluationData` with multiple rows will create single-response tests that
-only show the first turn.
-
-**Format reference**: See `src/examples/ess-samples/ESSEvaluationSamples/multi-turn/EvalConversationTemplate.csv`
-
-**Constraints** (from Copilot Studio):
-- Max **6 question-response pairs** (12 total messages) per conversation
-- Max **20 conversations** per test set
-- Max **500 characters** per question
-
-**YAML format for multi-turn children** — uses `activities:` with alternating
-user/agent roles:
-
-```yaml
-kind: MultiTurnEvaluationCase
-source: Imported
-activities:
-  - activity:
-      value:
-        from:
-          role: user
-
-      text:
-        - What is my base salary?
-
-  - activity:
-      value:
-        from:
-          role: agent
-
-      text:
-        - The agent should display the user's base compensation details.
-
-  - activity:
-      value:
-        from:
-          role: user
-
-      text:
-        - And when is my next service anniversary?
-
-  - activity:
-      value:
-        from:
-          role: agent
-
-      text:
-        - The agent should display the user's upcoming service anniversary date.
-
-extensionData:
-  displayOrder: "{timestamp}"
-```
-
-**Parent EvaluationSet** for multi-turn must NOT include `CompareMeaningGrader` —
-multi-turn conversations are evaluated with `GeneralQualityGrader` only
-(CompareMeaning is single-response only):
-
-```yaml
-kind: EvaluationSet
-displayName: "Multi-Turn"
-graders:
-  - kind: GeneralQualityGrader
-```
-
-**How to generate multi-turn scenarios:**
-
-1. Identify topic pairs that users commonly chain together (e.g., check
-   compensation → check service anniversary, list tickets → update a ticket).
-2. Read the topic files for each topic in the chain to understand the flow.
-3. **Show the proposed topic pairs to the user before generating:**
-
-> I identified these topic pairs for multi-turn conversations:
->
-> | # | Conversation chain | Turns |
-> |---|-------------------|-------|
-> | 1 | Create Ticket → Get User Tickets → Get Ticket Details | 3 |
-> | 2 | Get Job Info → Update Job Title (manager) | 2 |
-> | 3 | Get Employee ID → Get Cost Center → Get Company Code | 3 |
-> | ... | ... | ... |
->
-> Want to **adjust these pairs**, **add your own**, or **proceed**?
-
-Each chain should represent a **natural user journey** — the second turn should
-logically follow from the first (e.g., creating a ticket then checking its
-status, or reviewing a direct report's info before updating it). Avoid pairing
-unrelated lookups that a user wouldn't chain in the same session.
-
-4. Create 3-5 positive conversation scenarios based on confirmed pairs,
-   each with 2-4 turns.
-5. Each turn should be a natural follow-up that a real user would ask in the
-   same session.
-6. The agent `text` for each turn should describe what the agent does at
-   that step — these are used by `GeneralQualityGrader` to assess quality.
-7. Always alternate user → agent → user → agent. Start with user, end with agent.
-
-**Additionally, include 1-2 boundary and 1-2 negative multi-turn scenarios:**
-
-- **Boundary**: A conversation where the user uses typos or casual abbreviations
-  mid-conversation (e.g., turn 1: "Create a ticket for my laptop" → turn 2:
-  "show me my tkts"). The agent should still handle each turn correctly.
-- **Negative**: A conversation where the user pivots to an out-of-scope or
-  cross-domain request mid-conversation (e.g., turn 1: "Show my open tickets" →
-  turn 2: "Now book me a flight to New York"). The agent should handle the
-  valid turn and gracefully decline the invalid one.
-
-**Example positive scenarios:**
-- Ticket lifecycle: "Create a ticket for my laptop issue" → "Show me my open tickets" → "What's the latest update on ticket INC001?"
-- Employee profile chain: "What is my employee ID?" → "What about my cost center?" → "Show me my company code"
-- Manager review then update: "Show me the job titles of my direct reports" → "Update John's job title to Senior Engineer"
+Do not offer or emit `MultiTurnEvaluationCase` in this Compare Meaning-only
+feature. The conversational format is not compatible with this single-response
+method. On an explicit multi-turn request, explain this before writing files
+and ask whether the user wants single-response cases instead. Wait for their
+choice. Never silently flatten conversations, omit turns, switch graders, or
+convert historical samples.
 
 ---
 
-## Step 4: Write Files and Push
+## Step 4: Write, preview, and review quality
 
 ### 4.1 — Checkpoint
 
@@ -647,19 +573,39 @@ user-facing message, and it never fails the step):
 
 ### 4.2 — Write evaluation files
 
-Create the `evaluations/` and `evaluations/exports/` folders inside the agent
-folder if they do not exist. Write each EvaluationSet, EvaluationData, and
-matching CSV file as described above. Generate YAML and CSV from the same
-in-memory cases in one pass.
+Create the `evaluations/` folder inside the agent folder if needed. Validate
+proposed parent/case documents with `validate_evaluation_documents` from
+`evaluation_method_policy` before writing them. Write each EvaluationSet and
+EvaluationData file, then run:
+
+```text
+python scripts/evaluation_method_policy.py --evaluation-folder "{set-folder}"
+```
+
+Stop on errors without replacing the previous CSV or claiming readiness.
+Use the **Generated-case preview** procedure in
+`src/skills/evaluations/experience-contract.md`: it calls
+`evaluation_presentation.py` to show every prompt and expected response and
+regenerate the CSV through the existing export helper. Show this preview before
+any validator progress. Do not present the action menu yet.
 
 ### 4.3 — Quality validation
 
 Run quality validation on the generated files.
 
-**After the subagent returns, display its full quality report output directly
-to the user — the complete dimension table, per-category scores, and any ⚠️
-callout blocks listing flagged files. Do NOT summarize or compress the report.
-Paste the subagent's output verbatim into the chat so the user sees it.**
+Immediately invoke the validate subagent for each exact selected set folder,
+passing every `.mcs.yml` path. Its first action must be to read
+`src/skills/evaluations/validate/SKILL.md`. Do not show a separate validation
+progress message or preamble after the generated-case preview.
+
+**After the subagent returns, display its Post-generation quality report
+scorecard verbatim. Preserve its exact
+opening paragraph, overall line, case-count line, eight score rows, optional
+improvements, local-only warning, next-steps heading, and four closing
+questions. Do not add a table, filename callout, summary, or second preamble.**
+The generated-case tables from step 4.2 appear once only; never repeat them
+during or after quality validation unless a fix changed specific rows, in which
+case show only those changed rows.
 
 Follow the quality gate + fix flow defined in
 `src/skills/evaluations/quality-fix-flow.md`. The "review step" referred to
@@ -671,143 +617,33 @@ matching CSV before continuing.**
 
 ---
 
-### 4.4 — Review before push
+### 4.4 — Final cases and maker actions
 
-> **STOP. Do not proceed to step 4.5 until the user has explicitly responded to this step.**
-> This step is mandatory. Do not skip it even if the quality gate passed cleanly.
-
-Count the positive, boundary, and negative cases generated per category. Then show the user this summary and wait for their response:
-
-> Here's what I generated:
->
-> | Category | Positive | Boundary | Negative | Total |
-> |----------|----------|----------|----------|---------|
-> | Topic Triggering | {n} | {n} | {n} | {n} |
-> | Integration Data | {n} | {n} | {n} | {n} |
-> | ... | ... | ... | ... | ... |
->
-Use the available structured question control and ask:
-
-> How would you like to continue with these test sets?
-
-Offer:
-
-1. **Edit the test sets myself**
-2. **Send them to a judge or SME for feedback**
-3. **Push without requesting review**
-
-Wait for the user's answer before continuing. Do not run the dry-run or push
-until the user explicitly chooses one of the push paths.
+Re-read the selected YAML and refresh the shared preview/CSV if quality fixes
+changed cases. Display the final assertions, not stale conversation values.
+Follow **Four maker actions** from
+`src/skills/evaluations/experience-contract.md` and wait for the user's choice.
+This closing question is mandatory; never auto-select a deployment action.
 
 **If IntegrationData tests were generated**, add a placeholder reminder:
 
 > ⚠️ **Note:** Integration Data test cases contain `<placeholder>` values
 > (e.g., `<ticket-number>`, `<employee-name>`). You'll need to replace these
 > with real values from your system before running evals, or those tests will fail.
->
-> Files with placeholders:
-> - `integration-data-get-salary.mcs.yml` — `<salary-amount>`
-> - `integration-data-get-ticket.mcs.yml` — `<ticket-number>`
-> - ...
->
-> Want to **fill them in now** or **after pushing**?
 
-- **If user says now**: Walk through each placeholder and ask the user for
-  the real value. Update the YAML and matching CSV before pushing.
-- **If user says after pushing**: Proceed, but remind them again in the
-  final summary (Step 4.7).
+Show only actual placeholder-containing cases. **Edit this test set** can fill
+them in through the update flow, followed by synchronization and quality review.
+Do not invent real values or present unresolved placeholders as tenant results.
 
-- **Edit the test sets myself**: Show the selected cases, apply requested edits,
-  synchronize YAML and CSV, rerun validation when required, and ask this
-  structured question again.
-- **Send them to a judge or SME for feedback**: Continue to Step 4.4a, tag the
-  selected sets `review_requested`, and push them after confirmation.
-- **Push without requesting review**: Skip review tagging and proceed to the
-  dry run.
+## Step 5: Continue the selected action
 
-### 4.4a — Offer review tagging before push
+Carry exact selected folders and sources to the action owner in the shared
+experience contract. Request Review uses update Flow R1. Run uses run Flow A.
+Those flows own required deployment through
+`src/skills/evaluations/deployment-flow.md`; do not also push here.
+Explicit standalone push remains supported without automatically tagging or
+running. Local save, quality approval, or staging is not proof of deployment.
 
-Enter this step when the maker chose **Send them to a judge or SME for
-feedback** in Step 4.4:
-
-1. List the generated test sets and use a structured multi-select choice to ask
-   which ones to tag.
-   This question is scoped only because the user is directly answering the
-   create flow's offer about **these generated test sets**. If the user instead
-   starts a generic request such as "tag testsets for review", route to
-   `src/skills/evaluations/update/SKILL.md` Flow R1, list all workspace and
-   configured-agent sets, and require an explicit selection.
-2. For every selected set, run:
-
-   ```text
-   python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_requested
-   ```
-
-This creates `review.json` beside the parent EvaluationSet. `push.py` converts
-that metadata to the parent botcomponent description without replacing any
-human-authored description:
-
-```text
-[ADK-REVIEW status=review_requested]
-```
-
-### 4.5 — Dry run
-
-Run `python scripts/push.py --dry-run` to preview what will be pushed. Confirm the
-evaluation files are detected as new botcomponent records.
-
-Show the user the dry run output and ask for confirmation.
-
-### 4.6 — Push
-
-Run `python scripts/push.py --yes` to push the evaluation test sets to Copilot
-Studio. Pass `--yes` — the script otherwise prompts on `input()`, which a
-non-interactive subprocess cannot answer and which reads as a hang. The user
-already confirmed the push after the Step 4.5 dry run, so this flag bypasses no
-approval the maker did not give. The push script handles two-pass ordering
-automatically: parent EvaluationSet records are created first, then child
-EvaluationData records are linked via `parentbotcomponentid`.
-
-If the push fails or is cancelled, show:
-
-> ⚠️ This test set is still local and is not available to another authorized
-> judge or SME. It must be successfully pushed to Copilot Studio.
-
-### 4.7 — Show summary
-
-Print a summary table:
-
-> Here are your generated evaluation test sets:
->
-> | Set | Test cases | Category |
-> |-----|-----------|----------|
-> | `topic-triggering` | 24 | Topic trigger accuracy |
-> | `rai` | 15 | Responsible AI guardrails |
-> | ... | ... | ... |
->
-> ✅ Pushed to Copilot Studio. Open the
-> [Evaluation tab](https://copilotstudio.microsoft.com/) to run evaluations.
->
-> These test sets are now available to authorized judges and SMEs.
->
-> CSV copies are available in `{agent.folder}/evaluations/exports/`.
-
----
-
-## Step 5: Offer Next Steps
-
-After pushing, use a structured choice question rather than ending with a list
-of open-text suggestions:
-
-> What would you like to do next?
-
-Offer:
-
-- **Edit the test sets myself**
-- **Send them to a judge or SME for feedback** when they are not already tagged
-- **Add more test cases**
-- **Run an evaluation**
-- **Finish**
-
-This closing question is mandatory and must not be omitted after a successful
-push.
+If an operation fails or is cancelled, preserve files and show the shared
+local-only reminder with the actual reason. After verified deployment, report
+only what the selected action accomplished. Do not add another obsolete menu.

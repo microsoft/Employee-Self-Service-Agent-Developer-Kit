@@ -28,12 +28,127 @@ import pytest
 from flightcheck import cli
 
 
+def test_alm_import_probe_requires_explicit_target(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["cli.py", "--scope", "publishing", "--alm-import-probe"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
+def test_main_accepts_explicit_tenant_id_for_profile(monkeypatch) -> None:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+    captured = {}
+
+    def _run_profile(args):
+        captured["tenant_id"] = args.tenant_id
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_run_profile", _run_profile)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cli.py",
+            "--profile",
+            "workday-da:setup-readiness",
+            "--tenant-id",
+            tenant_id,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["tenant_id"] == tenant_id
+
+
+def test_create_alm_import_target_uses_separate_environment(monkeypatch) -> None:
+    created = []
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda environment_id, ring: (
+            f"https://{environment_id}.{ring}.example.test"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    monkeypatch.setattr(
+        cli,
+        "AgentBuilderClient",
+        lambda *args, **kwargs: created.append((args, kwargs)) or object(),
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="target-env",
+    )
+
+    target = cli._create_alm_import_target(
+        args,
+        source_host="https://source.test.example",
+        token="token",
+        tenant_id="tenant",
+        ring="test",
+        api_version="2024-10-01",
+    )
+
+    assert target is not None
+    assert created == [
+        (
+            ("https://target-env.test.example.test", "token"),
+            {
+                "ring": "test",
+                "tenant_id": "tenant",
+                "api_version": "2024-10-01",
+            },
+        )
+    ]
+
+
+def test_create_alm_import_target_rejects_source_environment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "derive_environment_host",
+        lambda _environment_id, _ring: "https://source.example.test",
+    )
+    monkeypatch.setattr(
+        cli,
+        "validate_environment_host",
+        lambda host, _ring: host,
+    )
+    args = SimpleNamespace(
+        alm_import_probe=True,
+        alm_import_target_environment_id="source-env",
+    )
+
+    with pytest.raises(ValueError, match="different environment"):
+        cli._create_alm_import_target(
+            args,
+            source_host="https://source.example.test/",
+            token="token",
+            tenant_id="tenant",
+            ring="test",
+            api_version="2024-10-01",
+        )
+
+
 def test_workday_da_check_is_explicit_scope_only() -> None:
     """An optional DA HR package must not fail unrelated full runs."""
     assert cli.SCOPE_MAP["workdayda"] == [
-        ("Workday DA", cli.run_workday_da_checks)
+        ("Workday DA", cli.run_workday_da_package_check)
     ]
-    assert ("Workday DA", cli.run_workday_da_checks) not in cli.FULL_SCOPE
+    assert (
+        "Workday DA",
+        cli.run_workday_da_package_check,
+    ) not in cli.FULL_SCOPE
 
 
 class TestOpenReportInBrowser:
@@ -155,6 +270,7 @@ class _FakeRunner:
             manual=0,
             not_configured=0,
             skipped=0,
+            blocked=0,
             passed=0,
             total=0,
             duration_secs=0,
@@ -281,7 +397,7 @@ class TestAgentBuilderNativeScopes:
         [
             (
                 "full",
-                ["Native Agent", "Environment", "Local Files"],
+                ["Native Agent", "Environment", "Local Files", "Publishing"],
                 True,
                 True,
                 None,
@@ -301,6 +417,7 @@ class TestAgentBuilderNativeScopes:
                 False,
                 ("shared_workdaysoap",),
             ),
+            ("publishing", ["Publishing"], True, False, None),
         ],
     )
     def test_native_no_dataverse_scope_uses_only_native_clients(
@@ -318,6 +435,7 @@ class TestAgentBuilderNativeScopes:
         config = {
             "releaseLine": "da",
             "environmentId": "00000000-0000-4000-8000-000000001111",
+            "ring": "test",
             "agent": {
                 "slug": "mock-agent",
                 "botId": "00000000-0000-4000-8000-000000002222",
@@ -407,7 +525,15 @@ class TestAgentBuilderNativeScopes:
 
         assert exc.value.code == 0
         assert auth_calls == (
-            [("test", {"include_connectivity": True})]
+            [
+                (
+                    "test",
+                    {
+                        "include_connectivity": True,
+                        "allow_write": False,
+                    },
+                )
+            ]
             if expects_agent_clients
             else []
         )
@@ -536,3 +662,60 @@ class TestPvaScopeGating:
 
         assert exc.value.code == 0
         assert _RecordingPVA.instantiated is True
+
+
+class TestTerminalBlockedSummary:
+    """Regression (ADO 7943641): a blocked-only run must surface as blocking
+    in the terminal summary.
+
+    Before the fix ``_print_prioritized_summary`` computed the NOT_READY
+    headline as ``failed + errors`` (excluding blocked), had no Blocked field
+    in the counts strip, and ``_status_tag`` had no BLOCKED mapping — so a
+    blocked-only run printed "0 issues need attention" and rendered the
+    blocked row as "[?   ]".
+    """
+
+    @staticmethod
+    def _blocked_result():
+        from flightcheck.runner import CheckResult, Priority, RunResult, Status
+
+        blocked_row = CheckResult(
+            checkpoint_id="WD-CONN-999",
+            category="Workday",
+            priority=Priority.CRITICAL.value,
+            status=Status.BLOCKED.value,
+            description="Essential Workday capability",
+            result="Workday connector unavailable in this environment",
+            remediation="Provision the Workday connection, then re-run.",
+            roles=["Workday Admin"],
+        )
+        return RunResult(
+            scope="workday-da:final",
+            started="2026-01-01T00:00:00Z",
+            duration_secs=1.0,
+            results=[blocked_row],
+            total=1,
+            blocked=1,
+            overall="NOT_READY",
+        )
+
+    def test_status_tag_has_blocked_mapping(self):
+        from flightcheck.runner import Status
+
+        assert cli._status_tag(Status.BLOCKED.value) == "[BLK ]"
+
+    def test_blocked_only_headline_counts_the_block(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        # Headline must count the blocked row, not report zero.
+        assert "1 issue needs attention" in out
+        assert "0 issue" not in out
+
+    def test_blocked_counts_strip_and_row_tag(self, capsys):
+        cli._print_prioritized_summary(self._blocked_result())
+        out = capsys.readouterr().out
+        assert "Blocked: 1" in out
+        # The blocked row surfaces under ACTION REQUIRED with the [BLK ] tag.
+        assert "[BLK ]" in out
+        assert "WD-CONN-999" in out
+        assert "[?   ]" not in out

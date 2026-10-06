@@ -31,9 +31,12 @@ target.
 
 **Scope:** the ESS + Workday *setup* checkpoints only — not the entire
 FlightCheck surface. Other integrations (ServiceNow ``SN-*``, graph
-connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` /
-``ENV-004`` (+ detail) rows stay validated by the existing ``--scope``
-runs and are deliberately out of registry scope. See
+connector ``EXT-*``, ``SAP-*``) and the pre-existing ``ENV-003`` row stay
+validated by the existing ``--scope`` runs and are deliberately out of
+registry scope. ``ENV-004`` was re-pointed to the Declarative Agent
+minimalBots components + ALM API and is now registered here (clients
+``AGENTBUILDER``) so it can run via the plan/``--checkpoint`` path like the
+other DA checks. See
 ``plans/workday-setup/flightcheck-single-checkpoint.md``.
 """
 
@@ -50,6 +53,7 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
@@ -131,6 +135,7 @@ class CheckpointSpec:
     category_fn: Callable
     category_label: str
     clients: frozenset = frozenset()
+    pp_admin_flow_required: bool = False
     requires_config: bool = True
     requires_dataverse_endpoint: bool = False
     prereqs: tuple = ()
@@ -152,11 +157,21 @@ class ResolvedPlan:
     target: str
     spec: CheckpointSpec
     clients: frozenset
+    pp_admin_flow_required: bool
     requires_config: bool
     requires_dataverse_endpoint: bool
     # (category_label, category_fn) pairs to register on the runner, ordered
     # by CATEGORY_ORDER (prerequisites' functions first), de-duped by function.
     ordered_fns: list = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProfileSpec:
+    """A named callable profile: ordered checkpoint IDs Connect can request."""
+
+    name: str
+    checkpoint_ids: tuple[str, ...]
+    description: str
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +254,26 @@ _SPECS: list[CheckpointSpec] = [
         is_family=True,
     ),
     CheckpointSpec(
+        key="PUB-001",
+        category_fn=run_publishing_checks,
+        category_label="Publishing",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="PUB-002",
+        category_fn=run_publishing_checks,
+        category_label="Publishing",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value),
+    ),
+    CheckpointSpec(
         key="ENV-009",
         category_fn=run_preferred_solution_check,
         category_label="Environment",
@@ -249,22 +284,16 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
     ),
     # ---- Solution: ESS-SOLN-001 (skill-2 install-ess) ----
-    # ESS-SOLN-001: the base ESS agent solution (msdyn_copilotforemployeeselfservice*)
-    # is installed in the target env. Queries the Dataverse `solutions` table
-    # (DATAVERSE client, already wired in cli.py's single-checkpoint path — no
-    # new client init). Prereq ENV-002 (Dataverse provisioned) transitively
-    # pulls ENV-001 (environment exists). Environment Maker owns the fix; the
-    # AppSource install itself is a manual portal action, but this check
-    # definitively verifies the outcome, so the S2.1 checklist row auto-completes
-    # (`prog` gate) on a PASSED result.
+    # ESS-SOLN-001: the base ESS DA package is present in the agent's GRS/ALM
+    # state. Reads the AgentBuilder minimalBots ALM configure API instead of
+    # Dataverse solution-table state.
     CheckpointSpec(
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,
         category_label="Solution",
-        clients=frozenset({DATAVERSE}),
+        clients=frozenset({AGENTBUILDER}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
-        prereqs=("ENV-002",),
+        requires_dataverse_endpoint=False,
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
@@ -281,9 +310,84 @@ _SPECS: list[CheckpointSpec] = [
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
-        prereqs=("ENV-002",),
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-FLOW-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("WD-DA-PKG-001",),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-AUTH-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("WD-DA-PKG-001", "WD-DA-FLOW-001"),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-TOPIC-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("DA-AGENT-001",),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-WIRING-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("DA-AGENT-001",),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-ATTACH-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="WD-DA-RUN-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
+        clients=frozenset({PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        prereqs=("WD-DA-FLOW-001",),
+        pp_admin_flow_required=True,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
+    ),
+    CheckpointSpec(
+        key="WD-SEC-003",
+        category_fn=run_workday_checks,
+        category_label="Workday",
+        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("WD-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.WORKDAY_ADMIN.value,),
     ),
     # ---- External Systems: WD-001 (prereq-only, hidden from listing) ----
     # Sets runner._workday_flows, which the below-early-return Workday checks
@@ -293,8 +397,9 @@ _SPECS: list[CheckpointSpec] = [
         category_fn=run_external_systems_checks,
         category_label="External Systems",
         clients=frozenset({PP_ADMIN}),
+        pp_admin_flow_required=True,
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
         listable=False,
@@ -363,7 +468,20 @@ _SPECS: list[CheckpointSpec] = [
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
-        prereqs=("WD-PKG-001", "WD-001"),
+        prereqs=("WD-PKG-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value,),
+    ),
+    # WD-CONN-013 reads the selected agent's exact connection-reference
+    # identities from AgentBuilder, then joins them to Dataverse parameter
+    # sharing configuration. It does not call BAP or Power Automate APIs.
+    CheckpointSpec(
+        key="WD-CONN-013",
+        category_fn=run_workday_checks,
+        category_label="Workday",
+        clients=frozenset({DATAVERSE, AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
         priority=Priority.HIGH.value,
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
     ),
@@ -540,17 +658,36 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the runtime package's Dataverse connection reference
+    # directly from Dataverse, matching the same surface Runtime apply mutates
+    # and rereads.
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
+    ),
+    # ENV-004 — re-pointed from the Dataverse connectionreference table to the
+    # Declarative Agent minimalBots components + ALM configure API
+    # (AGENTBUILDER). Reads every configured agent's connection references
+    # (bound/unbound) and, when an expected GRS commit SHA is configured, pins
+    # the deployed ALM commit (ENV-004-GRS). category_fn is
+    # run_environment_checks; the plan path filters emitted rows to the ENV-004
+    # target (the ENV-004-UR-* / ENV-004-GRS detail rows are supplementary, and
+    # the GRS verdict also folds into the ENV-004 summary status).
+    CheckpointSpec(
+        key="ENV-004",
+        category_fn=run_environment_checks,
+        category_label="Environment",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value, Role.ESS_MAKER.value),
     ),
     # WD-REST-001 — pure config check (restBaseUrl trimmed to /api), no client.
     CheckpointSpec(
@@ -630,6 +767,130 @@ _SPECS: list[CheckpointSpec] = [
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 
 
+_PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
+    ProfileSpec(
+        name="workday-da:setup-readiness",
+        description="Selected native agent readiness for Workday Connect.",
+        checkpoint_ids=(
+            "DA-AGENT-001",
+            "DA-CONTENT-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:package-ready",
+        description="Installed Workday package readiness before Connections.",
+        checkpoint_ids=(
+            "WD-DA-PKG-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:dataverse-ready",
+        description="Runtime package, flow, and connection readiness.",
+        checkpoint_ids=(
+            "WD-DA-PKG-001",
+            "WD-DA-FLOW-001",
+            "DV-CONN-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:external-prerequisites",
+        description="External prerequisites owned by Entra and Workday admins.",
+        checkpoint_ids=(
+            # Role-aware execution will trigger these live Entra API checks later.
+            # For now, Workday Connect uses a guided Entra administrator handoff.
+            # "WD-ENTRA-SCOPE-001",
+            # "WD-ENTRA-CONSENT-001",
+            # "WD-ASSIGN-001",
+            # "WD-ENTRA-NAMEID-001",
+            "WD-ENTRA-SIGNOPT-001",
+            # "WD-CONN-010",
+            # "WD-CONN-102",
+            "WD-API-CLIENT-001",
+            "WD-TENANT-001",
+            "WD-NET-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:post-runtime",
+        description="Post-runtime Workday read-path validation.",
+        checkpoint_ids=(
+            "WD-DA-FLOW-001",
+            "WD-DA-RUN-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:post-connection",
+        description="Connection-reference and Workday endpoint validation.",
+        checkpoint_ids=(
+            "WD-DA-PKG-001",
+            "WD-DA-FLOW-001",
+            "WD-CONN-012",
+            "WD-DA-AUTH-001",
+            "DV-CONN-001",
+            "WD-REST-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:post-agent-wiring",
+        description="Topic and agent wiring validation after connection setup.",
+        checkpoint_ids=(
+            "WD-DA-TOPIC-001",
+            "WD-DA-WIRING-001",
+            "WD-DA-ATTACH-001",
+            "WD-REST-002",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-da:final",
+        description="Full DA Workday Connect final readiness profile.",
+        checkpoint_ids=(
+            "DA-AGENT-001",
+            "DA-CONTENT-001",
+            "WD-DA-PKG-001",
+            "WD-DA-FLOW-001",
+            # Role-aware execution will trigger these live Entra API checks later.
+            # For now, Workday Connect uses a guided Entra administrator handoff.
+            # "WD-ENTRA-SCOPE-001",
+            # "WD-ENTRA-CONSENT-001",
+            # "WD-ASSIGN-001",
+            # "WD-ENTRA-NAMEID-001",
+            "WD-ENTRA-SIGNOPT-001",
+            # "WD-CONN-010",
+            # "WD-CONN-102",
+            "WD-API-CLIENT-001",
+            "WD-TENANT-001",
+            "WD-CONN-012",
+            "WD-DA-AUTH-001",
+            "DV-CONN-001",
+            "WD-REST-001",
+            "WD-REST-002",
+            "WD-NET-001",
+            "WD-DA-TOPIC-001",
+            "WD-DA-WIRING-001",
+            "WD-DA-ATTACH-001",
+            "WD-DA-RUN-001",
+        ),
+    ),
+    ProfileSpec(
+        name="workday-legacy:diagnostic",
+        description="Legacy/full Workday diagnostic profile retained separately.",
+        checkpoint_ids=(
+            "WD-PKG-001",
+            "WD-001",
+            "WD-CONN",
+            "WD-FLOW",
+            "WD-WF",
+            "WD-ENV",
+        ),
+    ),
+)
+
+PROFILES: dict[str, ProfileSpec] = {
+    profile.name: profile for profile in _PROFILE_DEFINITIONS
+}
+_SHIPPED_REGISTRY_KEYS = frozenset(REGISTRY)
+
+
 # ---------------------------------------------------------------------------
 # Owned-prefix allow-list for the drift test (tests/flightcheck/
 # test_registry_drift.py). This is the set of checkpoint-ID prefixes the
@@ -651,8 +912,10 @@ OWNED_PREFIXES: tuple = (
     "ENV-CAPACITY",
     "ESS-SOLN",
     "WD-PKG",
+    "WD-DA",
     "WD-DA-PKG",
     "WD-CONN",
+    "WD-SEC",
     "WD-RUN",
     "WD-FLOW",
     "WD-WF",
@@ -664,6 +927,7 @@ OWNED_PREFIXES: tuple = (
     "WD-REST",
     "WD-NET",
     "DV-CONN",
+    "PUB",
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
 )
@@ -762,10 +1026,14 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
     closure = _closure(checkpoint_id)
 
     clients: frozenset = frozenset()
+    pp_admin_flow_required = False
     requires_config = False
     requires_dataverse_endpoint = False
     for spec in closure:
         clients = clients | spec.clients
+        pp_admin_flow_required = (
+            pp_admin_flow_required or spec.pp_admin_flow_required
+        )
         requires_config = requires_config or spec.requires_config
         requires_dataverse_endpoint = (
             requires_dataverse_endpoint or spec.requires_dataverse_endpoint
@@ -794,10 +1062,94 @@ def transitive_requirements(checkpoint_id: str) -> ResolvedPlan:
         target=checkpoint_id,
         spec=target_spec,
         clients=clients,
+        pp_admin_flow_required=pp_admin_flow_required,
         requires_config=requires_config,
         requires_dataverse_endpoint=requires_dataverse_endpoint,
         ordered_fns=unique,
     )
+
+
+def resolve_profile(profile_name: str) -> Optional[ProfileSpec]:
+    """Return a callable validation profile by name."""
+    return PROFILES.get(profile_name)
+
+
+def list_profiles() -> list[ProfileSpec]:
+    """Return callable profiles sorted by stable profile name."""
+    return sorted(PROFILES.values(), key=lambda profile: profile.name)
+
+
+def profile_requirements(profile_name: str) -> ResolvedPlan:
+    """Resolve a profile to the union of its checkpoint execution needs."""
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        raise RegistryError(f"Unknown profile {profile_name!r}.")
+    if not profile.checkpoint_ids:
+        raise RegistryError(
+            f"Profile {profile_name!r} declares no checkpoints."
+        )
+
+    clients: frozenset = frozenset()
+    pp_admin_flow_required = False
+    requires_config = False
+    requires_dataverse_endpoint = False
+    seen_fns: set = set()
+    unique: list[tuple] = []
+
+    for checkpoint_id in profile.checkpoint_ids:
+        plan = transitive_requirements(checkpoint_id)
+        clients = clients | plan.clients
+        pp_admin_flow_required = (
+            pp_admin_flow_required or plan.pp_admin_flow_required
+        )
+        requires_config = requires_config or plan.requires_config
+        requires_dataverse_endpoint = (
+            requires_dataverse_endpoint or plan.requires_dataverse_endpoint
+        )
+        for label, fn in plan.ordered_fns:
+            if fn in seen_fns:
+                continue
+            seen_fns.add(fn)
+            unique.append((label, fn))
+
+    def _order_index(label: str) -> int:
+        try:
+            return CATEGORY_ORDER.index(label)
+        except ValueError:
+            return len(CATEGORY_ORDER)
+
+    unique.sort(key=lambda pair: _order_index(pair[0]))
+
+    return ResolvedPlan(
+        target=profile.name,
+        spec=_resolve_or_raise(profile.checkpoint_ids[0]),
+        clients=clients,
+        pp_admin_flow_required=pp_admin_flow_required,
+        requires_config=requires_config,
+        requires_dataverse_endpoint=requires_dataverse_endpoint,
+        ordered_fns=unique,
+    )
+
+
+def profile_matches(profile_name: str, emitted_id: str) -> bool:
+    """True when an emitted checkpoint ID belongs to a profile member."""
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        return False
+    return any(matches(checkpoint_id, emitted_id) for checkpoint_id in profile.checkpoint_ids)
+
+
+def profile_family_contract(profile_name: str) -> dict[str, dict[str, int]]:
+    """Return minimum emitted-row cardinality for each profile family."""
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        raise RegistryError(f"Unknown profile {profile_name!r}.")
+    families: dict[str, dict[str, int]] = {}
+    for checkpoint_id in profile.checkpoint_ids:
+        spec = _resolve_or_raise(checkpoint_id)
+        if spec.is_family:
+            families[spec.key] = {"minimum": 1}
+    return families
 
 
 def matches(target: str, emitted_id: str) -> bool:
@@ -824,6 +1176,13 @@ def matches(target: str, emitted_id: str) -> bool:
             is_family_request = True
 
     if is_family_request:
+        emitted_spec = REGISTRY.get(emitted_id)
+        if (
+            emitted_spec is not None
+            and not emitted_spec.is_family
+            and emitted_spec.key != fam_key
+        ):
+            return False
         return emitted_id == fam_key or emitted_id.startswith(fam_key + "-")
 
     # Exact (fixed or exact-dynamic) target.
@@ -855,6 +1214,42 @@ def validate_registry() -> None:
                     f"{prereq!r}, which does not resolve to any registered "
                     f"checkpoint or family."
                 )
+
+    # Profile-integrity self-check. Runs whenever REGISTRY contains at least
+    # the shipped keys (superset-safe): an extended REGISTRY must not skip the
+    # check, or a broken profile would fail open. The guard exists only so a
+    # deliberately stubbed/narrowed REGISTRY in a unit test doesn't trip on
+    # profiles referencing checkpoints it left out.
+    if _SHIPPED_REGISTRY_KEYS <= frozenset(REGISTRY):
+        for profile in PROFILES.values():
+            for checkpoint_id in profile.checkpoint_ids:
+                if resolve(checkpoint_id) is None:
+                    raise RegistryError(
+                        f"Profile {profile.name!r} declares checkpoint "
+                        f"{checkpoint_id!r}, which does not resolve to any "
+                        f"registered checkpoint or family."
+                    )
+        final = PROFILES.get("workday-da:final")
+        if final is None:
+            raise RegistryError("The workday-da:final profile is required.")
+        expected_final_members = {
+            checkpoint_id
+            for profile in PROFILES.values()
+            if profile.name.startswith("workday-da:")
+            and profile.name != "workday-da:final"
+            for checkpoint_id in profile.checkpoint_ids
+        }
+        final_members = set(final.checkpoint_ids)
+        missing_final_members = expected_final_members - final_members
+        unexpected_final_members = final_members - expected_final_members
+        if missing_final_members or unexpected_final_members:
+            raise RegistryError(
+                "The workday-da:final profile must exactly match the union "
+                "of every Workday DA boundary profile. Missing: "
+                + (", ".join(sorted(missing_final_members)) or "(none)")
+                + "; unexpected: "
+                + (", ".join(sorted(unexpected_final_members)) or "(none)")
+            )
 
     # (2) The prereq graph (keyed by resolved spec key) must be acyclic.
     WHITE, GREY, BLACK = 0, 1, 2

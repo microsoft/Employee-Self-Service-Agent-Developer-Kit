@@ -176,7 +176,15 @@ its own Message blocks and tool calls and must return an explicit
 `ACTION_RESULT`:
 
 - **`"applied"`** — the mutation was observed to complete successfully. Set
-  `phases.{id}.actionApplied = true` and write the state file immediately.
+  `phases.{id}.actionApplied = true`. If the phase has
+  `rollbackPushGlobFromAction: true`, require the action to return
+  `ACTION_ROLLBACK_PUSH_GLOB` as one normalized relative path beneath
+  `topics/`, with no `..` segment and no wildcard characters; persist it as
+  `phases.{id}.rollbackPushGlob`. If the path is missing or unsafe, set the
+  phase to `blocked`, write `actionApplied = true` immediately, and stop for
+  manual attention; the live mutation may already have happened and must not
+  be repeated without a known exact rollback scope. With a valid path, write
+  the state file immediately.
 - **`"cancelled"`** — the user declined before mutation. Keep
   `actionApplied = false`, leave the phase `in-progress`, write the state
   file, and stop. Do not run the phase checkpoints.
@@ -218,13 +226,16 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
 - **Any checkpoint `Failed`/`Error`:** set `phases.{id}.status = "blocked"`,
   record `checkpointResults`. Write the state file.
 
-  If this phase has `actionApplied: true`, `rollbackLabel`, and
-  `rollbackPushGlob`, restore and publish the exact pre-action state:
+  If this phase has `actionApplied: true` and `rollbackLabel`, resolve
+  `{ROLLBACK_PUSH_GLOB}` from `phases.{id}.rollbackPushGlob` when
+  `rollbackPushGlobFromAction: true`; otherwise use the contract's
+  `rollbackPushGlob`. Stop with manual attention if the required value is
+  missing. Restore and publish the exact pre-action state:
 
   ```
-  python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{rollbackPushGlob}"
-  python scripts/push.py --only "{rollbackPushGlob}" --dry-run
-  python scripts/push.py --only "{rollbackPushGlob}" --yes
+  python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{ROLLBACK_PUSH_GLOB}"
+  python scripts/push.py --only "{ROLLBACK_PUSH_GLOB}" --dry-run
+  python scripts/push.py --only "{ROLLBACK_PUSH_GLOB}" --yes
   ```
 
   If all three commands succeed, set `actionApplied = false`, keep the phase

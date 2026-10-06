@@ -31,6 +31,6 @@ Rules:
 4. Do not compose your own messages. If there is no Message block for a
    situation, stay silent and proceed to the next action.
 
-After reading SKILL.md, your first action is to check for
-`.local/connect/steps.md`. If starting fresh, your first message to the user
-is the checklist table from the Fresh Start section.
+After reading `SKILL.md`, follow its integration-specific state and routing
+instructions. Do not assume a shared `.local/connect/steps.md` file or a
+generic Fresh Start section.

@@ -6,70 +6,31 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 ## Getting started
 
-This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
+One command installs everything (VS Code, Python 3.12, Git, GitHub CLI, .NET runtime, NuGet, Copilot extensions, pip dependencies) and opens `ess-maker-skills` in VS Code so `/setup` works out of the box.
 
-### Pick your setup path
+**Windows** (PowerShell):
 
-There are several ways to set up your environment depending on your needs:
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+```
 
-| Option | Best for | Guide |
-|--------|----------|-------|
-| **One-shot installer** (Windows) | Full maker kit — installs VS Code, Python, Git, and all dependencies | [Setup README](setup/README.md) |
-| **One-shot installer** (macOS) | Same as above, using Homebrew | [Setup README](setup/README.md) |
-| **GitHub Codespaces** | Browser-based development — no local install required ([free tier available](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
-| **FlightCheck only** | Pre-deployment validation without the full ADK install | [Setup README](setup/README.md#flightcheck-only-mode) |
-| **Manual setup** | Clone or download the repo and open it in VS Code yourself | [Maker Kit README](solutions/ess-maker-skills/README.md#quick-start) — see also the [step-by-step walkthrough below](#how-to-open-ess-maker-skills-as-a-workspace-no-terminal-needed) |
+**macOS** (Terminal):
 
-> **GitHub Copilot subscription is required** for the in-editor maker experience.
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
+```
 
-### ⚠️ Important: open the right folder in VS Code
+See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only, and Maker vs Developer mode selection. Prefer to clone and open the repo yourself? See the [maker kit quick start](solutions/ess-maker-skills/README.md#quick-start). A **GitHub Copilot subscription is required** for the in-editor maker experience.
 
-The kit's slash-commands (`/setup`, `/flightcheck`, etc.) **only appear when you open a specific solution folder as your VS Code workspace** — not the top-level repo folder. If you open the wrong folder, Copilot Chat will not know about the kit and `/setup` will do nothing.
+## New to VS Code?
 
-> The **one-shot installer** and **GitHub Codespaces** paths above open the correct folder for you automatically. The walkthrough below is for the **Manual setup** path.
+The installer opens VS Code for you. If this is your first time in VS Code, use the guided view for a friendlier way to navigate the kit. In the **activity bar** along the far-left edge of the window, click the **rocket icon**.
 
-### How to open `ess-maker-skills` as a workspace (no terminal needed)
+![The rocket icon in the VS Code activity bar](docs/images/adk-extension.jpg)
 
-1. **Get the code.**
-   On the GitHub page, click the green **`< > Code`** button → **`Download ZIP`**. Unzip the file somewhere on your computer (for example, `Documents\Employee-Self-Service-Agent-Developer-Kit`). *(Or, if you already use Git, clone the repo with your tool of choice — GitHub Desktop, Visual Studio, etc.)*
+That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab.
 
-2. **Open VS Code.**
-
-3. **Click `File` → `Open Folder…`** (keyboard shortcut: `Ctrl+K Ctrl+O`).
-
-4. **Navigate INSIDE the unzipped folder, then INTO `solutions`, and select `ess-maker-skills`.**
-
-   The full path you select should look like:
-   ```
-   Employee-Self-Service-Agent-Developer-Kit\solutions\ess-maker-skills
-   ```
-
-   ✅ **Correct** — pick this:
-   ```
-   Employee-Self-Service-Agent-Developer-Kit\
-     solutions\
-       ess-maker-skills\    ← select this folder, then click "Select Folder"
-   ```
-
-   ❌ **Wrong** — do NOT pick the top-level folder:
-   ```
-   Employee-Self-Service-Agent-Developer-Kit\    ← do NOT pick this
-   ```
-
-5. **Click `Select Folder`.** VS Code will open with `ess-maker-skills` as your workspace root.
-
-6. **Open Copilot Chat.** Click the chat icon in the left sidebar (or press `Ctrl+Alt+I`).
-
-7. **Type `/setup`** and press Enter. The kit will guide you from there.
-
-### "I opened the wrong folder — now what?"
-
-If you typed `/setup` and nothing happened, you probably opened the top-level repo folder. Check the file Explorer in VS Code's left sidebar:
-
-- If you see `solutions`, `samples`, `LICENSE`, `CONTRIBUTING.md` — **you're at the wrong level.**
-- If you see `.github`, `scripts`, `src`, `workspace` — **you're in the right place.**
-
-To fix it: `File` → `Open Folder...` again, this time double-click into `solutions`, click on `ess-maker-skills` once to select it, then click `Select Folder`.
+Prefer to drive everything from chat? You can ignore the rocket view entirely and just type commands like `/setup` into Copilot Chat.
 
 ## Solutions
 
@@ -80,68 +41,7 @@ To fix it: `File` → `Open Folder...` again, this time double-click into `solut
 
 Additional solutions will be added under `solutions/` over time.
 
-## Samples
-
-Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
-
-## Repository structure
-
-```
-.github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
-solutions/
-  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
-  ess-flightcheck/      (planned) Standalone deployment-readiness validator
-samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
-LICENSE                 MIT
-SECURITY.md             Microsoft MSRC reporting path
-CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
-CONTRIBUTING.md         Contribution guide, maintenance, privacy posture, validation
-SUPPORT.md              Support model
-```
-
-## Telemetry
-
-The ESS Maker Skills CLI collects pseudonymous usage telemetry (enabled by
-default) to help improve the product. No developer identity, agent content, or
-personal data is collected.
-
-**To opt out**, run either of the following (both are persistent and take effect immediately):
-
-```bash
-# 1. From the solutions/ess-maker-skills directory:
-python scripts/adk_telemetry.py off
-
-# 2. Or set the ESS_ADK_TELEMETRY environment variable to off (any shell / CI).
-#    Syntax varies by shell — set it before running any ADK command.
-```
-
-Setting `ESS_ADK_TELEMETRY=off` inline before a command works in bash / zsh
-(`ESS_ADK_TELEMETRY=off python scripts/...`). To persist it, add it to your
-shell profile:
-
-```bash
-# bash / zsh (~/.bashrc, ~/.zshrc):
-export ESS_ADK_TELEMETRY=off
-```
-
-```powershell
-# PowerShell ($PROFILE) — persistent:
-$env:ESS_ADK_TELEMETRY = "off"
-# ...or for the current session only, run the same line at the prompt.
-```
-
-```cmd
-:: cmd.exe — current session only:
-set ESS_ADK_TELEMETRY=off
-:: For persistence use setx ESS_ADK_TELEMETRY off (takes effect in new shells).
-```
-
-The env var overrides the config-file setting.
-
-Re-enable later with `python scripts/adk_telemetry.py on` or by unsetting the
-env var. See
-[Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy)
-for the full data model and event catalog.
+For samples, repository structure, and telemetry details, see [REFERENCE.md](REFERENCE.md).
 
 ## Contributing
 

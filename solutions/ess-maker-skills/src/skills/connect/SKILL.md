@@ -8,15 +8,15 @@ or what files you are reading.
 
 ## Start
 
-Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
-message, and it never fails the step): `python scripts/emit_capability.py connect`
-
 If the user specified an integration as an argument (e.g., the user said
 "servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
 
-Read `src/skills/connect/step1.md` and follow it.
+Read `src/skills/connect/step1.md` and follow it. That file records anonymous
+usage telemetry after routing knows which integration was chosen, so the
+Connect capability event carries the correct `connector` attribution
+(workday vs servicenow) rather than being a generic "connect" wedge.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
 ServiceNow to its own step files; Workday first by agent architecture, then
@@ -51,16 +51,17 @@ Workday routes by architecture before package detection:
     `src/skills/connect/workday/contract.json`.
   - **CEA full/legacy package or no package** — stop at the current unsupported
     installation boundary without changing state.
-  - **DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
-    resumable package, Entra, tenant, Power Platform, and runtime checklist.
-  - **DA IT or another DA agent** — unsupported for Workday in this release;
-    stop before creating state or entering a Workday lifecycle.
+  - **Native DA HR agent** — use `src/skills/setup/workday-da/SKILL.md` for the
+    resumable six-phase controller lifecycle.
+  - **Classic DA HR, DA IT, or another DA agent** — unsupported for this
+    Workday lifecycle; stop before creating state.
 
   CEA per-agent lifecycle state is stored at
   `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. DA Workday state
-  is stored in `.local/connect/workday-da/config.json` and
-  `.local/setup/workday-da/tasks.md`.
+  is stored only in `.local/connect/workday-da/config.json`.
 
-Each integration's steps.md and config.json persist after completion.
-Running `/connect` again lets the user add a different integration
-without losing existing ones.
+Each integration retains only the state artifacts listed above. ServiceNow
+uses its `steps.md` and `config.json`; CEA Workday uses per-agent
+`lifecycle.json`; native DA Workday uses only its `config.json`. Running
+`/connect` again lets the user add a different integration without losing
+existing ones.

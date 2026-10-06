@@ -461,7 +461,7 @@ def test_common_dimensions_shape():
         "schema_version", "instance_id", "tenant_id", "tenant_class",
         "tenant_name",
         "session_id", "surface", "adk_version",
-        "toolkit_git_sha", "toolkit_git_branch",
+        "toolkit_git_sha", "toolkit_git_branch", "agent_type",
         "timestamp",
     ):
         assert key in dims
@@ -492,6 +492,19 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["toolkit_git_sha"] == "abcdef0"
     assert dims["toolkit_git_branch"] == "other"
+    assert dims["agent_type"] == adk.AGENT_TYPE_UNKNOWN
+
+
+def test_common_dimensions_agent_type_maps_from_branch(monkeypatch):
+    for branch, expected in (
+        ("main-ca", adk.AGENT_TYPE_CUSTOM),
+        ("main", adk.AGENT_TYPE_DECLARATIVE),
+        ("other", adk.AGENT_TYPE_UNKNOWN),
+    ):
+        monkeypatch.setenv("ESS_ADK_GIT_BRANCH", branch)
+        _fc.get_toolkit_git_branch.cache_clear()
+        dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+        assert dims["agent_type"] == expected
 
 
 def test_build_event_is_common_schema_4_0():
@@ -626,6 +639,66 @@ def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     assert envelopes[0]["name"] == "adk.capability.use"
     assert envelopes[0]["data"]["adk_capability"] == "evaluation_validate"
     assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
+
+
+def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
+    captured_post,
+):
+    correlation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    agent_id = "7f7c8f9c-1234-4abc-9def-0123456789ab"
+
+    adk.emit_connect_lifecycle(
+        "phase-completed",
+        connector="workday",
+        phase="employee-validation",
+        outcome="success",
+        duration_ms=1250,
+        retry_count=2,
+        resume_count=1,
+        blocker_category="permissions",
+        remediation_id="WD-E2E-006",
+        correlation_id=correlation_id,
+        agent_id=agent_id,
+        block=True,
+    )
+
+    envelope = captured_post[0][1][0]
+    assert envelope["name"] == "adk.connect.lifecycle"
+    assert envelope["data"]["connector"] == "workday"
+    assert envelope["data"]["lifecycle_event"] == "phase_completed"
+    assert envelope["data"]["phase"] == "employee_validation"
+    assert envelope["data"]["outcome"] == "success"
+    assert envelope["data"]["duration_ms"] == 1250
+    assert envelope["data"]["retry_count"] == 2
+    assert envelope["data"]["resume_count"] == 1
+    assert envelope["data"]["blocker_category"] == "permissions"
+    assert envelope["data"]["remediation_id"] == "WD-E2E-006"
+    assert envelope["data"]["correlation_id"] == correlation_id
+    assert envelope["data"]["agent_id"] == agent_id
+
+
+def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):
+    adk.emit_connect_lifecycle(
+        "future-event",
+        phase="Runtime / https://example.test/path",
+        outcome="future-outcome",
+        blocker_category="C:\\customer\\secret.txt",
+        remediation_id="customer-specific-value",
+        correlation_id="not-a-guid",
+        agent_id="owner@customer.example",
+        block=True,
+    )
+
+    data = captured_post[0][1][0]["data"]
+    assert data["lifecycle_event"] == "unknown"
+    assert data["outcome"] == "unknown"
+    assert data["phase"] == "unknown"
+    assert data["blocker_category"] == "unknown"
+    assert "example" not in data["phase"]
+    assert "customer" not in data["blocker_category"]
+    assert data["remediation_id"] == ""
+    assert data["correlation_id"] == ""
+    assert data["agent_id"] == ""
 
 
 def test_api_call_error_outcome_carries_error_fields(captured_post):
@@ -1694,6 +1767,7 @@ def test_wired_capabilities_are_in_canonical_list():
         # emit_capability_use(...) from the Python entry points
         "setup", "evaluation_validate",
         "backup_template_configs", "restore_template_configs",
+        "analytics",
         "push",
         # emit_flightcheck_*() event family
         "flightcheck",
@@ -1752,7 +1826,12 @@ def test_every_canonical_capability_is_actually_emitted():
         for pat in (py_shim_pat, use_pat, kw_pat):
             for m in pat.finditer(text):
                 emitted.add(m.group(1))
-    for path in skills_dir.rglob("SKILL.md"):
+    # Scan every prompt-file the skills dispatch chain reads, not just
+    # SKILL.md. Some SKILLs (connect, in particular) defer their emit into a
+    # step*.md file so the ``--connector`` value can be attached AFTER the
+    # user picks Workday vs ServiceNow. Restricting the scan to SKILL.md
+    # would misclassify those deferred capabilities as dead.
+    for path in skills_dir.rglob("*.md"):
         text = path.read_text(encoding="utf-8")
         for m in md_pat.finditer(text):
             emitted.add(m.group(1))
@@ -1799,7 +1878,9 @@ def test_no_caller_passes_a_noncanonical_capability_to_the_shim():
             cap = m.group(1)
             if cap not in adk.ADK_CAPABILITIES:
                 offenders.append((str(path.relative_to(repo_root)), cap))
-    for path in skills_dir.rglob("SKILL.md"):
+    # Scan every prompt file, not just SKILL.md — deferred emits live in
+    # step*.md (see the reverse scanner above for the same rationale).
+    for path in skills_dir.rglob("*.md"):
         text = path.read_text(encoding="utf-8")
         for m in md_pat.finditer(text):
             cap = m.group(1)
@@ -2027,3 +2108,152 @@ def test_sanitize_tenant_id_rejects_non_guid(bad):
 def test_sanitize_tenant_id_preserves_empty():
     assert adk._sanitize_tenant_id("") == ""
     assert adk._sanitize_tenant_id("   ") == ""
+
+
+# --- connector attribution (ADO 7943641) ----------------------------------
+def test_normalize_connector_known_values_pass_through():
+    for c in adk.CONNECTORS:
+        assert adk.normalize_connector(c) == c
+
+
+def test_normalize_connector_empty_stays_empty():
+    # Most events legitimately have no connector context (topic authoring,
+    # workflow deletion, etc.). Empty must NOT coerce to "unknown".
+    assert adk.normalize_connector("") == ""
+    assert adk.normalize_connector(None) == ""
+
+
+def test_normalize_connector_case_and_whitespace_insensitive():
+    assert adk.normalize_connector("  Workday  ") == "workday"
+    assert adk.normalize_connector("SERVICENOW") == "servicenow"
+
+
+def test_normalize_connector_legacy_sentinel_preserved():
+    # The "legacy" sentinel labels events that predate connector attribution
+    # (generic "connect" capability without a --connector arg). It must
+    # round-trip verbatim so the pre-attribution corpus stays queryable as
+    # its own bucket instead of collapsing into "unknown".
+    assert adk.normalize_connector("legacy") == adk.CONNECTOR_LEGACY
+    assert adk.normalize_connector(" Legacy ") == adk.CONNECTOR_LEGACY
+
+
+def test_normalize_connector_unknown_bucketed():
+    # Out-of-taxonomy values still emit but land in the controlled bucket so
+    # the "connector" dimension never mints stray slices.
+    assert adk.normalize_connector("adp") == adk.CONNECTOR_UNKNOWN
+    assert adk.normalize_connector("workday-soap") == adk.CONNECTOR_UNKNOWN
+    assert adk.normalize_connector("wd") == adk.CONNECTOR_UNKNOWN
+
+
+def test_emit_capability_use_stamps_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("connect", connector="workday", block=True)
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == "workday"
+
+
+def test_emit_capability_use_omitted_connector_is_empty(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("topic_create", block=True)
+    data = captured_post[0][1][0]["data"]
+    # Topic authoring is not connector-scoped; the field is always present
+    # (Kusto column shape stays stable) but empty.
+    assert data["connector"] == ""
+
+
+def test_emit_capability_use_unknown_connector_bucketed(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("connect", connector="Sap", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == adk.CONNECTOR_UNKNOWN
+
+
+def test_emit_flightcheck_run_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_run(agent_id="a1", connector="servicenow", block=True)
+    data = captured_post[0][1][0]["data"]
+    assert data["connector"] == "servicenow"
+
+
+def test_emit_flightcheck_result_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_result(agent_id="a1", connector="workday", result="pass", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_emit_flightcheck_error_carries_connector(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_flightcheck_error(agent_id="a1", connector="workday", error_code="X", block=True)
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_schema_version_bump_records_agent_type_dim():
+    # agent_type is added in 1.7.0 so cubes can version-gate the CA/DA split.
+    assert adk.SCHEMA_VERSION == "1.7.0"
+
+
+# --- emit_capability.py shim --connector plumbing -------------------------
+def test_shim_parses_connector_flag_before_capability(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "--connector", "servicenow", "connect",
+    ])
+    assert rc == 0
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == "servicenow"
+
+
+def test_shim_parses_connector_flag_after_capability(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "connect", "--connector", "workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_shim_parses_connector_equals_form(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "connect", "--connector=workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"
+
+
+def test_shim_omitted_connector_yields_empty(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "topic_create"])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == ""
+
+
+def test_shim_dangling_connector_flag_still_emits(captured_post, monkeypatch):
+    # Malformed CLI (`--connector` with no value at the end) must not fail
+    # the skill step; the emit still fires with an empty connector so the
+    # capability signal is not lost.
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "connect", "--connector"])
+    assert rc == 0
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "connect"
+    assert data["connector"] == ""
+
+
+def test_shim_worker_mode_preserves_connector(captured_post, monkeypatch):
+    # Async mode re-execs the shim with `--worker <cap>` (+ optional
+    # `--connector <value>`). Exercise the worker branch directly to
+    # prove the connector survives the subprocess round-trip.
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main([
+        "emit_capability.py", "--worker", "connect", "--connector", "workday",
+    ])
+    assert rc == 0
+    assert captured_post[0][1][0]["data"]["connector"] == "workday"

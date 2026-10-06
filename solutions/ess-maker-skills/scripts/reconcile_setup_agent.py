@@ -23,27 +23,13 @@ from agentbuilder import (
     derive_environment_host,
     validate_environment_host,
 )
-from auth import AuthExpiredError, authenticate, query_all
+from auth import AuthExpiredError, authenticate, dataverse_get
 from flightcheck.powerplatform_client import PowerPlatformClient
 from http_errors import APIError
 
 
-CEA_SCHEMA_NAMES = frozenset(
-    {
-        "msdyn_copilotforemployeeselfservice",
-        "msdyn_copilotforemployeeselfservicecore",
-        "msdyn_copilotforemployeeselfservicehr",
-        "msdyn_copilotforemployeeselfserviceit",
-    }
-)
-DA_SCHEMA_NAMES = frozenset(
-    {
-        "gptagent_copilotforemployeeselfservice",
-        "gptagent_copilotforemployeeselfservicecore",
-        "gptagent_copilotforemployeeselfservicehr",
-        "gptagent_copilotforemployeeselfserviceit",
-    }
-)
+SOLUTION_BACKED_ESS_PREFIX = "msdyn_copilotforemployeeselfservice"
+DA_GA_PREFIX = "gptagent_copilotforemployeeselfservice"
 RESULT_PREFIX = "DA_SETUP_PRODUCT_RECONCILIATION_JSON:"
 _RELEASE_MANIFEST = (
     Path(__file__).resolve().parents[1]
@@ -67,12 +53,12 @@ def _normalize_guid(value: str, label: str) -> str:
 
 
 def classify_schema_name(schema_name: str | None) -> str:
-    """Classify only exact, recognized solution-backed bot schema names."""
+    """Classify the two supported ESS schema families by stable prefix."""
     normalized = str(schema_name or "").strip().casefold()
-    if normalized in CEA_SCHEMA_NAMES:
-        return "cea"
-    if normalized in DA_SCHEMA_NAMES:
-        return "da"
+    if normalized.startswith(SOLUTION_BACKED_ESS_PREFIX):
+        return "solution-backed-ess"
+    if normalized.startswith(DA_GA_PREFIX):
+        return "da-ga"
     return "unknown"
 
 
@@ -139,7 +125,7 @@ def _probe_native_agent(
     kit_root: Path,
     host: str | None,
     api_version: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str, BaseException | None]:
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     token, tenant_id = authenticate_flightcheck(
         ring,
@@ -159,7 +145,19 @@ def _probe_native_agent(
         tenant_id=tenant_id,
         api_version=api_version,
     )
-    return client.get_agent(agent_id)
+    changeset = client.fetch_components(agent_id)
+    bot = changeset.get("bot")
+    if not isinstance(bot, dict):
+        raise ValueError("Component fetch did not return bot identity.")
+    fetched_id = _normalize_guid(
+        str(bot.get("cdsBotId") or ""),
+        "Fetched component agent ID",
+    )
+    if fetched_id.casefold() != agent_id.casefold():
+        raise ValueError(
+            "Component fetch returned identity for a different agent."
+        )
+    return bot, "minimalbot-components", None
 
 
 def _resolve_dataverse_url(
@@ -170,7 +168,11 @@ def _resolve_dataverse_url(
     client.authenticate(preferred_username=account)
     raw_environments = client.list_environments_for_user()
     if isinstance(raw_environments, dict) and "_error" in raw_environments:
-        return None
+        raise APIError(
+            status_code=int(raw_environments.get("_status") or 0),
+            resource_name="environment",
+            operation="read",
+        )
 
     target = _normalize_guid(environment_id, "Environment ID")
     for environment in raw_environments:
@@ -194,26 +196,348 @@ def _read_dataverse_agent(
     env_url: str,
     agent_id: str,
     account: str | None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     token = authenticate(env_url, preferred_username=account)
-    records = query_all(
+    record = dataverse_get(
         env_url,
         token,
-        entity_set="bots",
-        select="botid,name,schemaname,ismanaged",
-        filter_expr=f"botid eq {agent_id}",
+        f"bots({agent_id})",
+        {"$select": "botid,name,schemaname,ismanaged"},
     )
-    if len(records) > 1:
-        raise ValueError("Dataverse returned duplicate records for one agent ID.")
-    return records[0] if records else None
+    if not isinstance(record, dict):
+        raise ValueError("Dataverse agent lookup returned an invalid shape.")
+    return record
 
 
-def _continue_result(classification: str, evidence: str) -> dict[str, Any]:
+def _exception_evidence(exc: BaseException) -> dict[str, Any]:
+    chain: list[dict[str, str]] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(chain) < 4:
+        seen.add(id(current))
+        chain.append(
+            {
+                "type": type(current).__name__,
+                "message": str(current),
+            }
+        )
+        current = current.__cause__ or current.__context__
+
+    result: dict[str, Any] = {"causes": chain}
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int):
+        result["statusCode"] = status_code
+    error_code = getattr(exc, "error_code", None)
+    if error_code:
+        result["errorCode"] = str(error_code)
+    request_id = getattr(exc, "request_id", None)
+    if request_id:
+        result["requestId"] = str(request_id)
+    return result
+
+
+def _failure_result(
+    backend: str,
+    exc: BaseException,
+    *,
+    stage: str = "agent-lookup",
+) -> dict[str, Any]:
+    error = _exception_evidence(exc)
+    status_code = error.get("statusCode")
+    if status_code == 404:
+        outcome = "not-found"
+    elif status_code == 401:
+        outcome = "authentication-required"
+    elif status_code == 403:
+        outcome = "access-denied"
+    else:
+        outcome = "uncertain"
     return {
-        "action": "continue-da-ga-setup",
-        "classification": classification,
-        "evidence": evidence,
+        "backend": backend,
+        "outcome": outcome,
+        "stage": stage,
+        "error": error,
     }
+
+
+def _uncertain_product_identity(
+    evidence: str,
+    observation: str,
+    cause_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "outcome": "uncertain",
+        "stage": "schema-identity",
+        "source": evidence,
+        "observation": observation,
+        "error": {
+            "causes": [
+                {
+                    "type": cause_type,
+                    "message": message,
+                }
+            ]
+        },
+    }
+
+
+def _found_identity_result(
+    backend: str,
+    evidence: str,
+    identity: dict[str, Any],
+    schema_name: str | None,
+    product_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "backend": backend,
+        "outcome": "found",
+        "evidence": evidence,
+        "identity": identity,
+    }
+    if product_identity is not None:
+        result["productIdentity"] = product_identity
+    else:
+        result["productFamily"] = classify_schema_name(schema_name)
+    return result
+
+
+def _native_identity_summary(
+    agent: dict[str, Any],
+    *,
+    evidence: str,
+) -> dict[str, Any]:
+    identity: dict[str, Any] = {}
+    display_name = agent.get("displayName")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
+
+    managed_properties = agent.get("managedProperties")
+    if isinstance(managed_properties, dict):
+        managed = managed_properties.get("isManaged")
+        if isinstance(managed, bool):
+            identity["isManaged"] = managed
+
+    if "schemaName" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The native BotEntity did not include schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaName"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The native BotEntity returned a null schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The native BotEntity returned a non-string schemaName.",
+        )
+        return _found_identity_result(
+            "native", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The native BotEntity returned an empty schemaName.",
+        )
+    return _found_identity_result(
+        "native", evidence, identity, schema_name, product_identity
+    )
+
+
+def _dataverse_identity_summary(
+    agent: dict[str, Any],
+    *,
+    evidence: str,
+) -> dict[str, Any]:
+    identity: dict[str, Any] = {}
+    display_name = agent.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        identity["displayName"] = display_name.strip()
+    managed = agent.get("ismanaged")
+    if isinstance(managed, bool):
+        identity["isManaged"] = managed
+
+    if "schemaname" not in agent:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "field-absent",
+            "SchemaNameFieldAbsent",
+            "The Dataverse bot record did not include schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    raw_schema_name = agent["schemaname"]
+    if raw_schema_name is None:
+        identity["schemaName"] = None
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "null",
+            "SchemaNameNull",
+            "The Dataverse bot record returned a null schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+    if not isinstance(raw_schema_name, str):
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "invalid-type",
+            "SchemaNameInvalidType",
+            "The Dataverse bot record returned a non-string schemaname.",
+        )
+        return _found_identity_result(
+            "dataverse", evidence, identity, None, product_identity
+        )
+
+    schema_name = raw_schema_name.strip()
+    identity["schemaName"] = schema_name
+    product_identity = None
+    if not schema_name:
+        product_identity = _uncertain_product_identity(
+            evidence,
+            "empty",
+            "SchemaNameEmpty",
+            "The Dataverse bot record returned an empty schemaname.",
+        )
+    return _found_identity_result(
+        "dataverse", evidence, identity, schema_name, product_identity
+    )
+
+
+def probe_native_identity(
+    *,
+    environment_id: str,
+    agent_id: str,
+    ring: str,
+    account: str | None = None,
+    kit_root: Path = Path("."),
+    host: str | None = None,
+    api_version: str = "2024-10-01",
+) -> dict[str, Any]:
+    normalized_environment = _normalize_guid(environment_id, "Environment ID")
+    normalized_agent = _normalize_guid(agent_id, "Agent ID")
+    try:
+        agent, evidence, product_identity_error = _probe_native_agent(
+            normalized_environment,
+            normalized_agent,
+            ring,
+            account,
+            kit_root.resolve(),
+            host,
+            api_version,
+        )
+    except (
+        AgentBuilderError,
+        OSError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        return _failure_result("native", exc)
+    result = _native_identity_summary(
+        agent,
+        evidence=evidence,
+    )
+    if product_identity_error is not None:
+        result["productIdentity"] = {
+            "outcome": "uncertain",
+            "stage": "component-identity",
+            "error": _exception_evidence(product_identity_error),
+        }
+    return result
+
+
+def probe_dataverse_identity(
+    *,
+    environment_id: str,
+    agent_id: str,
+    account: str | None = None,
+    dataverse_url: str | None = None,
+) -> dict[str, Any]:
+    normalized_environment = _normalize_guid(environment_id, "Environment ID")
+    normalized_agent = _normalize_guid(agent_id, "Agent ID")
+    resolved_url = dataverse_url
+    if not resolved_url:
+        try:
+            resolved_url = _resolve_dataverse_url(
+                normalized_environment,
+                account,
+            )
+        except (
+            APIError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            requests.RequestException,
+        ) as exc:
+            return _failure_result(
+                "dataverse",
+                exc,
+                stage="environment-resolution",
+            )
+    if not resolved_url:
+        return {
+            "backend": "dataverse",
+            "outcome": "uncertain",
+            "stage": "environment-resolution",
+            "error": {
+                "causes": [
+                    {
+                        "type": "EnvironmentUrlNotResolved",
+                        "message": (
+                            "The exact Dataverse URL was not available from "
+                            "the user-scoped environment list."
+                        ),
+                    }
+                ]
+            },
+        }
+
+    try:
+        agent = _read_dataverse_agent(
+            resolved_url.rstrip("/"),
+            normalized_agent,
+            account,
+        )
+    except (
+        APIError,
+        AuthExpiredError,
+        OSError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        return _failure_result("dataverse", exc)
+    return _dataverse_identity_summary(
+        agent,
+        evidence="dataverse-direct",
+    )
 
 
 def reconcile_selected_agent(
@@ -225,115 +549,77 @@ def reconcile_selected_agent(
     kit_root: Path = Path("."),
     host: str | None = None,
     api_version: str = "2024-10-01",
-    native_da_ga: bool = False,
     dataverse_url: str | None = None,
+    probe: str,
+) -> dict[str, Any]:
+    """Run one independent, read-only identity probe."""
+    if probe == "native":
+        return probe_native_identity(
+            environment_id=environment_id,
+            agent_id=agent_id,
+            ring=ring,
+            account=account,
+            kit_root=kit_root,
+            host=host,
+            api_version=api_version,
+        )
+    if probe == "dataverse":
+        return probe_dataverse_identity(
+            environment_id=environment_id,
+            agent_id=agent_id,
+            account=account,
+            dataverse_url=dataverse_url,
+        )
+    raise ValueError("Probe must be 'native' or 'dataverse'.")
+
+
+def known_native_identity(schema_name: str) -> dict[str, Any]:
+    """Classify identity already proven by a native MinimalBot operation."""
+    normalized_schema = schema_name.strip()
+    return _found_identity_result(
+        "native",
+        "provided-native",
+        {"schemaName": normalized_schema},
+        normalized_schema,
+        None,
+    )
+
+
+def compatible_kit_result(
     operating_system: str | None = None,
 ) -> dict[str, Any]:
-    """Return a bounded routing result; unknown evidence always fails open."""
-    normalized_environment = _normalize_guid(environment_id, "Environment ID")
-    normalized_agent = _normalize_guid(agent_id, "Agent ID")
-
-    if native_da_ga:
-        return _continue_result("da-ga", "provided-native")
-
-    cea_evidence = "dataverse-schema"
-    try:
-        native_agent = _probe_native_agent(
-            normalized_environment,
-            normalized_agent,
-            ring,
-            account,
-            kit_root.resolve(),
-            host,
-            api_version,
-        )
-        native_classification = classify_schema_name(
-            native_agent.get("schemaName")
-        )
-        if native_classification == "cea":
-            classification = "cea"
-            cea_evidence = "native-schema"
-        else:
-            return _continue_result("da-ga", "native-minimal-bot")
-    except (AgentBuilderError, OSError, ValueError, requests.RequestException):
-        classification = "unknown"
-
-    if classification != "cea":
-        resolved_url = dataverse_url
-        if not resolved_url:
-            try:
-                resolved_url = _resolve_dataverse_url(
-                    normalized_environment,
-                    account,
-                )
-            except (
-                OSError,
-                RuntimeError,
-                SystemExit,
-                ValueError,
-                requests.RequestException,
-            ):
-                return _continue_result("unknown", "not-classified")
-        if not resolved_url:
-            return _continue_result("unknown", "not-classified")
-
-        try:
-            record = _read_dataverse_agent(
-                resolved_url.rstrip("/"),
-                normalized_agent,
-                account,
-            )
-        except (
-            APIError,
-            AuthExpiredError,
-            OSError,
-            SystemExit,
-            ValueError,
-            requests.RequestException,
-        ):
-            return _continue_result("unknown", "not-classified")
-
-        if not record:
-            return _continue_result("unknown", "not-classified")
-        classification = classify_schema_name(
-            str(record.get("schemaname") or "")
-        )
-    if classification != "cea":
-        return _continue_result(classification, "dataverse-schema")
-
-    result = {
-        "action": "stop-and-use-cea-kit",
-        "classification": "cea",
-        "evidence": cea_evidence,
-    }
+    """Return the pinned compatible-kit installation operation."""
     try:
         command, shell = build_recovery_command(operating_system)
         release = _load_release()
-    except ValueError:
-        result["recoveryUnavailable"] = True
-        return result
-    result.update(
-        {
-            "releaseTag": release["releaseTag"],
-            "recoveryCommand": command,
-            "recoveryShell": shell,
+    except ValueError as exc:
+        return {
+            "outcome": "unavailable",
+            "error": _exception_evidence(exc),
         }
-    )
-    return result
+    return {
+        "outcome": "available",
+        "releaseTag": release["releaseTag"],
+        "recoveryCommand": command,
+        "recoveryShell": shell,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Reconcile one selected agent before DA-GA setup."
+        description="Probe one selected agent before DA-GA setup."
     )
-    parser.add_argument("--environment-id", required=True)
-    parser.add_argument("--agent-id", required=True)
-    parser.add_argument("--ring", required=True)
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--probe", choices=("native", "dataverse"))
+    operation.add_argument("--known-native-schema")
+    operation.add_argument("--compatible-kit", action="store_true")
+    parser.add_argument("--environment-id")
+    parser.add_argument("--agent-id")
+    parser.add_argument("--ring")
     parser.add_argument("--account")
     parser.add_argument("--kit-root", type=Path, default=Path("."))
     parser.add_argument("--host")
     parser.add_argument("--api-version", default="2024-10-01")
-    parser.add_argument("--native-da-ga", action="store_true")
     parser.add_argument("--dataverse-url")
     parser.add_argument(
         "--operating-system",
@@ -346,18 +632,28 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        result = reconcile_selected_agent(
-            environment_id=args.environment_id,
-            agent_id=args.agent_id,
-            ring=args.ring,
-            account=args.account,
-            kit_root=args.kit_root,
-            host=args.host,
-            api_version=args.api_version,
-            native_da_ga=args.native_da_ga,
-            dataverse_url=args.dataverse_url,
-            operating_system=args.operating_system,
-        )
+        if args.compatible_kit:
+            result = compatible_kit_result(args.operating_system)
+        elif args.known_native_schema is not None:
+            result = known_native_identity(args.known_native_schema)
+        else:
+            if not args.environment_id or not args.agent_id:
+                raise ValueError(
+                    "Environment ID and agent ID are required for a probe."
+                )
+            if args.probe == "native" and not args.ring:
+                raise ValueError("Ring is required for a native probe.")
+            result = reconcile_selected_agent(
+                environment_id=args.environment_id,
+                agent_id=args.agent_id,
+                ring=args.ring or "",
+                account=args.account,
+                kit_root=args.kit_root,
+                host=args.host,
+                api_version=args.api_version,
+                dataverse_url=args.dataverse_url,
+                probe=args.probe or "",
+            )
     except ValueError as exc:
         print(f"ERROR: {exc}")
         return 2
