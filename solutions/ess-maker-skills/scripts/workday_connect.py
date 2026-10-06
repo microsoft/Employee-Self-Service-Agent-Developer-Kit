@@ -53,6 +53,10 @@ from workday_connect_readiness import (
     run_final_readiness,
     run_profile_gate,
 )
+from workday_connect_realms import (
+    WorkdayConnectRealmError,
+    discover_and_record_realm_target,
+)
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
     run_runtime_operation,
@@ -187,6 +191,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    discover_target = subparsers.add_parser("discover-realm-target")
+    discover_target.add_argument(
+        "--realm",
+        choices=("test", "prod"),
+        required=True,
+    )
+    discover_target.add_argument("--environment-id", required=True)
+    discover_target.add_argument("--dataverse-url", required=True)
+    discover_target.add_argument("--maker-username")
 
     tenant = subparsers.add_parser("set-workday-tenant")
     tenant.add_argument("--tenant", required=True)
@@ -295,6 +308,20 @@ def _status(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     return store.status()
+
+
+def _discover_realm_target(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return discover_and_record_realm_target(
+        Path(args.root),
+        store,
+        realm=args.realm,
+        environment_id=args.environment_id,
+        environment_url=args.dataverse_url,
+        account_hint=args.maker_username,
+    )
 
 
 def _run_profile_gate(
@@ -1235,6 +1262,7 @@ _COMMAND_HANDLERS: dict[
     Callable[[argparse.Namespace, WorkdayConnectStore], dict[str, Any]],
 ] = {
     "status": _status,
+    "discover-realm-target": _discover_realm_target,
     "set-workday-tenant": _set_workday_tenant,
     "entra-handoff": _entra_handoff,
     "record-entra": _record_entra,
@@ -1259,6 +1287,7 @@ _COMMAND_HANDLERS: dict[
 }
 
 _COMMAND_PHASES = {
+    "discover-realm-target": None,
     "preflight": "preflight",
     "set-workday-tenant": "entra",
     "entra-handoff": "entra",
@@ -1313,6 +1342,7 @@ def main() -> None:
         WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
+        WorkdayConnectRealmError,
         WorkdayConnectRuntimeError,
         WorkdayConnectStoreError,
         WorkdayConnectFlightCheckError,

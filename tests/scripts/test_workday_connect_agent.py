@@ -808,6 +808,7 @@ def test_controller_public_command_and_result_contract_is_stable(
 
     assert tuple(subparsers.choices) == (
         "status",
+        "discover-realm-target",
         "set-workday-tenant",
         "entra-handoff",
         "record-entra",

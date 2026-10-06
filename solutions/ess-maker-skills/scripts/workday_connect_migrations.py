@@ -20,6 +20,7 @@ from workday_connect_model import (
     default_administrator_state,
     default_lifecycle_state,
     default_state,
+    initialize_target_registry,
     utc_now,
     validate_state,
     workday_saml_entity_id,
@@ -34,6 +35,17 @@ from workday_connect_state_policy import (
 
 class WorkdayConnectMigrationError(ValueError):
     """Raised when no supported Workday Connect migration path exists."""
+
+
+def _finalize_state(state: dict[str, Any]) -> dict[str, Any]:
+    migration = state.get("migration")
+    provenance = (
+        str(migration.get("source") or "state-migration")
+        if isinstance(migration, Mapping)
+        else "state-migration"
+    )
+    initialize_target_registry(state, provenance=provenance)
+    return validate_state(state)
 
 
 def _legacy_phase_status(
@@ -260,7 +272,7 @@ def _migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
         "migratedAt": utc_now(),
     }
     state["updatedAt"] = utc_now()
-    return validate_state(state)
+    return _finalize_state(state)
 
 
 def _upgrade_structured_state(
@@ -408,7 +420,7 @@ def _upgrade_structured_state(
         "migratedAt": utc_now(),
     }
     state["updatedAt"] = utc_now()
-    return validate_state(state)
+    return _finalize_state(state)
 
 
 def _upgrade_pre_v7_state(
@@ -442,7 +454,7 @@ def _upgrade_pre_v7_state(
         state["phases"]["entra"]["updatedAt"] = utc_now()
     state["status"] = "in-progress"
     state["updatedAt"] = utc_now()
-    return validate_state(state)
+    return _finalize_state(state)
 
 
 def _upgrade_readiness_state(
@@ -485,7 +497,7 @@ def _upgrade_readiness_state(
     if baseline_required:
         state["status"] = "in-progress"
     state["updatedAt"] = utc_now()
-    return validate_state(state)
+    return _finalize_state(state)
 
 
 def _upgrade_v2_state(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -526,7 +538,11 @@ def _upgrade_v9_state(document: Mapping[str, Any]) -> dict[str, Any]:
             employee_phase["updatedAt"] = utc_now()
         state["status"] = "in-progress"
         state["updatedAt"] = utc_now()
-    return validate_state(state)
+    return _finalize_state(state)
+
+
+def _upgrade_v10_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    return _upgrade_structured_state(document, source_version=10)
 
 
 _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
@@ -538,11 +554,12 @@ _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     7: _upgrade_v7_state,
     8: _upgrade_v8_state,
     9: _upgrade_v9_state,
+    10: _upgrade_v10_state,
 }
 
 
 def migrate_state(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a validated schema-v10 state without performing any I/O."""
+    """Return a validated current state without performing any I/O."""
     source_version = document.get("schemaVersion")
     if "schemaVersion" in document and not isinstance(
         source_version,

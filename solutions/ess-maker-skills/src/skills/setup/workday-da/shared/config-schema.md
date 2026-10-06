@@ -11,19 +11,25 @@ The only writable lifecycle state is:
 `scripts/workday_connect_store.py` owns locking, migration backup and
 invocation, validation, atomic writes, and durable phase transitions.
 `scripts/workday_connect_migrations.py` owns every pure legacy and schema-v2
-through schema-v9 transformation; it never reads or writes the state file.
+through schema-v10 transformation; it never reads or writes the state file.
 `scripts/workday_connect_state_policy.py` owns shared pure reset, invalidation,
 and tenant-foundation comparisons used by persistence and migration. Skills
 must use `scripts/workday_connect.py`; they must not edit this file directly
 or create a Markdown state mirror.
 
-## Schema version 10
+## Schema version 11
 
 ```json
 {
-  "schemaVersion": 10,
+  "schemaVersion": 11,
   "provider": "workday",
   "status": "in-progress",
+  "activeTargetRealm": "dev",
+  "targets": {
+    "dev": {},
+    "test": null,
+    "prod": null
+  },
   "scope": {},
   "identifiers": {},
   "endpoints": {},
@@ -47,6 +53,14 @@ or create a Markdown state mirror.
 
 - `scope` contains exact agent, Dataverse environment, architecture, package,
   Entra tenant, and Workday tenant targeting.
+- `activeTargetRealm` selects the DEV, TEST, or PROD lifecycle projected into
+  the top-level `scope`, `operators`, `lifecycle`, `phases`, and `status`
+  fields for backward-compatible controller operations.
+- `targets` stores independent DEV, TEST, and PROD identity, deployment
+  status, environment, operator, lifecycle, phase, and evidence snapshots.
+  TEST and PROD remain `null` until controller-owned AgentBuilder discovery
+  proves the promoted sibling, ALM family, supported schema, deployed commit,
+  tenant, and exact environment ID-to-Dataverse URL mapping.
 - `identifiers` contains non-secret Entra and Workday identifiers.
 - `endpoints` contains validated non-secret Workday endpoints.
 - `operators` contains safe account and tenant provenance.
@@ -115,8 +129,8 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2 through schema-v9, or legacy row-based state, is backed up to
-`config.pre-v10.json` before one-time migration. Schema-v6 administrator
+Schema-v2 through schema-v10, or legacy row-based state, is backed up to
+`config.pre-v11.json` before one-time migration. Schema-v6 administrator
 evidence is preserved as safe partial evidence, while Entra and downstream
 phases reopen for the expanded directory, application-pairing, federation, and
 least-privilege checks. A previously complete runtime phase is reopened when

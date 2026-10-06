@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,10 +18,35 @@ from urllib.parse import urlparse
 import uuid
 
 
-STATE_SCHEMA_VERSION = 10
+STATE_SCHEMA_VERSION = 11
 CONTROLLER_CONTRACT_VERSION = 4
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
+TARGET_REALMS = ("dev", "test", "prod")
+TARGET_DEPLOYMENT_STATUSES = frozenset(
+    {
+        "not-deployed",
+        "detected",
+        "needs-configuration",
+        "partially-configured",
+        "blocked",
+        "ready",
+    }
+)
+TARGET_SNAPSHOT_FIELDS = ("scope", "operators", "lifecycle", "phases")
+TARGET_IDENTITY_FIELDS = frozenset(
+    {
+        "environmentId",
+        "environmentUrl",
+        "tenantId",
+        "agentId",
+        "agentSchemaName",
+        "agentSlug",
+        "almFamilyId",
+        "commitSha",
+        "sourceAgentId",
+    }
+)
 
 
 class WorkdayConnectModelError(ValueError):
@@ -536,8 +562,146 @@ def default_lifecycle_state() -> dict[str, Any]:
     }
 
 
-def default_state() -> dict[str, Any]:
+def _target_identity_from_scope(
+    scope: Mapping[str, Any],
+) -> dict[str, str]:
+    agent = scope.get("agent")
+    if not isinstance(agent, Mapping):
+        agent = {}
+    agent_id = str(agent.get("botId") or "")
     return {
+        "environmentId": str(scope.get("environmentId") or ""),
+        "environmentUrl": str(scope.get("dataverseUrl") or ""),
+        "tenantId": str(scope.get("entraTenantId") or ""),
+        "agentId": agent_id,
+        "agentSchemaName": str(agent.get("schemaName") or ""),
+        "agentSlug": str(agent.get("slug") or ""),
+        "almFamilyId": "",
+        "commitSha": "",
+        "sourceAgentId": agent_id,
+    }
+
+
+def _target_deployment_status(
+    state: Mapping[str, Any],
+    current: str = "",
+) -> str:
+    if state.get("status") == "ready":
+        return "ready"
+    phases = state.get("phases") or {}
+    if any(
+        isinstance(phase, Mapping)
+        and phase.get("status") == PhaseStatus.BLOCKED.value
+        for phase in phases.values()
+    ):
+        return "blocked"
+    if any(
+        isinstance(phase, Mapping)
+        and phase.get("status") != PhaseStatus.PENDING.value
+        for phase in phases.values()
+    ):
+        return "partially-configured"
+    if current in {"not-deployed", "detected"}:
+        return current
+    return "needs-configuration"
+
+
+def target_state_from_active(
+    state: Mapping[str, Any],
+    realm: str,
+    *,
+    identity: Mapping[str, Any] | None = None,
+    deployment_status: str | None = None,
+    discovered_at: str | None = None,
+    provenance: str | None = None,
+) -> dict[str, Any]:
+    if realm not in TARGET_REALMS:
+        raise WorkdayConnectModelError(
+            f"Unknown Workday target realm: {realm!r}."
+        )
+    existing_targets = state.get("targets")
+    existing = (
+        existing_targets.get(realm)
+        if isinstance(existing_targets, Mapping)
+        else None
+    )
+    existing_identity = (
+        existing.get("identity")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("identity"), Mapping)
+        else {}
+    )
+    normalized_identity = {
+        key: str(
+            (
+                identity.get(key)
+                if isinstance(identity, Mapping) and key in identity
+                else existing_identity.get(key)
+            )
+            or _target_identity_from_scope(state.get("scope") or {}).get(key)
+            or ""
+        )
+        for key in TARGET_IDENTITY_FIELDS
+    }
+    current_deployment_status = str(
+        (existing or {}).get("deploymentStatus") or ""
+    )
+    return {
+        "realm": realm,
+        "deploymentStatus": (
+            deployment_status
+            or _target_deployment_status(
+                state,
+                current_deployment_status,
+            )
+        ),
+        "identity": normalized_identity,
+        "status": str(state.get("status") or "in-progress"),
+        "scope": copy.deepcopy(dict(state.get("scope") or {})),
+        "operators": copy.deepcopy(dict(state.get("operators") or {})),
+        "lifecycle": copy.deepcopy(dict(state.get("lifecycle") or {})),
+        "phases": copy.deepcopy(dict(state.get("phases") or {})),
+        "discoveredAt": (
+            discovered_at
+            if discovered_at is not None
+            else (
+                existing.get("discoveredAt")
+                if isinstance(existing, Mapping)
+                else None
+            )
+        ),
+        "provenance": (
+            provenance
+            or str((existing or {}).get("provenance") or "controller")
+        ),
+        "updatedAt": str(state.get("updatedAt") or utc_now()),
+    }
+
+
+def initialize_target_registry(
+    state: dict[str, Any],
+    *,
+    provenance: str,
+) -> None:
+    state["activeTargetRealm"] = "dev"
+    state["targets"] = {realm: None for realm in TARGET_REALMS}
+    state["targets"]["dev"] = target_state_from_active(
+        state,
+        "dev",
+        provenance=provenance,
+    )
+
+
+def synchronize_active_target(state: dict[str, Any]) -> None:
+    realm = str(state.get("activeTargetRealm") or "")
+    targets = state.get("targets")
+    if realm not in TARGET_REALMS or not isinstance(targets, dict):
+        return
+    targets[realm] = target_state_from_active(state, realm)
+
+
+def default_state() -> dict[str, Any]:
+    state = {
         "schemaVersion": STATE_SCHEMA_VERSION,
         "provider": "workday",
         "status": "in-progress",
@@ -556,6 +720,106 @@ def default_state() -> dict[str, Any]:
         "migration": None,
         "updatedAt": utc_now(),
     }
+    initialize_target_registry(state, provenance="new-lifecycle")
+    return state
+
+
+def _validate_target_state(realm: str, value: Any) -> None:
+    if value is None:
+        if realm == "dev":
+            raise WorkdayConnectModelError(
+                "Workday DEV target state is required."
+            )
+        return
+    if not isinstance(value, dict):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' must be an object or null."
+        )
+    required_fields = {
+        "realm",
+        "deploymentStatus",
+        "identity",
+        "status",
+        "scope",
+        "operators",
+        "lifecycle",
+        "phases",
+        "discoveredAt",
+        "provenance",
+        "updatedAt",
+    }
+    if set(value) != required_fields or value["realm"] != realm:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has an invalid contract."
+        )
+    if value["deploymentStatus"] not in TARGET_DEPLOYMENT_STATUSES:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has an invalid deployment status."
+        )
+    identity = value["identity"]
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != TARGET_IDENTITY_FIELDS
+        or any(not isinstance(item, str) for item in identity.values())
+    ):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has invalid identity evidence."
+        )
+    for field in ("scope", "operators", "phases"):
+        if not isinstance(value[field], dict):
+            raise WorkdayConnectModelError(
+                f"Workday target '{realm}' field '{field}' must be an object."
+            )
+    _validate_lifecycle_state(value["lifecycle"])
+    if set(value["phases"]) != set(PHASE_BY_ID):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' must contain exactly the six phases."
+        )
+    for phase_id, phase in value["phases"].items():
+        _validate_phase_state(phase_id, phase)
+    for definition in PHASE_DEFINITIONS:
+        if definition.prerequisite is None:
+            continue
+        phase = value["phases"][definition.identifier.value]
+        prerequisite = value["phases"][definition.prerequisite.value]
+        if (
+            phase["status"] == PhaseStatus.COMPLETE.value
+            and prerequisite["status"] != PhaseStatus.COMPLETE.value
+        ):
+            raise WorkdayConnectModelError(
+                f"Workday target '{realm}' phase "
+                f"'{definition.identifier.value}' cannot be complete before "
+                f"'{definition.prerequisite.value}'."
+            )
+    expected_status = (
+        "ready"
+        if all(
+            phase["status"] == PhaseStatus.COMPLETE.value
+            for phase in value["phases"].values()
+        )
+        else "in-progress"
+    )
+    if value["status"] != expected_status:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' status must be '{expected_status}'."
+        )
+    if value["deploymentStatus"] == "ready" and expected_status != "ready":
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' cannot be ready before all phases complete."
+        )
+    if value["discoveredAt"] is not None:
+        _validate_timestamp(
+            value["discoveredAt"],
+            f"Workday target '{realm}' discoveredAt",
+        )
+    if not isinstance(value["provenance"], str) or not value["provenance"]:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' provenance is required."
+        )
+    _validate_timestamp(
+        value["updatedAt"],
+        f"Workday target '{realm}' updatedAt",
+    )
 
 
 def _validate_lifecycle_state(value: Any) -> None:
@@ -1283,6 +1547,23 @@ def validate_state(state: Any) -> dict[str, Any]:
         raise WorkdayConnectModelError(
             "Workday connect state provider must be 'workday'."
         )
+    active_target_realm = state.get("activeTargetRealm")
+    if active_target_realm not in TARGET_REALMS:
+        raise WorkdayConnectModelError(
+            "Workday connect activeTargetRealm must be Dev, Test, or Prod."
+        )
+    targets = state.get("targets")
+    if not isinstance(targets, dict) or set(targets) != set(TARGET_REALMS):
+        raise WorkdayConnectModelError(
+            "Workday connect state must contain exactly the Dev, Test, and "
+            "Prod target slots."
+        )
+    for realm, target in targets.items():
+        _validate_target_state(realm, target)
+    if targets[active_target_realm] is None:
+        raise WorkdayConnectModelError(
+            "Workday connect active target must contain persisted state."
+        )
     for field in ("scope", "identifiers", "endpoints", "operators", "phases"):
         if not isinstance(state.get(field), dict):
             raise WorkdayConnectModelError(
@@ -1320,6 +1601,19 @@ def validate_state(state: Any) -> dict[str, Any]:
     if state.get("status") != expected_status:
         raise WorkdayConnectModelError(
             f"Workday connect status must be '{expected_status}'."
+        )
+    active_target = targets[active_target_realm]
+    assert isinstance(active_target, Mapping)
+    for field in TARGET_SNAPSHOT_FIELDS:
+        if active_target.get(field) != state.get(field):
+            raise WorkdayConnectModelError(
+                "Workday connect active target projection is inconsistent "
+                f"for '{field}'."
+            )
+    if active_target.get("status") != state.get("status"):
+        raise WorkdayConnectModelError(
+            "Workday connect active target projection has an inconsistent "
+            "status."
         )
     return state
 
