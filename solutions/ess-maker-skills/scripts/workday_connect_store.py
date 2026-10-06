@@ -1772,13 +1772,13 @@ class WorkdayConnectStore:
                     "the Workday connection lifecycle."
                 )
             phase["employeeTestAttempt"] = None
-            phase["validationProfiles"] = {}
             _transition_phase_state(
                 state,
                 "employee-validation",
                 PhaseStatus.COMPLETE.value,
                 invalidate_downstream=False,
             )
+            self._refresh_validation_profile_fingerprints(state)
 
         return self._mutate(mutation)
 

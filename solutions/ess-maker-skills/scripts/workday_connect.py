@@ -50,6 +50,7 @@ from workday_connect_preflight import (
 )
 from workday_connect_readiness import (
     ensure_migration_baseline,
+    run_final_readiness,
     run_profile_gate,
 )
 from workday_connect_runtime import (
@@ -70,6 +71,12 @@ from workday_connect_telemetry import (
 
 RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
 ERROR_MARKER = "WORKDAY_CONNECT_ERROR_JSON:"
+
+
+class WorkdayConnectRetiredOperationError(WorkdayConnectStoreError):
+    """Raised when a compatibility-only operation has been retired."""
+
+    suppress_blocker_persistence = True
 
 
 def _json_object(value: str, label: str) -> dict[str, Any]:
@@ -297,6 +304,15 @@ def _run_profile_gate(
     return run_profile_gate(
         store,
         profile_name,
+        profile_runner=run_profile,
+    )
+
+
+def _run_final_readiness(
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return run_final_readiness(
+        store,
         profile_runner=run_profile,
     )
 
@@ -1073,7 +1089,7 @@ def _record_validation(
                 "timestamp": evidence["timestamp"],
                 "outcome": evidence["outcome"],
             }
-            if (
+            replayed = (
                 phase["status"] == "complete"
                 and _action_evidence(
                     {"phases": {"employee-validation": phase}},
@@ -1081,19 +1097,22 @@ def _record_validation(
                     "maker-smoke-test",
                 )
                 == maker_evidence
-            ):
+            )
+            if not replayed:
+                store.complete_action(
+                    "employee-validation",
+                    "maker-smoke-test",
+                    evidence=maker_evidence,
+                )
+            _run_final_readiness(store)
+            store.finalize_maker_validation_success()
+            if replayed:
                 return {
                     "verified": True,
                     "replayed": True,
                     "lifecycleComplete": True,
                     "status": store.status(),
                 }
-            store.complete_action(
-                "employee-validation",
-                "maker-smoke-test",
-                evidence=maker_evidence,
-            )
-            store.finalize_maker_validation_success()
             return {
                 "verified": True,
                 "lifecycleComplete": True,
@@ -1110,7 +1129,7 @@ def _record_validation(
                 ],
                 "status": store.status(),
             }
-        raise WorkdayConnectStoreError(
+        raise WorkdayConnectRetiredOperationError(
             "Signed-in employee runtime-evidence validation has been retired. "
             "Complete the guided lifecycle with the maker's successful "
             "Copilot Studio Test pane scenario."
@@ -1121,7 +1140,7 @@ def _begin_employee_test(
     _args: argparse.Namespace,
     _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    raise WorkdayConnectStoreError(
+    raise WorkdayConnectRetiredOperationError(
         "Employee runtime-evidence windows have been retired. Complete the "
         "guided lifecycle with the maker's successful Copilot Studio Test "
         "pane scenario."
@@ -1149,7 +1168,7 @@ def _record_validation_failure(
     _args: argparse.Namespace,
     _store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    raise WorkdayConnectStoreError(
+    raise WorkdayConnectRetiredOperationError(
         "Employee runtime-evidence failure recording has been retired. "
         "Resolve maker Test pane failures before completing maker validation."
     )
@@ -1300,10 +1319,10 @@ def main() -> None:
     ) as exc:
         phase_id = _COMMAND_PHASES.get(args.command)
         blocker_persistence_error = None
-        if phase_id and not getattr(
-            exc,
-            "profile_blocker_persisted",
-            False,
+        if (
+            phase_id
+            and not getattr(exc, "profile_blocker_persisted", False)
+            and not getattr(exc, "suppress_blocker_persistence", False)
         ):
             try:
                 blocker = {

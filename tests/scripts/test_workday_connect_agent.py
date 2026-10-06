@@ -1367,6 +1367,61 @@ def test_controller_emits_structured_runtime_error_details(
     assert payload["details"] == details
 
 
+def test_retired_cli_operations_do_not_persist_blockers(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import pytest
+
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    original = store.initialize()
+    evidence_file = tmp_path / "retired-evidence.json"
+    evidence_file.write_text("{}", encoding="utf-8")
+    invocations = (
+        (
+            "begin-employee-test",
+            [],
+            "runtime-evidence windows have been retired",
+        ),
+        (
+            "record-validation-failure",
+            ["--evidence-file", str(evidence_file)],
+            "failure recording has been retired",
+        ),
+    )
+
+    for command, command_args, expected_error in invocations:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "workday_connect.py",
+                "--root",
+                str(tmp_path),
+                command,
+                *command_args,
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            workday_connect.main()
+
+        assert exc.value.code == 1
+        error = capsys.readouterr().err
+        payload = json.loads(
+            error.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
+        )
+        assert expected_error in payload["error"]
+        assert payload["errorType"] == (
+            "WorkdayConnectRetiredOperationError"
+        )
+        assert store.load() == original
+
+
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,
@@ -1993,9 +2048,15 @@ def test_employee_success_runtime_correlation_is_retired(
 
 def test_maker_success_completes_without_runtime_evidence_correlation(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     import workday_connect
     import workday_connect_model as model
+    from workday_connect_flightcheck import (
+        effective_validation_state,
+        validation_input_fingerprint,
+    )
+    from workday_connect_readiness_policy import PROFILE_POLICIES
     from workday_connect_store import WorkdayConnectStore
 
     store = WorkdayConnectStore(tmp_path)
@@ -2040,6 +2101,44 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
         encoding="utf-8",
     )
 
+    def profile_runner(root, state, profile_name, **_kwargs):
+        effective_state = effective_validation_state(root, state)
+        return {
+            "profile": profile_name,
+            "sourceProfile": profile_name,
+            "schemaVersion": "flightcheck.result.v2",
+            "overall": "READY",
+            "target": {
+                "realm": "dev",
+                "environmentId": "environment-id",
+                "environmentUrl": "https://example.crm.dynamics.com",
+                "tenantId": "tenant-id",
+                "agentSlug": "ess-hr",
+                "agentSchemaName": "contoso_agent",
+                "agentId": "bot-id",
+            },
+            "inputFingerprint": validation_input_fingerprint(
+                effective_state,
+                profile_name,
+            ),
+            "checkpointStatuses": {
+                checkpoint_id: "Passed"
+                for checkpoint_id in PROFILE_POLICIES[
+                    profile_name
+                ].checkpoints
+            },
+            "acceptedSuppressions": [],
+            "remediationIds": [],
+            "accepted": True,
+            "migrationBaseline": False,
+        }
+
+    monkeypatch.setattr(
+        workday_connect,
+        "run_profile",
+        profile_runner,
+    )
+
     result = workday_connect._record_validation(
         SimpleNamespace(evidence_file=evidence_file),
         store,
@@ -2051,7 +2150,22 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
     assert len(result["postSkillNextSteps"]) == 3
     assert state["status"] == "ready"
     assert state["phases"]["employee-validation"]["employeeTestAttempt"] is None
-    assert state["phases"]["employee-validation"]["validationProfiles"] == {}
+    assert set(
+        state["phases"]["employee-validation"]["validationProfiles"]
+    ) == {
+        "workday-da:post-runtime",
+        "workday-da:final",
+    }
+    employee_status = next(
+        phase
+        for phase in result["status"]["phases"]
+        if phase["id"] == "employee-validation"
+    )
+    assert employee_status["readiness"]["accepted"] is True
+    assert employee_status["readiness"]["summary"] == (
+        "Maker validation readiness checks passed."
+    )
+    assert employee_status["readiness"]["validatedAt"]
     evidence = state["phases"]["employee-validation"]["evidence"][0]
     assert evidence["action"] == "maker-smoke-test"
     assert evidence["testUserCategory"] == "maker"
