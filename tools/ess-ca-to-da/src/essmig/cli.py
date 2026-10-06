@@ -22,6 +22,9 @@ import sys
 from pathlib import Path
 
 from essmig import customizations as customizations_module
+from essmig import flows as flows_module
+from essmig import knowledge as knowledge_module
+from essmig import made, package_source
 from essmig import reference as reference_module
 from essmig.assessment import Assessment, assess
 from essmig.auth import discover_tenant, provider_for, provider_for_target
@@ -145,6 +148,14 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
         help="Dataverse environment root, e.g. https://contoso.crm.dynamics.com",
     )
     parser.add_argument(
+        "--from-package",
+        type=Path,
+        help="read customizations from an exported CA solution package (a .zip from "
+        "make.powerapps.com > Solutions > Export, or an already-unpacked folder) "
+        "instead of connecting to Dataverse. Use this when the customer cannot run "
+        "the Dataverse queries; inspect/migrate behave identically either way.",
+    )
+    parser.add_argument(
         "--vertical",
         choices=TARGETS,
         default=None,
@@ -170,7 +181,8 @@ def _vendor(args: argparse.Namespace) -> int:
 
 
 def _inspect(args: argparse.Namespace) -> int:
-    client = _client(args)
+    _validate_source(args)
+    client = None if args.from_package else _client(args)
     auto = args.vertical is None
     verticals = _resolve_verticals(args, client)
     if auto:
@@ -185,14 +197,15 @@ def _inspect(args: argparse.Namespace) -> int:
 
 
 def _inspect_one(
-    client: DataverseClient, args: argparse.Namespace, vertical: str, out: Path
+    client: DataverseClient | None, args: argparse.Namespace, vertical: str, out: Path
 ) -> int:
-    result = discover(client, vertical, preferred_solution=args.preferred_solution)
     reference = reference_module.load(vertical)
+    result = _discover_one(client, args, vertical, reference)
     out.mkdir(parents=True, exist_ok=True)
     path = out / "customizations.json"
     path.write_text(json.dumps(_snapshot(result), indent=2), encoding="utf-8")
 
+    shipped = made.snapshot(reference)
     merged = merge(
         reference,
         result.components,
@@ -208,6 +221,16 @@ def _inspect_one(
         encoding="utf-8",
     )
 
+    made_path = made.write(
+        out,
+        vertical,
+        shipped,
+        made.snapshot(reference),
+        source_solution=result.solution_unique_name,
+        da_schemaname=reference.da_schemaname,
+        template_version=reference.provenance.get("template_version"),
+    )
+
     print(f"Found {len(result.components)} customization(s) in {result.solution_unique_name}:")
     for component in sorted(result.components.values(), key=lambda c: c.schemaname):
         marker = "new" if component.is_net_new else "edited"
@@ -220,8 +243,56 @@ def _inspect_one(
     verdict_path.write_text(json.dumps(verdict.to_json(), indent=2), encoding="utf-8")
     _print_verdict(verdict)
 
-    print(f"\nWrote {path}, {diff_path} and {verdict_path}\n")
+    flow_export = (
+        package_source.read_flow_export(args.from_package)
+        if args.from_package is not None
+        else None
+    )
+    _print_flows(flows_module.plan(merged.agent, flow_export), None, None)
+
+    print(f"\nWrote {path}, {diff_path}, {made_path} and {verdict_path}\n")
     return 0
+
+
+def _print_flows(
+    findings: flows_module.FlowFindings, flows_zip: Path | None, package_path: Path | None
+) -> None:
+    if not (findings.carried or findings.dangling):
+        return
+    print("\nCloud flows:")
+    for flow in findings.carried:
+        print(f"  - {flow.name} — carried in a separate flows solution.")
+    if findings.carried:
+        connectors = findings.connectors()
+        if flows_zip is not None:
+            package = package_path.name if package_path is not None else "the agent package"
+            print(
+                f"    Import {flows_zip.name} into the target FIRST, then {package}; "
+                "the flows keep their ids so the agent's references resolve."
+            )
+        if connectors:
+            print(f"    Rebind these connections after import: {', '.join(connectors)}.")
+    for flow_id in findings.dangling:
+        print(
+            f"  - flow {flow_id} is invoked by a migrated topic but its definition is "
+            "not available to carry. Re-create or import it into the target, or the "
+            "agent import will fail."
+        )
+
+
+
+def _print_knowledge(bindings: list[knowledge_module.GraphConnection]) -> None:
+    if not bindings:
+        return
+    print("\nKnowledge sources:")
+    for binding in bindings:
+        print(f"  - {binding.display_name} — carried as a ServiceNow knowledge source.")
+    print(
+        "    The connection is carried from your source environment and must be "
+        "rebound after import: in the agent's knowledge settings, point "
+        f"{', '.join(b.connection_name for b in bindings)} at a connection in the "
+        "target, then confirm the source returns results."
+    )
 
 
 def _print_verdict(verdict: Assessment) -> None:
@@ -241,7 +312,8 @@ def _migrate(args: argparse.Namespace) -> int:
         vertical = args.vertical or _snapshot_vertical(args.snapshot)
         return _migrate_one(None, args, vertical, args.out)
 
-    client = _client(args)
+    _validate_source(args)
+    client = None if args.from_package else _client(args)
     auto = args.vertical is None
     verticals = _resolve_verticals(args, client)
     if auto:
@@ -264,19 +336,19 @@ def _migrate(args: argparse.Namespace) -> int:
 def _migrate_one(
     client: DataverseClient | None, args: argparse.Namespace, vertical: str, out: Path
 ) -> int:
+    reference = reference_module.load(vertical)
     if args.snapshot is not None:
         discovery = _load_snapshot(args.snapshot, vertical)
     else:
-        assert client is not None
-        discovery = discover(client, vertical, preferred_solution=args.preferred_solution)
+        discovery = _discover_one(client, args, vertical, reference)
 
-    reference = reference_module.load(vertical)
     interactive = not args.non_interactive and sys.stdin.isatty()
     if interactive:
         print(
             "Conflicts (spots you and ESS both changed) will be offered here to resolve; "
             "press Enter to keep ESS's version."
         )
+    shipped = made.snapshot(reference)
     merged = merge(
         reference,
         discovery.components,
@@ -284,6 +356,24 @@ def _migrate_one(
         agent_metadata=discovery.agent,
         merge_instructions=skip_instruction_reconciliation if args.keep_instructions else None,
         resolver_factory=console_resolver_factory() if interactive else None,
+    )
+
+    flow_export = (
+        package_source.read_flow_export(args.from_package)
+        if args.from_package is not None
+        else None
+    )
+    flow_findings = flows_module.plan(merged.agent, flow_export)
+    flows_module.add_interfaces(merged.agent, flow_findings.carried)
+    flows_module.register_config_flows(reference.config, flow_findings.carried)
+
+    env_values = (
+        package_source.read_env_var_values(args.from_package)
+        if args.from_package is not None
+        else {}
+    )
+    knowledge_bindings = knowledge_module.bind_connections(
+        reference.config, knowledge_module.graph_connections(merged.agent), env_values
     )
 
     plugin = write_package(out, reference, merged.agent)
@@ -299,20 +389,45 @@ def _migrate_one(
     if not args.no_zip:
         package_path = zip_package(plugin, out / f"{reference.da_schemaname}.zip")
 
+    flows_zip: Path | None = None
+    if flow_findings.needs_flow_import and flow_export is not None and not args.no_zip:
+        flows_zip = out / "flows.zip"
+        flows_zip.write_bytes(flows_module.build_solution_zip(flow_export))
+
     import_result: ImportResult | None = None
     if args.do_import:
         import_result = _deliver(args, reference, package_bytes(plugin))
 
     markdown, _ = write_reports(
-        out, discovery, merged, package_path=package_path, import_result=import_result
+        out,
+        discovery,
+        merged,
+        package_path=package_path,
+        import_result=import_result,
+        flow_findings=flow_findings,
+        flows_zip=flows_zip,
+        knowledge_bindings=knowledge_bindings,
+    )
+    made_path = made.write(
+        out,
+        vertical,
+        shipped,
+        made.snapshot(reference),
+        source_solution=discovery.solution_unique_name,
+        da_schemaname=reference.da_schemaname,
+        template_version=reference.provenance.get("template_version"),
+        package_path=package_path,
     )
     print(summarize(merged.results) or "nothing to migrate")
     _print_verdict(assess(merged))
+    _print_flows(flow_findings, flows_zip, package_path)
+    _print_knowledge(knowledge_bindings)
     if package_path is not None:
         print(f"\nPackage: {package_path}")
     if import_result is not None:
         _print_import(import_result)
     print(f"Report:  {markdown}")
+    print(f"Changes: {made_path}")
     if merged.count(Outcome.FAILED) or (import_result is not None and not import_result.ok):
         return 1
     return 0
@@ -354,16 +469,60 @@ def _print_import(result: ImportResult) -> None:
         print(f"  Track: {result.operation_url}")
 
 
+def _validate_source(args: argparse.Namespace) -> None:
+    """Enforce mutual exclusion of the source flags."""
+    if args.from_package is not None and args.environment_url:
+        raise ValueError(
+            "--from-package and --environment-url are mutually exclusive; the package "
+            "is the source. Drop one."
+        )
+    if getattr(args, "snapshot", None) is not None and args.from_package is not None:
+        raise ValueError("--from-package cannot be combined with --snapshot.")
+    if args.from_package is not None:
+        if not args.from_package.exists():
+            raise ValueError(f"--from-package path does not exist: {args.from_package}")
+        if args.preferred_solution:
+            print(
+                "note: --preferred-solution is ignored with --from-package; the exported "
+                "package already defines the scope.",
+                file=sys.stderr,
+            )
+
+
+def _discover_one(
+    client: DataverseClient | None,
+    args: argparse.Namespace,
+    vertical: str,
+    reference: reference_module.ReferenceSet,
+) -> DiscoveryResult:
+    if args.from_package is not None:
+        return package_source.discover_from_package(args.from_package, vertical, reference)
+    assert client is not None
+    return discover(client, vertical, preferred_solution=args.preferred_solution)
+
+
 def _client(args: argparse.Namespace) -> DataverseClient:
     if not args.environment_url:
         raise ValueError("--environment-url is required unless --snapshot is supplied.")
     return DataverseClient(args.environment_url, provider_for(args.environment_url))
 
 
-def _resolve_verticals(args: argparse.Namespace, client: DataverseClient) -> list[str]:
+def _resolve_verticals(
+    args: argparse.Namespace, client: DataverseClient | None
+) -> list[str]:
     """The agents this run will migrate: the named one, or every one installed."""
     if args.vertical is not None:
         return [args.vertical]
+    if args.from_package is not None:
+        found = package_source.package_targets(args.from_package)
+        if not found:
+            raise RuntimeError(
+                "No ESS Custom Engine Agent components (Core, HR or IT) were found in "
+                f"the exported package {args.from_package}. Check that this is an ESS CA "
+                "solution export, or name one explicitly with --vertical."
+            )
+        return found
+    assert client is not None
     found = installed_targets(client)
     if not found:
         raise RuntimeError(

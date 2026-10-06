@@ -748,11 +748,6 @@ def _folder_matches_globs(folder: Path, root: Path, only_globs: list[str]) -> bo
     return False
 
 
-def _safe_name(value: str, fallback: str) -> str:
-    name = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-    return name or fallback
-
-
 def _schema_name(stem: str, component_id: str) -> str:
     safe_stem = re.sub(r"[^a-z0-9]+", "_", stem.casefold()).strip("_")
     safe_stem = safe_stem or "evaluation"
