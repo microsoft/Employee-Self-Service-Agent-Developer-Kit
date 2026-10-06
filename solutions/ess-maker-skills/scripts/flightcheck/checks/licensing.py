@@ -806,23 +806,117 @@ def _env_mcs_allocation(powerplatform, env_id) -> int | None:
         denied, or the call failed); the caller must fall back to the
         tenant-wide signal.
     """
+    allocated, _evidence = _env_mcs_allocation_observation(
+        powerplatform,
+        env_id,
+    )
+    if (
+        _evidence.get("outcome") == "invalid-response"
+        or _evidence.get("errorType") == "InvalidAllocationResponse"
+    ):
+        raise ValueError("Power Platform returned an invalid allocation response.")
+    return allocated
+
+
+def _env_mcs_allocation_observation(
+    powerplatform,
+    env_id,
+) -> tuple[int | None, dict[str, object]]:
+    """Read allocation while preserving safe classification evidence."""
+    evidence: dict[str, object] = {"environmentId": env_id}
     if powerplatform is None or not env_id:
-        return None
+        evidence["outcome"] = (
+            "unsupported-capability"
+            if powerplatform is None
+            else "missing-environment-id"
+        )
+        return None, evidence
     try:
         allocations = powerplatform.get_currency_allocations(env_id)
-    except Exception:
-        return None
-    if isinstance(allocations, dict):  # {"_error": ...} sentinel
-        return None
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        evidence.update(
+            {
+                "outcome": "service-error",
+                "errorType": type(exc).__name__,
+            }
+        )
+        if response is not None:
+            evidence["serviceStatus"] = getattr(response, "status_code", None)
+            request_id = (
+                response.headers.get("x-ms-request-id")
+                or response.headers.get("request-id")
+                or response.headers.get("x-ms-correlation-request-id")
+            )
+            if request_id:
+                evidence["requestId"] = request_id
+        return None, evidence
+    if isinstance(allocations, dict):
+        evidence.update(
+            {
+                "outcome": (
+                    "denied-access"
+                    if allocations.get("_status") in {401, 403}
+                    else "service-error"
+                ),
+                "serviceStatus": allocations.get("_status"),
+            }
+        )
+        if allocations.get("_request_id"):
+            evidence["requestId"] = allocations["_request_id"]
+        return None, evidence
+    if not isinstance(allocations, list):
+        evidence.update(
+            {
+                "outcome": "service-error",
+                "errorType": "InvalidAllocationResponse",
+            }
+        )
+        return None, evidence
+
     total = 0
+    matched = 0
     for allocation in allocations:
+        if not isinstance(allocation, dict):
+            continue
         currency = str(allocation.get("currencyType") or "").strip().lower()
-        if currency == _MCS_MESSAGES_CURRENCY.lower():
-            try:
-                total += int(allocation.get("allocated") or 0)
-            except (TypeError, ValueError):
-                continue
-    return total
+        if currency != _MCS_MESSAGES_CURRENCY.lower():
+            continue
+        matched += 1
+        raw_allocated = allocation.get("allocated")
+        try:
+            if (
+                raw_allocated is None
+                or isinstance(raw_allocated, bool)
+                or isinstance(raw_allocated, str)
+                or (
+                    isinstance(raw_allocated, float)
+                    and not raw_allocated.is_integer()
+                )
+            ):
+                raise ValueError
+            parsed_allocated = int(raw_allocated)
+            if parsed_allocated < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            evidence.update(
+                {
+                    "outcome": "invalid-response",
+                    "errorType": "InvalidAllocationValue",
+                    "matchingAllocations": matched,
+                    "invalidAllocationValues": 1,
+                }
+            )
+            return None, evidence
+        total += parsed_allocated
+    evidence.update(
+        {
+            "outcome": "empty-results" if not allocations else "verified",
+            "allocatedCredits": total,
+            "matchingAllocations": matched,
+        }
+    )
+    return total, evidence
 
 
 def classify_copilot_studio_capacity(

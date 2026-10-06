@@ -47,6 +47,7 @@ def _args(
     invocation_source: str | None = None,
     quiet_auth: bool = False,
     ring: str | None = None,
+    power_platform_admin_origin: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -59,6 +60,7 @@ def _args(
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
         ring=ring,
+        power_platform_admin_origin=power_platform_admin_origin,
     )
 
 
@@ -177,6 +179,31 @@ def test_resolve_environment_ring_rejects_inconclusive_state(
             config,
             explicit_ring=explicit_ring,
         )
+
+
+def test_resolve_power_platform_admin_origin_from_config() -> None:
+    preview_origin = "https://admin.preview.powerplatform.microsoft.com"
+
+    assert (
+        cli._resolve_power_platform_admin_origin(
+            {
+                "portalOrigins": {
+                    "powerPlatformAdmin": f" {preview_origin}/ ",
+                }
+            }
+        )
+        == preview_origin
+    )
+
+
+def test_ring_admin_origins_are_validated() -> None:
+    from flightcheck.checks.environment import (
+        _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING,
+    )
+
+    assert set(_POWER_PLATFORM_ADMIN_ORIGIN_BY_RING.values()) <= (
+        cli._POWER_PLATFORM_ADMIN_ORIGINS
+    )
 
 
 @pytest.fixture
@@ -533,6 +560,57 @@ class TestGates:
             )
 
         assert exc.value.code == 0
+
+    def test_capacity_retains_preview_admin_origin(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        saved_results = []
+        monkeypatch.setattr(
+            cli,
+            "save_results",
+            lambda result, *_args, **_kwargs: saved_results.append(result),
+        )
+
+        class _PowerPlatform:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self) -> str:
+                return "token"
+
+            def get_currency_allocations(self, environment_id: str):
+                assert environment_id == (
+                    "00000000-0000-4000-8000-000000001111"
+                )
+                return []
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                    ring="prod",
+                    power_platform_admin_origin=(
+                        "https://admin.preview.powerplatform.microsoft.com"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 0
+        remediation = saved_results[0].results[0].remediation
+        assert (
+            "https://admin.preview.powerplatform.microsoft.com/"
+            "billing/licenses/copilotStudio/overview"
+        ) in remediation
 
     def test_capacity_requires_ring_when_setup_state_is_inconclusive(
         self,
