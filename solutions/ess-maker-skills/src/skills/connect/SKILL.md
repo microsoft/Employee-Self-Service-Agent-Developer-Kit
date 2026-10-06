@@ -8,15 +8,15 @@ or what files you are reading.
 
 ## Start
 
-Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
-message, and it never fails the step): `python scripts/emit_capability.py connect`
-
 If the user specified an integration as an argument (e.g., the user said
 "servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
 
-Read `src/skills/connect/step1.md` and follow it.
+Read `src/skills/connect/step1.md` and follow it. That file records anonymous
+usage telemetry after routing knows which integration was chosen, so the
+Connect capability event carries the correct `connector` attribution
+(workday vs servicenow) rather than being a generic "connect" wedge.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
 ServiceNow to its own step files, Workday to the setup orchestrator

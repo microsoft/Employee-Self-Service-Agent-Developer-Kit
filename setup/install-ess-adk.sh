@@ -243,10 +243,20 @@ if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
 fi
 
 if [[ -d "$REPO_PATH/.git" ]]; then
-    ok "Repo already cloned at $REPO_PATH — pulling latest"
-    git -C "$REPO_PATH" fetch --quiet origin
-    git -C "$REPO_PATH" checkout "$BRANCH" 2>/dev/null || warn "git checkout $BRANCH failed. Continuing on current branch."
-    git -C "$REPO_PATH" pull --quiet origin "$BRANCH" 2>/dev/null || warn "git pull failed. Continuing with local copy."
+    ok "Repo already cloned at $REPO_PATH — refreshing requested ref"
+    git -C "$REPO_PATH" fetch --quiet --tags origin
+    if git -C "$REPO_PATH" checkout --quiet "$BRANCH"; then
+        if git -C "$REPO_PATH" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+            git -C "$REPO_PATH" pull --quiet --ff-only origin "$BRANCH" ||
+                warn "git pull failed. Continuing with local copy."
+        elif git -C "$REPO_PATH" show-ref --verify --quiet "refs/tags/$BRANCH"; then
+            ok "Checked out pinned tag $BRANCH"
+        else
+            ok "Checked out pinned ref $BRANCH"
+        fi
+    else
+        warn "git checkout $BRANCH failed. Continuing on current ref."
+    fi
 else
     echo "    Cloning to $REPO_PATH..."
     mkdir -p "$INSTALL_ROOT"
@@ -293,6 +303,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
         INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
+        INSTALLED_EXTENSIONS_WITH_VERSIONS=$("$CODE_CMD" --list-extensions --show-versions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
             if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
                 ok "extension $ext (already present / built-in)"
@@ -337,6 +348,10 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
 
         if [[ -z "$MAKER_VSIX" ]]; then
             warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
+        elif MAKER_VERSION="$(basename "$MAKER_VSIX" .vsix)" &&
+             MAKER_VERSION="${MAKER_VERSION#ess-maker-profile-}" &&
+             echo "$INSTALLED_EXTENSIONS_WITH_VERSIONS" | grep -Fqix "microsoft-ess.ess-maker-profile@$MAKER_VERSION"; then
+            ok "ESS Maker Profile $MAKER_VERSION (already installed) — $MODE_LABEL mode"
         elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
             ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
         else

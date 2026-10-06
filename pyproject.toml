@@ -25,6 +25,9 @@ test = [
     "mcp>=1.29.0,<2.0.0",
     "jsonschema>=4.0,<5.0",
 ]
+skill-eval = [
+    "github-copilot-sdk==1.0.14",
+]
 
 # This project is a *test harness*, not a distributable package: it ships no
 # importable package of its own (the code under test is put on sys.path via

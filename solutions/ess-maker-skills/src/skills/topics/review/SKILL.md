@@ -89,6 +89,9 @@ roll-up's coverage line). Do not add a separate pre-analysis announcement.
 
 ## Step 1: Identify the scope
 
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+message, and it never fails the step): `python scripts/emit_capability.py topic_review`
+
 Decide whether the maker wants **one topic** or a **module scope** (all topics for a backend), then branch:
 
 - If the maker named a single topic (a path or one topic name) → **single-topic review**: use it and continue

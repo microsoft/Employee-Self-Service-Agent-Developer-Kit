@@ -165,6 +165,22 @@ function Resolve-Python {
     return $null
 }
 
+function Resolve-CodeCommand {
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if ($code) { return $code }
+
+    $knownPaths = @(
+        "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd",
+        "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd",
+        "${env:ProgramFiles(x86)}\Microsoft VS Code\bin\code.cmd"
+    )
+    foreach ($path in $knownPaths) {
+        if (Test-Path -LiteralPath $path) { return Get-Item -LiteralPath $path }
+    }
+
+    return $null
+}
+
 # Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
 # pip install (cryptography only shipped win_arm64 wheels in 46.0+; older
 # resolutions fall back to a Rust source-build that needs VS Build Tools).
@@ -454,7 +470,13 @@ if (-not $wingetAvailable) {
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        $existing = if ($pkg.Cmd -eq 'python') {
+            Resolve-Python
+        } elseif ($pkg.Cmd -eq 'code') {
+            Resolve-CodeCommand
+        } else {
+            Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+        }
         if ($existing) {
             Write-Ok "$($pkg.Name) (already installed)"
             continue
@@ -536,14 +558,7 @@ if ($FlightCheckOnly) {
 } elseif (-not $SkipExtensions) {
     Write-Step 'Installing VS Code extensions'
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        # Fallback: check the known VS Code install location (winget/user install)
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) {
-            $code = Get-Item $knownCodeCmd
-        }
-    }
+    $code = Resolve-CodeCommand
     if (-not $code) {
         Write-Warn2 'code CLI not on PATH yet. Open a new PowerShell window after this script and run:'
         Write-Warn2 '  code --install-extension GitHub.copilot'
@@ -557,7 +572,23 @@ if ($FlightCheckOnly) {
             'GitHub.copilot-chat',
             'ms-python.python'
         )
+        $installedExtensions = @()
+        $extensionListOutput = Invoke-Native { & $codeBin --list-extensions }
+        if ($LASTEXITCODE -eq 0) {
+            $installedExtensions = @(
+                $extensionListOutput |
+                    ForEach-Object { "$_".Trim().ToLowerInvariant() } |
+                    Where-Object { $_ }
+            )
+        } else {
+            Write-Warn2 'Could not list installed VS Code extensions. Existing extensions will be verified individually.'
+        }
         foreach ($ext in $extensions) {
+            if ($installedExtensions -contains $ext.ToLowerInvariant()) {
+                Write-Ok "extension $ext (already present / built-in)"
+                continue
+            }
+
             # `code` writes its install errors to stderr; combined with the
             # script-global $ErrorActionPreference='Stop' that causes 2>&1 to
             # raise a terminating exception before we can inspect the output.
@@ -630,7 +661,7 @@ if (-not $SkipClone) {
     }
 
     if (Test-Path (Join-Path $repoPath '.git')) {
-        Write-Ok "Repo already cloned at $repoPath - pulling latest"
+        Write-Ok "Repo already cloned at $repoPath - refreshing requested ref"
         Push-Location $repoPath
         try {
             # Self-heal --single-branch clones from earlier installer versions.
@@ -640,12 +671,20 @@ if (-not $SkipClone) {
             # from. Idempotent: no-op if the refspec is already broad.
             $null = Invoke-Native { & git remote set-branches origin '*' }
 
-            $gitOutput = Invoke-Native { & git fetch --quiet origin }
+            $gitOutput = Invoke-Native { & git fetch --quiet --tags origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
-                $currentBranch = (Invoke-Native { & git branch --show-current } | Select-Object -First 1).Trim()
+                $currentRef = Invoke-Native { & git branch --show-current } |
+                    Select-Object -First 1
+                if ([string]::IsNullOrWhiteSpace([string]$currentRef)) {
+                    $currentCommit = Invoke-Native { & git rev-parse --short HEAD } |
+                        Select-Object -First 1
+                    $currentRef = "detached HEAD at $currentCommit"
+                } else {
+                    $currentRef = $currentRef.Trim()
+                }
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
@@ -654,17 +693,33 @@ if (-not $SkipClone) {
                     # open" regression reports for users who first installed
                     # from a feature branch.
                     Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE)."
-                    Write-Warn2 "Your local clone is on '$currentBranch' and cannot switch to '$Branch'."
-                    Write-Warn2 "You will run STALE code from '$currentBranch' instead of '$Branch'."
+                    Write-Warn2 "Your local clone is on '$currentRef' and cannot switch to '$Branch'."
+                    Write-Warn2 "You will run STALE code from '$currentRef' instead of '$Branch'."
                     Write-Warn2 "To recover: delete the local clone and re-run, e.g."
                     Write-Warn2 "  Remove-Item -Recurse -Force '$repoPath'"
                     Write-Warn2 "Then re-run the installer / bootstrap command."
                 } else {
-                    $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
-                    foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
-                        Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                    $null = Invoke-Native {
+                        & git show-ref --verify --quiet "refs/remotes/origin/$Branch"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        $gitOutput = Invoke-Native {
+                            & git pull --quiet --ff-only origin $Branch
+                        }
+                        foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
+                            Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                        }
+                    } else {
+                        $null = Invoke-Native {
+                            & git show-ref --verify --quiet "refs/tags/$Branch"
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Ok "Checked out pinned tag $Branch"
+                        } else {
+                            Write-Ok "Checked out pinned ref $Branch"
+                        }
                     }
                 }
             }
@@ -727,11 +782,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if (-not $codeBin) {
         Write-Warn2 'code CLI not on PATH. ESS Maker Profile will not be installed.'
@@ -750,25 +801,35 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
         if (-not $vsix) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
-            $out = $null
-            $vsix_exit = 0
-            try {
-                $prevEAP = $ErrorActionPreference
-                $ErrorActionPreference = 'Continue'
-                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                $vsix_exit = $LASTEXITCODE
-            } catch {
-                $out = $_.Exception.Message
-                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-            } finally {
-                $ErrorActionPreference = $prevEAP
-            }
+            $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
+            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
+            $makerProfileCurrent = $makerVersion -and
+                $LASTEXITCODE -eq 0 -and
+                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
 
-            if ($vsix_exit -eq 0) {
-                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+            if ($makerProfileCurrent) {
+                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
             } else {
-                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                $out = $null
+                $vsix_exit = 0
+                try {
+                    $prevEAP = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                    $vsix_exit = $LASTEXITCODE
+                } catch {
+                    $out = $_.Exception.Message
+                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
+
+                if ($vsix_exit -eq 0) {
+                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+                } else {
+                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                }
             }
         }
 
@@ -1151,11 +1212,7 @@ if ($FlightCheckOnly) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
         # Launch strategy depends on mode:

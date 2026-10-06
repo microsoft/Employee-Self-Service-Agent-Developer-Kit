@@ -55,6 +55,10 @@ Wait for the user to respond.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
+Record anonymous usage telemetry attributed to ServiceNow (best-effort,
+non-blocking — no user-facing message, and it never fails the step):
+`python scripts/emit_capability.py connect --connector servicenow`
+
 Check if `.local/connect/servicenow/steps.md` exists.
 
 **If it exists and all items are checked:**
@@ -205,6 +209,10 @@ Let's connect ServiceNow to your agent.
 Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
+
+Record anonymous usage telemetry attributed to Workday (best-effort,
+non-blocking — no user-facing message, and it never fails the step):
+`python scripts/emit_capability.py connect --connector workday`
 
 Workday connection is handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
