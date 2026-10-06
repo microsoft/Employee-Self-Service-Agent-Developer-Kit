@@ -1170,6 +1170,33 @@ def test_update_sends_the_identifier_and_complete_state(fake_clients) -> None:
     assert client.saves[0]["audience"] == ["g1"]
 
 
+def test_publish_accepts_an_empty_audience_without_graph_lookup(
+    fake_clients,
+) -> None:
+    class EchoAudienceClient(_FakeClient):
+        async def save_bulletin(
+            self, title_id: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            saved = await super().save_bulletin(title_id, payload)
+            saved["audience"] = list(payload["audience"])
+            return saved
+
+    client, graph = fake_clients(EchoAudienceClient(items=[]))
+
+    payload = _structured(
+        _call(
+            "save_bulletin",
+            _save_arguments(audience=[], status="published"),
+        )
+    )
+
+    assert payload["status"] == "success"
+    assert client.saves[0]["audience"] == []
+    assert payload["item"]["config"]["audience"] == []
+    assert payload["item"]["audienceMetadata"] == []
+    assert graph.resolve_calls == []
+
+
 def test_publish_now_is_expressed_as_a_save_with_the_current_instant(
     fake_clients,
 ) -> None:
