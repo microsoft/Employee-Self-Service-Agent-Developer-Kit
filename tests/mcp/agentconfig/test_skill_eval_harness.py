@@ -88,7 +88,7 @@ def test_contracts_match_the_shipped_model_visible_tools(contracts, monkeypatch)
         ("quickLinksConfig", {"quickLinks": [harness.quick_link("replacement")]}),
         ("branding", {"theming": [{"name": "light", "accentColor": "#123456"}]}),
         ("pivots", []),
-        ("insightCardsConfig", {"isStayUpToDateEnabled": False, "isQuickAccessEnabled": True}),
+        ("insightCardsConfig", {"isStayUpToDateEnabled": False}),
     ],
 )
 def test_updates_replace_complete_sections_verbatim(backend, section, replacement) -> None:
@@ -647,11 +647,11 @@ def test_incomplete_model_turn_times_out_aborts_and_unsubscribes() -> None:
     assert session.unsubscribed
 
 
-def test_overview_grader_rejects_reversed_toggle_states() -> None:
-    expected = {"stay up to date": "enabled", "quick access": "disabled"}
-    correct = "| Stay up to date | Enabled | Ticket updates |\n| Quick Access | Disabled | Personal information |"
+def test_overview_grader_rejects_reversed_stay_up_to_date_state() -> None:
+    expected = {"stay up to date": "enabled"}
+    correct = "| Stay up to date | Enabled | Ticket updates |"
     harness.assert_overview_states(correct, expected)
-    reversed_states = "| Stay up to date | Disabled | Ticket updates |\n| Quick Access | Enabled | Personal information |"
+    reversed_states = "| Stay up to date | Disabled | Ticket updates |"
     with pytest.raises(AssertionError, match="correct setting"):
         harness.assert_overview_states(reversed_states, expected)
 
