@@ -102,7 +102,7 @@ When listing succeeds, render this mostly fixed catalog surface:
 
 **End message.**
 
-Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}` to the unnumbered agent rows defined below; never assume a fixed agent count. In the host's interactive single-selection control, present those agent choices followed by **Help me decide**, **Refresh list**, and **Choose a different environment**, in that order. Leave the selection initially unset, and disable custom entry inside the control. Use **Choose an ESS agent or setup action.** as the exact question. Do not imply that selecting an installed agent creates it.
+Set `{PRODUCT_COUNT}` to the exact grouped `packageId` count and `{PRODUCT_ROWS}` to the unnumbered agent rows defined below; never assume a fixed agent count. In the host's interactive single-selection control, present those agent choices followed by **Help me decide**, **Refresh list**, and **Choose a different environment**, in that order. Leave the selection initially unset. Use **Choose an ESS agent or setup action.** as the exact question. Do not imply that selecting an installed agent creates it.
 
 For **Help me decide**, follow the shared contract in `SKILL.md`. Ask what employee experience the maker wants to provide. Compare **Employee Self-Service (Hub)** for one experience coordinating HR, IT, or other connected agents, **Employee Self-Service (HR)** for HR answers and requests, and **Employee Self-Service (IT)** for technical support and issue resolution. For another catalog entry, use only its service-provided description. Recommend an exact current catalog choice and preserve whether that choice is **Create** or **Use — Already installed**.
 
@@ -113,7 +113,7 @@ Build the agent picker as a projection of the latest successful catalog result, 
 When one or more exact validated Dev candidates match the same catalog entry, format that choice as **Use {friendly agent name} — Already installed**. Keep the catalog version in supporting text when present; never present it as the installed agent's version. Selecting this choice does not invoke create:
 
 - When exactly one agent has the matching key, the effective path changes to existing-agent setup. Complete the parent checkpoint for that path, environment, and Microsoft login using **Existing-agent setup** from `permission-guidance.md`, then run the parent's selected-agent product-line reconciliation for that exact returned identity and continue through `da-existing-dev.md`.
-- When multiple agents have the matching key, show those exact returned agent names followed by **Help me decide** as the standard choices, leave the selection initially unset, disable custom entry inside the control, and let the maker select one. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`. The effective path then changes to existing-agent setup; complete its parent checkpoint using **Existing-agent setup** from `permission-guidance.md` before reconciliation and `da-existing-dev.md`.
+- When multiple agents have the matching key, show those exact returned agent names followed by **Help me decide** as the standard choices, leave the selection initially unset, and let the maker select one. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`. The effective path then changes to existing-agent setup; complete its parent checkpoint using **Existing-agent setup** from `permission-guidance.md` before reconciliation and `da-existing-dev.md`.
 
 When the current setup invocation retains a definitive collision for an agent template and the latest successful agent list contains no exact matching identity, format that choice as **Resolve {friendly agent name} — Existing installation not visible**. Use this exact supporting description:
 
@@ -139,7 +139,7 @@ Copilot Studio reported a conflict the last time setup tried to create **{friend
 
 **End message.**
 
-Immediately ask **How would you like to continue?** and present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control.
+Immediately ask **How would you like to continue?** and present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **I have another login we can use to try connecting to this agent**, and **Go back** as the standard choices, with no preselected choice.
 
 For **Create anyway**, retain the selected package facts and proceed through **Create** with a new client request UUID. Do not claim that the agent type is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented direct-inspection, alternate-login, or catalog-return route when another choice is selected.
 
@@ -147,7 +147,7 @@ When an older environment-scoped observation reports `installed: true` but the l
 
 > Setup previously observed this ESS agent type in the environment, but current agent visibility could not confirm it. An existing agent may still be hidden from this account. Create anyway and let Copilot Studio validate the current state?
 
-Present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **Try with a different user**, and **Go back** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Create anyway** retains the selected package facts and proceeds through **Create** with a new client request UUID. It does not claim that a matching agent is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented route when one of the other standard choices is selected. Do not add another prohibition based on the earlier observation.
+Present **Create anyway**, **Use a Microsoft Copilot Studio URL**, **Try with a different user**, and **Go back** as the standard choices, with no preselected choice. **Create anyway** retains the selected package facts and proceeds through **Create** with a new client request UUID. It does not claim that a matching agent is absent or that creation will succeed; preserve the service's success or collision result. Apply the documented route when one of the other standard choices is selected. Do not add another prohibition based on the earlier observation.
 
 When no current exact Dev identity is established, format the choice as **Create {friendly agent name} {version}**. This label is an action, not a claim that no matching agent exists. Omit a blank version instead of showing an unresolved value. After the maker selects the choice, retain the exact `packageId`, backend `name`, catalog `version`, and friendly agent name, then begin **Create**. Retain the friendly agent name for the final exact-agent link.
 
@@ -219,7 +219,7 @@ Copilot Studio says an agent for **{friendly agent name}** already exists. This 
 
 Immediately ask **Choose the installed {friendly agent name}.**, present those matching identities followed by **Help me decide** and **Go back** as the standard choices, and render every agent identity option as its exact service-provided display name only. For **Help me decide**, use the existing-agent picker guidance in `da-existing-dev.md`.
 
-Leave every collision choice initially unset and disable custom entry inside the control. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either the message or choice panel.
+Leave every collision choice initially unset. Retain IDs and schemas as internal evidence; never display an ID, schema, product key, or **schema will be verified** annotation in either the message or choice panel.
 
 For a selected identity whose matching MakerOperations BotEntity supplies a usable schema, pass that exact schema into the parent's selected-agent product-line reconciliation as `--known-native-schema "{RETURNED_SCHEMA_NAME}"`. Otherwise run both exact identity probes so the native component result can establish schema identity. Only a supported native `found` result may continue to route inspection and optional enrollment; a native `not-found`, access failure, or uncertain result must stop without offering enrollment. Successful enrollment requires reconciliation and route inspection before the normal attachment path; skipped enrollment with established supported native identity returns to the attachment command below with `--allow-unenrolled-authoring`.
 

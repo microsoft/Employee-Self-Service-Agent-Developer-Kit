@@ -1105,7 +1105,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "Go back",
     ):
         assert f"**{discovery_failure_choice}**" in environment_target
-    assert "custom entry disabled inside the control" in normalized_environment_target
+    assert "custom entry disabled inside the control" not in normalized_environment_target
     assert "authoritative environment-scoped operation" in (
         normalized_environment_target
     )
@@ -1203,10 +1203,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     )
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type an agent name" in normalized
-    assert (
-        "Leave the selection initially unset, and disable custom entry inside "
-        "the control"
-    ) in normalized
+    assert "Leave the selection initially unset." in normalized
     assert "{PRODUCT_ROWS}" in text
     assert "never assume a fixed agent count" in normalized
     assert "Do not ask the maker to type an agent name or number any choice" in normalized
@@ -1363,7 +1360,8 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "followed by every cached sign-in name, then **Help me decide**" in foundation
     assert "For **Help me decide** on the multiple-account surface" in foundation
     assert "separate from GitHub/Copilot sign-in" in foundation
-    assert "custom entry disabled inside the control" in normalized_foundation
+    assert "Allow custom entry" in foundation
+    assert "custom entry disabled inside the control" not in normalized_foundation
     assert (
         "When no cached account exists, or the maker selects **Use a different "
         "user** or **Use the Microsoft account picker**, omit `--account`"
@@ -1559,7 +1557,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     ]
     assert "**Go back**" in collision_choices
     assert "**Cancel setup**" not in collision_choices
-    assert "disable custom entry inside the control" in " ".join(
+    assert "disable custom entry inside the control" not in " ".join(
         collision_choices.split()
     )
     assert "never repeats the collided request" in " ".join(collision_choices.split())
@@ -1689,7 +1687,7 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "the final secondary choice"
         in normalized_incomplete
     )
-    assert "disable custom entry" in normalized_incomplete
+    assert "disable custom entry" not in normalized_incomplete
     assert "Do not render the ready completion choices" in normalized_incomplete
     assert "durable completion snapshot" in normalized_incomplete
     assert "general post-setup capabilities" in normalized_incomplete

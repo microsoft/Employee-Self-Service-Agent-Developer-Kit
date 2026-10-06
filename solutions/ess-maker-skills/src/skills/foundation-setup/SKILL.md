@@ -40,7 +40,7 @@ defined maker interaction.
 
 ## Standard choices and ad hoc recovery
 
-Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged, initially unselected, and with custom entry disabled inside the interactive control.
+Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged and initially unselected. Allow custom entry so the maker can clarify, express uncertainty, correct an earlier choice, or respond conversationally.
 
 The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
 
@@ -184,8 +184,8 @@ python scripts/setup_existing_da.py cached-accounts
 Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
 
 - When no cached account is returned, do not ask an account question. Use the Microsoft account picker on the first command that can authenticate.
-- When exactly one cached account `{CACHED_ACCOUNT}` is returned, ask **Continue with {CACHED_ACCOUNT}?** and present **Continue** and **Use a different user** as the standard choices, with no preselected choice and custom entry disabled inside the control. **Continue** retains that account. **Use a different user** uses the Microsoft account picker on the first command that can authenticate.
-- When two or more cached accounts are returned, ask **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in. Build the standard choices in this order: **Use the Microsoft account picker** first, followed by every cached sign-in name, then **Help me decide**. Do not preselect or recommend an option. Disable custom entry inside the control.
+- When exactly one cached account `{CACHED_ACCOUNT}` is returned, ask **Continue with {CACHED_ACCOUNT}?** and present **Continue** and **Use a different user** as the standard choices, with no preselected choice. **Continue** retains that account. **Use a different user** uses the Microsoft account picker on the first command that can authenticate.
+- When two or more cached accounts are returned, ask **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in. Build the standard choices in this order: **Use the Microsoft account picker** first, followed by every cached sign-in name, then **Help me decide**. Do not preselect or recommend an option.
 
 For **Help me decide** on the multiple-account surface, follow the shared contract above. Establish whether the maker is accessing an existing agent, creating a fresh agent, or only discovering environments. Explain that an existing-agent path needs the login that created the exact agent, a fresh-agent path needs a login whose environment permissions allow agent creation, and environment discovery needs a login that can access the target environment. Recommend only an account the maker identifies as satisfying the applicable reason; otherwise recommend the Microsoft account picker.
 
@@ -417,7 +417,7 @@ single-selection control, in runtime readiness order. Across those actions,
 append **(Recommended)** to exactly one action: the action owned by the first
 unresolved row. Leave every other action untagged. After adding every static
 and dynamic action, append **Exit setup** as the final secondary choice. Leave
-every choice initially unselected and disable custom entry. Selecting **Exit
+every choice initially unselected. Selecting **Exit
 setup** uses the incomplete **Exit setup** message under **Start**. Do not
 render the ready completion choices, durable completion snapshot, or general
 post-setup capabilities. The global router's explicit
@@ -469,7 +469,7 @@ Then present these choices in one host interactive single-selection control:
 Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when **Add or
 change an integration** is recommended; otherwise set it to an empty string.
 Omit **Switch to another configured agent** when it is unavailable. Leave every
-choice initially unselected, disable custom entry, and always render **Exit
+choice initially unselected, and always render **Exit
 setup** after every static and dynamic choice. **Add or change an integration**
 begins `/connect` at its first decision surface. **Exit setup** acknowledges the
 displayed results and renders a durable completion snapshot as the final chat
@@ -599,7 +599,7 @@ setup**:
 - **What does setup do?**
 
 Use the same recommendation suffixes and maker-facing recommendation. Leave
-every choice initially unselected, disable custom entry, and keep **Exit setup**
+every choice initially unselected, and keep **Exit setup**
 as the final choice. Selecting **Exit setup** uses the ready exit message below.
 
 For a usable local target whose canonical agent record is incomplete or blocked, render the maker-facing progress checklist and ask:
@@ -617,7 +617,7 @@ single-selection control:
 - **What does setup do?**
 - **Exit setup**
 
-Leave every choice initially unselected, disable custom entry, and keep **Exit
+Leave every choice initially unselected, and keep **Exit
 setup** as the final choice. Follow the corresponding shared workspace choice
 above. For **Create and open a new workspace**, use the location-selection and
 worktree handoff defined under **Work with both environments side by side**,
