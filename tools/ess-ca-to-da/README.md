@@ -475,6 +475,25 @@ deleted. Each gap is labelled with who has to act on it:
 
 Only the last kind makes a migration `blocked`. The rest is a worklist.
 
+#### Auto-upgrading `AnswerQuestionWithAI`
+
+Before a topic is disabled, `convert.py` inspects each `AnswerQuestionWithAI`
+("create generative answers") node — a construct the DA has no equivalent for —
+and classifies how the CA actually used it:
+
+| class | what happens |
+| --- | --- |
+| *response composition* over an all-scalar parsed record | **auto-upgraded** to a deterministic `SetVariable` that renders the record, exactly how the GA templates compose `InvokeFlow → ParseValue → SendActivity`. The output variable the next `SendActivity` reads is preserved, so the topic stays active |
+| *response composition* over tabular/nested data | left in place and flagged — a deterministic template cannot reproduce a table losslessly |
+| *intent classification* (output drives a branch) | left in place; route it with the agent's native intent routing instead |
+| *knowledge grounded* / *general knowledge* | left in place with guidance to connect a knowledge source or fold it into instructions |
+
+A topic un-deprecates (stays active) only when **every** unsupported construct in
+it was converted. A topic that mixes a convertible composition node with, say, an
+intent classifier keeps the composition upgrade but still lands on the worklist
+for the classifier. Every upgrade is listed in the report's *Automatically
+upgraded to supported building blocks* section.
+
 ### What the report will not tell you
 
 The report covers *content*. Three things change for employees that no amount of
@@ -517,6 +536,7 @@ src/essmig/
   instructions.py model-backed reconciliation of edited agent instructions
   llm.py          minimal GitHub Copilot API client (gh auth token)
   rules.py        constructs the DA does not support, and who must act on each
+  convert.py      classify AnswerQuestionWithAI nodes; auto-upgrade the convertible ones
   assessment.py   the eligibility verdict: blockers, worklist, employee impact
   packaging.py    emit the ALM package
   deliver.py      import the package into a target DA (the one write path; opt-in)

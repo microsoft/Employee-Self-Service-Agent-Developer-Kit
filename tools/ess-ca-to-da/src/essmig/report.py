@@ -240,6 +240,24 @@ def render_markdown(
                     "```",
                 ]
 
+    upgraded = [result for result in merged.results if result.conversions]
+    if upgraded:
+        lines += [
+            "",
+            "## Automatically upgraded to supported building blocks",
+            "",
+            "These topics used an `AnswerQuestionWithAI` (generative answers) node only to "
+            "phrase data the topic had already fetched. That has no Declarative Agent "
+            "equivalent, so the tool rewrote each one into a deterministic `SetVariable` "
+            "that renders the parsed record — exactly how the GA templates compose "
+            "`InvokeFlow → ParseValue → SendActivity` responses. These topics stay active.",
+            "",
+        ]
+        for result in upgraded:
+            lines.append(f"- **{result.display_name or result.suffix}**")
+            for note in result.conversions:
+                lines.append(f"  - {note}")
+
     deprecated = [result for result in merged.results if result.deprecated]
     if deprecated:
         lines += [

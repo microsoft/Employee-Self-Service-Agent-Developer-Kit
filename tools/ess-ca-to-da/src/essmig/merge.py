@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from essmig.convert import convert_dialog
 from essmig.discovery import AgentMetadata, CaComponent
 from essmig.ess import non_ported_pack_of, schema_suffix
 from essmig.instructions import (
@@ -95,6 +96,10 @@ class ComponentResult:
     """For ``CONFLICTED``: the customer's complete version, so every edit that could not
     be applied automatically is on record for manual re-application — not just the
     subset of nodes that conflicted."""
+    conversions: list[str] = field(default_factory=list)
+    """Notes for each unsupported node this tool rewrote onto supported building blocks
+    (e.g. an ``AnswerQuestionWithAI`` response-composition node turned into a
+    deterministic ``SetVariable``), so the report can say what it upgraded."""
     customer_state: str = ""
     """The customer's enabled/disabled state when it could not be applied automatically
     (i.e. it was lost to a payload conflict). Surfaced so the setting stays actionable
@@ -447,6 +452,8 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
 
     Runs after the merge so it sees the final content: a customer edit may well have
     introduced the unsupported node, and an ESS rewrite may equally have removed it.
+    First it rewrites the convertible nodes onto supported building blocks; a topic is
+    only disabled for what genuinely cannot be converted.
     """
     by_suffix = {result.suffix: result for result in results}
     for entry in entries:
@@ -455,6 +462,8 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
         result = by_suffix.get(schema_suffix(str(entry.get("schemaName") or "")))
         if result is None or result.outcome not in (Outcome.MERGED, Outcome.CARRIED_NEW):
             continue
+        conversions = convert_dialog(entry.get("dialog"))
+        result.conversions = [c.note for c in conversions if c.converted]
         found = find_unsupported(entry.get("dialog"))
         if not found:
             continue
@@ -463,6 +472,9 @@ def _apply_unsupported_rules(entries: list[Any], results: list[ComponentResult])
         result.unsupported = [construct.reason for construct in found]
         result.guidance = [construct.advice for construct in found]
         result.owners = [construct.owner for construct in found]
+        result.guidance += [
+            f"{c.node_name}: {c.note}" for c in conversions if not c.converted
+        ]
 
 
 def _pack_label(solution_unique_name: str) -> str:
