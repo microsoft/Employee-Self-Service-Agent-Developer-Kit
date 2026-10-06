@@ -40,7 +40,7 @@ defined maker interaction.
 
 ## Standard choices and ad hoc recovery
 
-Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged and initially unselected. Allow custom entry so the maker can clarify, express uncertainty, correct an earlier choice, or respond conversationally.
+Choice lists define the standard maker-facing UX for the current decision. Render the listed choices in the documented order with their labels unchanged and initially unselected.
 
 The choice list is not an exhaustive recovery contract. If the maker instead types another recovery action in chat, treat that message as current intent and compose the available bounded operations when the requested action can be performed. Preserve existing evidence, obtain the existing confirmation for consequential mutations, and let authoritative service operations validate remote state. Do not reject a recovery solely because it is absent from the presented choices. When the typed intent is ambiguous, explain what must be resolved and present the standard choices again.
 

@@ -1360,7 +1360,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "followed by every cached sign-in name, then **Help me decide**" in foundation
     assert "For **Help me decide** on the multiple-account surface" in foundation
     assert "separate from GitHub/Copilot sign-in" in foundation
-    assert "Allow custom entry" in foundation
+    assert "Allow custom entry" not in foundation
     assert "custom entry disabled inside the control" not in normalized_foundation
     assert (
         "When no cached account exists, or the maker selects **Use a different "
