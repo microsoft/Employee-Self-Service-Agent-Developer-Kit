@@ -152,10 +152,14 @@ PHASE_DEFINITIONS = (
         identifier=Phase.EMPLOYEE_VALIDATION,
         title="Employee validation",
         what_happens=(
-            "Publish the configured agent.",
-            "Run a real Workday scenario as a signed-in non-maker employee.",
-            "Confirm employee context and Workday data work without an "
-            "unexpected repeated sign-in.",
+            "Smoke-test an enabled read-only Workday scenario in the Copilot "
+            "Studio Test pane without publishing the agent.",
+            "After the maker smoke test passes, publish and deploy the agent "
+            "to Microsoft 365 Chat.",
+            "Have the assigned non-maker employee establish employee-owned "
+            "Workday connections, run a real scenario, and confirm employee "
+            "context and Workday data work without an unexpected repeated "
+            "sign-in.",
         ),
         prerequisite=Phase.RUNTIME,
     ),

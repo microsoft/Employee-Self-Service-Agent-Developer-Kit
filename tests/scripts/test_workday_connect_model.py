@@ -162,6 +162,41 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
     }
 
 
+def test_employee_validation_summary_preserves_test_then_publish_order() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        state["phases"][phase_id]["status"] = "complete"
+
+    assert model.next_phase_summary(state) == {
+        "id": "employee-validation",
+        "title": "Employee validation",
+        "whatHappens": [
+            (
+                "Smoke-test an enabled read-only Workday scenario in the "
+                "Copilot Studio Test pane without publishing the agent."
+            ),
+            (
+                "After the maker smoke test passes, publish and deploy the "
+                "agent to Microsoft 365 Chat."
+            ),
+            (
+                "Have the assigned non-maker employee establish "
+                "employee-owned Workday connections, run a real scenario, "
+                "and confirm employee context and Workday data work without "
+                "an unexpected repeated sign-in."
+            ),
+        ],
+    }
+
+
 def test_pending_current_phase_and_following_phases_are_pending() -> None:
     import workday_connect_model as model
 
