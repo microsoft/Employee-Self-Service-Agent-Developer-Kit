@@ -1175,7 +1175,6 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
             ),
             "signingCertificate": {
                 "thumbprint": "AA11",
-                "validFrom": "2026-01-01T00:00:00Z",
                 "validTo": "2027-01-01T00:00:00Z",
             },
         },
@@ -1207,6 +1206,16 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
     )
 
     result = workday_connect._record_workday_admin(args, store)
+    completed = store.load()
+    assert completed["tenantFoundation"] is not None
+    assert "validFrom" not in completed["tenantFoundation"]["identifiers"][
+        "signingCertificate"
+    ]
+    completed["tenantFoundation"] = None
+    store.config_path.write_text(
+        json.dumps(completed),
+        encoding="utf-8",
+    )
     replay = workday_connect._record_workday_admin(
         SimpleNamespace(
             response_file=None,
@@ -1214,6 +1223,7 @@ def test_workday_finalization_uses_retained_partial_evidence_and_replays(
         ),
         store,
     )
+    assert store.load()["tenantFoundation"] is not None
     drift = workday_connect._record_workday_admin(
         SimpleNamespace(
             response_file=None,

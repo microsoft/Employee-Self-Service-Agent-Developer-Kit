@@ -349,7 +349,6 @@ are optional and must not be invented when they were not collected:
   "replyUrl": "https://{approved-workday-reply-url}",
   "certificate": {
     "thumbprint": "{thumbprint}",
-    "validFrom": "2026-01-01T00:00:00Z",
     "validTo": "2027-01-01T00:00:00Z"
   },
   "checks": {

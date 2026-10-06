@@ -2366,7 +2366,6 @@ def test_matching_foundation_restores_workday_after_entra_reread(
         {
             "signingCertificate": {
                 "thumbprint": "TH UM BP RI NT",
-                "validFrom": "2026-01-01T12:00:00+00:00",
                 "validTo": "2027-01-01T12:00:00+00:00",
             }
         },

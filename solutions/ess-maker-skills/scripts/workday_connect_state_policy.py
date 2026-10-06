@@ -109,15 +109,14 @@ def _normalized_foundation_value(value: Any) -> Any:
     return value
 
 
-def _certificate_identity(value: Any) -> tuple[str, str, str] | None:
+def _certificate_identity(value: Any) -> tuple[str, str] | None:
     if not isinstance(value, Mapping):
         return None
     thumbprint = str(value.get("thumbprint") or "").replace(" ", "").strip().casefold()
-    valid_from = str(value.get("validFrom") or "").strip()[:10]
     valid_to = str(value.get("validTo") or "").strip()[:10]
-    if not thumbprint or not valid_from or not valid_to:
+    if not thumbprint or not valid_to:
         return None
-    return thumbprint, valid_from, valid_to
+    return thumbprint, valid_to
 
 
 def foundation_matches_current_entra(

@@ -755,6 +755,8 @@ def _record_workday_admin(
                 store,
                 "workday-da:external-prerequisites",
             )
+            if state.get("tenantFoundation") is None:
+                store.capture_tenant_foundation()
             return {
                 "verified": True,
                 "replayed": True,

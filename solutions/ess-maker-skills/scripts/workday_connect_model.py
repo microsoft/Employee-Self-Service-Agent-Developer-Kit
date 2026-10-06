@@ -1204,11 +1204,11 @@ def _validate_tenant_foundation(value: Any) -> None:
     certificate = value["identifiers"].get("signingCertificate")
     if not isinstance(certificate, dict) or any(
         not str(certificate.get(key) or "").strip()
-        for key in ("thumbprint", "validFrom", "validTo")
+        for key in ("thumbprint", "validTo")
     ):
         raise WorkdayConnectModelError(
             "Workday tenantFoundation signingCertificate must contain "
-            "thumbprint, validFrom, and validTo."
+            "thumbprint and validTo."
         )
     missing_endpoints = sorted(
         key
