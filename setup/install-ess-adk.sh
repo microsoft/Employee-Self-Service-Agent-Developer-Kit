@@ -833,6 +833,11 @@ fi
 # ---------------------------------------------------------------------------
 # 8. Launch VS Code
 # ---------------------------------------------------------------------------
+print_authentication_guidance() {
+    echo -e "    ${YELLOW}Sign in to GitHub Copilot with an entitled GitHub account to activate Copilot Chat, where you run /setup. This sign-in does not grant Power Platform access.${NC}"
+    echo -e "    ${YELLOW}When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent.${NC}"
+}
+
 if [[ -n "$CODE_CMD" ]]; then
     # Launch strategy: open the workspace in VS Code. The ESS Maker Profile
     # extension reads essMaker.mode and applies the mode-specific layout
@@ -847,7 +852,7 @@ if [[ -n "$CODE_CMD" ]]; then
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
             ok "Launched VS Code at $WORKSPACE_PATH"
             echo -e "    ${YELLOW}Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent.${NC}"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts.${NC}"
+            echo -e "    ${YELLOW}Review the VS Code workspace trust prompt before accepting it.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
             echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
@@ -857,7 +862,7 @@ if [[ -n "$CODE_CMD" ]]; then
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
             ok "Launched VS Code at $WORKSPACE_PATH"
             echo -e "    ${YELLOW}The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat.${NC}"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
+            echo -e "    ${YELLOW}Review the VS Code workspace trust prompt before accepting it.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
             echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
@@ -867,6 +872,8 @@ else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
     echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
 fi
+
+print_authentication_guidance
 
 echo ""
 echo -e "${GREEN}=== ESS Maker Kit ready! ===${NC}"

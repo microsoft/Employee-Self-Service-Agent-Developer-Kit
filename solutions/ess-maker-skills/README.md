@@ -23,6 +23,8 @@ The kit connects VS Code to an existing editable DA Dev agent through the native
 
 Run `/setup` and follow the prompts.
 
+> **Accounts used during setup:** Sign in to GitHub Copilot to activate Copilot Chat, where you run `/setup`. When `/setup` connects your agent, use the separate Microsoft work account that can access the target Power Platform environment and agent. GitHub Copilot authentication does not grant Power Platform access. See [Authentication prompts](../../setup/README.md#authentication-prompts) for the full sequence and the standalone FlightCheck exception.
+
 ### 🎨 Customize the ESS Landing Page
 
 Configure the active agent's tenant landing page directly from chat. Run
