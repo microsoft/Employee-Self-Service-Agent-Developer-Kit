@@ -453,6 +453,8 @@ def test_foundation_and_onboarding_surface_landing_page_command() -> None:
     for content in surfaces:
         assert "/landing-page" in content
 
+    assert "/org-announcements" in _FOUNDATION.read_text(encoding="utf-8")
+
 
 def test_onboarding_does_not_offer_legacy_optional_readiness_check() -> None:
     router = _ONBOARDING.read_text(encoding="utf-8")
