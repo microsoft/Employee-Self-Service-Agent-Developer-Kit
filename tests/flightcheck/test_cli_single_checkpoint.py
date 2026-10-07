@@ -155,7 +155,7 @@ def test_resolve_environment_ring(
 @pytest.mark.parametrize(
     ("config", "explicit_ring", "message"),
     [
-        ({}, None, "ring is unavailable"),
+        ({}, None, "could not determine the Power Platform environment ring"),
         (
             {
                 "ring": "prod",
@@ -165,7 +165,7 @@ def test_resolve_environment_ring(
                 ),
             },
             None,
-            "do not identify the same",
+            "identifies different rings",
         ),
     ],
 )
@@ -672,7 +672,9 @@ class TestGates:
             )
 
         assert exc.value.code == 1
-        assert "Confirm whether the environment uses" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Confirm prod, preprod, or test" in output
+        assert "rerun with --ring" in output
 
 
 class TestHermeticRun:
