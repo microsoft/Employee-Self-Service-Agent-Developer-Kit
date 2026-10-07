@@ -23,11 +23,14 @@ agent. `titleId` is an agent identifier, not an author permission, a Dataverse
 authoring sign-in; never supply `tenantId` to a tool.
 
 The 100-current-item limit and latest-50 archived window apply separately to
-each tenant-and-agent pair. There is no migration or tenant-wide fallback.
+each tenant-and-agent pair. There is no migration, cross-agent sharing, or
+legacy tenant-only API fallback. An empty audience applies no additional
+Security Group filtering and reaches everyone who uses the selected agent.
 Tell the maker which selected agent they are managing:
 
-> These announcements belong to **{agent name}**. Their selected audiences apply
-> within that agent, not across your other ESS agents.
+> These announcements belong to **{agent name}**. They can reach everyone who
+> uses this agent or selected audiences within it, not across your other ESS
+> agents.
 
 ## Setup-state check
 
@@ -247,8 +250,11 @@ Use this when the maker's message already carries real announcement content.
   `0 = Important`; `1 = Informational`. For an explicit Informational request,
   send `"priority": 1`; for Important, send `"priority": 0`.
 - Omit a field to accept its default: `type` `standard`, empty title and
-  description, empty dates, no primary action, empty audience, Informational
-  priority `1`, and no secondary action.
+  description, empty dates, no primary action, an empty audience with no
+  additional Security Group filtering, Informational priority `1`, and no
+  secondary action.
+- When the maker explicitly asks for everyone who uses the selected agent, send
+  `"audience": []` and do not run an audience-group search.
 - An explicit empty string is a real value. Send `""` only when the maker
   actually asked to clear something.
 - **Dates.** Send one of exactly three things, and nothing else:
@@ -280,7 +286,7 @@ Use this when the maker's message already carries real announcement content.
 
 #### Resolve suggested audiences
 
-For each audience the maker named:
+For each audience group the maker named:
 
 1. Call `search_audience_groups` with the name or email they used. One combined
    Graph query searches tokenized display names and mail prefixes; broad queries
@@ -293,14 +299,17 @@ For each audience the maker named:
    `open_org_announcements` once with `view: "editor"` and `mode: "create"`,
    preserving the maker's supplied content and schedule. If no audience was
    resolved, omit `suggestedDraft.audience` so the editor opens with an empty
-   audience. Tell the maker to select a valid audience in the editor before
-   publishing. Do not guess or substitute a group from an earlier request.
+   audience. Tell the maker that the empty selection reaches everyone who uses
+   the selected agent by default and that they must select the intended group
+   before publishing this targeted announcement. Do not guess or substitute a
+   group from an earlier request.
 4. Never invent a group ID and never send a group name where an ID belongs.
 
 For example, after a successful empty lookup, explain: "I couldn't resolve that
-audience. I'll open your draft with the audience unset so you can select it in
-the editor. Nothing has been saved or published." Then open the review editor;
-do not end the turn with only the no-match explanation.
+audience. I'll open your draft with an empty audience. That reaches everyone
+who uses this agent by default, so choose the intended group before publishing
+this targeted announcement. Nothing has been saved or published." Then open the
+review editor; do not end the turn with only the no-match explanation.
 
 A lookup failure is not a successful empty result. Report an authentication or
 directory-service error as such; do not claim the group does not exist.

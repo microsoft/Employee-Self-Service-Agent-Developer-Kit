@@ -57,8 +57,10 @@ announcement** Quick Action.
 - **Standard announcements** carry a title, description, priority, and up to
   two actions.
 - **Alerts** carry a single link action for time-sensitive notices.
-- **Audiences** are security groups, mail-enabled security groups, or classic
-  distribution groups, searched by name or email in one combined query.
+- **Audiences** are optional. An empty audience applies no additional Security
+  Group filtering and reaches everyone who uses the selected agent. Security
+  groups, mail-enabled security groups, or classic distribution groups limit
+  delivery and are searched by name or email in one combined query.
 - **Scheduling** publishes an announcement for a start/end window, and expired
   announcements can be published again through the normal editor after
   reviewing and updating their schedule.
@@ -71,11 +73,13 @@ editor.
 
 Org Announcements are **scoped to the authenticated tenant and selected
 agent's `titleId`**, not shared across agents. The current 100 limit and latest
-50 archive window apply per tenant-and-agent pair. There is no tenant-wide
-fallback. The title is resolved using `list_agent_configs` and `search_agents`
-on the `ess-org-announcements` provider. Discovery shares neutral Python code
-with the landing-page provider, but does not require its MCP process or
-initialize its configuration.
+50 archive window apply per tenant-and-agent pair. There is no cross-agent or
+legacy tenant-only API fallback. Within the selected agent, `audience: []`
+applies no additional Security Group filtering, so the announcement reaches
+everyone who uses that agent. The title is resolved using `list_agent_configs`
+and `search_agents` on the `ess-org-announcements` provider. Discovery shares
+neutral Python code with the landing-page provider, but does not require its MCP
+process or initialize its configuration.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`
