@@ -107,8 +107,8 @@ const GUIDED_LAYOUT = {
 // `requires` records setup prerequisites; Customization keeps every action clickable.
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
-    { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
+    { id: 'create',      icon: '✨', label: 'Create a topic (Coming Soon)', sub: 'Describe a new conversation', query: 'Create a topic',            requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic (Coming Soon)', sub: 'Tweak an existing topic',     query: 'Update a topic',            requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
     { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
@@ -555,8 +555,8 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
-            <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
-            <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
+            <li><strong>Create a topic (Coming Soon)</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
+            <li><strong>Update a topic (Coming Soon)</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
             <li><strong>Run a flightcheck</strong> \u2014 Run 41+ automated readiness checks.</li>
             <li><strong>Generate tests</strong> \u2014 Create evaluation test sets for regression testing.</li>
@@ -580,9 +580,9 @@ function getTutorialHtml() {
     </section>
 
     <section id="create">
-        <h2>\u2728 Create a topic</h2>
+        <h2>\u2728 Create a topic (Coming Soon)</h2>
         <p>A <strong>topic</strong> is one conversation your agent can handle \u2014 for example, \u201csubmit a time-off request\u201d or \u201creset my password\u201d.</p>
-        <p>When you click <strong>Create a topic</strong>, a chat opens where you describe what you want in plain English. The kit will:</p>
+        <p>When you click <strong>Create a topic (Coming Soon)</strong>, a chat opens with the current availability message.</p>
         <ul>
             <li>Generate trigger phrases (the things employees might say).</li>
             <li>Build the conversation flow and adaptive cards.</li>
@@ -596,8 +596,8 @@ function getTutorialHtml() {
     </section>
 
     <section id="update">
-        <h2>\u270f\ufe0f Update a topic</h2>
-        <p>The <strong>Update a topic</strong> button lets you modify an existing conversation topic. Describe the change you want in plain English and the kit will:</p>
+        <h2>\u270f\ufe0f Update a topic (Coming Soon)</h2>
+        <p>When you click <strong>Update a topic (Coming Soon)</strong>, a chat opens with the current availability message.</p>
         <ul>
             <li>Find the matching topic in your local working copy.</li>
             <li>Apply the change \u2014 add new branches, update card layouts, rewire integrations.</li>
@@ -1097,8 +1097,8 @@ async function openGettingStarted(stepId) {
 
 // Customization actions stay clickable; the walkthrough explains setup prerequisites.
 const CUSTOMIZATION_ITEMS = [
-    { id: 'create',      label: 'Create a topic',         run: 'essMaker.runCreate',       icon: 'add',       requires: ['setup'], desc: 'Create a new topic, described in plain English.' },
-    { id: 'update',      label: 'Update a topic',         run: 'essMaker.runUpdate',       icon: 'edit',      requires: ['setup'], desc: 'Change an existing topic, described in plain English.' },
+    { id: 'create',      label: 'Create a topic (Coming Soon)', run: 'essMaker.runCreate', icon: 'add',  requires: ['setup'], desc: 'Topic creation is not yet available.' },
+    { id: 'update',      label: 'Update a topic (Coming Soon)', run: 'essMaker.runUpdate', icon: 'edit', requires: ['setup'], desc: 'Topic updates are not yet available.' },
     { id: 'scan',        label: 'Scan for issues',        run: 'essMaker.runScan',         icon: 'search',    requires: ['setup'], desc: 'Scan your agent for errors and common configuration problems.' },
     { id: 'flightcheck', label: 'Run a flightcheck',      run: 'essMaker.runFlightcheck',  icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
     { id: 'evaluate',    label: 'Generate tests',         run: 'essMaker.run_evaluate',    icon: 'beaker',    requires: ['setup'], desc: 'Generate evaluation tests to validate your agent behaves as expected.' },
@@ -1583,8 +1583,8 @@ function activate(context) {
     // Legacy command IDs from 0.1.0 (still referenced by the walkthrough).
     const legacyMap = {
         'essMaker.runSetup': '/setup',
-        'essMaker.runCreate': '/create',
-        'essMaker.runUpdate': '/update',
+        'essMaker.runCreate': 'Create a topic',
+        'essMaker.runUpdate': 'Update a topic',
         'essMaker.runScan': '/scan',
         'essMaker.runFlightcheck': '/flightcheck',
         'essMaker.runPush': '/push',
