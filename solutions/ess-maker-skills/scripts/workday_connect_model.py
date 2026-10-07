@@ -305,7 +305,14 @@ ADMINISTRATOR_REQUIRED_FIELDS = {
     ),
     Phase.WORKDAY_ADMIN.value: (
         ADMINISTRATOR_PARTIAL_FIELDS[Phase.WORKDAY_ADMIN.value]
-        - {"certificateValidFrom", "employeeSecurityGroup"}
+        - {
+            "certificateValidFrom",
+            "employeeSecurityGroup",
+            "authorizationOutcome",
+            "authorizationRemediationDomain",
+            "authorizationRemediationScenario",
+            "authorizationRetestOutcome",
+        }
     ),
 }
 TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS = frozenset(

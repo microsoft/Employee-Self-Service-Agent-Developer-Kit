@@ -215,6 +215,8 @@ def validate_employee_failure_evidence(
         "failureSurface",
         "timestamp",
         "remediation",
+        "scenarioName",
+        "affectedDomain",
     }
     unexpected = sorted(set(evidence) - allowed)
     if unexpected:
@@ -271,13 +273,30 @@ def validate_employee_failure_evidence(
         raise WorkdayConnectContractError(
             "Employee validation failureSurface is required for WD-E2E-999."
         )
-    return {
+    result = {
         "remediationId": remediation_id,
         "failureCategory": contract["failureCategory"],
         "failureSurface": failure_surface,
         "timestamp": timestamp,
         "remediation": contract["remediation"],
     }
+    scenario_name = str(evidence.get("scenarioName") or "").strip()
+    affected_domain = str(evidence.get("affectedDomain") or "").strip()
+    if remediation_id == "WD-E2E-006":
+        if bool(scenario_name) != bool(affected_domain):
+            raise WorkdayConnectContractError(
+                "scenarioName and affectedDomain must be supplied together "
+                "for Workday access remediation."
+            )
+        if scenario_name:
+            result["scenarioName"] = scenario_name
+            result["affectedDomain"] = affected_domain
+    elif scenario_name or affected_domain:
+        raise WorkdayConnectContractError(
+            "scenarioName and affectedDomain are accepted only for "
+            "WD-E2E-006."
+        )
+    return result
 
 
 def validate_agent_binding_evidence(

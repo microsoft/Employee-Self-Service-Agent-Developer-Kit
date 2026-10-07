@@ -186,7 +186,6 @@ def test_every_controller_command_is_documented() -> None:
     legacy_commands = {
         "begin-employee-test",
         "abandon-employee-test",
-        "record-validation-failure",
     }
     assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
 
@@ -248,6 +247,9 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "without publishing the agent" in text
     assert '"header": "Maker smoke test"' in text
     assert '"testUserCategory": "maker"' in text
+    assert '"remediationId": "WD-E2E-006"' in text
+    assert "record-validation-failure --evidence-file" in text
+    assert "retest that same named scenario" in text
     assert "lifecycleComplete: true" in text
     assert "do not run `begin-employee-test`" in normalized.casefold()
     assert "wait for Power Automate run-history evidence" in normalized

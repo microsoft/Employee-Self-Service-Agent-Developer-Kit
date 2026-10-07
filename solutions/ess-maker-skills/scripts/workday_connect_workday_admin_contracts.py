@@ -64,23 +64,15 @@ WORKDAY_ADMIN_WORKSHEET_LABELS = (
     "Certificate expiration",
     "OAuth client ID",
     "API client",
-    "Client grant type",
-    "Workday owned scope",
     "OAuth token URL",
     "REST base URL",
     "SOAP base URL",
     "Authentication policy",
     "Network readiness",
     "Rollout",
-    "Public worker reports",
-    "Integration permissions",
-    "Functional-area scopes",
-    "Optional domains",
-    "Additional domain mappings",
-    "Authorization",
-    "Affected Workday security domain",
-    "Scenario retested after remediation",
-    "Authorization retest",
+    "API client access",
+    "Required employee access",
+    "Additional scenario domains",
 )
 WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
     "SAML settings": "SAML row settings",
@@ -90,8 +82,6 @@ WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
     "Client ID": "OAuth client ID",
     "OAuth application client ID": "OAuth client ID",
     "API client status": "API client",
-    "Grant type": "Client grant type",
-    "Include Workday Owned Scope": "Workday owned scope",
     "Token URL": "OAuth token URL",
     "REST URL": "REST base URL",
     "SOAP URL": "SOAP base URL",
@@ -99,17 +89,10 @@ WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
     "Network access": "Network readiness",
     "Employee rollout": "Rollout",
     "Employee population": "Rollout",
-    "Public Worker Reports": "Public worker reports",
-    "Integration Permissions": "Integration permissions",
-    "Functional areas": "Functional-area scopes",
-    "Functional area scopes": "Functional-area scopes",
-    "Domain mappings": "Additional domain mappings",
-    "Authorization result": "Authorization",
-    "Remediated domain": "Affected Workday security domain",
-    "Affected domain": "Affected Workday security domain",
-    "Remediation scenario": "Scenario retested after remediation",
-    "Affected scenario": "Scenario retested after remediation",
-    "Retest result": "Authorization retest",
+    "API access": "API client access",
+    "Employee access": "Required employee access",
+    "Additional domains": "Additional scenario domains",
+    "Domain mappings": "Additional scenario domains",
 }
 
 
@@ -136,7 +119,7 @@ def parse_workday_admin_return_worksheet(
         worksheet,
         labels=WORKDAY_ADMIN_WORKSHEET_LABELS,
         label="Workday administrator return worksheet",
-        multiline_labels=frozenset({"Additional domain mappings"}),
+        multiline_labels=frozenset({"Additional scenario domains"}),
         label_aliases=WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES,
     )
     _worksheet_choice(
@@ -159,34 +142,41 @@ def parse_workday_admin_return_worksheet(
         "Certificate expiration",
         {"Yes, the expiration date matches exactly": "verified"},
     )
-    optional_domain_outcome = _worksheet_choice(
+    _worksheet_choice(
         values,
-        "Optional domains",
+        "API client access",
         {
-            "No additional domains are required": "none",
-            "Yes, additional supported scenarios require domains": "provided",
+            (
+                "Yes, SAML Bearer, Workday Owned Scope, and all four "
+                "required functional areas are configured"
+            ): "verified",
         },
     )
-    optional_domains = _optional_domain_mappings(values["Additional domain mappings"])
-    if optional_domain_outcome == "none" and optional_domains:
-        raise WorkdayConnectContractError(
-            "Additional domain mappings must be blank when no additional "
-            "domains are required."
-        )
-    if optional_domain_outcome == "provided" and not optional_domains:
-        raise WorkdayConnectContractError(
-            "At least one additional domain mapping is required."
-        )
-    authorization = _worksheet_choice(
+    _worksheet_choice(
         values,
-        "Authorization",
+        "Required employee access",
         {
-            "Verified without an authorization error": "verified",
-            "Task not authorized was remediated and retested": (
-                "task-not-authorized-remediated"
-            ),
+            (
+                "Yes, Get permission is verified for Public Worker Reports "
+                "and Integration Permissions"
+            ): "verified",
         },
     )
+    additional_domains = values["Additional scenario domains"].strip()
+    optional_domains = (
+        []
+        if additional_domains.casefold()
+        == "no additional scenario domains are required"
+        else _optional_domain_mappings(additional_domains)
+    )
+    if not optional_domains and additional_domains.casefold() != (
+        "no additional scenario domains are required"
+    ):
+        raise WorkdayConnectContractError(
+            "Additional scenario domains must be 'No additional scenario "
+            "domains are required' or one 'Domain | supported scenario' "
+            "mapping per line."
+        )
     identifiers = state.get("identifiers") or {}
     response: dict[str, Any] = {
         "identityProviderOutcome": "verified-entra-issuer",
@@ -211,16 +201,8 @@ def parse_workday_admin_return_worksheet(
                 "A new client was registered": "new-client-registered",
             },
         ),
-        "clientGrantType": _worksheet_choice(
-            values,
-            "Client grant type",
-            {"SAML Bearer": "saml-bearer"},
-        ),
-        "includeWorkdayOwnedScope": _worksheet_choice(
-            values,
-            "Workday owned scope",
-            {"Yes": "yes"},
-        ),
+        "clientGrantType": "saml-bearer",
+        "includeWorkdayOwnedScope": "yes",
         "oauthTokenUrl": values["OAuth token URL"],
         "restBaseUrl": values["REST base URL"],
         "soapBaseUrl": values["SOAP base URL"],
@@ -267,57 +249,27 @@ def parse_workday_admin_return_worksheet(
         ),
         "publicWorkerReportsOutcome": _worksheet_choice(
             values,
-            "Public worker reports",
-            {"Yes, Get permission is verified": "get-permission-verified"},
+            "Required employee access",
+            {
+                (
+                    "Yes, Get permission is verified for Public Worker "
+                    "Reports and Integration Permissions"
+                ): "get-permission-verified",
+            },
         ),
         "integrationPermissionsGetOutcome": _worksheet_choice(
             values,
-            "Integration permissions",
-            {"Yes, Get permission is verified": "get-permission-verified"},
+            "Required employee access",
+            {
+                (
+                    "Yes, Get permission is verified for Public Worker "
+                    "Reports and Integration Permissions"
+                ): "get-permission-verified",
+            },
         ),
         "functionalAreaScopes": list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES),
         "optionalDomains": optional_domains,
-        "authorizationOutcome": authorization,
     }
-    _worksheet_choice(
-        values,
-        "Functional-area scopes",
-        {
-            "Yes, all four required functional areas are present": "verified",
-        },
-    )
-    if authorization == "task-not-authorized-remediated":
-        response.update(
-            {
-                "authorizationRemediationDomain": _safe_nonsecret_text(
-                    values["Affected Workday security domain"],
-                    "Affected Workday security domain",
-                ),
-                "authorizationRemediationScenario": _safe_nonsecret_text(
-                    values["Scenario retested after remediation"],
-                    "Scenario retested after remediation",
-                ),
-                "authorizationRetestOutcome": _worksheet_choice(
-                    values,
-                    "Authorization retest",
-                    {
-                        "Verified after remediation": ("verified-after-remediation"),
-                    },
-                ),
-            }
-        )
-    elif any(
-        values[label].strip()
-        for label in (
-            "Affected Workday security domain",
-            "Scenario retested after remediation",
-            "Authorization retest",
-        )
-    ):
-        raise WorkdayConnectContractError(
-            "Authorization remediation fields must be blank when no bounded "
-            "remediation was required."
-        )
     return response
 
 
@@ -556,20 +508,6 @@ def build_workday_admin_packet(
                 "exampleValue": "An existing approved client was verified",
             },
             {
-                "information": "Client grant type",
-                "fields": ["clientGrantType"],
-                "portalLocation": "View API Client -> Client Grant Type",
-                "instruction": "Record the configured grant type.",
-                "exampleValue": "SAML Bearer",
-            },
-            {
-                "information": "Workday owned scope",
-                "fields": ["includeWorkdayOwnedScope"],
-                "portalLocation": "View API Client -> Include Workday Owned Scope",
-                "instruction": "Record whether the setting is enabled.",
-                "exampleValue": "Yes",
-            },
-            {
                 "information": "OAuth token URL",
                 "fields": ["oauthTokenUrl"],
                 "portalLocation": "View API Client -> Token Endpoint",
@@ -628,97 +566,48 @@ def build_workday_admin_packet(
                 ),
             },
             {
-                "information": "Public worker reports",
-                "fields": ["publicWorkerReportsOutcome"],
-                "portalLocation": (
-                    "Domain Security Policies for Functional Area -> Worker "
-                    "Data: Public Worker Reports"
-                ),
-                "instruction": "Confirm Get permission is granted.",
-                "exampleValue": "Yes, Get permission is verified",
-            },
-            {
-                "information": "Integration permissions",
-                "fields": ["integrationPermissionsGetOutcome"],
-                "portalLocation": (
-                    "Domain Security Policies for Functional Area -> "
-                    "Integration Permissions"
-                ),
-                "instruction": "Confirm Get permission is granted.",
-                "exampleValue": "Yes, Get permission is verified",
-            },
-            {
-                "information": "Functional-area scopes",
-                "fields": ["functionalAreaScopes"],
+                "information": "API client access",
+                "fields": [
+                    "clientGrantType",
+                    "includeWorkdayOwnedScope",
+                    "functionalAreaScopes",
+                ],
                 "portalLocation": "View API Client -> Functional Areas",
                 "instruction": (
-                    "Confirm Core Payroll, Organizations and Roles, Staffing, "
-                    "and Time Off and Leave are all present."
+                    "Confirm SAML Bearer, Include Workday Owned Scope, and "
+                    "Core Payroll, Organizations and Roles, Staffing, and "
+                    "Time Off and Leave."
                 ),
                 "exampleValue": (
-                    "Yes, all four required functional areas are present"
+                    "Yes, SAML Bearer, Workday Owned Scope, and all four "
+                    "required functional areas are configured"
                 ),
             },
             {
-                "information": "Optional domains",
+                "information": "Required employee access",
+                "fields": [
+                    "publicWorkerReportsOutcome",
+                    "integrationPermissionsGetOutcome",
+                ],
+                "portalLocation": "Domain Security Policies for Functional Area",
+                "instruction": (
+                    "Confirm Get permission on Worker Data: Public Worker "
+                    "Reports and Integration Permissions."
+                ),
+                "exampleValue": (
+                    "Yes, Get permission is verified for Public Worker "
+                    "Reports and Integration Permissions"
+                ),
+            },
+            {
+                "information": "Additional scenario domains",
                 "fields": ["optionalDomains"],
                 "portalLocation": "Additional domain security policy review",
                 "instruction": (
-                    "Record whether custom scenarios require extra domains."
+                    "Enter 'No additional scenario domains are required', or "
+                    "one Domain | supported scenario mapping per line."
                 ),
-                "exampleValue": "No additional domains are required",
-            },
-            {
-                "information": "Additional domain mappings",
-                "fields": ["optionalDomains"],
-                "portalLocation": "Additional domain security policy review",
-                "instruction": (
-                    "When required, enter one mapping per line as Domain | "
-                    "supported scenario; otherwise leave blank."
-                ),
-                "exampleValue": (
-                    "Worker Data | custom worker lookup<br>"
-                    "Absence | custom leave lookup"
-                ),
-            },
-            {
-                "information": "Authorization",
-                "fields": ["authorizationOutcome"],
-                "portalLocation": "Signed-in employee authorization retest",
-                "instruction": "Record the final authorization result.",
-                "exampleValue": "Verified without an authorization error",
-            },
-            {
-                "information": "Affected Workday security domain",
-                "fields": ["authorizationRemediationDomain"],
-                "portalLocation": "Affected Workday domain security policy",
-                "instruction": (
-                    "Only when Task not authorized was remediated, record the "
-                    "Workday security domain whose permission changed; "
-                    "otherwise leave blank."
-                ),
-                "exampleValue": "Worker Data: Public Worker Reports",
-            },
-            {
-                "information": "Scenario retested after remediation",
-                "fields": ["authorizationRemediationScenario"],
-                "portalLocation": "Signed-in employee authorization retest",
-                "instruction": (
-                    "Only when remediation was required, record the named "
-                    "supported scenario that was successfully retested; "
-                    "otherwise leave blank."
-                ),
-                "exampleValue": "Check vacation balance",
-            },
-            {
-                "information": "Authorization retest",
-                "fields": ["authorizationRetestOutcome"],
-                "portalLocation": "Signed-in employee authorization retest",
-                "instruction": (
-                    "When remediation was required, record the retest outcome; "
-                    "otherwise leave blank."
-                ),
-                "exampleValue": "Verified after remediation",
+                "exampleValue": "No additional scenario domains are required",
             },
         ],
         "informationToReturn": [
@@ -733,8 +622,7 @@ def build_workday_admin_packet(
             "Workday Owned Scope outcome",
             "Configured employee rollout population and Integration "
             "Permissions > Get outcome for Worker Data: Public Worker Reports",
-            "Any optional domain permission, its supported scenario, and the "
-            "employee retest outcome",
+            "Any additional domain permission and its supported scenario",
             "Authentication-policy outcome and network-readiness outcome",
         ],
         "responseForm": {
@@ -759,7 +647,6 @@ def build_workday_admin_packet(
                 "integrationPermissionsGetOutcome",
                 "functionalAreaScopes",
                 "optionalDomains",
-                "authorizationOutcome",
             ],
             "collection": {
                 "mode": "labeled-worksheet",
@@ -1067,7 +954,6 @@ def validate_workday_admin_response(
         "rolloutType",
         "publicWorkerReportsOutcome",
         "integrationPermissionsGetOutcome",
-        "authorizationOutcome",
     }
     values.update(
         {key: _required_text(response, key, key) for key in least_privilege_required}
@@ -1099,11 +985,6 @@ def validate_workday_admin_response(
             "integrationPermissionsGetOutcome must confirm Get permission "
             "under Integration Permissions."
         )
-    if values["authorizationOutcome"] not in WORKDAY_AUTHORIZATION_OUTCOMES:
-        raise WorkdayConnectContractError(
-            "authorizationOutcome must confirm verification or bounded "
-            "Task not authorized remediation."
-        )
     supplied_functional_area_scopes = _safe_string_list(
         response.get("functionalAreaScopes"),
         "Workday functionalAreaScopes",
@@ -1122,8 +1003,16 @@ def validate_workday_admin_response(
     functional_area_scopes = list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES)
     optional_domains = _optional_domains(response.get("optionalDomains"))
     remediation_evidence: dict[str, str] = {}
-    if values["authorizationOutcome"] == "task-not-authorized-remediated":
-        remediation_evidence = {
+    legacy_authorization = str(response.get("authorizationOutcome") or "").strip()
+    if legacy_authorization:
+        if legacy_authorization not in WORKDAY_AUTHORIZATION_OUTCOMES:
+            raise WorkdayConnectContractError(
+                "authorizationOutcome is unsupported."
+            )
+        remediation_evidence["authorizationOutcome"] = legacy_authorization
+    if legacy_authorization == "task-not-authorized-remediated":
+        remediation_evidence.update(
+            {
             "authorizationRemediationDomain": _safe_nonsecret_text(
                 response.get("authorizationRemediationDomain"),
                 "authorizationRemediationDomain",
@@ -1137,7 +1026,8 @@ def validate_workday_admin_response(
                 "authorizationRetestOutcome",
                 "authorizationRetestOutcome",
             ),
-        }
+            }
+        )
         if (
             remediation_evidence["authorizationRetestOutcome"]
             not in WORKDAY_AUTHORIZATION_RETEST_OUTCOMES
@@ -1171,7 +1061,6 @@ def validate_workday_admin_response(
             ],
             "functionalAreaScopes": functional_area_scopes,
             "optionalDomains": optional_domains,
-            "authorizationOutcome": values["authorizationOutcome"],
             **remediation_evidence,
         },
         "partialEvidence": {
@@ -1195,7 +1084,6 @@ def validate_workday_admin_response(
             ],
             "functionalAreaScopes": functional_area_scopes,
             "optionalDomains": optional_domains,
-            "authorizationOutcome": values["authorizationOutcome"],
             **remediation_evidence,
         },
     }

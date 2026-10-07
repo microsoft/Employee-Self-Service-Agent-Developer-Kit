@@ -1380,18 +1380,11 @@ def test_retired_cli_operations_do_not_persist_blockers(
 
     store = WorkdayConnectStore(tmp_path)
     original = store.initialize()
-    evidence_file = tmp_path / "retired-evidence.json"
-    evidence_file.write_text("{}", encoding="utf-8")
     invocations = (
         (
             "begin-employee-test",
             [],
             "runtime-evidence windows have been retired",
-        ),
-        (
-            "record-validation-failure",
-            ["--evidence-file", str(evidence_file)],
-            "failure recording has been retired",
         ),
     )
 
@@ -1826,8 +1819,9 @@ def test_record_agent_binding_rejects_manual_boolean_evidence(
         )
 
 
-def test_record_validation_failure_is_retired(
+def test_record_validation_failure_tracks_maker_authorization_remediation(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     import pytest
 
@@ -1869,32 +1863,79 @@ def test_record_validation_failure_is_retired(
                 evidence=evidence,
             )
         store.set_phase_status(phase_id, "complete")
-    attempt = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
     evidence_file = tmp_path / "employee-failure.json"
     evidence_file.write_text(
         json.dumps(
             {
                 "remediationId": "WD-E2E-006",
-                "timestamp": attempt["startedAt"],
+                "scenarioName": "Check vacation balance",
+                "affectedDomain": "Worker Data: Public Worker Reports",
+                "timestamp": "2026-10-06T01:00:00Z",
             }
         ),
         encoding="utf-8",
     )
 
+    result = workday_connect._record_validation_failure(
+        SimpleNamespace(evidence_file=evidence_file),
+        store,
+    )
+
+    phase = store.load()["phases"]["employee-validation"]
+    assert result["recorded"] is True
+    assert phase["status"] == "blocked"
+    assert phase["blocker"]["scenarioName"] == "Check vacation balance"
+    assert phase["blocker"]["affectedDomain"] == (
+        "Worker Data: Public Worker Reports"
+    )
+
+    success_file = tmp_path / "maker-validation.json"
+    success_file.write_text(
+        json.dumps(
+            {
+                "testUserCategory": "maker",
+                "scenarioName": "Check worker profile",
+                "timestamp": "2026-10-06T01:10:00Z",
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
     with pytest.raises(
-        workday_connect.WorkdayConnectStoreError,
-        match="failure recording has been retired",
+        workday_connect.WorkdayConnectContractError,
+        match="same named scenario",
     ):
-        workday_connect._record_validation_failure(
-            SimpleNamespace(evidence_file=evidence_file),
+        workday_connect._record_validation(
+            SimpleNamespace(evidence_file=success_file),
             store,
         )
 
-    phase = store.load()["phases"]["employee-validation"]
-    assert phase["status"] == "active"
-    assert phase["blocker"] is None
+    success_file.write_text(
+        json.dumps(
+            {
+                "testUserCategory": "maker",
+                "scenarioName": "Check vacation balance",
+                "timestamp": "2026-10-06T01:10:00Z",
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workday_connect, "_run_final_readiness", lambda _store: None)
+    result = workday_connect._record_validation(
+        SimpleNamespace(evidence_file=success_file),
+        store,
+    )
+
+    assert result["lifecycleComplete"] is True
+    maker_evidence = store.load()["phases"]["employee-validation"]["evidence"][0]
+    assert maker_evidence["scenarioName"] == "Check vacation balance"
+    assert maker_evidence["authorizationRemediationDomain"] == (
+        "Worker Data: Public Worker Reports"
+    )
+    assert maker_evidence["authorizationRetestOutcome"] == (
+        "verified-after-remediation"
+    )
 
 
 def test_invalid_validation_retry_preserves_stable_failure_evidence(

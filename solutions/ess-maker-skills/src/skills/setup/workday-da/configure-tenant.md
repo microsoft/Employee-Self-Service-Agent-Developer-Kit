@@ -275,14 +275,17 @@ must contain all required evidence:
   registered;
 - exact client grant type and Include Workday Owned Scope outcome;
 - rollout type: entire workforce or limited/test;
-- `Worker Data: Public Worker Reports` Get-permission outcome;
-- `Integration Permissions > Get` outcome;
-- confirmation that all four required API functional-area scopes are present;
+- API-client access: SAML Bearer, Include Workday Owned Scope, and all four
+  required functional-area scopes;
+- required employee access: Get permission for both `Worker Data: Public
+  Worker Reports` and `Integration Permissions`;
 - any additional domain paired with its named supported scenario, only when
-  custom ESS scenarios require one;
-- authorization outcome, including whether a bounded `Task not authorized`
-  remediation was required; when it was, the affected domain, named scenario,
-  and successful retest outcome.
+  custom ESS scenarios require one.
+
+Do not ask the Workday administrator to run an agent scenario or report an
+authorization result in this phase. Connections and runtime configuration do
+not exist yet. A maker-observed `Task not authorized` result is handled only
+during Phase 6 after the same named scenario can be retested.
 
 The worksheet definition below is an internal mapping reference for the exact
 successful values accepted by the controller. Do not render it after the
@@ -336,21 +339,6 @@ and verified certificate expiration date when building the table:
     "allowFreeformInput": false
   },
   {
-    "header": "Client grant type",
-    "question": "What client grant type is configured?",
-    "options": [
-      { "label": "SAML Bearer" },
-      { "label": "Another grant type or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Workday owned scope",
-    "question": "Is Include Workday Owned Scope set to Yes?",
-    "options": [{ "label": "Yes" }, { "label": "No or not sure" }],
-    "allowFreeformInput": false
-  },
-  {
     "header": "OAuth token URL",
     "question": "Enter the OAuth token URL shown by Workday."
   },
@@ -395,73 +383,28 @@ and verified certificate expiration date when building the table:
     "allowFreeformInput": false
   },
   {
-    "header": "Public worker reports",
-    "question": "Was Get permission verified for Worker Data: Public Worker Reports?",
+    "header": "API client access",
+    "question": "Did the administrator verify SAML Bearer, Include Workday Owned Scope, and all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
     "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Integration permissions",
-    "question": "Was Get permission verified under Integration Permissions?",
-    "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Functional-area scopes",
-    "question": "Did the administrator verify that the API client includes all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
-    "options": [
-      { "label": "Yes, all four required functional areas are present" },
-      { "label": "No, one or more required functional areas are missing" },
+      { "label": "Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured" },
+      { "label": "No, one or more API client access settings are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Optional domains",
-    "question": "Are additional Workday domains required for named custom ESS scenarios beyond the standard setup?",
+    "header": "Required employee access",
+    "question": "Did the administrator verify Get permission for both Worker Data: Public Worker Reports and Integration Permissions?",
     "options": [
-      { "label": "No additional domains are required" },
-      { "label": "Yes, additional supported scenarios require domains" },
+      { "label": "Yes, Get permission is verified for Public Worker Reports and Integration Permissions" },
+      { "label": "No, one or both required permissions are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Additional domain mappings",
-    "question": "Only when additional domains are required: enter one per line as Domain | supported scenario. Otherwise leave this blank."
-  },
-  {
-    "header": "Authorization",
-    "question": "What was the final authorization result after the employee security changes?",
-    "options": [
-      { "label": "Verified without an authorization error" },
-      { "label": "Task not authorized was remediated and retested" },
-      { "label": "Task not authorized is unresolved" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Affected Workday security domain",
-    "question": "Only when Task not authorized was remediated: enter the Workday security domain whose permission changed, such as Worker Data: Public Worker Reports. Otherwise leave blank."
-  },
-  {
-    "header": "Scenario retested after remediation",
-    "question": "Only when Task not authorized was remediated: enter the named supported scenario that was successfully retested, such as Check vacation balance. Otherwise leave blank."
-  },
-  {
-    "header": "Authorization retest",
-    "question": "Only when Task not authorized was remediated: was the same scenario retested successfully?",
-    "options": [
-      { "label": "Verified after remediation" },
-      { "label": "Not retested or still failing" }
-    ],
-    "allowFreeformInput": false
+    "header": "Additional scenario domains",
+    "question": "Enter 'No additional scenario domains are required', or enter one required mapping per line as Domain | supported scenario."
   }
 ]
 ```

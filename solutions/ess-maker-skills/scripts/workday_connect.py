@@ -38,6 +38,7 @@ from workday_connect_evidence_contracts import (
     WorkdayConnectContractError,
     validate_agent_binding_evidence,
     validate_employee_evidence,
+    validate_employee_failure_evidence,
 )
 from workday_connect_flightcheck import (
     WorkdayConnectFlightCheckError,
@@ -861,15 +862,6 @@ def _record_workday_admin(
             "workday-admin",
             "collecting-evidence",
             valid_fields=result["partialEvidence"],
-            invalid_fields=(
-                [
-                    "authorizationRemediationDomain",
-                    "authorizationRemediationScenario",
-                    "authorizationRetestOutcome",
-                ]
-                if result["evidence"]["authorizationOutcome"] == "verified"
-                else []
-            ),
         )
     store.complete_action(
         "workday-admin",
@@ -1154,6 +1146,33 @@ def _record_validation(
                 "timestamp": evidence["timestamp"],
                 "outcome": evidence["outcome"],
             }
+            blocker = phase.get("blocker")
+            if (
+                isinstance(blocker, Mapping)
+                and blocker.get("remediationId") == "WD-E2E-006"
+            ):
+                scenario_name = str(evidence.get("scenarioName") or "").strip()
+                if scenario_name != blocker.get("scenarioName"):
+                    raise WorkdayConnectContractError(
+                        "Retest the same named scenario that observed "
+                        "'Task not authorized'."
+                    )
+                maker_evidence.update(
+                    {
+                        "scenarioName": scenario_name,
+                        "authorizationOutcome": (
+                            "task-not-authorized-remediated"
+                        ),
+                        "authorizationRemediationDomain": blocker[
+                            "affectedDomain"
+                        ],
+                        "authorizationRetestOutcome": (
+                            "verified-after-remediation"
+                        ),
+                    }
+                )
+            elif evidence.get("scenarioName"):
+                maker_evidence["scenarioName"] = evidence["scenarioName"]
             replayed = (
                 phase["status"] == "complete"
                 and _action_evidence(
@@ -1225,13 +1244,48 @@ def _abandon_employee_test(
 
 
 def _record_validation_failure(
-    _args: argparse.Namespace,
-    _store: WorkdayConnectStore,
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    raise WorkdayConnectRetiredOperationError(
-        "Employee runtime-evidence failure recording has been retired. "
-        "Resolve maker Test pane failures before completing maker validation."
+    evidence = validate_employee_failure_evidence(
+        _json_input(args, "evidence", "maker validation failure")
     )
+    if evidence["remediationId"] != "WD-E2E-006":
+        raise WorkdayConnectRetiredOperationError(
+            "Only a maker-observed 'Task not authorized' result uses this "
+            "focused remediation path. Resolve other Test pane failures "
+            "before completing maker validation."
+        )
+    if not evidence.get("scenarioName") or not evidence.get("affectedDomain"):
+        raise WorkdayConnectContractError(
+            "A named failed scenario and the affected Workday security "
+            "domain are required for 'Task not authorized' remediation."
+        )
+    state = store.load()
+    if state["phases"]["runtime"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete runtime configuration before recording Maker "
+            "validation remediation."
+        )
+    store.set_phase_status(
+        "employee-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation",
+            "errorType": "WorkdayAuthorizationRemediationRequired",
+            "message": (
+                "The maker observed 'Task not authorized'. Correct the "
+                "recorded Workday domain and retest the same scenario."
+            ),
+            **evidence,
+        },
+    )
+    return {
+        "recorded": True,
+        "remediationId": evidence["remediationId"],
+        "scenarioName": evidence["scenarioName"],
+        "status": store.status(),
+    }
 
 
 def _preflight(
