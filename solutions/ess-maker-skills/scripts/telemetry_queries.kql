@@ -95,6 +95,43 @@ essmakerkit_flightcheck_check
 
 
 // -----------------------------------------------------------------------------
+// 3b) BLOCKED, SPLIT BY CAUSE  (blockReason — schema 1.5)
+//     The verdict donut shows a single Blocked wedge. blockReason splits it by
+//     cause so admin-API authorization denials (HTTP 401/403, AADSTS*) are
+//     countable on their own, separate from "admin API unreachable"
+//     (adminApiUnavailable: 404 wrong-env, 5xx, timeout) and non-auth blocks.
+//     Enum: adminApiAuthorization | adminApiUnavailable | checkpointContract |
+//           profileCardinality | evidenceAmbiguous | other.
+//     Empty blockReason on a blocked row = pre-1.5 data (not classified).
+//
+// Customers (tenants) and runs blocked by admin-API AUTHORIZATION, by week.
+// Excludes internal tenants so the signal reflects real customers.
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(90d)
+| where tenantClass != "internal"
+| where blockReason == "adminApiAuthorization"
+| summarize BlockedRuns = count(), BlockedCustomers = dcount(tenantId)
+          by bin(EventInfo_Time, 7d)
+| order by EventInfo_Time asc
+
+// Full breakdown: runs + distinct customers per block cause (last 30d).
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| where tenantClass != "internal"
+| where isnotempty(blockReason)
+| summarize Runs = count(), Customers = dcount(tenantId) by blockReason
+| order by Runs desc
+
+// Which checks drive the admin-API auth blocks (check-level drill-down).
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d)
+| where tenantClass != "internal"
+| where blockReason == "adminApiAuthorization"
+| summarize Checks = count(), Customers = dcount(tenantId) by checkpointId, category
+| order by Checks desc
+
+
+// -----------------------------------------------------------------------------
 // 4) RUNS-TO-FIX  (ADO 7590586)
 //    On which sequential run does a previously-FAILING check first PASS,
 //    per (environment, agent, user)? Buckets: 2nd / 3rd / 4th / 5+ runs.
