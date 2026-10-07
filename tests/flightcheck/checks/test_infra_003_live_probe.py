@@ -237,7 +237,6 @@ class TestLiveProbeIndeterminate:
         assert "necessary but not sufficient" not in row.result
         # Guidance points back at the egress probe + manual verification.
         assert "--runtime-reachability" in row.remediation
-        assert "/connect " not in row.remediation
         assert Role.WORKDAY_ADMIN.value in row.roles
         assert Role.POWER_PLATFORM_ADMIN.value in row.roles
 

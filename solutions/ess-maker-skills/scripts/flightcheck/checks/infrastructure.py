@@ -942,7 +942,7 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     "be created, activated, or triggered, or no endpoint URL is "
                     "recorded for the system. Re-run /flightcheck --scope "
                     "infrastructure --runtime-reachability to retry, confirm the "
-                    "recorded endpoint URL is correct, or verify "
+                    "endpoint URL recorded during /connect is correct, or verify "
                     "allowlisting manually:\n\n"
                     + _infra_003_manual_verification()
                 ),
