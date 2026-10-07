@@ -29,7 +29,7 @@
       },
       {
         "command": "essMaker.runCreate",
-        "title": "ESS Maker: Create a topic",
+        "title": "ESS Maker: Create a topic (Coming Soon)",
         "category": "ESS Maker"
       },
       {
@@ -64,7 +64,7 @@
       },
       {
         "command": "essMaker.runUpdate",
-        "title": "Agent Developer Kit: Modify a topic",
+        "title": "Agent Developer Kit: Modify a topic (Coming Soon)",
         "category": "Agent Developer Kit"
       },
       {

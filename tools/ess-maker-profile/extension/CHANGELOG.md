@@ -5,7 +5,8 @@
 - **Topic actions stop at the DA capability gate.** **Create a topic** and
   **Update a topic** now send explicit topic intent so direct and legacy
   commands show the applicable "not yet available" message instead of entering
-  retained legacy authoring flows.
+  retained legacy authoring flows. Their extension labels include **(Coming
+  Soon)** so availability is clear before the maker selects either action.
 
 ## 0.4.34 (POC)
 
