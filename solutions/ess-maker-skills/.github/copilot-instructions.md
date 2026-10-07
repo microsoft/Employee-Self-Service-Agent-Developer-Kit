@@ -1,14 +1,12 @@
 # ESS Maker Kit — Copilot Instructions
 
-## MANDATORY FIRST MAKER KIT ACTION — Do This Before Anything Else
+## MANDATORY FIRST ACTION — Do This Before Anything Else
 
-**After the Maker Kit catalog is established as available from the current
-folder, YOUR VERY FIRST ACTION under these instructions must be to use your file
+**YOUR VERY FIRST ACTION on every new conversation must be: use your file
 reading tool to try to read `.local/setup/config.json`.**
-
-Do NOT respond to the user's message first. Do NOT greet the user first. Do NOT
-list capabilities. Read this file FIRST, then decide what to do based on the
-result.
+Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
+the user first. Do NOT list capabilities. Read this file FIRST, then decide what
+to do based on the result.
 
 ### If setup is missing or not ready
 
