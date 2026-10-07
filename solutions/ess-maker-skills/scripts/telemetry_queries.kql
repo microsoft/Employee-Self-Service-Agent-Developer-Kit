@@ -105,10 +105,11 @@ essmakerkit_flightcheck_check
 //     Empty blockReason on a blocked row = pre-1.5 data (not classified).
 //
 // Customers (tenants) and runs blocked by admin-API AUTHORIZATION, by week.
-// Excludes internal tenants so the signal reflects real customers.
+// Counts real customers only: tenantClass must be "customer" and tenantId
+// must be non-empty (excludes internal, unknown, and empty/synthetic tenants).
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(90d)
-| where tenantClass != "internal"
+| where tenantClass == "customer" and isnotempty(tenantId)
 | where blockReason == "adminApiAuthorization"
 | summarize BlockedRuns = count(), BlockedCustomers = dcount(tenantId)
           by bin(EventInfo_Time, 7d)
@@ -117,7 +118,7 @@ essmakerkit_flightcheck_run
 // Full breakdown: runs + distinct customers per block cause (last 30d).
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
-| where tenantClass != "internal"
+| where tenantClass == "customer" and isnotempty(tenantId)
 | where isnotempty(blockReason)
 | summarize Runs = count(), Customers = dcount(tenantId) by blockReason
 | order by Runs desc
@@ -125,7 +126,7 @@ essmakerkit_flightcheck_run
 // Which checks drive the admin-API auth blocks (check-level drill-down).
 essmakerkit_flightcheck_check
 | where EventInfo_Time > ago(30d)
-| where tenantClass != "internal"
+| where tenantClass == "customer" and isnotempty(tenantId)
 | where blockReason == "adminApiAuthorization"
 | summarize Checks = count(), Customers = dcount(tenantId) by checkpointId, category
 | order by Checks desc

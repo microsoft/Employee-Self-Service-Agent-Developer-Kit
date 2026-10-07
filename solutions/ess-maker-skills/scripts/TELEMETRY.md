@@ -144,6 +144,22 @@ Nuances:
 - **Pre-1.5 data:** an empty `blockReason` on a blocked row is an event emitted
   before this field shipped, not a classification of "no reason."
 
+### Coverage boundary (known gap, tracked as follow-up)
+
+`adminApiAuthorization` is emitted only when a required admin-API client
+raises on the authorization/binding path, where `cli._classify_client_block`
+sees the HTTP 401/403 or `AADSTS*` error. The Graph and Power Platform admin
+clients normalize *later* API responses into structured error dicts rather
+than raising, so a **post-auth** authorization denial (a 401/403 returned by
+a data call after the client already authenticated) may bypass the classifier
+and surface as a `Failed` check or `adminApiUnavailable`, not
+`adminApiAuthorization`. This path is not exercised by an automated test
+because there is no safe test tenant that reliably returns a post-auth
+401/403 without side effects. Treat the `adminApiAuthorization` count as a
+**lower bound** on admin-API authorization blocks, and track closing this gap
+(classify normalized client error dicts, add a tenant-free regression) as
+follow-up work.
+
 See `telemetry_queries.kql` section 3b for the customers-and-runs-blocked
 queries.
 
