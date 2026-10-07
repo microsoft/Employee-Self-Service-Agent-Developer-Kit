@@ -731,6 +731,7 @@ config = {
     'configVersion': 1,
     'setup': 'flightcheck-only',
     'dataverseEndpoint': sys.argv[1],
+    'ring': sys.argv[6],
     'flightCheckOnly': True,
     'agent': {
         'name': sys.argv[2],
@@ -750,11 +751,38 @@ config = {
     }] if sys.argv[3] else [],
     'activeAgent': 'flightcheck-only' if sys.argv[3] else ''
 }
-with open(sys.argv[6], 'w', encoding='utf-8') as f:
+with open(sys.argv[7], 'w', encoding='utf-8') as f:
     json.dump(config, f, indent=4)
-" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$CONFIG_PATH"
+" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$RING" "$CONFIG_PATH"
         ok "Created $CONFIG_PATH"
     fi
+
+    # Reuse the retained config's ring, infer it from a saved environment API
+    # endpoint, or migrate a legacy config with the requested/default ring.
+    # Print only the effective ring so command substitution remains bounded.
+    RING=$("$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+path, requested = sys.argv[1:3]
+with open(path, encoding='utf-8') as f:
+    config = json.load(f)
+ring = str(config.get('ring') or '').strip().lower()
+endpoint = str(config.get('powerPlatformApiEndpoint') or '').strip().lower()
+if not ring:
+    if 'api.test.powerplatform.com' in endpoint:
+        ring = 'test'
+    elif 'api.preprod.powerplatform.com' in endpoint:
+        ring = 'preprod'
+    elif 'api.powerplatform.com' in endpoint:
+        ring = 'prod'
+if not ring:
+    ring = requested
+if ring not in {'prod', 'preprod', 'test'}:
+    raise SystemExit(f\"Unsupported Power Platform ring in existing config: {ring}\")
+config['ring'] = ring
+with open(path, 'w', encoding='utf-8') as f:
+    json.dump(config, f, indent=4)
+print(ring)
+" "$CONFIG_PATH" "$RING")
 
     # --- Read config values if they came from an existing file ---
     if [[ -z "$BOT_ID" && -f "$CONFIG_PATH" ]]; then
@@ -793,10 +821,9 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --ring <RING>: the FlightCheck-only installer discovers environments via
     # BAP prod (api.bap.microsoft.com) by default, so we target the prod
     # service ring unless the caller overrode RING (typically a PM validating
-    # a preprod/test environment). Without this flag FlightCheck's --scope
-    # full aborts with "The Power Platform environment ring is unavailable"
-    # because the installer-authored config.json only carries dataverseEndpoint
-    # (no powerPlatformApiEndpoint from which FC could infer the ring).
+    # a preprod/test environment). Persisting the ring supports later
+    # /flightcheck runs; forwarding it explicitly also covers this first run
+    # and older configs.
     "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring "$RING"
     exit $?
 fi

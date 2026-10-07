@@ -483,18 +483,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "prod"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -539,18 +550,29 @@ class TestGates:
         monkeypatch.chdir(tmp_path)
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "test"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert (
                     environment_id
                     == "00000000-0000-4000-8000-000000001111"
                 )
-                return [{"currencyType": "MCSMessages", "allocated": 100}]
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 100},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
@@ -576,17 +598,28 @@ class TestGates:
         )
 
         class _PowerPlatform:
-            def __init__(self, tenant_id: str) -> None:
+            def __init__(self, tenant_id: str, *, ring: str) -> None:
                 assert tenant_id == "organizations"
+                assert ring == "prod"
 
             def authenticate(self) -> str:
                 return "token"
 
-            def get_currency_allocations(self, environment_id: str):
+            def get_environment_entitlements(self, environment_id: str):
                 assert environment_id == (
                     "00000000-0000-4000-8000-000000001111"
                 )
-                return []
+                return {
+                    "items": [{
+                        "entitlementId": "MCSMessages",
+                        "entitlement": {
+                            "capacity": {
+                                "allocated": {"value": 0},
+                            },
+                        },
+                    }],
+                    "_status": 200,
+                }
 
         monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
 
