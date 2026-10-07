@@ -132,7 +132,10 @@ def _check_connections(runner) -> list[CheckResult]:
         connector_keyword=["service-now", "servicenow"],
         checkpoint_prefix="SN-CONN",
         category="ServiceNow",
-        not_found_remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
+        not_found_remediation=(
+            "Guided ServiceNow setup is not yet available in ADK. You can configure the "
+            "ServiceNow connection manually in Copilot Studio or contact admin."
+        ),
         doc_link=f"{DOC_BASE}/servicenow",
         connection_pin=getattr(runner, "servicenow_connection_pin", "") or "",
     )
