@@ -108,6 +108,15 @@ test('landing-page action sends the slash command', () => {
     assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
+test('topic actions send explicit intent through the not-yet-available gates', () => {
+    const create = ACTIONS.find(a => a.id === 'create');
+    const update = ACTIONS.find(a => a.id === 'update');
+    assert.strictEqual(create.label, 'Create a topic (Coming Soon)');
+    assert.strictEqual(update.label, 'Update a topic (Coming Soon)');
+    assert.strictEqual(create.query, 'Create a topic');
+    assert.strictEqual(update.query, 'Update a topic');
+});
+
 test('landing-page action is last, immediately after push', () => {
     assert.deepStrictEqual(ACTIONS.slice(-2).map(action => action.id), ['push', 'landingPage']);
 });
@@ -263,6 +272,20 @@ const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'ut
 test('view container is in activitybar (primary sidebar)', () => {
     assert.ok(pkg.contributes.viewsContainers.activitybar);
     assert.strictEqual(pkg.contributes.viewsContainers.activitybar[0].id, 'essMakerActions');
+});
+
+test('topic command titles are marked coming soon', () => {
+    const commands = new Map(pkg.contributes.commands.map(command => [
+        command.command, command.title,
+    ]));
+    assert.strictEqual(
+        commands.get('essMaker.runCreate'),
+        'ESS Maker: Create a topic (Coming Soon)',
+    );
+    assert.strictEqual(
+        commands.get('essMaker.runUpdate'),
+        'Agent Developer Kit: Modify a topic (Coming Soon)',
+    );
 });
 
 test('quick start view is a tree (no webview type)', () => {

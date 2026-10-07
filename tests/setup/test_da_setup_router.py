@@ -1105,7 +1105,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "Go back",
     ):
         assert f"**{discovery_failure_choice}**" in environment_target
-    assert "custom entry disabled inside the control" in normalized_environment_target
+    assert "custom entry disabled inside the control" not in normalized_environment_target
     assert "authoritative environment-scoped operation" in (
         normalized_environment_target
     )
@@ -1203,10 +1203,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     )
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type an agent name" in normalized
-    assert (
-        "Leave the selection initially unset, and disable custom entry inside "
-        "the control"
-    ) in normalized
+    assert "Leave the selection initially unset." in normalized
     assert "{PRODUCT_ROWS}" in text
     assert "never assume a fixed agent count" in normalized
     assert "Do not ask the maker to type an agent name or number any choice" in normalized
@@ -1363,7 +1360,8 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "followed by every cached sign-in name, then **Help me decide**" in foundation
     assert "For **Help me decide** on the multiple-account surface" in foundation
     assert "separate from GitHub/Copilot sign-in" in foundation
-    assert "custom entry disabled inside the control" in normalized_foundation
+    assert "Allow custom entry" not in foundation
+    assert "custom entry disabled inside the control" not in normalized_foundation
     assert (
         "When no cached account exists, or the maker selects **Use a different "
         "user** or **Use the Microsoft account picker**, omit `--account`"
@@ -1559,7 +1557,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     ]
     assert "**Go back**" in collision_choices
     assert "**Cancel setup**" not in collision_choices
-    assert "disable custom entry inside the control" in " ".join(
+    assert "disable custom entry inside the control" not in " ".join(
         collision_choices.split()
     )
     assert "never repeats the collided request" in " ".join(collision_choices.split())
@@ -1689,7 +1687,7 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "the final secondary choice"
         in normalized_incomplete
     )
-    assert "disable custom entry" in normalized_incomplete
+    assert "disable custom entry" not in normalized_incomplete
     assert "Do not render the ready completion choices" in normalized_incomplete
     assert "durable completion snapshot" in normalized_incomplete
     assert "general post-setup capabilities" in normalized_incomplete
@@ -1757,8 +1755,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "> **Open [{USER_FRIENDLY_AGENT_NAME}]({ACTUAL_AGENT_URL}) "
         "in Classic Copilot Studio.**"
     ) == 1
-    assert "### Runtime readiness" in completion_choices
-    assert "**{overall readiness status}**" in completion_choices
     assert "Next steps:" in completion_choices
     assert (
         "Build `{POST_SETUP_COMMAND_REMINDERS}` from the same recommendation and "
@@ -2272,16 +2268,13 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     ):
         assert readiness_status in text
     assert "### Capacity follow-up" in text
-    assert "local timezone of the machine running setup" in normalized
-    assert "`YYYY-MM-DDTHH:mm:ss`" in text
-    assert "`2026-10-03T01:43:19`" in text
-    assert "Truncate fractional seconds; do not round" in normalized
-    assert "do not rewrite persisted evidence" in normalized
-    assert "omit the displayed time rather than inferring one" in normalized
     assert "Times are shown in your local timezone" not in text
     assert (
-        "We weren’t able to automatically verify capacity for this environment."
+        "We weren’t able to automatically verify capacity for "
+        "**{ENVIRONMENT_DISPLAY_NAME}**."
     ) in text
+    assert "canonical `environment.display_name`" in text
+    assert '--environment-display-name "{ENVIRONMENT_DISPLAY_NAME}"' in text
     assert "Your agent and local authoring workspace are already available." in text
     assert "#### Copilot Studio message capacity" in text
     assert "In the left navigation, select **Licensing**." in text
@@ -2306,7 +2299,8 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     )
     assert "> ⚠️ **Administrator consent required**" in text
     assert (
-        "a **Power Platform administrator is present and has consented to override this capacity check**"
+        "a **Power Platform administrator is present and has consented to "
+        "override the capacity check for {ENVIRONMENT_DISPLAY_NAME}**"
         in normalized
     )
     assert "The original unavailable or denied result remains the recorded evidence." in (
@@ -2469,10 +2463,57 @@ def test_hybrid_workday_config_commands_remain_available() -> None:
         assert (_SOLUTION / script_path).is_file(), name
 
 
-def test_da_local_capabilities_remain_available() -> None:
+def test_da_topic_authoring_is_blocked_before_local_changes() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    normalized_instructions = " ".join(instructions.split())
+    create = (_PROMPTS / "create.prompt.md").read_text(encoding="utf-8")
+    update = (_PROMPTS / "update.prompt.md").read_text(encoding="utf-8")
+    menu = (_PROMPTS / "menu.prompt.md").read_text(encoding="utf-8")
+
+    assert (
+        "Topic creation is not yet available in this release. No local or "
+        "remote files have been changed."
+    ) in " ".join(create.split())
+    assert (
+        "Topic updates are not yet available in this release. No local or "
+        "remote files have been changed."
+    ) in " ".join(update.split())
+    assert "Topic creation is not yet available in this release." in create
+    assert "Topic updates are not yet available in this release." in update
+    assert "Topic creation is not available in this release." not in create
+    assert "Topic updates are not available in this release." not in update
+    for prompt in (create, update):
+        normalized = " ".join(prompt.split())
+        assert "every explicit or implicit request" in normalized.casefold()
+        assert "topic intent, whether explicit or implicit, always wins" in normalized
+        assert "before reading a topic-authoring skill" in normalized
+        assert "or direct file edits" in normalized
+        assert "Render only that message" in normalized
+        assert "do not add product-specific capability claims" in normalized
+        assert "or other alternatives" in normalized
+        assert "or a follow-up question" in normalized
+        assert "tooling that remains visible in this repository is legacy" in normalized
+        assert "It has not been cleared for use with DA" in normalized
+        assert "must not be invoked for direct user requests" in normalized
+    assert (
+        "Create a topic | Stop: topic creation is not yet available"
+        in normalized_instructions
+    )
+    assert (
+        "Update/modify a topic | Stop: topic updates are not yet available"
+        in normalized_instructions
+    )
+    assert "Create a workflow or evaluation test set locally" in menu
+    assert "Update a workflow or evaluation test set locally" in menu
+    assert "Create a topic, workflow" not in menu
+    assert "Update a topic, workflow" not in menu
+
+
+def test_da_workflow_local_authoring_remains_available() -> None:
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         normalized = " ".join(prompt.split()).casefold()
+        assert "workflow" in normalized, name
         assert "continue with local authoring" in normalized, name
         assert "skip every instruction to push, publish" in normalized, name
 

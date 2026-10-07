@@ -74,6 +74,7 @@ shared_commondataserviceforapps=Premium, shared_conversionservice=Standard.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import re
 from pathlib import Path
 
@@ -764,15 +765,14 @@ def run_licensing_checks(runner) -> list[CheckResult]:
 # which sizes the shared/published population) and the skill-1 Environment
 # surface (ENV-CAPACITY-001 "is capacity provisioned?" check, which runs before
 # the agent exists and therefore has no population to size against). The
-# allocation read and the PayG-aware status decision live here so the two
+# entitlement read and the PayG-aware status decision live here so the two
 # callers can't drift; each caller still owns its own human-readable result /
 # remediation phrasing (population-aware vs provisioned-only).
 # ---------------------------------------------------------------------------
 
-# Copilot Studio message capacity in the Power Platform Licensing
-# "currency allocation" API (ExternalCurrencyType enum). The Sept 2025 rename
-# to "Copilot Credits" did not change this API contract value.
-_MCS_MESSAGES_CURRENCY = "MCSMessages"
+# Copilot Studio message capacity entitlement ID in the Power Platform
+# Licensing API. The Sept 2025 rename to "Copilot Credits" did not change it.
+_MCS_MESSAGES_ENTITLEMENT_ID = "MCSMessages"
 
 # Capacity remediation anchors shared by PRE-004/PRE-006 and ENV-CAPACITY-001.
 # The prepaid-capacity / message-credit model is documented on the Copilot
@@ -789,41 +789,15 @@ _CAPACITY_PORTAL = (
 _M365_ADMIN_CENTER = "[Microsoft 365 admin center](https://admin.microsoft.com)"
 
 
-def _env_mcs_allocation(powerplatform, env_id) -> int | None:
-    """Copilot Studio message capacity allocated to *this* environment.
-
-    ``_has_prepaid_messages`` is tenant-wide (Graph ``subscribedSkus``), so it
-    cannot tell whether the *target* environment actually has capacity — only
-    that the tenant owns some. This reads the per-environment prepaid
-    allocation via the Power Platform Licensing currency-allocation API so
-    PRE-005 can catch the case where a tenant holds capacity but none is
-    allocated to the environment under test.
-
-    Returns:
-      - ``int``  — MCSMessages units allocated to the environment. ``0`` means
-        the read succeeded and this environment has no dedicated allocation.
-      - ``None`` — could not determine (no client, no env id, permission
-        denied, or the call failed); the caller must fall back to the
-        tenant-wide signal.
-    """
-    allocated, _evidence = _env_mcs_allocation_observation(
-        powerplatform,
-        env_id,
-    )
-    if (
-        _evidence.get("outcome") == "invalid-response"
-        or _evidence.get("errorType") == "InvalidAllocationResponse"
-    ):
-        raise ValueError("Power Platform returned an invalid allocation response.")
-    return allocated
-
-
-def _env_mcs_allocation_observation(
+def _env_mcs_entitlement_observation(
     powerplatform,
     env_id,
 ) -> tuple[int | None, dict[str, object]]:
-    """Read allocation while preserving safe classification evidence."""
-    evidence: dict[str, object] = {"environmentId": env_id}
+    """Read this environment's allocated MCSMessages entitlement."""
+    evidence: dict[str, object] = {
+        "environmentId": env_id,
+        "source": "environment-entitlements",
+    }
     if powerplatform is None or not env_id:
         evidence["outcome"] = (
             "unsupported-capability"
@@ -832,91 +806,118 @@ def _env_mcs_allocation_observation(
         )
         return None, evidence
     try:
-        allocations = powerplatform.get_currency_allocations(env_id)
+        response = powerplatform.get_environment_entitlements(env_id)
     except Exception as exc:
-        response = getattr(exc, "response", None)
+        service_response = getattr(exc, "response", None)
         evidence.update(
             {
                 "outcome": "service-error",
                 "errorType": type(exc).__name__,
             }
         )
-        if response is not None:
-            evidence["serviceStatus"] = getattr(response, "status_code", None)
+        if service_response is not None:
+            evidence["serviceStatus"] = getattr(
+                service_response,
+                "status_code",
+                None,
+            )
             request_id = (
-                response.headers.get("x-ms-request-id")
-                or response.headers.get("request-id")
-                or response.headers.get("x-ms-correlation-request-id")
+                service_response.headers.get("x-ms-request-id")
+                or service_response.headers.get("request-id")
+                or service_response.headers.get("x-ms-correlation-request-id")
             )
             if request_id:
                 evidence["requestId"] = request_id
         return None, evidence
-    if isinstance(allocations, dict):
+
+    if not isinstance(response, dict):
         evidence.update(
             {
-                "outcome": (
-                    "denied-access"
-                    if allocations.get("_status") in {401, 403}
-                    else "service-error"
-                ),
-                "serviceStatus": allocations.get("_status"),
-            }
-        )
-        if allocations.get("_request_id"):
-            evidence["requestId"] = allocations["_request_id"]
-        return None, evidence
-    if not isinstance(allocations, list):
-        evidence.update(
-            {
-                "outcome": "service-error",
-                "errorType": "InvalidAllocationResponse",
+                "outcome": "invalid-response",
+                "errorType": "InvalidEntitlementResponse",
             }
         )
         return None, evidence
 
-    total = 0
-    matched = 0
-    for allocation in allocations:
-        if not isinstance(allocation, dict):
-            continue
-        currency = str(allocation.get("currencyType") or "").strip().lower()
-        if currency != _MCS_MESSAGES_CURRENCY.lower():
-            continue
-        matched += 1
-        raw_allocated = allocation.get("allocated")
-        try:
-            if (
-                raw_allocated is None
-                or isinstance(raw_allocated, bool)
-                or isinstance(raw_allocated, str)
-                or (
-                    isinstance(raw_allocated, float)
-                    and not raw_allocated.is_integer()
-                )
-            ):
-                raise ValueError
-            parsed_allocated = int(raw_allocated)
-            if parsed_allocated < 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            evidence.update(
-                {
-                    "outcome": "invalid-response",
-                    "errorType": "InvalidAllocationValue",
-                    "matchingAllocations": matched,
-                    "invalidAllocationValues": 1,
-                }
-            )
-            return None, evidence
-        total += parsed_allocated
+    evidence["serviceStatus"] = response.get("_status")
+    if response.get("_request_id"):
+        evidence["requestId"] = response["_request_id"]
+    if response.get("_error"):
+        status = response.get("_status")
+        evidence["outcome"] = (
+            "denied-access"
+            if status in {401, 403}
+            else "not-found"
+            if status == 404
+            else "service-error"
+        )
+        return None, evidence
+
+    items = response.get("items")
+    if not isinstance(items, list):
+        evidence.update(
+            {
+                "outcome": "invalid-response",
+                "errorType": "InvalidEntitlementResponse",
+            }
+        )
+        return None, evidence
+
+    matching = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and str(item.get("entitlementId") or "").strip().casefold()
+        == _MCS_MESSAGES_ENTITLEMENT_ID.casefold()
+    ]
+    evidence["matchingEntitlements"] = len(matching)
+    if not matching:
+        evidence["outcome"] = "missing-entitlement"
+        return None, evidence
+    if len(matching) > 1:
+        evidence["outcome"] = "ambiguous-entitlement"
+        return None, evidence
+
+    item = matching[0]
+    entitlement = item.get("entitlement")
+    capacity = entitlement.get("capacity") if isinstance(entitlement, dict) else None
+    allocation = capacity.get("allocated") if isinstance(capacity, dict) else None
+    if not isinstance(allocation, dict) or "value" not in allocation:
+        evidence.update(
+            {
+                "outcome": "invalid-response",
+                "errorType": "InvalidEntitlementResponse",
+            }
+        )
+        return None, evidence
+    raw_allocated = allocation["value"]
+    if (
+        isinstance(raw_allocated, bool)
+        or not isinstance(raw_allocated, (int, float))
+        or not math.isfinite(raw_allocated)
+        or raw_allocated < 0
+        or (
+            isinstance(raw_allocated, float)
+            and not raw_allocated.is_integer()
+        )
+    ):
+        evidence.update(
+            {
+                "outcome": "invalid-response",
+                "errorType": "InvalidEntitlementAllocationValue",
+            }
+        )
+        return None, evidence
+
+    allocated = int(raw_allocated)
     evidence.update(
         {
-            "outcome": "empty-results" if not allocations else "verified",
-            "allocatedCredits": total,
-            "matchingAllocations": matched,
+            "outcome": "verified",
+            "entitlementId": _MCS_MESSAGES_ENTITLEMENT_ID,
+            "allocatedCredits": allocated,
         }
     )
-    return total, evidence
+    return allocated, evidence
 
 
 def classify_copilot_studio_capacity(
@@ -932,7 +933,7 @@ def classify_copilot_studio_capacity(
 
     Args:
       allocated: MCSMessages units allocated to the environment, or ``None``
-        when the allocation could not be read.
+        when the entitlement could not be read.
       population: the shared/published user count to size against
         (PRE-004 sufficiency mode), or ``None`` for the "is capacity
         provisioned?" mode (ENV-CAPACITY-001), where the

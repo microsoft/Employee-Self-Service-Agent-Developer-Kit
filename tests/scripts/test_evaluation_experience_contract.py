@@ -530,7 +530,7 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))
-    assert "For **topic and workflow updates only**" in update
+    assert "For **workflow updates only**" in update
     assert "This restriction does not apply to evaluation operations" in update
     evaluate = _normalized(_read(".github/prompts/evaluate.prompt.md"))
     assert "**quality review** / **Run another quality review**" in evaluate

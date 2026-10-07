@@ -123,7 +123,7 @@ def test_validate_scenario_rejects_phase_two_and_integration_fields():
     assert "scenario: unknown field 'integration'" in exc_info.value.errors
 
 
-def test_create_command_routes_topics_to_eval_driven_skill():
+def test_create_command_blocks_topics_but_preserves_supporting_skill():
     prompt = (
         _REPO_ROOT
         / "solutions"
@@ -141,13 +141,22 @@ def test_create_command_routes_topics_to_eval_driven_skill():
     ).read_text(encoding="utf-8")
 
     skill_path = "src/skills/topics/create-eval-driven/SKILL.md"
+    assert "Topic creation is not yet available in this release." in prompt
+    assert "do not read a topic-authoring skill or write files" in instructions
     assert skill_path in prompt
-    assert skill_path in instructions
-    assert "scenario YAML file" in prompt
-    assert "evaluation YAML files" in prompt
+    assert (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "topics"
+        / "create-eval-driven"
+        / "SKILL.md"
+    ).is_file()
 
 
-def test_create_command_preserves_legacy_integration_path():
+def test_create_command_blocks_integration_and_simple_topic_paths():
     prompt = (
         _REPO_ROOT
         / "solutions"
@@ -156,17 +165,14 @@ def test_create_command_preserves_legacy_integration_path():
         / "prompts"
         / "create.prompt.md"
     ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
 
-    integration_rule = prompt.index(
-        "involving Workday,\n   ServiceNow, SAP"
-    )
-    simple_rule = prompt.index("asks to create a **simple topic**")
-
-    assert integration_rule < simple_rule
+    assert "including a topic from evals or a scenario file" in normalized
     assert "src/skills/topics/create/SKILL.md" in prompt
+    assert "or direct file edits" in prompt
 
 
-def test_create_command_gives_explicit_evaluation_intent_precedence():
+def test_create_command_gives_explicit_or_implicit_topic_block_precedence():
     prompt = (
         _REPO_ROOT
         / "solutions"
@@ -176,16 +182,19 @@ def test_create_command_gives_explicit_evaluation_intent_precedence():
         / "create.prompt.md"
     ).read_text(encoding="utf-8")
 
-    evaluation_rule = prompt.index(
+    normalized = " ".join(prompt.split())
+    evaluation_rule = normalized.index(
         "explicitly asks to create or generate an **evaluation**"
     )
-    topic_rule = prompt.index("explicitly asks to create a **topic**")
+    topic_rule = normalized.index(
+        "explicitly or implicitly asks to create any **topic**"
+    )
 
-    assert evaluation_rule < topic_rule
-    assert "Do this even" in prompt
-    assert "also contains evaluation file paths" in prompt
-    assert "create a **topic from these evals**" in prompt
-    assert "**evaluation test set**" in prompt
+    assert topic_rule < evaluation_rule
+    assert "Do this even" in normalized
+    assert "also contains evaluation file paths" in normalized
+    assert "creating a topic from those evals is not yet available" in normalized
+    assert "**evaluation test set**" in normalized
 
 
 def test_eval_driven_skill_is_create_only():
@@ -199,7 +208,6 @@ def test_eval_driven_skill_is_create_only():
         / "create-eval-driven"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
-
     assert "## Step 4: Generate the topic" in skill
     assert "Write the new topic" in skill
     assert "src/skills/topics/update/SKILL.md" not in skill
@@ -213,7 +221,7 @@ def test_eval_driven_skill_is_create_only():
     assert "future automated eval-level validation pipeline" in skill
 
 
-def test_update_command_routes_simple_topics_and_preserves_integrations():
+def test_update_command_blocks_topics_and_preserves_supporting_skill():
     prompt = (
         _REPO_ROOT
         / "solutions"
@@ -232,11 +240,11 @@ def test_update_command_routes_simple_topics_and_preserves_integrations():
         / "update-eval-driven"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
+    normalized = " ".join(prompt.split())
 
-    legacy_rule = prompt.index("Workday, ServiceNow, SAP")
-    eval_rule = prompt.index("simple informational, clarification")
-
-    assert legacy_rule < eval_rule
+    assert "Topic updates are not yet available in this release." in prompt
+    assert "including its evals" in normalized
+    assert "explicitly or implicitly asks to update any **topic**" in normalized
     assert "src/skills/topics/update-eval-driven/SKILL.md" in prompt
     assert "src/skills/topics/update/SKILL.md` unchanged" in update_skill
     assert "Never create a second topic file" in update_skill

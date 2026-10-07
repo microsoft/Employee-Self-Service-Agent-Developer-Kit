@@ -862,6 +862,13 @@ def _new_canonical_setup_state(
         "intent": SETUP_INTENT,
         "environment": {
             "id": connection["environment"]["id"],
+            **(
+                {
+                    "display_name": connection["environment"]["displayName"],
+                }
+                if connection["environment"].get("displayName")
+                else {}
+            ),
             "tenant_id": connection["environment"]["tenantId"],
             "power_platform_api_endpoint": connection["environment"][
                 "powerPlatformApiEndpoint"
@@ -889,6 +896,10 @@ def _store_canonical_agent_state(
             "This workspace already targets another Power Platform "
             "environment. Create and open a new workspace for that environment."
         )
+    if connection["environment"].get("displayName"):
+        updated["environment"]["display_name"] = connection["environment"][
+            "displayName"
+        ]
     updated["agents"][connection["agent"]["id"]] = agent_state
     updated["updated_at"] = _utc_now()
     _write_json(kit_root / CANONICAL_SETUP_STATE, updated)
@@ -1409,6 +1420,7 @@ def validate_existing_dev_connection(
     client: AgentBuilderClient,
     *,
     environment_id: str,
+    environment_display_name: str | None = None,
     agent_id: str,
     selection_source: str | None = None,
     setup_source: str = "existing-dev",
@@ -1474,6 +1486,9 @@ def validate_existing_dev_connection(
         if isinstance(managed_properties, dict)
         else False
     )
+    normalized_environment_display_name = str(
+        environment_display_name or ""
+    ).strip()
     return {
         "schemaVersion": 1,
         "stateKind": "da-existing-dev-connection",
@@ -1482,6 +1497,11 @@ def validate_existing_dev_connection(
         "setupSource": normalized_setup_source,
         "environment": {
             "id": normalized_environment_id,
+            **(
+                {"displayName": normalized_environment_display_name}
+                if normalized_environment_display_name
+                else {}
+            ),
             "tenantId": client.tenant_id,
             "powerPlatformApiEndpoint": client.host,
             "ring": client.ring,
@@ -2126,6 +2146,7 @@ def attach_existing_dev(
     client: AgentBuilderClient,
     *,
     environment_id: str,
+    environment_display_name: str | None = None,
     agent_id: str,
     kit_root: Path,
     refresh: bool = False,
@@ -2138,6 +2159,7 @@ def attach_existing_dev(
     connection = validate_existing_dev_connection(
         client,
         environment_id=environment_id,
+        environment_display_name=environment_display_name,
         agent_id=agent_id,
         selection_source=selection_source,
         setup_source=setup_source,
@@ -2770,6 +2792,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent ID override or fallback when target extraction omits it.",
     )
     attach.add_argument(
+        "--environment-display-name",
+        help=(
+            "Service-provided display name for the target environment. "
+            "Persisted only in canonical setup state."
+        ),
+    )
+    attach.add_argument(
         "--refresh",
         action="store_true",
         help="Checkpoint and replace a changed existing workspace.",
@@ -3002,6 +3031,7 @@ def main(argv: list[str] | None = None) -> int:
         result = attach_existing_dev(
             client,
             environment_id=environment_id,
+            environment_display_name=args.environment_display_name,
             agent_id=target["agentId"],
             kit_root=args.kit_root.resolve(),
             refresh=args.refresh,

@@ -26,7 +26,9 @@ admin role (Global Admin or Global Reader).
 
 ---
 
-## 2. Power Platform Admin API (BAP)
+## 2. Power Platform APIs
+
+### Power Platform Admin API (BAP)
 
 Used for: environment details, flow inventory, connection status, DLP policies.
 
@@ -44,6 +46,14 @@ the scope `https://service.powerapps.com//.default`.
 
 **If the user lacks PP Admin role**: Environment and flow checks return
 Warning status. The check doesn't block; it just can't validate those items.
+
+### Power Platform Licensing API
+
+Used for: billing policies, Pay-as-you-go environment linkage, and environment-scoped Copilot Studio message capacity.
+
+**Requires**: Power Platform Administrator or Dynamics 365 Admin role.
+
+FlightCheck requests the ring-specific Power Platform API `/.default` scope and reads `GET /licensing/environments/{environmentId}/entitlements`. Capacity checks use only the single `MCSMessages` entitlement's `entitlement.capacity.allocated.value`; missing, duplicate, denied, malformed, and unavailable entitlement observations remain unresolved rather than being treated as zero.
 
 ---
 
@@ -101,8 +111,8 @@ footprint, logical connector references, and environment connection health.
 The audience is ring-specific (`api.powerplatform.com`,
 `api.preprod.powerplatform.com`, or `api.test.powerplatform.com`). These
 checks do not require a Dataverse endpoint or Power Platform Administrator
-enumeration. Capacity remains a separate read through the Power Platform
-Licensing API and uses the persisted environment ID.
+enumeration. Capacity remains a separate read through the same ring's Power
+Platform Licensing API and uses the persisted environment ID.
 
 ---
 

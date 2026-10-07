@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Guided, plain-English experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.34",
+  "version": "0.4.35",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -29,7 +29,7 @@
       },
       {
         "command": "essMaker.runCreate",
-        "title": "ESS Maker: Create a topic",
+        "title": "ESS Maker: Create a topic (Coming Soon)",
         "category": "ESS Maker"
       },
       {
@@ -64,7 +64,7 @@
       },
       {
         "command": "essMaker.runUpdate",
-        "title": "Agent Developer Kit: Modify a topic",
+        "title": "Agent Developer Kit: Modify a topic (Coming Soon)",
         "category": "Agent Developer Kit"
       },
       {
@@ -127,14 +127,20 @@
             "id": "overview",
             "title": "What ADK does",
             "description": "The Agent Developer Kit lets you build, update, and publish your Employee Self-Service agent in plain English — Copilot turns your intent into set-up steps, topics, and configuration, so you don't have to write code.\nIf you don't already have Copilot Chat open, click the button below.\n[Open Copilot Chat](command:workbench.action.chat.open)",
-            "media": { "markdown": "walkthrough/overview.md" },
-            "completionEvents": ["onCommand:workbench.action.chat.open"]
+            "media": {
+              "markdown": "walkthrough/overview.md"
+            },
+            "completionEvents": [
+              "onCommand:workbench.action.chat.open"
+            ]
           },
           {
             "id": "getting-started",
             "title": "Getting started",
             "description": "Not sure where to begin? Just tell Copilot Chat what you want. For example, to set up ESS, ask **\"Help me set up ESS\"**. To configure the landing page, ask **\"Help me customize the landing page\"**. And to check readiness before you deploy, ask **\"Help me run a flightcheck\"**.\nMake sure setup is completed before customizing your ESS agent.",
-            "media": { "markdown": "walkthrough/getting-started.md" }
+            "media": {
+              "markdown": "walkthrough/getting-started.md"
+            }
           }
         ]
       }
@@ -144,7 +150,13 @@
       "properties": {
         "essMaker.mode": {
           "type": "string",
-          "enum": ["maker", "developer", "lite", "standard", ""],
+          "enum": [
+            "maker",
+            "developer",
+            "lite",
+            "standard",
+            ""
+          ],
           "default": "",
           "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the guided rail layout; 'developer' (was 'standard') uses the default VS Code layout with a rendered README preview. In both modes /setup is user-driven — the extension never auto-runs it. Empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and normalized to 'maker'/'developer' so existing users keep their choice after the rename."
         },
