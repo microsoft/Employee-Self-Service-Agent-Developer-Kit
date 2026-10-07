@@ -888,9 +888,9 @@ def _resolve_environment_ring(
     }
     if not candidates:
         raise ValueError(
-            "The Power Platform environment ring is unavailable. Confirm "
-            "whether the environment uses prod, preprod, or test, then rerun "
-            "FlightCheck with --ring."
+            "FlightCheck could not determine the Power Platform environment "
+            "ring from --ring, configured ring, or powerPlatformApiEndpoint. "
+            "Confirm prod, preprod, or test, then rerun with --ring."
         )
     if not candidates <= {"prod", "preprod", "test"}:
         raise ValueError(
@@ -899,8 +899,9 @@ def _resolve_environment_ring(
         )
     if len(candidates) != 1:
         raise ValueError(
-            "The supplied ring, configured ring, and Power Platform endpoint "
-            "do not identify the same environment ring."
+            "Available ring evidence from --ring, configured ring, and "
+            "powerPlatformApiEndpoint identifies different rings. Align the "
+            "configuration or rerun with a matching --ring."
         )
     return candidates.pop()
 
@@ -3067,7 +3068,7 @@ def main():
             print("Authenticating to Power Platform API (capacity)...")
             powerplatform = PowerPlatformClient(
                 tenant_id,
-                ring=resolved_ring or "prod",
+                ring=resolved_ring,
             )
             try:
                 powerplatform.authenticate()
@@ -3210,7 +3211,7 @@ def main():
         print("Authenticating to Power Platform API (billing policies)...")
         powerplatform = PowerPlatformClient(
             tenant_id,
-            ring=resolved_ring or "prod",
+            ring=resolved_ring,
         )
         try:
             powerplatform.authenticate()
