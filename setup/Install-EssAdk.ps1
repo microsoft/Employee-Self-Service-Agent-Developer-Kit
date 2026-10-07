@@ -1583,6 +1583,11 @@ if (-not $FlightCheckOnly -and -not $SkipLaunch) {
 # ---------------------------------------------------------------------------
 # 7. Launch
 # ---------------------------------------------------------------------------
+function Write-AuthenticationGuidance {
+    Write-Host "When VS Code asks you to sign in to GitHub Copilot, use the GitHub account that has your Copilot access. This enables Copilot Chat, where you run /setup." -ForegroundColor Yellow
+    Write-Host "When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent. GitHub sign-in does not grant Power Platform access." -ForegroundColor Yellow
+}
+
 if (-not $SkipLaunch) {
     $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
@@ -1604,14 +1609,14 @@ if (-not $SkipLaunch) {
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
             } else {
                 # Maker mode - extension opens the guided view; /setup is user-driven
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
             }
         } finally { Pop-Location }
     } else {
@@ -1622,6 +1627,8 @@ if (-not $SkipLaunch) {
     Write-Warn2 'Skipping launch per -SkipLaunch'
     Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
 }
+
+Write-AuthenticationGuidance
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
 
