@@ -134,7 +134,7 @@ class TestManualGuidanceWhenNoEgressProbe:
         row = results[0]
         assert row.status == Status.NOT_CONFIGURED.value
         assert "Nothing to probe" in row.result
-        assert "- Workday: the /connect workday" in row.remediation
+        assert "- Workday: the /connect skill" in row.remediation
         servicenow_guidance = row.remediation.split("- ServiceNow:", 1)[1].split(
             "- SAP SuccessFactors", 1
         )[0]

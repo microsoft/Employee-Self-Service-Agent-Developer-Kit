@@ -23,8 +23,8 @@ ServiceNow-specific wiring:
   connection would silently mask a broken ServiceNow one.
 * The summary row uses checkpoint prefix ``SN-CONN-001`` and category
   ``ServiceNow``; per-connection rows continue at ``SN-CONN-002``.
-* The not-configured remediation must use administrator/product-extension
-  guidance, not the unavailable DA connection command.
+* The not-configured remediation must use manual configuration guidance,
+  not the unavailable ADK guided setup command.
 * The doc_link must point at the ServiceNow integration docs.
 """
 

@@ -292,12 +292,9 @@ Status emoji mapping:
 After the table, analyze the failed and warning results and build a list
 of things you CAN fix automatically vs. things that need manual action.
 
-Apply **Availability** in `src/skills/connect/SKILL.md` to connection repairs.
-ServiceNow uses manual Copilot Studio guidance, not an auto-fix.
-
 **Auto-fixable** (offer to do these right now):
 - Compile errors in topics → run `/scan` skill
-- Missing Workday connection → run `/connect workday` skill
+- Missing Workday connection → run `/connect` skill
 - Workday env vars not set → run `/connect workday` skill
 - Workday connections in Error state → run `/connect workday` skill
 - Disabled Workday/ServiceNow flows → enable via Dataverse MCP
@@ -357,8 +354,7 @@ Then use `vscode_askQuestions` to ask:
 
 **If they say yes**, execute each fix by reading and following the
 appropriate skill file:
-- Workday connection issues → read `src/skills/connect/SKILL.md`
-  and follow it with Workday preselected
+- Connection issues → read `src/skills/connect/SKILL.md` and follow it
 - Compile errors → read `src/skills/cleanup/SKILL.md` and follow it
 - Flow enablement → use Dataverse MCP to update flow state
 

@@ -820,9 +820,9 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     "ServiceNow / SAP SuccessFactors / custom HTTP."
                 ),
                 remediation=(
-                    "If this agent integrates with an external HR system, use "
-                    "its supported endpoint guidance:\n"
-                    "- Workday: the /connect workday workflow records the "
+                    "If this agent integrates with an external HR system, record "
+                    "its endpoint so reachability can be validated:\n"
+                    "- Workday: the /connect skill records the "
                     "endpoint automatically.\n"
                     "- ServiceNow: Guided ServiceNow setup is not yet available in ADK. "
                     "You can configure the ServiceNow connection manually in Copilot "

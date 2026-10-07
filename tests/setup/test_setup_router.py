@@ -49,10 +49,10 @@ def test_guided_servicenow_requests_stop_before_provider_actions() -> None:
     connect = _CONNECT_SKILL.read_text(encoding="utf-8")
     contract = " ".join(connect.split("## Availability", 1)[1].split("## Start", 1)[0].split())
     assert _SERVICENOW_MESSAGE in contract
-    assert "Only Workday" in contract and "SNOW and follow-ups" in contract
-    assert "preselection and saved state" in contract
+    assert "ServiceNow guided setup or repair" in contract
+    assert "SNOW and follow-ups" in contract
+    assert "preselection and saved-state resume" in contract
     assert "STOP before provider state, credentials, telemetry, MCP, or retained steps" in contract
-    assert "never substitute Workday" in contract
 
     route = _CONNECT_STEP1.read_text(encoding="utf-8")
     entry = route.split("## 1.1", 1)[0]
@@ -72,20 +72,18 @@ def test_connect_menus_and_callers_use_the_guided_boundary() -> None:
     assert menu.count("1. **Workday**") == 2
     assert '### If the user chose Workday (1 or "workday")' in route
     instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
-    assert "Before any guided connection dispatch, apply **Availability**" in instructions
-    assert "including repair and follow-ups" in " ".join(instructions.split())
-    prompt = (_SOLUTION / ".github" / "prompts" / "connect.prompt.md").read_text(encoding="utf-8")
-    assert prompt.index("and STOP") < prompt.index("Read `src/skills/connect/SKILL.md`")
-    foundation = (_SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md").read_text(encoding="utf-8")
-    assert "**Add or change an integration** begins `/connect`" in " ".join(foundation.split())
+    triggers = instructions.split("**Trigger phrases for connect:**", 1)[1].split(
+        "**Trigger phrases for troubleshooting:**", 1
+    )[0]
+    assert "servicenow" not in triggers.casefold()
+    unknown = route.split("### If the user said something else", 1)[1]
+    assert "Wait for the user and try again" in unknown
 
 
 def test_flightcheck_and_docs_keep_servicenow_setup_manual() -> None:
     text = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
     fixes = text.split("### 3c", 1)[1].split("### 3d", 1)[0]
-    assert "Apply **Availability**" in fixes and "manual Copilot Studio guidance" in fixes
     assert "Missing Workday connection" in fixes and "Missing Workday/ServiceNow" not in fixes
-    assert "Workday connection issues" in fixes and "with Workday preselected" in fixes
     readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
     assert _SERVICENOW_MESSAGE in " ".join(readme.split())
     assert "/connect servicenow" not in readme

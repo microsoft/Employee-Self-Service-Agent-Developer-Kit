@@ -240,17 +240,20 @@ This toolkit does NOT:
 ## Integrations
 
 > **DA-GA boundary:** ServiceNow, Workday, and other integrations are delivered
-> through separate product extensions. ADK does not enter the retired CEA or
-> DA-Preview setup flows.
+> through separate product extensions. The current release does not install
+> those extensions, configure their connections, or enter the retired CEA or
+> DA-Preview setup flows. The detailed material below is reference-only until
+> DA-GA product-extension guidance is available.
 
 The reference sections below describe how these integrations were configured in
-earlier Dataverse-based releases.
+earlier Dataverse-based releases. They are not executable setup paths in the
+current DA-GA release.
 
 ### ServiceNow (HRSD / ITSM)
 
 Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
 
-**Setup reference:**
+**What the kit sets up:**
 - **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
 - **OAuth or Certificate auth** for service-to-service flows — configurable per environment
 - **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
@@ -403,7 +406,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | Connect this workspace to an existing editable DA Dev agent |
 | `/landing-page` | Configure landing-page branding and content |
-| `/connect` | Choose the supported Workday integration |
+| `/connect` | Explain the DA-GA product extension requirement |
 | `/create` | Create a topic, workflow, or evaluation test set locally |
 | `/update` | Update a topic, workflow, or evaluation test set locally |
 | `/delete` | Report that DA-GA deletion is not yet available |

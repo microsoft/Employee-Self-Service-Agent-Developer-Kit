@@ -427,10 +427,6 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 
 ### Skill routing for CRUD operations
 
-Before any guided connection dispatch, apply **Availability** in
-`src/skills/connect/SKILL.md`, including repair and follow-ups; retained
-provider steps are not direct entry points.
-
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
@@ -457,8 +453,7 @@ provider steps are not direct entry points.
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md` |
 | Invoke any tool from the `ess-landing-page-config` MCP server | `src/skills/landing-page-config/SKILL.md` |
 
-**Trigger phrases for connect:** "connect Workday", "set up Workday",
-"add Workday", "Workday integration".
+**Trigger phrases for connect:** "connect Workday", "set up Workday".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works
