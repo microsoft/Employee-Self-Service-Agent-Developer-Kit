@@ -2,34 +2,39 @@
 
 ## Discover Maker Kit operations
 
-At the beginning of each conversation:
+Establish the Maker Kit catalog location once per conversation:
 
-1. List the `*.prompt.md` files under `.github/prompts/`.
-2. When that path contains no prompt files, list the `*.prompt.md` files under
-   `solutions/ess-maker-skills/.github/prompts/`.
+1. Check whether `.github/prompts/` contains any `*.prompt.md` files and
+   `src/skills/` exists in the same current folder.
+2. When that pair is unavailable, check whether
+   `solutions/ess-maker-skills/.github/prompts/` contains any `*.prompt.md`
+   files and `solutions/ess-maker-skills/src/skills/` exists.
 
-Classify the catalog location from those results:
+Classify the result:
 
-- Prompt files under `.github/prompts/` represent an active Maker Kit workspace.
-- Prompt files found only under
-  `solutions/ess-maker-skills/.github/prompts/` represent a nested Maker Kit
-  workspace.
-- No prompt files at either path means the Maker Kit operation catalog is
-  unavailable from the current folder.
+- The qualifying paths in the current folder mean the Maker Kit catalog is
+  available from the current folder.
+- The qualifying paths under `solutions/ess-maker-skills/` mean the Maker Kit
+  catalog is available from a nested solution folder.
+- No qualifying catalog at either location means the Maker Kit operation
+  catalog is unavailable.
 
-Use the discovered prompt filenames to match direct commands and natural-language
-operation intent. When a filename provides a clear match, route from the catalog
-location. When the match remains unclear, read the `description` frontmatter
-field from likely candidate prompts and then route.
+When the catalog is available from the current folder, read and follow the
+current folder's `.github/copilot-instructions.md`. That file owns setup-state
+and operation routing for the conversation.
 
-Requests whose target is repository source, tests, documentation, or tooling
-follow the repository-development workflow.
+When the catalog is available from a nested solution folder:
 
-For a request that matches a discovered Maker Kit operation:
-
-- In an active Maker Kit workspace, continue with the applicable prompt and skill
-  instructions.
-- In a nested Maker Kit workspace, provide the folder-selection guidance.
+- When the request begins with `/`, derive its prompt filename from the command
+  name. For example, `/flightcheck` maps to `flightcheck.prompt.md`. Check that
+  candidate directly in the nested catalog.
+- For natural-language requests, or when the direct command candidate does not
+  exist, list the prompt filenames in the nested catalog and use them to match
+  the operation intent.
+- When the filename match remains unclear, read the `description` frontmatter
+  field from likely candidate prompts.
+- When the request matches a discovered Maker Kit operation, provide the
+  folder-selection guidance.
 
 When the operation catalog is unavailable and the user explicitly names the ESS
 Maker Kit, provide the folder-selection guidance.
@@ -47,3 +52,5 @@ When folder-selection guidance applies, respond with only:
 > 2. Select `solutions/ess-maker-skills`.
 > 3. Click `Select Folder`.
 > 4. After VS Code reopens, enter the request again.
+
+Route every request not covered above as normal.
