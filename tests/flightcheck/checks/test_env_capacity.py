@@ -34,20 +34,52 @@ def _scripts_on_path():
 
 
 class _FakePP:
-    """Power Platform Licensing stub: only get_currency_allocations is read."""
+    """Power Platform Licensing stub for environment entitlement reads."""
 
-    def __init__(self, allocations):
-        self._alloc = allocations  # list | {"_error": ...} | Exception
+    def __init__(self, entitlements):
+        self._entitlements = entitlements
 
-    def get_currency_allocations(self, _env_id):
-        if isinstance(self._alloc, Exception):
-            raise self._alloc
-        return self._alloc
+    def get_environment_entitlements(self, _env_id):
+        if isinstance(self._entitlements, Exception):
+            raise self._entitlements
+        return self._entitlements
 
 
-def _mcs(allocated: int) -> list[dict]:
-    """One MCSMessages allocation row at the given credit count."""
-    return [{"currencyType": "MCSMessages", "allocated": allocated}]
+def _mcs_entitlement(
+    *,
+    allocated=0,
+    auto_allocated=0,
+    available=0,
+    consumed=0,
+    payg_entitled=0,
+    payg_consumed=0,
+    addons=None,
+):
+    return {
+        "items": [
+            {
+                "entitlementId": "MCSMessages",
+                "addons": list(addons or []),
+                "entitlement": {
+                    "capacity": {
+                        "allocated": {
+                            "value": allocated,
+                            "autoAllocated": auto_allocated,
+                        },
+                        "availableQuantity": available,
+                        "consumed": {"value": consumed},
+                        "status": "WithinCapacity",
+                    },
+                    "payGo": {
+                        "entitled": {"value": payg_entitled},
+                        "consumed": {"value": payg_consumed},
+                    },
+                },
+            }
+        ],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    }
 
 
 def _runner(
@@ -82,17 +114,26 @@ def _run(runner):
 
 
 def test_passed_when_capacity_allocated():
-    r = _run(_runner(powerplatform=_FakePP(_mcs(25000))))
+    r = _run(_runner(powerplatform=_FakePP(
+        _mcs_entitlement(
+            allocated=25000.0,
+            auto_allocated=750,
+            available=0,
+            consumed=25000,
+        )
+    )))
     assert r.status == "Passed"
     assert "25000" in r.result
     assert r.evidence["outcome"] == "verified"
     assert r.evidence["allocatedCredits"] == 25000
+    assert r.evidence["source"] == "environment-entitlements"
+    assert r.evidence["requestId"] == "entitlement-request-200"
 
 
 def test_warns_when_zero_capacity_no_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=False))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement()), payg=False))
     assert r.status == "Warning"
-    assert r.evidence["outcome"] == "empty-results"
+    assert r.evidence["outcome"] == "verified"
     assert r.evidence["allocatedCredits"] == 0
     assert "not configured" in r.result
     assert "administrator may explicitly attest" in r.remediation
@@ -100,7 +141,7 @@ def test_warns_when_zero_capacity_no_payg():
 
 
 def test_warns_when_zero_capacity_with_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=True))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement()), payg=True))
     assert r.status == "Warning"
     assert "Pay-as-you-go billing is configured" in r.result
     assert "administrator may explicitly attest" in r.remediation
@@ -109,7 +150,7 @@ def test_warns_when_zero_capacity_with_payg():
 
 def test_warns_when_zero_capacity_unknown_payg():
     # No _payg_configured on the runner (PRE-005 did not run this scope).
-    r = _run(_runner(powerplatform=_FakePP([])))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement())))
     assert r.status == "Warning"
     assert "not determined" in r.result
     assert "administrator may explicitly attest" in r.remediation
@@ -124,14 +165,12 @@ def test_requires_manual_confirmation_when_no_powerplatform_client():
     assert "capacity check is skipped" in r.remediation
 
 
-def test_requires_manual_confirmation_when_allocation_read_denied():
-    pp_denied = _FakePP(
-        {
-            "_error": "insufficient_permissions",
-            "_status": 403,
-            "_request_id": "request-123",
-        }
-    )
+def test_requires_manual_confirmation_when_entitlement_read_denied():
+    pp_denied = _FakePP({
+        "_error": "insufficient_permissions",
+        "_status": 403,
+        "_request_id": "request-123",
+    })
     r = _run(_runner(powerplatform=pp_denied, payg=False))
     assert r.status == "Manual"
     assert "access was denied" in r.result
@@ -140,7 +179,34 @@ def test_requires_manual_confirmation_when_allocation_read_denied():
     assert r.evidence["requestId"] == "request-123"
 
 
-def test_requires_manual_confirmation_when_allocation_service_fails():
+def test_requires_manual_confirmation_when_mcs_entitlement_is_missing():
+    r = _run(_runner(powerplatform=_FakePP({
+        "items": [],
+        "_status": 204,
+        "_request_id": "entitlement-request-204",
+    })))
+
+    assert r.status == "Manual"
+    assert "no MCSMessages entitlement" in r.result
+    assert r.evidence["outcome"] == "missing-entitlement"
+    assert r.evidence["matchingEntitlements"] == 0
+
+
+def test_requires_manual_confirmation_when_mcs_entitlement_is_duplicated():
+    item = _mcs_entitlement()["items"][0]
+    r = _run(_runner(powerplatform=_FakePP({
+        "items": [item, item],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    })))
+
+    assert r.status == "Manual"
+    assert "multiple MCSMessages entitlements" in r.result
+    assert r.evidence["outcome"] == "ambiguous-entitlement"
+    assert r.evidence["matchingEntitlements"] == 2
+
+
+def test_requires_manual_confirmation_when_entitlement_service_fails():
     class _Response:
         status_code = 503
         headers = {"x-ms-request-id": "request-503"}
@@ -155,6 +221,7 @@ def test_requires_manual_confirmation_when_allocation_service_fails():
     assert "service payload" not in r.result
     assert r.evidence == {
         "environmentId": "env-guid",
+        "source": "environment-entitlements",
         "outcome": "service-error",
         "errorType": "RuntimeError",
         "serviceStatus": 503,
@@ -164,29 +231,66 @@ def test_requires_manual_confirmation_when_allocation_service_fails():
 
 @pytest.mark.parametrize(
     "allocated",
-    ["not-a-number", "25000", None, True, 1.5, -1],
+    [
+        "not-a-number",
+        "25000",
+        None,
+        True,
+        1.5,
+        -1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ],
 )
-def test_requires_manual_confirmation_when_allocation_value_is_invalid(
+def test_requires_manual_confirmation_when_entitlement_value_is_invalid(
     allocated,
 ):
     r = _run(
         _runner(
             powerplatform=_FakePP(
-                [{"currencyType": "MCSMessages", "allocated": allocated}]
+                _mcs_entitlement(allocated=allocated)
             ),
             payg=False,
         )
     )
 
     assert r.status == "Manual"
-    assert "invalid allocation value" in r.result
+    assert "invalid entitlement value" in r.result
     assert r.evidence == {
         "environmentId": "env-guid",
+        "source": "environment-entitlements",
         "outcome": "invalid-response",
-        "errorType": "InvalidAllocationValue",
-        "matchingAllocations": 1,
-        "invalidAllocationValues": 1,
+        "serviceStatus": 200,
+        "requestId": "entitlement-request-200",
+        "matchingEntitlements": 1,
+        "errorType": "InvalidEntitlementAllocationValue",
     }
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"items": {}, "_status": 200},
+        {
+            "items": [
+                {
+                    "entitlementId": "MCSMessages",
+                    "entitlement": {},
+                }
+            ],
+            "_status": 200,
+        },
+    ],
+)
+def test_requires_manual_confirmation_when_entitlement_response_is_malformed(
+    response,
+):
+    r = _run(_runner(powerplatform=_FakePP(response), payg=False))
+
+    assert r.status == "Manual"
+    assert "invalid entitlement response" in r.result
+    assert r.evidence["outcome"] == "invalid-response"
 
 
 @pytest.mark.parametrize(
@@ -233,6 +337,9 @@ def test_capacity_remediation_falls_back_when_ring_unresolved():
 
 
 def test_fails_when_no_env_id():
-    r = _run(_runner(powerplatform=_FakePP(_mcs(10)), env_id=None))
+    r = _run(_runner(
+        powerplatform=_FakePP(_mcs_entitlement(allocated=10)),
+        env_id=None,
+    ))
     assert r.status == "Failed"
     assert "Environment ID is unavailable" in r.result

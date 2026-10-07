@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import responses
 
 from flightcheck.powerplatform_client import PowerPlatformClient
@@ -24,12 +25,36 @@ def _client() -> PowerPlatformClient:
     return client
 
 
+@pytest.mark.parametrize(
+    ("ring", "expected_base"),
+    [
+        ("prod", "https://api.powerplatform.com"),
+        ("preprod", "https://api.preprod.powerplatform.com"),
+        ("test", "https://api.test.powerplatform.com"),
+    ],
+)
+def test_client_uses_ring_specific_base_and_scope(
+    ring: str,
+    expected_base: str,
+) -> None:
+    client = PowerPlatformClient("tenant", ring=ring)
+
+    assert client.base_url == expected_base
+    assert client.scope == f"{expected_base}/.default"
+
+
+def test_client_rejects_unknown_ring() -> None:
+    with pytest.raises(ValueError, match="Unsupported Power Platform ring"):
+        PowerPlatformClient("tenant", ring="unknown")
+
+
 def test_authenticate_uses_preferred_cached_account(
     tmp_path,
     monkeypatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     selected_accounts = []
+    requested_scopes = []
 
     class FakeCache:
         has_state_changed = False
@@ -46,6 +71,7 @@ def test_authenticate_uses_preferred_cached_account(
 
         def acquire_token_silent(self, scopes, account):
             selected_accounts.append(account)
+            requested_scopes.append(scopes)
             return {
                 "access_token": "preferred-token",
                 "id_token_claims": {
@@ -67,12 +93,38 @@ def test_authenticate_uses_preferred_cached_account(
         FakeApp,
     )
 
-    client = PowerPlatformClient("organizations")
+    client = PowerPlatformClient("organizations", ring="test")
     token = client.authenticate(preferred_username="maker@example.com")
 
     assert token == "preferred-token"
     assert client.signed_in_username == "Maker@Example.com"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
+    assert requested_scopes == [
+        ["https://api.test.powerplatform.com/.default"]
+    ]
+
+
+@responses.activate
+def test_capacity_request_uses_ring_specific_base() -> None:
+    environment_id = "00000000-0000-4000-8000-000000001111"
+    expected_url = (
+        "https://api.preprod.powerplatform.com/licensing/environments/"
+        f"{environment_id}/entitlements"
+    )
+    entitlement = pp.environment_entitlement(allocated=0)
+    responses.add(
+        method="GET",
+        url=expected_url,
+        json=[entitlement],
+        status=200,
+    )
+    client = PowerPlatformClient("tenant", ring="preprod")
+    client._token = "REDACTED_TOKEN"  # noqa: S105 - test fixture
+
+    assert client.get_environment_entitlements(environment_id)["items"] == [
+        entitlement
+    ]
+    assert responses.calls[0].request.url.startswith(expected_url)
 
 
 @responses.activate
@@ -109,6 +161,21 @@ def test_environment_listing_follows_documented_nextlink_casing() -> None:
     result = _client().list_environments_for_user()
 
     assert result == [first, second]
+
+
+@responses.activate
+def test_collection_permission_error_preserves_request_id() -> None:
+    response = pp.list_environments_for_user(status=403)
+    response["headers"] = {"x-ms-request-id": "environment-request-403"}
+    responses.add(**response)
+
+    result = _client().list_environments_for_user()
+
+    assert result == {
+        "_error": "insufficient_permissions",
+        "_status": 403,
+        "_request_id": "environment-request-403",
+    }
 
 
 @responses.activate
@@ -165,13 +232,55 @@ def test_app_management_permission_error_is_explicit() -> None:
 
 
 @responses.activate
-def test_capacity_permission_error_preserves_request_id() -> None:
-    response = pp.get_currency_allocations(status=403)
-    response["headers"] = {"x-ms-request-id": "capacity-request-403"}
-    responses.add(**response)
+def test_environment_entitlements_preserve_response_evidence() -> None:
+    entitlement = pp.environment_entitlement(allocated=500, available=500)
+    responses.add(
+        **pp.get_environment_entitlements(entitlements=[entitlement])
+    )
 
-    assert _client().get_currency_allocations(pp.MOCK_ENV_ID) == {
+    result = _client().get_environment_entitlements(pp.MOCK_ENV_ID)
+
+    assert result == {
+        "items": [entitlement],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    }
+
+
+@responses.activate
+def test_environment_entitlements_preserve_denied_status() -> None:
+    responses.add(**pp.get_environment_entitlements(status=403))
+
+    result = _client().get_environment_entitlements(pp.MOCK_ENV_ID)
+
+    assert result == {
         "_error": "insufficient_permissions",
         "_status": 403,
-        "_request_id": "capacity-request-403",
+        "_request_id": "entitlement-request-403",
+    }
+
+
+@responses.activate
+def test_environment_entitlements_preserve_not_found_status() -> None:
+    responses.add(**pp.get_environment_entitlements(status=404))
+
+    result = _client().get_environment_entitlements(pp.MOCK_ENV_ID)
+
+    assert result == {
+        "_error": "not_found",
+        "_status": 404,
+        "_request_id": "entitlement-request-404",
+    }
+
+
+@responses.activate
+def test_environment_entitlements_preserve_no_content_status() -> None:
+    responses.add(**pp.get_environment_entitlements(status=204))
+
+    result = _client().get_environment_entitlements(pp.MOCK_ENV_ID)
+
+    assert result == {
+        "items": [],
+        "_status": 204,
+        "_request_id": "entitlement-request-204",
     }

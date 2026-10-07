@@ -324,6 +324,30 @@ class TestInfrastructureScopeAuthGating:
 
         assert exc.value.code == 1
 
+    def test_prerequisites_scope_fails_closed_without_ring(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps({
+                "dataverseEndpoint": "https://contoso.crm.dynamics.com",
+                "agents": [],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["cli.py", "--scope", "prerequisites", "--no-open"],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+        assert "environment ring is unavailable" in capsys.readouterr().out
+
 
 class TestAgentBuilderLocalScope:
     def test_runs_without_dataverse_or_remote_authentication(
@@ -540,6 +564,8 @@ class TestAgentBuilderNativeScopes:
         assert bool(created_agent_clients) is expects_agent_clients
         assert bool(created_connectivity_clients) is expects_agent_clients
         assert bool(created_capacity_clients) is expects_capacity_client
+        if expects_capacity_client:
+            assert created_capacity_clients[0][1] == {"ring": "test"}
         runner = _FakeRunner.last_instance
         assert runner is not None
         assert [category for category, _ in runner.registered] == expected_categories

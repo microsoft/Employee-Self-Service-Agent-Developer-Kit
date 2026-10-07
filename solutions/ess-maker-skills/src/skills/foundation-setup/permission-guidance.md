@@ -91,7 +91,7 @@ After rendering either path table, ask exactly:
 > Are the required people present?
 
 Present **Yes, the required people are present**, **No, one or more required
-people are unavailable**, and **Help me decide** with no preselected choice and custom entry disabled.
+people are unavailable**, and **Help me decide** with no preselected choice.
 The question applies only to rows marked **Required now**. A conditional person
 does not need to be present unless setup reaches the operation that needs them.
 
