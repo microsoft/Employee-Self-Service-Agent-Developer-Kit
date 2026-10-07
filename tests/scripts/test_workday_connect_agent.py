@@ -2148,7 +2148,17 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
     state = store.load()
     assert result["verified"] is True
     assert result["lifecycleComplete"] is True
-    assert len(result["postSkillNextSteps"]) == 3
+    assert result["activeTargetRealm"] == "dev"
+    assert result["postSkillNextSteps"] == [
+        "Promote the agent from Development to Test when ready.",
+        (
+            "Return to Connect Workday and say that the agent was promoted "
+            "to Test."
+        ),
+    ]
+    assert "non-maker employee" not in " ".join(
+        result["postSkillNextSteps"]
+    )
     assert state["status"] == "ready"
     assert state["phases"]["employee-validation"]["employeeTestAttempt"] is None
     assert set(
@@ -2171,3 +2181,27 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
     assert evidence["action"] == "maker-smoke-test"
     assert evidence["testUserCategory"] == "maker"
     assert evidence["timestamp"] == "2026-10-06T01:00:00Z"
+
+
+def test_post_skill_next_steps_are_realm_specific() -> None:
+    import workday_connect
+
+    dev_steps = workday_connect._post_skill_next_steps("dev")
+    test_steps = workday_connect._post_skill_next_steps("test")
+    prod_steps = workday_connect._post_skill_next_steps("prod")
+
+    assert "promoted to Test" in " ".join(dev_steps)
+    assert "promoted to Production" in " ".join(test_steps)
+    assert "non-maker employee" not in " ".join(dev_steps)
+    assert "non-maker employee" not in " ".join(test_steps)
+    assert prod_steps == [
+        "Publish and deploy the Production agent when ready.",
+        (
+            "Have each non-maker employee establish their own Workday "
+            "connections in Microsoft 365 Chat."
+        ),
+        (
+            "Validate an enabled Workday scenario with the published "
+            "Production agent."
+        ),
+    ]

@@ -247,8 +247,8 @@ Functional-area scopes: Yes, all four required functional areas are present
 Optional domains: No additional domains are required
 Additional domain mappings:
 Authorization: Verified without an authorization error
-Remediated domain:
-Remediation scenario:
+Affected Workday security domain:
+Scenario retested after remediation:
 Authorization retest:
 """
 
@@ -936,6 +936,40 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["evidence"]["optionalDomains"] == []
 
 
+def test_workday_remediation_worksheet_uses_clear_conditional_labels() -> None:
+    worksheet = _workday_worksheet().replace(
+        "Authorization: Verified without an authorization error",
+        "Authorization: Task not authorized was remediated and retested",
+    ).replace(
+        "Affected Workday security domain:",
+        (
+            "Affected Workday security domain: "
+            "Worker Data: Public Worker Reports"
+        ),
+    ).replace(
+        "Scenario retested after remediation:",
+        "Scenario retested after remediation: Check vacation balance",
+    ).replace(
+        "Authorization retest:",
+        "Authorization retest: Verified after remediation",
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["authorizationRemediationDomain"] == (
+        "Worker Data: Public Worker Reports"
+    )
+    assert parsed["authorizationRemediationScenario"] == (
+        "Check vacation balance"
+    )
+    assert parsed["authorizationRetestOutcome"] == (
+        "verified-after-remediation"
+    )
+
+
 def test_workday_customer_labeled_response_accepts_common_labels() -> None:
     worksheet = _workday_worksheet()
     for canonical, customer_label in {
@@ -953,8 +987,8 @@ def test_workday_customer_labeled_response_accepts_common_labels() -> None:
         "Functional-area scopes": "Functional areas",
         "Additional domain mappings": "Domain mappings",
         "Authorization": "Authorization result",
-        "Remediated domain": "Affected domain",
-        "Remediation scenario": "Affected scenario",
+        "Affected Workday security domain": "Remediated domain",
+        "Scenario retested after remediation": "Remediation scenario",
         "Authorization retest": "Retest result",
     }.items():
         worksheet = worksheet.replace(

@@ -70,16 +70,42 @@ ask the maker or employee to repeat a successful scenario.
 
 ## Finish with post-skill next steps
 
-After the controller returns `lifecycleComplete: true`, tell the maker:
+After the controller returns `lifecycleComplete: true`, name the completed
+realm from `activeTargetRealm` and render only the returned
+`postSkillNextSteps`. Do not add Production employee-adoption steps to a
+Development or Test completion.
 
-> Workday setup is complete, and the maker Test pane scenario passed.
+For Development, tell the maker:
+
+> Workday setup is complete in Development, and the maker Test pane scenario
+> passed.
 >
 > **Next steps:**
 >
-> 1. Publish and deploy the agent when ready.
+> 1. Promote the agent from Development to Test when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to Test.
+
+For Test, tell the maker:
+
+> Workday setup is complete in Test, and the maker Test pane scenario passed.
+>
+> **Next steps:**
+>
+> 1. Promote the agent from Test to Production when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to
+>    Production.
+
+Only for Production, tell the maker:
+
+> Workday setup is complete in Production, and the maker Test pane scenario
+> passed.
+>
+> **Next steps:**
+>
+> 1. Publish and deploy the Production agent when ready.
 > 2. Have each non-maker employee establish their own Workday connections in
 >    Microsoft 365 Chat.
-> 3. Validate an enabled Workday scenario with the published agent.
+> 3. Validate an enabled Workday scenario with the published Production agent.
 
 Do not wait for those results, record them as lifecycle evidence, or keep the
 Workday skill open. They are deployment and adoption validation outside this

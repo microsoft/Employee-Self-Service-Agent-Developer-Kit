@@ -251,8 +251,11 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "lifecycleComplete: true" in text
     assert "do not run `begin-employee-test`" in normalized.casefold()
     assert "wait for Power Automate run-history evidence" in normalized
-    assert "Publish and deploy the agent when ready" in text
+    assert "Promote the agent from Development to Test when ready" in text
+    assert "Promote the agent from Test to Production when ready" in text
+    assert "Publish and deploy the Production agent when ready" in text
     assert "employee establish their own Workday connections" in text
+    assert "Do not add Production employee-adoption steps" in text
     assert "outside this guided setup lifecycle" in normalized
 
 
@@ -544,6 +547,13 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
+    assert "Refresh the Copilot\nStudio page" in action
+    assert '"header": "Confirm Workday topics"' in action
+    assert "all Workday topics show as On" in action
+    assert action.index("Confirm Workday topics") < action.index(
+        "record-topic-activation"
+    )
+    assert "does not replace the\ncontroller's live reread" in action
     assert "record-topic-activation" in action
     assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
@@ -730,6 +740,7 @@ def test_runtime_apply_persists_verified_stages_before_later_failure(
         fail_after_two_stages,
     )
     args = argparse.Namespace(
+        root=tmp_path,
         plan_hash="approved",
         workday_connection_id=None,
         dataverse_connection_id=None,

@@ -491,6 +491,40 @@ def _action_evidence(
     return None
 
 
+def _post_skill_next_steps(realm: str) -> list[str]:
+    if realm == "dev":
+        return [
+            "Promote the agent from Development to Test when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Test."
+            ),
+        ]
+    if realm == "test":
+        return [
+            "Promote the agent from Test to Production when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Production."
+            ),
+        ]
+    if realm == "prod":
+        return [
+            "Publish and deploy the Production agent when ready.",
+            (
+                "Have each non-maker employee establish their own Workday "
+                "connections in Microsoft 365 Chat."
+            ),
+            (
+                "Validate an enabled Workday scenario with the published "
+                "Production agent."
+            ),
+        ]
+    raise WorkdayConnectStoreError(
+        f"Unsupported Workday target realm: {realm}"
+    )
+
+
 def _entra_handoff(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
@@ -1136,29 +1170,24 @@ def _record_validation(
                     evidence=maker_evidence,
                 )
             _run_final_readiness(store)
-            store.finalize_maker_validation_success()
+            final_state = store.finalize_maker_validation_success()
+            active_realm = final_state["activeTargetRealm"]
+            status = store.status()
             if replayed:
                 return {
                     "verified": True,
                     "replayed": True,
                     "lifecycleComplete": True,
-                    "status": store.status(),
+                    "activeTargetRealm": active_realm,
+                    "postSkillNextSteps": _post_skill_next_steps(active_realm),
+                    "status": status,
                 }
             return {
                 "verified": True,
                 "lifecycleComplete": True,
-                "postSkillNextSteps": [
-                    "Publish and deploy the agent when ready.",
-                    (
-                        "Have each non-maker employee establish their own "
-                        "Workday connections in Microsoft 365 Chat."
-                    ),
-                    (
-                        "Validate an enabled Workday scenario with the "
-                        "published agent."
-                    ),
-                ],
-                "status": store.status(),
+                "activeTargetRealm": active_realm,
+                "postSkillNextSteps": _post_skill_next_steps(active_realm),
+                "status": status,
             }
         raise WorkdayConnectRetiredOperationError(
             "Signed-in employee runtime-evidence validation has been retired. "

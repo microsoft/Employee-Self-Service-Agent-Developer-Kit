@@ -447,12 +447,12 @@ and verified certificate expiration date when building the table:
     "allowFreeformInput": false
   },
   {
-    "header": "Remediated domain",
-    "question": "Only when Task not authorized was remediated: enter the affected domain. Otherwise leave blank."
+    "header": "Affected Workday security domain",
+    "question": "Only when Task not authorized was remediated: enter the Workday security domain whose permission changed, such as Worker Data: Public Worker Reports. Otherwise leave blank."
   },
   {
-    "header": "Remediation scenario",
-    "question": "Only when Task not authorized was remediated: enter the named supported scenario. Otherwise leave blank."
+    "header": "Scenario retested after remediation",
+    "question": "Only when Task not authorized was remediated: enter the named supported scenario that was successfully retested, such as Check vacation balance. Otherwise leave blank."
   },
   {
     "header": "Authorization retest",

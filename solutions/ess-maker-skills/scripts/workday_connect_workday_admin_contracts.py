@@ -78,8 +78,8 @@ WORKDAY_ADMIN_WORKSHEET_LABELS = (
     "Optional domains",
     "Additional domain mappings",
     "Authorization",
-    "Remediated domain",
-    "Remediation scenario",
+    "Affected Workday security domain",
+    "Scenario retested after remediation",
     "Authorization retest",
 )
 WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
@@ -105,8 +105,10 @@ WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
     "Functional area scopes": "Functional-area scopes",
     "Domain mappings": "Additional domain mappings",
     "Authorization result": "Authorization",
-    "Affected domain": "Remediated domain",
-    "Affected scenario": "Remediation scenario",
+    "Remediated domain": "Affected Workday security domain",
+    "Affected domain": "Affected Workday security domain",
+    "Remediation scenario": "Scenario retested after remediation",
+    "Affected scenario": "Scenario retested after remediation",
     "Retest result": "Authorization retest",
 }
 
@@ -288,12 +290,12 @@ def parse_workday_admin_return_worksheet(
         response.update(
             {
                 "authorizationRemediationDomain": _safe_nonsecret_text(
-                    values["Remediated domain"],
-                    "Remediated domain",
+                    values["Affected Workday security domain"],
+                    "Affected Workday security domain",
                 ),
                 "authorizationRemediationScenario": _safe_nonsecret_text(
-                    values["Remediation scenario"],
-                    "Remediation scenario",
+                    values["Scenario retested after remediation"],
+                    "Scenario retested after remediation",
                 ),
                 "authorizationRetestOutcome": _worksheet_choice(
                     values,
@@ -307,8 +309,8 @@ def parse_workday_admin_return_worksheet(
     elif any(
         values[label].strip()
         for label in (
-            "Remediated domain",
-            "Remediation scenario",
+            "Affected Workday security domain",
+            "Scenario retested after remediation",
             "Authorization retest",
         )
     ):
@@ -687,22 +689,24 @@ def build_workday_admin_packet(
                 "exampleValue": "Verified without an authorization error",
             },
             {
-                "information": "Remediated domain",
+                "information": "Affected Workday security domain",
                 "fields": ["authorizationRemediationDomain"],
                 "portalLocation": "Affected Workday domain security policy",
                 "instruction": (
-                    "When Task not authorized was remediated, record the "
-                    "affected domain; otherwise leave blank."
+                    "Only when Task not authorized was remediated, record the "
+                    "Workday security domain whose permission changed; "
+                    "otherwise leave blank."
                 ),
                 "exampleValue": "Worker Data: Public Worker Reports",
             },
             {
-                "information": "Remediation scenario",
+                "information": "Scenario retested after remediation",
                 "fields": ["authorizationRemediationScenario"],
                 "portalLocation": "Signed-in employee authorization retest",
                 "instruction": (
-                    "When remediation was required, record the supported "
-                    "scenario used for the retest; otherwise leave blank."
+                    "Only when remediation was required, record the named "
+                    "supported scenario that was successfully retested; "
+                    "otherwise leave blank."
                 ),
                 "exampleValue": "Check vacation balance",
             },

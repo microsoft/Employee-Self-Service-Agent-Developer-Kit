@@ -394,7 +394,11 @@ Then run internally:
 derives the complete Workday dialog list from the selected agent's
 `.component-map.json`, previews the exact scope, and uses the native components
 endpoint to set both `state` and `status` to `Active` for every Workday topic.
-Do not activate only the two User Context setup topics.
+Do not activate only the two User Context setup topics. After the live update
+verifies, the action must ask the maker to refresh Copilot Studio and confirm
+that every Workday topic visibly shows as **On** before recording activation.
+This refreshed-page confirmation is a UX gate, not a substitute for the
+controller's live reread.
 
 Then run:
 
