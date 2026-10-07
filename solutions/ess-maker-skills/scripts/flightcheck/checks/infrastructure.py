@@ -500,10 +500,10 @@ def _discover_external_endpoints(runner: Any) -> list[_ExternalEndpoint]:
 
     Endpoint URLs are not exposed on the BAP connection records (connector
     auth is configured in the Copilot Studio portal, not in code), so this
-    reads the kit's own ``.local/config.json`` ``connections`` map — where the
-    /connect skill records each system's non-secret endpoint metadata (e.g.
-    Workday ``baseUrl``). One endpoint per configured system, de-duplicated by
-    host. Read-only.
+    reads recorded non-secret endpoint metadata in the kit's own
+    ``.local/config.json`` ``connections`` map (e.g. Workday ``baseUrl``),
+    including retained metadata for existing integrations. One endpoint per
+    configured system, de-duplicated by host. Read-only.
     """
     config = getattr(runner, "config", {}) or {}
     connections = config.get("connections", {})
@@ -803,8 +803,8 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
       For an IP-range firewall allowlist they share the same environment egress,
       so this is the correct reachability tool — but a PASS is not an absolute
       guarantee for a connector with exotic per-connector routing.
-    - Installed vs connected: enumeration reads .local/config.json connections
-      (written by /connect), which reflects CONNECTED systems and may undercount
+    - Installed vs connected: enumeration reads recorded .local/config.json
+      connections, which reflects CONNECTED systems and may undercount
       installed-but-not-yet-connected extensions. Any system with no recorded
       endpoint URL is surfaced as MANUAL (unverifiable) rather than dropped.
     """
@@ -820,10 +820,13 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     "ServiceNow / SAP SuccessFactors / custom HTTP."
                 ),
                 remediation=(
-                    "If this agent integrates with an external HR system, record "
-                    "its endpoint so reachability can be validated:\n"
-                    "- Workday and ServiceNow: the /connect skill records the "
+                    "If this agent integrates with an external HR system, use "
+                    "its supported endpoint guidance:\n"
+                    "- Workday: the /connect workday workflow records the "
                     "endpoint automatically.\n"
+                    "- ServiceNow: connection setup isn't supported in this DA "
+                    "release. Ask your administrator to verify the installed "
+                    "ServiceNow product extension's endpoint manually.\n"
                     "- SAP SuccessFactors or a custom HTTP system (no /connect "
                     "flow yet): add the endpoint URL to .local/config.json under "
                     "connections.<System> (for example "
@@ -939,7 +942,7 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     "be created, activated, or triggered, or no endpoint URL is "
                     "recorded for the system. Re-run /flightcheck --scope "
                     "infrastructure --runtime-reachability to retry, confirm the "
-                    "endpoint URL recorded during /connect is correct, or verify "
+                    "recorded endpoint URL is correct, or verify "
                     "allowlisting manually:\n\n"
                     + _infra_003_manual_verification()
                 ),

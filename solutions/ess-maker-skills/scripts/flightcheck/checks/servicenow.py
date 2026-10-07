@@ -132,7 +132,12 @@ def _check_connections(runner) -> list[CheckResult]:
         connector_keyword=["service-now", "servicenow"],
         checkpoint_prefix="SN-CONN",
         category="ServiceNow",
-        not_found_remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
+        not_found_remediation=(
+            "ServiceNow connection setup isn't supported in this DA release. "
+            "Ask your administrator to verify the required HRSD/ITSM product "
+            "extension and its connections using the ServiceNow integration "
+            "documentation."
+        ),
         doc_link=f"{DOC_BASE}/servicenow",
         connection_pin=getattr(runner, "servicenow_connection_pin", "") or "",
     )
@@ -662,5 +667,4 @@ def _count_matching_topics(topic_files: list[str], pack_type: str) -> int:
         if any(p.replace(" ", "") in normalized for p in patterns):
             count += 1
     return count
-
 
