@@ -81,6 +81,7 @@ For the ordinary existing-agent path, run:
 ```text
 python scripts/setup_existing_da.py attach \
   --environment-id "{ENVIRONMENT_ID}" \
+  --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --ring "{RING}" \
   --agent-id "{AGENT_ID}" \
   --allow-unenrolled-authoring

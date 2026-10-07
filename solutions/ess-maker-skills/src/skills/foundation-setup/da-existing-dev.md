@@ -56,11 +56,15 @@ After a Dev result, show:
 
 > Dev agent route verified. Preparing its local authoring workspace...
 
-Run:
+Run the attachment command below. Include `--environment-display-name` only
+when `{ENVIRONMENT_DISPLAY_NAME}` is the service-provided name retained from
+the selected environment record. When it is unavailable, omit that argument;
+do not derive a name from an environment ID, URL, API host, or agent metadata.
 
 ```text
 python scripts/setup_existing_da.py attach \
   --environment-id "{ENVIRONMENT_ID}" \
+  --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --tenant-id "{TENANT_ID}" \
   --host "{VALIDATED_HOST}" \
   --ring "{RING}" \
@@ -173,19 +177,24 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 
 Inspect the exact `ENV-CAPACITY-001` row before applying it and apply each result exactly once. Apply `Passed`, `Failed`, and `Error` immediately without a skip flag. `Passed` requires an observed allocation greater than zero. `Failed` and `Error` remain blocked and are not eligible for administrator-attested skip. A `Warning` means the Licensing API ran successfully and found zero allocated credits. Apply the first `Warning` without a skip flag to record that zero allocation, then present the follow-up below. Do not complete the capacity step without a successful recheck or an explicit administrator-attested skip after a second zero-allocation result. `Manual` means the exact environment is known but the capacity read did not produce a verdict; follow its branch below before applying it so the maker's selected disposition and the source evidence are recorded together.
 
+Use canonical `environment.display_name` as `{ENVIRONMENT_DISPLAY_NAME}` in
+the maker guidance below. When that optional field is unavailable, replace
+the whole placeholder with `the selected Power Platform environment`; do not
+infer an environment name.
+
 For `Warning`, present:
 
 **Message:**
 
 ### Capacity follow-up
 
-FlightCheck checked **{friendly environment name or selected Power Platform environment}** and found **0 allocated Copilot Credits**. Your agent and local authoring workspace are already available.
+FlightCheck checked **{ENVIRONMENT_DISPLAY_NAME}** and found **0 allocated Copilot Credits**. Your agent and local authoring workspace are already available.
 
 1. Open [Power Platform Admin Center]({POWER_PLATFORM_ADMIN_ORIGIN}/billing/licenses/copilotStudio/overview).
 2. In the left navigation, select **Licensing**.
 3. Under **Products**, select **Copilot Studio**.
 4. Select **Manage Copilot Credits**.
-5. Find **{friendly environment name or selected Power Platform environment}**.
+5. Find **{ENVIRONMENT_DISPLAY_NAME}**.
 6. Allocate more than 0 Copilot Credits and save the change.
 
 **End message.**
@@ -224,7 +233,7 @@ When the status is `Manual`, automatic verification did not produce an allocatio
 
 ### Capacity follow-up
 
-We weren’t able to automatically verify capacity for this environment. Your agent and local authoring workspace are already available.
+We weren’t able to automatically verify capacity for **{ENVIRONMENT_DISPLAY_NAME}**. Your agent and local authoring workspace are already available.
 
 | Person or access | Why setup may need them | When |
 | --- | --- | --- |
@@ -236,14 +245,14 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 2. In the left navigation, select **Licensing**.
 3. Under **Products**, select **Copilot Studio**.
 4. Select **Manage Copilot Credits**.
-5. Find **{friendly environment name or selected Power Platform environment}**.
+5. Find **{ENVIRONMENT_DISPLAY_NAME}**.
 6. Review the allocated Copilot Credits. Setup requires a nonzero allocation for an automatic pass; for initial use, we recommend allocating **500 or more Copilot Credits**.
 
 After a Power Platform administrator verifies or changes the allocation, use **Check again** so Setup can attempt to verify the current state.
 
 > ⚠️ **Administrator consent required**
 >
-> Selecting **Continue with administrator-attested skip** confirms that a **Power Platform administrator is present and has consented to override this capacity check**. Setup will not verify or allocate capacity. The original unavailable or denied result remains the recorded evidence.
+> Selecting **Continue with administrator-attested skip** confirms that a **Power Platform administrator is present and has consented to override the capacity check for {ENVIRONMENT_DISPLAY_NAME}**. Setup will not verify or allocate capacity. The original unavailable or denied result remains the recorded evidence.
 
 **End message.**
 
@@ -348,8 +357,6 @@ Use the same five rows and order in every runtime-readiness table. Map the three
 
 Each evidence summary states whether the check ran, its target, and the result file's `started` observation time when available. Preserve the row's safe `serviceStatus`, `requestId`, `outcome`, and other non-secret evidence when a check is unavailable. Do not expose tokens, authorization headers, or customer content.
 
-Convert every maker-facing FlightCheck timestamp to the local timezone of the machine running setup. Render timestamps at second precision using `YYYY-MM-DDTHH:mm:ss`, for example `2026-10-03T01:43:19`. Truncate fractional seconds; do not round. Do not display a UTC suffix, numeric offset, or timezone abbreviation. Apply this format to every `{observation time}` and `{recorded time}` in the runtime-readiness table. Format presentation only; do not rewrite persisted evidence. If a source timestamp is missing, invalid, or lacks timezone information, omit the displayed time rather than inferring one.
-
 Use concise factual details:
 
 - Agent access: **Access to {agent display name} was verified. Observed at {observation time}.**
@@ -374,7 +381,7 @@ Complete this connection to finish foundation readiness. Your agent and local au
 For `NotConfigured`, show:
 
 1. Open [Power Apps]({POWER_APPS_ORIGIN}/).
-2. Select **{friendly environment name or selected Power Platform environment}**.
+2. Select **{ENVIRONMENT_DISPLAY_NAME}**.
 3. Open **Connections**.
 4. Select **New connection**.
 5. Search for **Microsoft 365 Self-Help**.
@@ -420,6 +427,7 @@ Continue only after the maker explicitly selects **Checkpoint and refresh**:
 ```text
 python scripts/setup_existing_da.py attach \
   --environment-id "{ENVIRONMENT_ID}" \
+  --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --tenant-id "{TENANT_ID}" \
   --host "{VALIDATED_HOST}" \
   --ring "{RING}" \

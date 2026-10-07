@@ -439,15 +439,17 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value),
     ),
-    # ---- Workday: active connector runtime health (WD-RUN-001) ----
+    # ---- Workday: end-to-end runtime health (WD-RUN-001) ----
     # Emitted by run_workday_checks (_check_workday_run_health ->
-    # _check_workday_active_run_health). The active, consent-gated probe reads
-    # BAP connections + creates a transient Dataverse probe flow, and the
-    # passive run-history fallback reads flow runs via pp_admin over the flows
-    # WD-001 hydrates onto runner._workday_flows — so the plan needs both
-    # PP_ADMIN and DATAVERSE and pulls WD-001 as a prereq. Fixed ID (not a
-    # family): registering it makes `--checkpoint WD-RUN-001` resolve instead
-    # of raising RegistryError.
+    # _check_workday_run_health_passive). Passive-only, user-assisted: it reads
+    # recent Workday flow runs via pp_admin over the flows WD-001 hydrates onto
+    # runner._workday_flows and grades the freshest terminal run (started within
+    # the last 60 min), so the plan needs both PP_ADMIN and DATAVERSE and pulls
+    # WD-001 as a prereq. Direct/headless invocation was ruled out (invoker-
+    # scoped connector carries no user token; only tests Flow->Workday). No
+    # fresh run -> NOT_CONFIGURED with guided sign-in remediation (SKILL.md 3d).
+    # Fixed ID (not a family): registering it makes `--checkpoint WD-RUN-001`
+    # resolve instead of raising RegistryError.
     CheckpointSpec(
         key="WD-RUN-001",
         category_fn=run_workday_checks,
