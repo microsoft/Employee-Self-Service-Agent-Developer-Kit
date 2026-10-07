@@ -294,7 +294,7 @@ of things you CAN fix automatically vs. things that need manual action.
 
 **Auto-fixable** (offer to do these right now):
 - Compile errors in topics → run `/scan` skill
-- Missing Workday/ServiceNow connection → run `/connect` skill
+- Missing Workday connection → run `/connect` skill
 - Workday env vars not set → run `/connect workday` skill
 - Workday connections in Error state → run `/connect workday` skill
 - Disabled Workday/ServiceNow flows → enable via Dataverse MCP

@@ -445,7 +445,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
-| Connect to ServiceNow/Workday                                                                           | `src/skills/connect/SKILL.md`                                                                 |
+| Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
 | Create a topic                                                                                          | Stop: topic creation is not yet available; do not read a topic-authoring skill or write files |
 | Create a workflow                                                                                       | `src/skills/workflows/create/SKILL.md`                                                        |
 | Update/modify a topic                                                                                   | Stop: topic updates are not yet available; do not read a topic-authoring skill or write files |
@@ -467,9 +467,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
-**Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
-"integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
-"I want to connect to ServiceNow", "ServiceNow integration".
+**Trigger phrases for connect:** "connect Workday", "set up Workday".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works
