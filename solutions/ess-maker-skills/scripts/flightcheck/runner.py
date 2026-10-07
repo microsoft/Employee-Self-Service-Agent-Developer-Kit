@@ -67,6 +67,31 @@ class Role(str, Enum):
     ESS_MAKER = "ESS Maker / Agent Developer"
 
 
+# Block-reason taxonomy — WHY a BLOCKED check was gated, as a bounded enum.
+#
+# The BLOCKED status already tells telemetry that an essential platform
+# capability was unavailable; block_reason splits that single wedge by cause
+# so we can count, specifically, runs blocked by admin-API authorization
+# denials vs. everything else. These are emitted to telemetry, so they MUST
+# stay a small closed set of non-identifying tokens — never free text or
+# error messages (EUII risk). telemetry.py keeps an independent allow-list
+# mirror of these literals; keep the two in sync.
+#
+# adminApiAuthorization — an admin API positively rejected us for identity
+#   reasons: HTTP 401/403 or an AADSTS* error. This is the metric the team
+#   is chasing (customers blocked by admin-API auth policy).
+# adminApiUnavailable — an admin API could not be reached or did not
+#   positively authorize/deny: connect error, timeout, 404 wrong-env, 5xx.
+#   Default when a client block cannot be positively classified as auth, so
+#   the known test-ring 404-wrong-host bug never inflates the auth metric.
+BLOCK_REASON_ADMIN_API_AUTHORIZATION = "adminApiAuthorization"
+BLOCK_REASON_ADMIN_API_UNAVAILABLE = "adminApiUnavailable"
+BLOCK_REASON_CHECKPOINT_CONTRACT = "checkpointContract"
+BLOCK_REASON_PROFILE_CARDINALITY = "profileCardinality"
+BLOCK_REASON_EVIDENCE_AMBIGUOUS = "evidenceAmbiguous"
+BLOCK_REASON_OTHER = "other"
+
+
 @dataclass
 class CheckResult:
     checkpoint_id: str
@@ -87,6 +112,10 @@ class CheckResult:
     # so the runner's ERROR fallback and unit-test constructions still
     # build. Values are Role enum strings.
     roles: list[str] = field(default_factory=list)
+    # block_reason — WHY this check is BLOCKED, as a bounded BLOCK_REASON_*
+    # token. Only meaningful when status == BLOCKED; empty on every other
+    # status. An empty block_reason on a blocked row means pre-change data.
+    block_reason: str = ""
 
     def __post_init__(self) -> None:
         if not self.severity:

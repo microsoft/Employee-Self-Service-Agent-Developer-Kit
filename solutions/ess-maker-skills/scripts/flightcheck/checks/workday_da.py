@@ -36,7 +36,13 @@ from workday_connect_model import (
 )
 
 from ..agent_scope import active_agent, validate_agent_slug
-from ..runner import CheckResult, Priority, Role, Status
+from ..runner import (
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    CheckResult,
+    Priority,
+    Role,
+    Status,
+)
 from .workday import _WD_SUCCESS_RESPONSE_ACTION, _classify_run
 
 
@@ -366,6 +372,7 @@ def _da_result(
     priority: str = Priority.CRITICAL.value,
     automation_type: str = "automated",
     evidence: dict[str, Any] | None = None,
+    block_reason: str = "",
 ) -> CheckResult:
     return CheckResult(
         checkpoint_id=checkpoint_id,
@@ -379,6 +386,7 @@ def _da_result(
         roles=roles or [Role.ESS_MAKER.value],
         automation_type=automation_type,
         evidence=evidence or {},
+        block_reason=block_reason,
     )
 
 
@@ -1327,6 +1335,7 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             ),
             automation_type="passive",
             evidence=evidence,
+            block_reason=BLOCK_REASON_EVIDENCE_AMBIGUOUS,
         )]
     if pending:
         return [_da_result(
@@ -1344,6 +1353,7 @@ def _check_correlated_runtime_evidence(runner) -> list[CheckResult]:
             ),
             automation_type="passive",
             evidence=evidence,
+            block_reason=BLOCK_REASON_EVIDENCE_AMBIGUOUS,
         )]
     if missing:
         return [_da_result(
