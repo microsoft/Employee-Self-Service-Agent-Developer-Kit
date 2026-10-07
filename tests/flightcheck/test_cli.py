@@ -346,7 +346,9 @@ class TestInfrastructureScopeAuthGating:
             cli.main()
 
         assert exc.value.code == 1
-        assert "environment ring is unavailable" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "could not determine the Power Platform environment ring" in output
+        assert "--ring, configured ring, or powerPlatformApiEndpoint" in output
 
 
 class TestAgentBuilderLocalScope:

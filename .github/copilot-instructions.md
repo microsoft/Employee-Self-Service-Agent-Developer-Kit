@@ -1,62 +1,44 @@
 # Repo-root Copilot instructions
 
-If GitHub Copilot is reading this file, the user has opened the **top-level repo folder** (`Employee-Self-Service-Agent-Developer-Kit/`) as their VS Code workspace root.
+## Discover Maker Kit operations
 
-This repo is a **monorepo of solutions**. The actual tooling for each solution — slash-commands, agent personas, Python scripts — lives inside individual solution folders under `solutions/` (today the canonical one is `solutions/ess-maker-skills/`; more may be added over time), NOT at this repo root. Slash-commands typed against the repo root will not resolve to any prompt and Copilot Chat will treat them as plain text.
+At the beginning of each conversation, check whether both of these nested Maker
+Kit paths are available:
 
-## Do not load nested solution-level instructions from here
+- `solutions/ess-maker-skills/.github/prompts/` contains at least one
+  `*.prompt.md` file.
+- `solutions/ess-maker-skills/src/skills/` exists.
 
-Even when responding to a normal coding request at the repo root, do **not** read or follow `solutions/ess-maker-skills/.github/copilot-instructions.md` (or the equivalent file in any future sibling solution). Those files expect to be the active workspace's instructions and contain setup gates that misfire when loaded out of context (e.g. they will force-trigger a "run `/setup`" welcome message even when the user is just editing a CI workflow at the repo root). Treat solution-level instruction files as opaque from this workspace.
+When that pair is unavailable, do not apply the Maker Kit folder-routing
+instructions below. Route the request as normal.
 
-## Default behavior
+When that pair is available:
 
-For everything that isn't an attempt to use the kit (general questions, code exploration, README lookups, "what is this repo?", build/test help on the repo's Python scripts, etc.) **behave normally**. You are a general-purpose coding assistant working in a monorepo. Help the user with whatever they're actually asking about — there is no kit persona to load here and no setup gate to enforce.
+- When the request begins with `/`, derive its prompt filename from the command
+  name. For example, `/flightcheck` maps to `flightcheck.prompt.md`. Check that
+  candidate directly in the nested prompt catalog.
+- For natural-language requests, or when the direct command candidate does not
+  exist, list the prompt filenames in the nested catalog and use them to match
+  the operation intent.
+- When the filename match remains unclear, read the `description` frontmatter
+  field from likely candidate prompts.
+- Provide the folder-selection guidance when the request matches a discovered
+  Maker Kit operation.
+- Also provide the folder-selection guidance when the user explicitly asks to
+  use, open, or run the ESS Maker Kit as a maker experience.
 
-## When to fire the "wrong folder" redirect
+## Folder-selection guidance
 
-**Only** show the redirect message below when the user is clearly trying to invoke the ESS Maker Kit and will be blocked by the wrong-folder problem. Concretely, fire the redirect if either of the following is true:
+When folder-selection guidance applies, respond with only:
 
-1. **Explicit kit slash-command.** The user's message starts with (or is exactly) one of the kit's slash-commands:
-   - `/setup`
-   - `/landing-page`
-   - `/create`
-   - `/connect`
-   - `/connect-workday`
-   - `/delete`
-   - `/evaluate`
-   - `/run`
-   - `/scan`
-   - `/update`
-   - `/push`
-   - `/menu`
-   - `/troubleshoot`
-   - `/flightcheck`
-
-2. **Intent hint — natural-language equivalent.** The user isn't typing a slash-command but is unambiguously asking to *run* the kit from this workspace. Examples:
-   - "How do I set up the kit?" / "How do I run setup?" / "Start the ESS Maker Kit"
-   - "Run flightcheck" / "Run the readiness check on my agent"
-   - "Create a topic" / "Connect ServiceNow" / "Scan my agent for errors" — when phrased as a request to *do it now* in this workspace, not as a general "how does this work?" question.
-
-   When in doubt, prefer the default behavior (answer normally) over firing the redirect. A user asking "what does /flightcheck do?" is asking a documentation question — answer it from the README and `solutions/ess-maker-skills/` files; do **not** redirect.
-
-## The redirect message
-
-When (and only when) the trigger conditions above are met, respond with **only** this message and nothing else:
-
-> Hey! It looks like you opened the top-level repo folder in VS Code, but the kit's slash-commands live inside a specific solution folder.
+> ESS Maker Kit agent operations are available from the
+> `solutions/ess-maker-skills` workspace.
 >
-> **To use the ESS Maker Kit:**
+> **Open the Maker Kit workspace:**
 >
-> 1. Click `File` → `Open Folder…` (or press `Ctrl+K Ctrl+O`)
-> 2. Navigate **inside** this folder, then **into** `solutions`, and select `ess-maker-skills`
-> 3. Click `Select Folder`
-> 4. VS Code will reopen with the kit loaded
-> 5. Type your command again (for example `/setup` or `/run`) — it will work this time
->
-> See the [README](README.md) for the full getting-started walkthrough.
->
-> Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
+> 1. In VS Code, select `File` → `Open Folder…` or press `Ctrl+K Ctrl+O`.
+> 2. Select `solutions/ess-maker-skills`.
+> 3. Click `Select Folder`.
+> 4. After VS Code reopens, enter the request again.
 
-When firing the redirect, do not also try to execute the user's request from this folder — the kit persona, skills, and scripts are not loaded here, so any attempt would run against the wrong workspace.
-
-If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, then include the steps above.
+Route every request not covered above as normal.
