@@ -133,10 +133,8 @@ def _check_connections(runner) -> list[CheckResult]:
         checkpoint_prefix="SN-CONN",
         category="ServiceNow",
         not_found_remediation=(
-            "ServiceNow connection setup isn't supported in this DA release. "
-            "Ask your administrator to verify the required HRSD/ITSM product "
-            "extension and its connections using the ServiceNow integration "
-            "documentation."
+            "Guided ServiceNow setup is not yet available in ADK. You can configure the "
+            "ServiceNow connection manually in Copilot Studio or contact admin."
         ),
         doc_link=f"{DOC_BASE}/servicenow",
         connection_pin=getattr(runner, "servicenow_connection_pin", "") or "",

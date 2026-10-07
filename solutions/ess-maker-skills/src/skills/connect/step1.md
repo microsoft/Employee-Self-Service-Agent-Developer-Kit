@@ -59,11 +59,10 @@ Wait for the user to respond.
 
 ## 1.3 — Route by selection
 
-### If the user requested ServiceNow (any alias)
+### If the user requested ServiceNow
 
-Apply **Availability** in `src/skills/connect/SKILL.md`: show its unavailable
-Message and STOP. The legacy instructions below are reference-only; never
-execute them in this DA release.
+Apply **Availability** in `src/skills/connect/SKILL.md` and STOP.
+The legacy steps below are reference-only.
 
 Record anonymous usage telemetry attributed to ServiceNow (best-effort,
 non-blocking — no user-facing message, and it never fails the step):

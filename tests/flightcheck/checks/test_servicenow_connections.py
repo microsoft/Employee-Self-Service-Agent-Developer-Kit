@@ -44,6 +44,11 @@ from tests.mocks import pp_admin as pp
 
 require_validated_mock(pp)
 
+_SERVICENOW_MESSAGE = (
+    "Guided ServiceNow setup is not yet available in ADK. You can configure the "
+    "ServiceNow connection manually in Copilot Studio or contact admin."
+)
+
 
 @dataclass
 class _MinimalRunner:
@@ -257,21 +262,30 @@ class TestBadConfig:
 
     @responses.activate
     def test_no_servicenow_connections_returns_not_configured(
-        self, runner: _MinimalRunner
+        self, runner: _MinimalRunner, tmp_path
     ) -> None:
         """Empty connections list — clean tenant, ServiceNow not set up
-        yet. Preserve NOT_CONFIGURED with the manual DA boundary."""
+        yet. Keep manual configuration guidance in the result and report."""
         from flightcheck.checks.servicenow import _check_connections
-        responses.add(**pp.list_connections(env_id=runner.env_id, connections=[]))
+        from flightcheck.runner import FlightCheckRunner, save_results
 
-        results = _check_connections(runner)
-        summary = _result_by_id(results, "SN-CONN-001")
+        responses.add(**pp.list_connections(env_id=runner.env_id, connections=[]))
+        report_runner = FlightCheckRunner(scope="servicenow")
+        report_runner.pp_admin = runner.pp_admin
+        report_runner.env_id = runner.env_id
+        report_runner.register("ServiceNow", _check_connections)
+
+        run_result = report_runner.run()
+        summary = _result_by_id(run_result.results, "SN-CONN-001")
         assert summary.status == "NotConfigured"
         assert "No ServiceNow connections" in summary.result
-        assert "isn't supported in this DA release" in summary.remediation
-        assert "administrator" in summary.remediation
-        assert "HRSD/ITSM product extension" in summary.remediation
-        assert "/connect" not in summary.remediation
+        assert summary.remediation == _SERVICENOW_MESSAGE
+        save_results(run_result, output_dir=str(tmp_path))
+        data = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+        assert data["results"][0]["remediation"] == _SERVICENOW_MESSAGE
+        report = unescape((tmp_path / "report.html").read_text(encoding="utf-8"))
+        assert _SERVICENOW_MESSAGE in report
+        assert re.search(r"/connect\b", report) is None
 
     @responses.activate
     def test_only_non_servicenow_connections_returns_not_configured(
@@ -293,10 +307,7 @@ class TestBadConfig:
         summary = _result_by_id(results, "SN-CONN-001")
         assert summary.status == "NotConfigured"
         assert "No ServiceNow connections" in summary.result
-        assert "isn't supported in this DA release" in summary.remediation
-        assert "administrator" in summary.remediation
-        assert "HRSD/ITSM product extension" in summary.remediation
-        assert "/connect" not in summary.remediation
+        assert summary.remediation == _SERVICENOW_MESSAGE
 
 
 class TestMixedState:
@@ -347,35 +358,6 @@ class TestMixedState:
 
 
 class TestMetadataPropagation:
-    @responses.activate
-    def test_missing_connection_report_keeps_manual_guidance(
-        self, runner: _MinimalRunner, tmp_path
-    ) -> None:
-        from flightcheck.checks.servicenow import _check_connections
-        from flightcheck.runner import FlightCheckRunner, save_results
-
-        responses.add(**pp.list_connections(env_id=runner.env_id, connections=[]))
-        report_runner = FlightCheckRunner(scope="servicenow")
-        report_runner.pp_admin = runner.pp_admin
-        report_runner.env_id = runner.env_id
-        report_runner.register("ServiceNow", _check_connections)
-
-        run_result = report_runner.run()
-        summary = _result_by_id(run_result.results, "SN-CONN-001")
-        save_results(run_result, output_dir=str(tmp_path))
-
-        data = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
-        row = next(r for r in data["results"] if r["checkpoint_id"] == "SN-CONN-001")
-        assert row["status"] == "NotConfigured"
-        assert row["result"] == "No ServiceNow connections found"
-        assert row["remediation"] == summary.remediation
-        assert "administrator" in row["remediation"]
-        assert "HRSD/ITSM product extension" in row["remediation"]
-        assert "/connect" not in row["remediation"]
-        report = unescape((tmp_path / "report.html").read_text(encoding="utf-8"))
-        assert summary.remediation in report
-        assert re.search(r"/connect\b", report) is None
-
     @responses.activate
     def test_all_rows_use_servicenow_category_and_sn_conn_prefix(
         self, runner: _MinimalRunner

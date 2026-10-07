@@ -8,27 +8,15 @@ or what files you are reading.
 
 ## Availability
 
-This DA release offers **Workday only**, subject to the existing active-agent
-architecture gates. ServiceNow connect is unavailable for every target in this
-release; saved state cannot enable it.
-
-Treat case-insensitive `servicenow`, `service now`, `snow`, `hrsd`, and `itsm`
-as ServiceNow. This includes explicit arguments, PRE_SELECTED_INTEGRATION,
-connection setup inferred from topic/workflow requests, reconnect, change-auth,
-resume/continue, and repair, with complete, incomplete, stale, or absent
-ServiceNow state. Use the requested provider or prior conversation context to
-classify follow-ups; generic `/connect` never reads or advertises saved
-ServiceNow state.
-
-For a ServiceNow request, show this Message and STOP before reading or writing
-provider state, asking for credentials, emitting connect telemetry, configuring
-MCP, or loading or executing retained provider files. Leave existing state
-unchanged. Do not substitute Workday for a requested ServiceNow operation.
+Only Workday has a guided setup route in ADK; keep its architecture checks.
+For ServiceNow requests (including SNOW and follow-ups), show the Message and
+STOP before provider state, credentials, telemetry, MCP, or retained steps.
+Apply this to preselection and saved state; never substitute Workday for a
+different requested provider.
 
 **Message:**
 
-ServiceNow integration isn't supported in this DA release. Please contact
-your administrator.
+Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
 
 **End message.**
 
@@ -36,7 +24,7 @@ your administrator.
 
 ## Start
 
-Apply **Availability** before any setup check or other connect action.
+Apply **Availability** before continuing.
 
 If the user specified a supported integration as an argument (e.g., "workday"),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the

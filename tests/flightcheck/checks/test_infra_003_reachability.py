@@ -138,14 +138,12 @@ class TestManualGuidanceWhenNoEgressProbe:
         servicenow_guidance = row.remediation.split("- ServiceNow:", 1)[1].split(
             "- SAP SuccessFactors", 1
         )[0]
-        assert "isn't supported in this DA release" in servicenow_guidance
-        assert "administrator" in servicenow_guidance
-        assert "product extension" in servicenow_guidance
+        assert "Guided ServiceNow setup is not yet available in ADK" in servicenow_guidance
+        assert "manually in Copilot Studio or contact admin" in servicenow_guidance
         assert "/connect" not in servicenow_guidance
         card = _render_check_card(row)
         assert "Workday and ServiceNow: the /connect" not in card
-        assert "administrator" in card
-        assert "product extension" in card
+        assert "manually in Copilot Studio" in card
 
     def test_default_run_returns_manual_guidance_not_a_probe(self):
         # No --runtime-reachability: reachability is not tested; the check hands

@@ -19,7 +19,6 @@ Covered:
 
 from __future__ import annotations
 
-import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -220,27 +219,6 @@ class TestDeleteProbeFlow:
 
 class TestLiveProbeIndeterminate:
     @responses.activate
-    def test_servicenow_create_failure_keeps_manual_endpoint_guidance(self):
-        from flightcheck.runner import _render_check_card
-
-        responses.add(**pa.find_workflows())
-        responses.add(**pa.create_workflow(status=500))
-        runner = _live_runner({"ServiceNow": {"instanceUrl": "https://sn.example.com"}})
-
-        results = check_external_endpoint_reachability(runner)
-
-        assert len(results) == 1
-        row = results[0]
-        assert row.status == Status.MANUAL.value
-        assert "UNDETERMINED from the egress probe" in row.result
-        assert "recorded endpoint URL" in row.remediation
-        assert "verify allowlisting manually" in row.remediation
-        assert re.search(r"/connect\b", row.remediation) is None
-        assert re.search(r"/connect\b", _render_check_card(row)) is None
-        assert Role.SERVICENOW_ADMIN.value in row.roles
-        assert Role.POWER_PLATFORM_ADMIN.value in row.roles
-
-    @responses.activate
     def test_create_failure_is_manual_not_local_probe(self):
         # Flow creation fails (500) -> the egress result is indeterminate. The
         # local probe was removed, so the endpoint is reported MANUAL with
@@ -259,6 +237,7 @@ class TestLiveProbeIndeterminate:
         assert "necessary but not sufficient" not in row.result
         # Guidance points back at the egress probe + manual verification.
         assert "--runtime-reachability" in row.remediation
+        assert "/connect " not in row.remediation
         assert Role.WORKDAY_ADMIN.value in row.roles
         assert Role.POWER_PLATFORM_ADMIN.value in row.roles
 

@@ -239,27 +239,24 @@ This toolkit does NOT:
 
 ## Integrations
 
-> **DA-GA boundary:** `/connect` offers Workday for the native ESS HR Agent.
-> ServiceNow connection setup is not supported in this DA release; its retained
-> implementation and integration documentation are reference-only. The kit
-> does not enter retired CEA or DA-Preview setup flows.
+> **DA-GA boundary:** ServiceNow, Workday, and other integrations are delivered
+> through separate product extensions. ADK does not enter the retired CEA or
+> DA-Preview setup flows.
 
-The ServiceNow reference below describes earlier Dataverse-based releases,
-not an executable setup path in the current DA-GA release.
+The reference sections below describe how these integrations were configured in
+earlier Dataverse-based releases.
 
 ### ServiceNow (HRSD / ITSM)
 
-ServiceNow connection setup is not supported in this DA release, including
-reconnect, authentication changes, and resuming saved setup. Its source remains
-available for reference.
+Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
 
-**Retained setup reference:**
+**Setup reference:**
 - **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
 - **OAuth or Certificate auth** for service-to-service flows — configurable per environment
 - **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
 - **Extension pack installation** — installs the ServiceNow HRSD/ITSM extension in Copilot Studio with all connection references wired up
 
-**Historical auth methods:**
+**Supported auth methods:**
 | Method | Use case |
 |--------|----------|
 | Microsoft Entra ID (interactive) | Production — employees SSO through Microsoft |
@@ -348,7 +345,7 @@ The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for 
 - **REST API** — Query and create records in any ServiceNow table
 - **Connection testing** — Verify instance connectivity and credentials
 
-Retained for reference; the DA connection experience does not configure it.
+Not configured automatically by ADK.
 
 ---
 

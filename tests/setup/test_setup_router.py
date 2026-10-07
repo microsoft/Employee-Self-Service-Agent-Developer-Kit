@@ -13,6 +13,10 @@ _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
 _BOUNDARY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _CONNECT_SKILL = _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
+_SERVICENOW_MESSAGE = (
+    "Guided ServiceNow setup is not yet available in ADK. You can configure the "
+    "ServiceNow connection manually in Copilot Studio or contact admin."
+)
 _OLD_PROMPT = _SOLUTION / ".github" / "prompts" / "setup-workday.prompt.md"
 _WORKDAY_PROVIDER_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
 _WORKDAY_PLAYBOOKS = (
@@ -38,8 +42,53 @@ def test_connect_workday_routes_installed_cea_packages_to_lifecycle() -> None:
     assert "connect/workday/step" not in step1
     assert "connect/workday/step" not in connect
     assert "connect/shared/lifecycle-runner.md" in connect
-    assert "ServiceNow integration isn't supported in this DA release." in connect
     assert "src/skills/connect/servicenow/" not in connect
+
+
+def test_guided_servicenow_requests_stop_before_provider_actions() -> None:
+    connect = _CONNECT_SKILL.read_text(encoding="utf-8")
+    contract = " ".join(connect.split("## Availability", 1)[1].split("## Start", 1)[0].split())
+    assert _SERVICENOW_MESSAGE in contract
+    assert "Only Workday" in contract and "SNOW and follow-ups" in contract
+    assert "preselection and saved state" in contract
+    assert "STOP before provider state, credentials, telemetry, MCP, or retained steps" in contract
+    assert "never substitute Workday" in contract
+
+    route = _CONNECT_STEP1.read_text(encoding="utf-8")
+    entry = route.split("## 1.1", 1)[0]
+    assert "Apply **Availability**" in entry and "PRE_SELECTED_INTEGRATION" in entry
+    legacy = route.split("### If the user requested ServiceNow", 1)[1].split(
+        "### If the user chose Workday", 1
+    )[0]
+    for action in ("emit_capability.py", ".local/connect/servicenow/", "vscode_askQuestions"):
+        assert legacy.index("STOP") < legacy.index(action)
+    assert "reference-only" in legacy
+
+
+def test_connect_menus_and_callers_use_the_guided_boundary() -> None:
+    route = _CONNECT_STEP1.read_text(encoding="utf-8")
+    menu = route.split("## 1.1", 1)[1].split("## 1.3", 1)[0]
+    assert "servicenow" not in menu.casefold()
+    assert menu.count("1. **Workday**") == 2
+    assert '### If the user chose Workday (1 or "workday")' in route
+    instructions = (_SOLUTION / ".github" / "copilot-instructions.md").read_text(encoding="utf-8")
+    assert "Before any guided connection dispatch, apply **Availability**" in instructions
+    assert "including repair and follow-ups" in " ".join(instructions.split())
+    prompt = (_SOLUTION / ".github" / "prompts" / "connect.prompt.md").read_text(encoding="utf-8")
+    assert prompt.index("and STOP") < prompt.index("Read `src/skills/connect/SKILL.md`")
+    foundation = (_SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md").read_text(encoding="utf-8")
+    assert "**Add or change an integration** begins `/connect`" in " ".join(foundation.split())
+
+
+def test_flightcheck_and_docs_keep_servicenow_setup_manual() -> None:
+    text = (_SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md").read_text(encoding="utf-8")
+    fixes = text.split("### 3c", 1)[1].split("### 3d", 1)[0]
+    assert "Apply **Availability**" in fixes and "manual Copilot Studio guidance" in fixes
+    assert "Missing Workday connection" in fixes and "Missing Workday/ServiceNow" not in fixes
+    assert "Workday connection issues" in fixes and "with Workday preselected" in fixes
+    readme = (_SOLUTION / "README.md").read_text(encoding="utf-8")
+    assert _SERVICENOW_MESSAGE in " ".join(readme.split())
+    assert "/connect servicenow" not in readme
 
 
 def test_hybrid_boundary_is_non_mutating() -> None:

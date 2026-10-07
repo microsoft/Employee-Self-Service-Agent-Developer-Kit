@@ -5,10 +5,6 @@ description: "Connect Workday or another supported integration"
 
 # Connect
 
-**Availability check.** Apply **Availability** in
-`src/skills/connect/SKILL.md` first. Finish unavailable requests there before
-the setup-state check; otherwise continue below.
-
 **Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
 Resolve `activeAgent` to the canonical agent whose `agent.workspace_slug`
 matches. Continue when canonical state has `schema_version: 4`, complete

@@ -500,10 +500,10 @@ def _discover_external_endpoints(runner: Any) -> list[_ExternalEndpoint]:
 
     Endpoint URLs are not exposed on the BAP connection records (connector
     auth is configured in the Copilot Studio portal, not in code), so this
-    reads recorded non-secret endpoint metadata in the kit's own
-    ``.local/config.json`` ``connections`` map (e.g. Workday ``baseUrl``),
-    including retained metadata for existing integrations. One endpoint per
-    configured system, de-duplicated by host. Read-only.
+    reads the kit's own ``.local/config.json`` ``connections`` map — where the
+    /connect skill records each system's non-secret endpoint metadata (e.g.
+    Workday ``baseUrl``). One endpoint per configured system, de-duplicated by
+    host. Read-only.
     """
     config = getattr(runner, "config", {}) or {}
     connections = config.get("connections", {})
@@ -803,8 +803,8 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
       For an IP-range firewall allowlist they share the same environment egress,
       so this is the correct reachability tool — but a PASS is not an absolute
       guarantee for a connector with exotic per-connector routing.
-    - Installed vs connected: enumeration reads recorded .local/config.json
-      connections, which reflects CONNECTED systems and may undercount
+    - Installed vs connected: enumeration reads .local/config.json connections
+      (written by /connect), which reflects CONNECTED systems and may undercount
       installed-but-not-yet-connected extensions. Any system with no recorded
       endpoint URL is surfaced as MANUAL (unverifiable) rather than dropped.
     """
@@ -824,9 +824,9 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     "its supported endpoint guidance:\n"
                     "- Workday: the /connect workday workflow records the "
                     "endpoint automatically.\n"
-                    "- ServiceNow: connection setup isn't supported in this DA "
-                    "release. Ask your administrator to verify the installed "
-                    "ServiceNow product extension's endpoint manually.\n"
+                    "- ServiceNow: Guided ServiceNow setup is not yet available in ADK. "
+                    "You can configure the ServiceNow connection manually in Copilot "
+                    "Studio or contact admin.\n"
                     "- SAP SuccessFactors or a custom HTTP system (no /connect "
                     "flow yet): add the endpoint URL to .local/config.json under "
                     "connections.<System> (for example "

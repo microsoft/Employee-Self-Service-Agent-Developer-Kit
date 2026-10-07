@@ -1,20 +1,8 @@
 # ESS Maker Kit — Copilot Instructions
 
-## Connection availability (before setup gating)
+## MANDATORY FIRST ACTION — Do This Before Anything Else
 
-For ServiceNow connection/setup, reconnect, change-auth, resume/continue, or
-repair requests, apply **Availability** in `src/skills/connect/SKILL.md` first
-and finish unavailable requests there, including follow-ups to a prior run.
-Before a generic topic/workflow request dispatches integration setup, apply
-the same contract; use the supported-provider menu rather than infer
-ServiceNow from saved state.
-The retained ServiceNow connect files are reference-only: never load or execute
-them, even to continue an earlier run.
-
-## MANDATORY FIRST ACTION — Setup-state Check
-
-For requests that continue past connection availability, **your first action
-on every new conversation must be: use your file
+**YOUR VERY FIRST ACTION on every new conversation must be: use your file
 reading tool to try to read `.local/setup/config.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
 the user first. Do NOT list capabilities. Read this file FIRST, then decide what
@@ -406,10 +394,8 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 
 ### ServiceNow
 - Requires the corresponding DA-GA HRSD or ITSM product extension.
-- Apply **Availability** in `src/skills/connect/SKILL.md` to connection/setup
-  requests. The vendored integration docs are informational only, not a route
-  to the retained connection steps.
-- See `src/reference/ess-docs/integrations/servicenow.md` for integration reference
+- Do not configure the connector or write template configs through the retired Dataverse path.
+- See `src/reference/ess-docs/integrations/servicenow.md` for connector setup
 - See `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for HRSD/ITSM details
 
 ### Workday
@@ -441,11 +427,15 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 
 ### Skill routing for CRUD operations
 
+Before any guided connection dispatch, apply **Availability** in
+`src/skills/connect/SKILL.md`, including repair and follow-ups; retained
+provider steps are not direct entry points.
+
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`) | `src/skills/connect/SKILL.md` |
-| Choose an available integration, reconnect, change authentication, or continue connection setup | `src/skills/connect/SKILL.md` |
+| Connect to Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
 | Update/modify a topic | `src/skills/topics/update-eval-driven/SKILL.md` |
