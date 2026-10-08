@@ -6,8 +6,6 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 ## Getting started
 
-Setting up an ESS Declarative Agent? Use the [Declarative Agent setup guide](docs/declarative-agent/README.md) for one recommended maker path from installation through `/setup`.
-
 One command installs everything (VS Code, Python 3.12, Git, GitHub CLI, .NET runtime, NuGet, Copilot extensions, pip dependencies) and opens the `ess-maker-skills` workspace in VS Code.
 
 **What happens after you run it:**
