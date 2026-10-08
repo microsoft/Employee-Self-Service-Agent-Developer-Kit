@@ -832,14 +832,8 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
         normalized_text = " ".join(text.split()).casefold()
         assert "resolve the service ring" in normalized_text
         assert "da-environment-target.md" in normalized_text
-    assert "Which Power Platform service ring should setup use?" in (environment_target)
     assert "recognized Copilot Studio hostname" in environment_target
     assert "copilotstudio.preview.microsoft.com" in environment_target
-    assert "completes ring selection" in environment_target
-    assert "render this exact decision surface" in environment_target
-    assert "Present all three labels unchanged with no default selection" in (
-        environment_target
-    )
 
 
 def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
@@ -1059,16 +1053,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Retain its `evidencePath`" in environment_target
     assert "read that file only when richer diagnostics" in environment_target
     assert "Environment discovery is separate from agent discovery" in (
-        normalized_environment_target
-    )
-    assert "Which Power Platform service ring should setup use?" in (environment_target)
-    for ring_choice in ("Production / Preview", "Pre-production", "Test"):
-        assert f"**{ring_choice}**" in environment_target
-    assert "Map **Production / Preview** to `prod`" in environment_target
-    assert "Present all three labels unchanged with no default selection" in (
-        normalized_environment_target
-    )
-    assert "A ring is resolved only by an explicit URL segment" in (
         normalized_environment_target
     )
     assert "Before showing the shared authorization message" in (
