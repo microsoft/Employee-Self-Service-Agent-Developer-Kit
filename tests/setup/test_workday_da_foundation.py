@@ -175,7 +175,10 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
     assert "reformat a recognizable response" in tenant
-    assert "rejects missing, duplicate, or unknown labels" in normalized
+    assert (
+        "rejects missing mandatory labels, duplicate labels, or unknown labels"
+        in normalized
+    )
     assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant
     assert 'Enter a JSON array of {' not in tenant
@@ -183,6 +186,7 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Required employee access" in tenant
     assert "Additional scenario domains" in tenant
     assert "Domain | supported scenario" in tenant
+    assert "do not ask for it again" in tenant
     assert '"header": "Authorization"' not in tenant
     assert '"header": "Authorization retest"' not in tenant
     assert '"all good", "continue", or "proceed"' in tenant

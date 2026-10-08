@@ -930,10 +930,15 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
 def test_workday_phase_three_worksheet_excludes_runtime_authorization() -> None:
     packet = build_workday_admin_packet(_workday_state())
     labels = packet["responseForm"]["collection"]["labels"]
+    required = packet["responseForm"]["required"]
 
     assert "API client access" in labels
     assert "Required employee access" in labels
     assert "Additional scenario domains" in labels
+    assert "optionalDomains" not in required
+    assert "optionalDomains" not in ADMINISTRATOR_REQUIRED_FIELDS[
+        "workday-admin"
+    ]
     assert not any("authorization" in label.casefold() for label in labels)
     assert not any("retest" in label.casefold() for label in labels)
 
@@ -1008,6 +1013,36 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required\n"
+            ),
+            "",
+        ),
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required"
+            ),
+            "Additional scenario domains:",
+        ),
+    ],
+)
+def test_workday_optional_domains_may_be_omitted_or_blank(
+    worksheet: str,
+) -> None:
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["optionalDomains"] == []
+
+
 def test_workday_capture_table_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
         "Additional scenario domains: No additional scenario domains are required\n",
@@ -1031,6 +1066,23 @@ def test_workday_capture_table_parses_multiline_optional_domains() -> None:
             "scenario": "custom leave lookup",
         },
     ]
+
+
+def test_workday_capture_table_may_omit_optional_domains_row() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    table = _worksheet_table(packet, _workday_worksheet())
+    table = "\n".join(
+        line
+        for line in table.splitlines()
+        if not line.startswith("| Additional scenario domains |")
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        table,
+    )
+
+    assert parsed["optionalDomains"] == []
 
 
 @pytest.mark.parametrize(
@@ -1161,6 +1213,19 @@ def test_workday_admin_response_enforces_limited_rollout_group():
             _workday_state(),
             _workday_response(employeeSecurityGroup="All Employees"),
         )
+
+
+def test_workday_admin_response_defaults_omitted_optional_domains() -> None:
+    response = _workday_response()
+    response.pop("optionalDomains")
+
+    result = validate_workday_admin_response(
+        _workday_state(),
+        response,
+    )
+
+    assert result["evidence"]["optionalDomains"] == []
+    assert result["partialEvidence"]["optionalDomains"] == []
 
 
 def test_workday_admin_response_requires_exact_functional_area_scopes():

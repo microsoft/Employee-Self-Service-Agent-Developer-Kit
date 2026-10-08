@@ -120,6 +120,7 @@ def parse_workday_admin_return_worksheet(
         labels=WORKDAY_ADMIN_WORKSHEET_LABELS,
         label="Workday administrator return worksheet",
         multiline_labels=frozenset({"Additional scenario domains"}),
+        optional_labels=frozenset({"Additional scenario domains"}),
         label_aliases=WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES,
     )
     _worksheet_choice(
@@ -162,21 +163,14 @@ def parse_workday_admin_return_worksheet(
             ): "verified",
         },
     )
-    additional_domains = values["Additional scenario domains"].strip()
+    additional_domains = values.get("Additional scenario domains", "").strip()
     optional_domains = (
         []
-        if additional_domains.casefold()
+        if not additional_domains
+        or additional_domains.casefold()
         == "no additional scenario domains are required"
         else _optional_domain_mappings(additional_domains)
     )
-    if not optional_domains and additional_domains.casefold() != (
-        "no additional scenario domains are required"
-    ):
-        raise WorkdayConnectContractError(
-            "Additional scenario domains must be 'No additional scenario "
-            "domains are required' or one 'Domain | supported scenario' "
-            "mapping per line."
-        )
     identifiers = state.get("identifiers") or {}
     response: dict[str, Any] = {
         "identityProviderOutcome": "verified-entra-issuer",
@@ -604,8 +598,9 @@ def build_workday_admin_packet(
                 "fields": ["optionalDomains"],
                 "portalLocation": "Additional domain security policy review",
                 "instruction": (
-                    "Enter 'No additional scenario domains are required', or "
-                    "one Domain | supported scenario mapping per line."
+                    "Optional. When custom scenarios require extra domains, "
+                    "enter one Domain | supported scenario mapping per line. "
+                    "Otherwise omit this row or leave it blank."
                 ),
                 "exampleValue": "No additional scenario domains are required",
             },
@@ -646,7 +641,6 @@ def build_workday_admin_packet(
                 "publicWorkerReportsOutcome",
                 "integrationPermissionsGetOutcome",
                 "functionalAreaScopes",
-                "optionalDomains",
             ],
             "collection": {
                 "mode": "labeled-worksheet",
@@ -1001,7 +995,11 @@ def validate_workday_admin_response(
             "Organizations and Roles, Staffing, and Time Off and Leave."
         )
     functional_area_scopes = list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES)
-    optional_domains = _optional_domains(response.get("optionalDomains"))
+    optional_domains = _optional_domains(
+        response.get("optionalDomains")
+        if response.get("optionalDomains") is not None
+        else []
+    )
     legacy_authorization = str(response.get("authorizationOutcome") or "").strip()
     legacy_remediation_fields = {
         "authorizationRemediationDomain": str(

@@ -404,7 +404,7 @@ and verified certificate expiration date when building the table:
   },
   {
     "header": "Additional scenario domains",
-    "question": "Enter 'No additional scenario domains are required', or enter one required mapping per line as Domain | supported scenario."
+    "question": "Optional: only when custom ESS scenarios require extra Workday domains, enter one mapping per line as Domain | supported scenario. Otherwise omit this row or leave it blank."
   }
 ]
 ```
@@ -426,11 +426,13 @@ After the administrator confirms completion, use one
 ```
 
 Preserve the response unchanged. The controller recognizes the generated table
-and common customer-facing labels and capitalization, rejects missing,
-duplicate, or unknown labels, and maps only the listed successful choices into
-the structured response object described below. Do not ask the customer to
-reformat a recognizable response. Never infer a missing answer or treat
-unlabeled prose as evidence:
+and common customer-facing labels and capitalization, rejects missing
+mandatory labels, duplicate labels, or unknown labels, and maps only the
+listed successful choices into the structured response object described
+below. Omission of the optional **Additional scenario domains** row means
+`optionalDomains: []`; do not ask for it again. Do not ask the customer to
+reformat a recognizable response. Never infer a missing mandatory answer or
+treat unlabeled prose as evidence:
 
 Certificate comparisons are date-only. Do not ask either administrator for a
 timestamp, time, or timezone. Accept the portal's displayed certificate date
@@ -471,7 +473,8 @@ existing-client-verified`;
 - successful **Required employee access** confirmation ->
   `publicWorkerReportsOutcome: get-permission-verified` and
   `integrationPermissionsGetOutcome: get-permission-verified`;
-- **No additional scenario domains are required** -> `optionalDomains: []`;
+- omitted, blank, or **No additional scenario domains are required** ->
+  `optionalDomains: []`;
 - additional scenario-domain lines -> `optionalDomains` objects with one
   `domain` and one named supported `scenario` per line;
 - a missing or uncertain required functional area, or an uncertain optional
