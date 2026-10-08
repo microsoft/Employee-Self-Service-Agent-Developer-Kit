@@ -752,7 +752,7 @@ def _workday_admin_packet(
     state = store.load()
     if state["phases"]["entra"]["status"] != "complete":
         raise WorkdayConnectStoreError(
-            "Complete the Microsoft Entra administrator sign-off before "
+            "Complete the Microsoft Entra app administrator sign-off before "
             "starting the Workday administrator handoff."
         )
     administrator = state["phases"]["workday-admin"]["administrator"]
@@ -774,7 +774,7 @@ def _record_workday_admin(
     state = store.load()
     if state["phases"]["entra"]["status"] != "complete":
         raise WorkdayConnectStoreError(
-            "Complete the Microsoft Entra administrator sign-off before "
+            "Complete the Microsoft Entra app administrator sign-off before "
             "recording Workday administrator evidence."
         )
     _require_administrator_completion(state, "workday-admin")

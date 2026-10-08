@@ -171,9 +171,9 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "id": "entra",
         "title": "Microsoft Entra",
         "whatHappens": [
-            "Give the Microsoft Entra administrator one complete guided handoff.",
+            "Give the Microsoft Entra app administrator one complete guided handoff.",
             (
-                "Guide an Entra administrator through the required SAML, "
+                "Guide that app administrator through the required SAML, "
                 "permission, consent, assignment, and employee sign-in settings."
             ),
             (

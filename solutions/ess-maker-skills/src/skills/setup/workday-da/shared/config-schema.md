@@ -17,7 +17,7 @@ and tenant-foundation comparisons used by persistence and migration. Skills
 must use `scripts/workday_connect.py`; they must not edit this file directly
 or create a Markdown state mirror.
 
-## Schema version 11
+## Schema version 12
 
 ```json
 {

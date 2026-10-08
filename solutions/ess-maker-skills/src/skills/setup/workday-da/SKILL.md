@@ -129,7 +129,7 @@ people:
 2. Only then may the Workday administrator phase begin.
 3. The Workday handoff consumes the recorded Entra identifiers, certificate
    metadata, and transferred certificate file. It must not ask the maker to
-   reopen Entra, re-engage the Entra administrator, or repeat an Entra task.
+   reopen Entra, re-engage the Entra app administrator, or repeat an Entra task.
 4. A Workday-side mismatch or uncertainty remains blocked in the Workday phase
    and is resolved through the customer's Workday governance path. The only
    exception is an explicit controller-detected change to the selected Entra
@@ -201,7 +201,7 @@ resumed setup must still make its remaining administrator dependencies clear.
 > | Phase                 | Responsibility                                                                                                                                             | Who is needed                                                                                                        |
 > | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 > | Preflight             | Verify the ESS HR agent, environment, maker account, and supported package choice without changing the environment                                         | Power Platform Environment Maker                                                                                     |
-> | Microsoft Entra       | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID                                                        | Application Administrator or Cloud Application Administrator; a consent-capable administrator when required          |
+> | Microsoft Entra       | Configure the Workday enterprise application, SAML, API permission, consent, assignment, and NameID                                                        | One Microsoft Entra app administrator with either the Application Administrator or Cloud Application Administrator role; involve a separate consent-capable administrator only if tenant policy prevents that administrator from granting consent |
 > | Workday administrator | Configure tenant SAML and certificate trust, OAuth and the API client, functional-area access, endpoints, and the employee authentication policy           | Workday Administrator                                                                                                |
 > | Connections           | Install or verify the supported Workday package, then create the Workday OAuthUser and Dataverse connections and complete connector sign-in                | Power Platform Environment Maker with package installation access                                                    |
 > | Runtime configuration | Connect the installed Workday components, activate the required flows, configure runtime permissions and connection sharing, and enable all Workday topics | Power Platform Environment Maker; Dataverse System Administrator access for runtime authorization                    |
@@ -271,14 +271,14 @@ from `nextPhaseId`:
 | `nextPhaseId`         | People required for the current phase                                                                                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `preflight`           | Power Platform Environment Maker                                                                                                                                                                            |
-| `entra`               | Application Administrator or Cloud Application Administrator to identify or confirm the exact application and return the guided evidence; a consent-capable administrator when the handoff requires consent |
+| `entra`               | One Microsoft Entra app administrator with either the Application Administrator or Cloud Application Administrator role to complete the handoff; involve a separate consent-capable administrator only if tenant policy prevents that administrator from granting consent |
 | `workday-admin`       | Workday Administrator                                                                                                                                                                                       |
 | `connections`         | Power Platform Environment Maker with package installation access                                                                                                                                           |
 | `runtime`             | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization                                                                                                       |
 | `maker-validation`    | Environment Maker                                                                                                                                                                                           |
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
-form below. That phase asks whether the maker has looped in the administrator,
+form below. That phase asks whether the maker has engaged the administrator,
 presents the guided handoff, and validates the returned non-secret evidence.
 It must not authenticate the maker to Graph or perform live Entra API checks.
 

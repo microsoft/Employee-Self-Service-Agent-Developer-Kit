@@ -127,9 +127,9 @@ PHASE_DEFINITIONS = (
         identifier=Phase.ENTRA,
         title="Microsoft Entra",
         what_happens=(
-            "Give the Microsoft Entra administrator one complete guided "
+            "Give the Microsoft Entra app administrator one complete guided "
             "handoff.",
-            "Guide an Entra administrator through the required SAML, "
+            "Guide that app administrator through the required SAML, "
             "permission, consent, assignment, and employee sign-in settings.",
             "Validate and record the administrator's returned non-secret "
             "application and signing-certificate evidence.",
@@ -1289,7 +1289,7 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
                 )
             ):
                 raise WorkdayConnectModelError(
-                    "Entra administrator entraChecks must contain named "
+                    "Entra app administrator entraChecks must contain named "
                     "evidence objects."
                 )
             continue

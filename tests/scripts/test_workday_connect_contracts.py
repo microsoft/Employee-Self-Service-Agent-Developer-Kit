@@ -26,6 +26,12 @@ from workday_connect_contracts import (  # noqa: E402
     validate_workday_admin_response,
 )
 import workday_connect_contracts as contracts  # noqa: E402
+from workday_connect_entra_contracts import (  # noqa: E402
+    ENTRA_ADMIN_COMPLETION_QUESTION,
+    ENTRA_ADMIN_CONSENT_NOTE,
+    ENTRA_ADMIN_ENGAGEMENT_QUESTION,
+    ENTRA_APP_ADMIN_ROLE,
+)
 from workday_connect_model import (  # noqa: E402
     ADMINISTRATOR_REQUIRED_FIELDS,
     default_state,
@@ -370,8 +376,10 @@ def test_entra_handoff_can_request_explicit_creation():
     assert handoff["identifiers"]["entraAppIdUri"] is None
     assert handoff["requiresRediscovery"] is True
     assert handoff["scope"]["directoryDisplayName"] == "Contoso"
-    assert handoff["engagementQuestion"].startswith("Have you looped in")
-    assert handoff["completionQuestion"].startswith("Has the Microsoft Entra")
+    assert handoff["administratorRole"] == ENTRA_APP_ADMIN_ROLE
+    assert handoff["consentNote"] == ENTRA_ADMIN_CONSENT_NOTE
+    assert handoff["engagementQuestion"] == ENTRA_ADMIN_ENGAGEMENT_QUESTION
+    assert handoff["completionQuestion"] == ENTRA_ADMIN_COMPLETION_QUESTION
     assert any("NameID" in item for item in handoff["informationToReturn"])
     capture_by_field = {
         field: instruction

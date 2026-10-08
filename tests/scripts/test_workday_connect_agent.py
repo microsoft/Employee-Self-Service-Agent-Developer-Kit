@@ -1251,7 +1251,7 @@ def test_workday_administrator_commands_require_completed_entra(
 
     with pytest.raises(
         WorkdayConnectStoreError,
-        match="Complete the Microsoft Entra administrator sign-off",
+        match="Complete the Microsoft Entra app administrator sign-off",
     ):
         workday_connect._workday_admin_packet(
             SimpleNamespace(),
@@ -1260,7 +1260,7 @@ def test_workday_administrator_commands_require_completed_entra(
 
     with pytest.raises(
         WorkdayConnectStoreError,
-        match="Complete the Microsoft Entra administrator sign-off",
+        match="Complete the Microsoft Entra app administrator sign-off",
     ):
         workday_connect._record_workday_admin(
             SimpleNamespace(response_file=None, response_json="{}"),

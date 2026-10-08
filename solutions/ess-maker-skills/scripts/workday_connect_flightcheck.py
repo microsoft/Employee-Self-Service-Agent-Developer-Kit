@@ -107,7 +107,7 @@ def _customer_remediation(phase_id: str, error_type: str) -> str:
             "and capacity, then rerun Preflight."
         ),
         "entra": (
-            "Have the Microsoft Entra administrator review the Workday "
+            "Have the Microsoft Entra app administrator review the Workday "
             "application, consent, assignment, NameID, and signing settings, "
             "then rerun the Entra verification."
         ),
