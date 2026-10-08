@@ -44,14 +44,16 @@ administrator finished configuration.
   Issuer exactly matches the verified Entra issuer.
 - For **No enabled SAML row**, render **Workday Administrator Steps - New
   Microsoft Entra federation** and the greenfield handoff below.
-- For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
-  showing certificate, tenant-security, or API-client changes. Explain that the
-  enabled row belongs to an existing federation and must not be replaced. The
-  Workday administrator must determine, through the customer's Workday
-  governance process, whether a separate Microsoft Entra row can be added
-  safely for the target environment. Do not reopen Entra, re-engage the Entra
-  administrator, show the completion question, or show the response form.
-  Preserve the current Workday phase.
+- For **Okta**, **Ping Identity**, or **Another sign-in provider**, render
+  **Workday Administrator Steps - Existing non-Entra federation** and the
+  coexistence or controlled-transition handoff below. Preserve the existing
+  provider and guide the Workday administrator to either add a separate
+  Microsoft Entra row for the approved target environment or perform a
+  customer-approved transition of only that target environment. Do not return
+  to Entra or re-engage the Entra administrator. If the routing decision still
+  needs customer governance approval, show the exact approval and inventory
+  steps, preserve this phase, and resume the same handoff after approval
+  instead of terminating the workflow.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
   contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
@@ -177,6 +179,72 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Record either that both hosts are allowed or that no customer-managed
    firewall change is required. Do not wait until final employee validation to
    discover a known allowlist requirement.
+
+### Existing non-Entra federation coexistence or transition handoff
+
+1. **Protect and inventory the existing federation.** In Workday, run **Edit
+   Tenant Setup - Security**, open **SAML Setup**, and record the existing
+   provider type, Issuer, **Used for Environments** assignment, selected X.509
+   public key name, and applicable employee authentication-policy routing. Do
+   not collect certificate contents, disable the row, overwrite its Issuer, or
+   replace its certificate.
+2. **Choose the customer-approved routing path.** The Workday administrator
+   must select one of these safe paths:
+   - where the tenant's supported Workday routing design permits it, add a
+     separate Microsoft Entra SAML row for the approved target employee
+     environment and scope its authentication-policy routing to the intended
+     population; or
+   - perform a controlled transition of only the target employee environment
+     from the existing provider to Microsoft Entra during the customer's
+     reviewed change window.
+
+   Preserve every environment and population that is not in scope on the
+   existing provider. Record the existing assignment needed for rollback. If
+   the Workday administrator cannot approve either path yet, provide this
+   inventory and routing decision as the next action, preserve the Workday
+   phase, and resume here after approval. Do not restart the Entra handoff.
+3. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. Run **Create x509
+   Public Key**, paste that public certificate, give it a customer-chosen
+   recognizable name, and save it. Do not modify the key selected by the
+   existing non-Entra row.
+4. **Create the separate Microsoft Entra row.** Add a SAML identity-provider
+   row with the packet's exact expected Microsoft Entra Issuer, select the new
+   Entra-derived public key, set the exact Workday Service Provider ID, set the
+   identity-provider SSO service URL to the packet's **Login URL**, and set the
+   sign-on redirect URL to the packet's **Reply URL**. Do not copy the existing
+   provider's Issuer, endpoints, or certificate.
+5. **Apply only the approved routing change.** For coexistence, assign the new
+   Microsoft Entra row only to the approved target employee environment and
+   apply the approved authentication-policy routing for the intended
+   population. For a controlled transition, move only that approved target
+   environment from the existing row to the new Entra row during the reviewed
+   change window. Verify all out-of-scope assignments remain unchanged and
+   keep the recorded rollback assignment until validation completes.
+6. **Configure tenant security without weakening existing safeguards.** Enable
+   **OAuth 2.0 Clients Enabled** and **SAML** when required. Preserve unrelated
+   authentication policies, administrator safeguards, network restrictions,
+   and non-Entra federation settings.
+7. **Reuse or register the employee API client.** Reuse an approved client only
+   when its **Client Grant Type** is **SAML Bearer**, its functional areas are
+   exactly **Core Payroll**, **Organizations and Roles**, **Staffing**, and
+   **Time Off and Leave**, and **Include Workday Owned Scope** is **Yes**.
+   Otherwise register a new client with those exact settings.
+8. **Configure employee domain security.** Grant the intended employee
+   population **Get** on **Worker Data: Public Worker Reports** and
+   **Integration Permissions**. Add another domain only for a named supported
+   scenario. Preserve unrelated groups and permissions.
+9. **Verify the connection endpoints.** Confirm the OAuth client ID and token
+   endpoint, the REST base ending at `/ccx/api`, and the SOAP base ending at
+   `/ccx/service` without the tenant name. Never return secrets or tokens.
+10. **Review and activate the target authentication policy.** Confirm an active
+    rule allows **SAML** for the intended target employees. Review and activate
+    pending authentication-policy changes through the customer's approved
+    process without changing routing for out-of-scope users.
+11. **Confirm network readiness and final Entra-row values.** Confirm the REST
+    and SOAP hosts are allowed, then verify the new Microsoft Entra row's
+    Issuer, Service Provider ID, identity-provider SSO URL, redirect URL,
+    selected certificate, and certificate expiration exactly match the packet.
 
 ### New Microsoft Entra federation handoff
 
@@ -481,9 +549,10 @@ existing-client-verified`;
   domain outcome -> stop for administrator remediation instead of submitting
   successful evidence.
 
-Any unsupported provider, mismatch, missing certificate, date mismatch, or
-**I'm not sure** answer is a remediation outcome, not successful evidence.
-Show the affected remediation step and keep the phase waiting.
+Any unresolved provider identification or routing approval, mismatch, missing
+certificate, date mismatch, or **I'm not sure** answer requires the applicable
+guided step before successful evidence can be submitted. Preserve completed
+evidence and resume the selected handoff rather than restarting the phase.
 
 If the administrator omits a required value or replies only with wording such
 as "done", "all good", "continue", or "proceed", do not move to another field,

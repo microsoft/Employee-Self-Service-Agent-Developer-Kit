@@ -156,6 +156,15 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Another sign-in provider" in tenant
     assert "No enabled SAML row" in tenant
     assert "I'm not sure" in tenant
+    assert "Existing non-Entra federation coexistence or transition" in tenant
+    assert "add a separate Microsoft Entra SAML row" in normalized
+    assert (
+        "controlled transition of only the target employee environment"
+        in tenant
+    )
+    assert "Do not restart the Entra handoff" in tenant
+    assert "resume here after approval" in tenant
+    assert "stop before\n  showing certificate" not in tenant
     assert "Do not infer a match from the provider choice alone" in normalized
     assert "certificateSelectionQuestion" in tenant
     assert (
