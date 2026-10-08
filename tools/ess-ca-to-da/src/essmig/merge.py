@@ -163,8 +163,8 @@ ConflictResolver = Callable[[Conflict], "Decision | None"]
 report it), matching the non-interactive default."""
 
 ResolverFactory = Callable[[CaComponent], ConflictResolver]
-"""Builds a fresh resolver for one component, so per-topic state (e.g. an
-'apply to the rest of this topic' choice) does not leak across components."""
+"""Builds a fresh resolver for one component, so any per-component state does not
+leak across components."""
 
 
 @dataclass

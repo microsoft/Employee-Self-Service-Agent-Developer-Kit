@@ -83,8 +83,8 @@ both reduce to `topic.ConversationStart`.
   changed* (a plain diff against the version ESS originally shipped, so you see
   just your edit) and ESS's current version, then you pick **keep ESS's** (press
   Enter), **keep mine**, or **open an editor to merge by hand** (both versions are
-  placed in a text file you edit, save and close). An "apply to the rest of this
-  topic" shortcut avoids answering a repetitive rename twenty times. Your choice is
+  placed in a text file you edit, save and close). Each contested spot is answered
+  on its own. Your choice is
   baked straight into the package. Pass `--non-interactive` (the default in CI /
   when output isn't a terminal) to skip the prompts: conflicts then keep the ESS
   version and are listed in the report for a human. Nothing is ever silently
@@ -368,6 +368,73 @@ The import token audience defaults to the Power Platform API; override it with
 environment requires it. The import contract is from a draft design — see *Open
 questions* — so the endpoint and scope are deliberately overridable.
 
+> **This `--import` path reaches the Dev ring only.** The `minimalBots/alm/import`
+> endpoint is a development-ring bulk ALM promote and is **not available on the
+> production rings**, so it cannot deliver to a customer's production agent. For a
+> prod-capable write, use `--deliver-minimalbot` (below).
+
+### 4b. Deliver the customizations into a *live* agent (prod-capable)
+
+To apply the migrated customizations straight into a running Declarative Agent —
+on any ring, **including production** — use `--deliver-minimalbot`. It delivers the
+**delta** (only what the migration could carry) through the MinimalBot components
+API, the same authoring data plane Copilot Studio uses, as a **hybrid**:
+
+- **Your edits to shipped topics** (modelDescriptions, GPT instructions, input
+  descriptions, …) are **overlaid live** onto the agent's existing components.
+- **Brand-new topics you authored** can't be compiled to the live runtime form, so
+  they're **routed to the ALM package import** (`--import` or a manual import) and
+  listed in the report instead.
+- A handful of **formula-level edits** (changes to Power Fx expressions/conditions)
+  can't be auto-applied; they're reported with the before/after values so you can
+  apply them by hand.
+
+```powershell
+python -m essmig migrate --environment-url https://contoso.crm.dynamics.com --vertical hr `
+  --deliver-minimalbot `
+  --target-agent-url "https://copilotstudio.microsoft.com/environments/<env>/copilots/<botId>/details"
+```
+
+You identify the target agent by its **Copilot Studio URL** — open the DA in
+Copilot Studio and copy the browser address; the tool reads both the environment
+id and the botId from it. The shipping ESS DA GA is a Cosmos-backed agent, which
+is **not listable** by any supported API, so the botId cannot be auto-discovered
+— it must come from the URL (or be supplied explicitly). Instead of the URL you
+may pass `--target-environment-id <guid>` together with `--target-bot-id <guid>`.
+
+It is **dry-run by default**: it reads the target, builds the overlays and prints
+the exact change set (topics edited live, topics routed to the package, and any
+edits it couldn't overlay), and **writes nothing**. Review that, then add
+`--deliver-apply` to actually write:
+
+```powershell
+python -m essmig migrate … --deliver-minimalbot `
+  --target-agent-url "<copilot-studio-url>" --deliver-apply
+```
+
+Only your edits to **shipped topics** (outcome **MERGED**) are overlaid live;
+**CARRIED_NEW** topics you authored are routed to the package import. Everything
+left on the template, un-carryable, or conflicted is untouched.
+
+| flag | meaning | default |
+| --- | --- | --- |
+| `--deliver-minimalbot` | deliver the delta into the live agent via the components API | off |
+| `--target-agent-url` | the DA's Copilot Studio URL (supplies env id + botId) | required (or use the two flags below) |
+| `--target-environment-id` | the agent's Power Platform environment GUID | required if no `--target-agent-url` |
+| `--target-bot-id` | GUID (botId) of the live target agent | required if no `--target-agent-url` |
+| `--target-ring` | ring the agent lives on (`test`/`preprod`/`prod`) | `prod` |
+| `--target-tenant-id` | target tenant GUID | source tenant (`--environment-url`), else interactive sign-in |
+| `--deliver-apply` | actually write (otherwise dry-run preview only) | off (dry-run) |
+
+> **Verified live.** Sending the raw `agent.yml` component forms is rejected by the
+> service (a dialog's expressions must be expanded runtime objects, not strings);
+> the overlay sidesteps this by starting from the live component and substituting
+> only your plain-text edits. Against a real Cosmos-backed ESS DA GA it applies the
+> ServiceNow modelDescription edits + GPT instructions and leaves the agent's dialog
+> logic intact. **Do a dry-run first to review the plan, then `--deliver-apply`.**
+> See `DEV_DESIGN.md` §9.2.
+
+
 Knowledge sources **do** ride in the package: a SharePoint (or other) source is
 carried as a `KnowledgeSourceComponent`, marked customer-owned, and the GPT is
 pointed at it (`knowledgeSources: SearchAllKnowledgeSources`) so it is actually
@@ -539,7 +606,8 @@ src/essmig/
   convert.py      classify AnswerQuestionWithAI nodes; auto-upgrade the convertible ones
   assessment.py   the eligibility verdict: blockers, worklist, employee impact
   packaging.py    emit the ALM package
-  deliver.py      import the package into a target DA (the one write path; opt-in)
+  deliver.py      import the ALM package into a target DA's Dev ring (opt-in, dev-ring only)
+  minimalbot_deliver.py  deliver the delta into a live agent via the components API (opt-in, prod-capable, dry-run default)
   report.py       the report
   made.py         diff shipped DA vs produced package (customizationsMade.md)
   cli.py          vendor / inspect / migrate
@@ -589,13 +657,18 @@ Measured against *ESS CA to DA Migration* (`specs/ess/ca-da-migration/spec.md`,
 | --- | --- | --- |
 | R1 | Outcomes explicit for every scenario; nothing dropped silently | met |
 | R2 | Actionable guidance for gaps, including ADK configuration | met |
-| R3 | Prepare and validate without affecting production | partial — read-only against the source, and delivery targets the Dev ring only; it does not create the isolated draft or run evals |
-| R4 | Publish directly; ALM optional | partial — `migrate --import` now delivers directly by importing the ALM package into the target; ALM is not yet *optional*, so there is no non-ALM publish path |
+| R3 | Prepare and validate without affecting production | partial — read-only against the source; `--deliver-minimalbot` is **dry-run by default** (reads, prints the change set, writes nothing) so you can validate without touching the agent; it does not yet create an isolated draft or run evals |
+| R4 | Publish directly; ALM optional | **met (ALM optional)** — `--deliver-minimalbot` overlays your edits to shipped topics directly through the components API with **no ALM package**, on any ring incl. production; brand-new topics route to `--import` (the ALM-package path, Dev ring only). The live overlay of shipped-topic edits is verified against a Cosmos DA GA |
 | R5 | Employees experience no required action or visible disruption | not addressed — out of reach for a package-generating CLI; the report names the impact instead |
 | R6 | Hub migration with incremental domain migration | partial — Core (the hub) and each domain agent are first-class `--vertical` targets you migrate independently; there is no single command that orchestrates the hub plus its spokes in one pass |
 
 R4 and R5 are scope decisions, not defects. Take them up before this is
 offered to a customer.
+
+> Update: R4's non-ALM publish path now exists (`--deliver-minimalbot`, see
+> §4b and `DEV_DESIGN.md` §9.2) as a **hybrid**: your plain-text edits to shipped
+> topics are overlaid onto the live agent (verified against a Cosmos DA GA), while
+> brand-new topics route to the ALM package import. Gated behind a dry-run.
 
 ## Open questions
 

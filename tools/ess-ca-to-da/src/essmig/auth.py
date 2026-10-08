@@ -25,6 +25,12 @@ DEFAULT_AUTHORITY = "https://login.microsoftonline.com/organizations"
 # API). Draft-design value — override with ESSMIG_TARGET_SCOPE when confirmed.
 DEFAULT_TARGET_SCOPE = "https://api.powerplatform.com/.default"
 
+# First-party public client Copilot Studio uses for the MinimalBot components API,
+# the same client the shipping ADK authenticates with for that data plane. The
+# migration tool's live-delivery path reuses it so both speak the components API
+# through an identical, already-consented client. Override via ESSMIG_MINIMALBOT_CLIENT_ID.
+MINIMALBOT_CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+
 _DEFAULT_TENANT = "organizations"
 _SCOPE_SUFFIX = "/user_impersonation"
 _TENANT_RE = re.compile(r"login\.microsoftonline\.com/([^/\"'\s]+)")
@@ -156,6 +162,37 @@ def provider_for_target(
     )
 
 
+def provider_for_minimalbot(
+    tenant_id: str, scope: str, *, client_id: str | None = None
+) -> MsalTokenProvider:
+    """A token provider for the MinimalBot components API (live delivery path).
+
+    Authenticates in ``tenant_id`` against the ring-appropriate Power Platform
+    ``.default`` ``scope`` (see :func:`essmig.minimalbot_deliver.scope_for_ring`),
+    using the Copilot Studio first-party client the data plane expects. The client
+    id is overridable via ``ESSMIG_MINIMALBOT_CLIENT_ID`` / ``ESSMIG_MSAL_CLIENT_ID``
+    and the authority via ``ESSMIG_TARGET_AUTHORITY``.
+    """
+    if not tenant_id.strip():
+        raise ValueError("tenant_id must be provided for the delivery token.")
+    authority = os.environ.get("ESSMIG_TARGET_AUTHORITY") or (
+        f"https://login.microsoftonline.com/{tenant_id.strip()}"
+    )
+    resolved_client_id = (
+        client_id
+        or os.environ.get("ESSMIG_MINIMALBOT_CLIENT_ID")
+        or os.environ.get("ESSMIG_MSAL_CLIENT_ID")
+        or MINIMALBOT_CLIENT_ID
+    )
+    return MsalTokenProvider(
+        MsalConfig(
+            client_id=resolved_client_id,
+            authority=authority,
+            scopes=(_normalize_scope(scope),),
+        )
+    )
+
+
 def discover_tenant(environment_url: str) -> str:
     """The tenant id the environment authenticates against, from its 401 challenge.
 
@@ -223,5 +260,6 @@ __all__ = [
     "TokenProvider",
     "discover_tenant",
     "provider_for",
+    "provider_for_minimalbot",
     "provider_for_target",
 ]

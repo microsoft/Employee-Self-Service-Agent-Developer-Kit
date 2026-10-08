@@ -38,25 +38,25 @@ class _Script:
 
 
 def test_pressing_enter_keeps_ess_version() -> None:
-    script = _Script(["", "n"])
+    script = _Script([""])
     resolve = console_resolver_factory(prompt=script.prompt, echo=script.echo)(_component())
     assert resolve(_conflict()).resolution is Resolution.THEIRS
 
 
 def test_answering_m_keeps_our_version() -> None:
-    script = _Script(["m", "n"])
+    script = _Script(["m"])
     resolve = console_resolver_factory(prompt=script.prompt, echo=script.echo)(_component())
     assert resolve(_conflict()).resolution is Resolution.OURS
 
 
-def test_apply_to_rest_of_topic_answers_later_spots_without_prompting() -> None:
-    script = _Script(["m", "y"])  # first: keep mine, then apply to the rest
+def test_each_spot_is_prompted_independently() -> None:
+    script = _Script(["m", "e", "m"])  # every spot answered on its own
     resolve = console_resolver_factory(prompt=script.prompt, echo=script.echo)(_component())
     assert resolve(_conflict("topic.ServiceNowITSM.a")).resolution is Resolution.OURS
-    assert resolve(_conflict("topic.ServiceNowITSM.b")).resolution is Resolution.OURS
+    assert resolve(_conflict("topic.ServiceNowITSM.b")).resolution is Resolution.THEIRS
     assert resolve(_conflict("topic.ServiceNowITSM.c")).resolution is Resolution.OURS
-    # Only the first spot was prompted; the sticky choice covered the other two.
-    assert len(script.prompts) == 2
+    # One prompt per spot — a choice never carries over to the next spot.
+    assert len(script.prompts) == 3
 
 
 def test_instruction_conflicts_are_never_prompted() -> None:
@@ -67,7 +67,7 @@ def test_instruction_conflicts_are_never_prompted() -> None:
 
 
 def test_an_invalid_answer_is_reprompted() -> None:
-    script = _Script(["huh?", "e", "n"])
+    script = _Script(["huh?", "e"])
     resolve = console_resolver_factory(prompt=script.prompt, echo=script.echo)(_component())
     assert resolve(_conflict()).resolution is Resolution.THEIRS
     assert any("E (keep ESS's)" in line for line in script.output)
@@ -93,12 +93,10 @@ def test_opening_the_editor_returns_the_hand_merged_value() -> None:
     assert decision.value == {"kind": "MyBlend", "value": 42}
     # The editor was seeded with both sides for reference.
     assert "YOUR VERSION" in seen["initial"] and "ESS'S VERSION" in seen["initial"]
-    # After a hand-merge, no 'apply to the rest' prompt is offered.
-    assert not any("rest of this topic" in p for p in script.prompts)
 
 
 def test_an_empty_hand_merge_reprompts_then_falls_back_to_ess() -> None:
-    script = _Script(["o", "e", "n"])  # editor first, then keep ESS's
+    script = _Script(["o", "e"])  # editor first, then keep ESS's
 
     def edit(initial: str) -> str:
         return initial.split(_MARKER)[0] + _MARKER + "\n   \n"  # nothing below the marker
@@ -111,7 +109,7 @@ def test_an_empty_hand_merge_reprompts_then_falls_back_to_ess() -> None:
 
 
 def test_unparseable_hand_merge_reprompts() -> None:
-    script = _Script(["o", "m", "n"])  # editor first, then keep mine
+    script = _Script(["o", "m"])  # editor first, then keep mine
 
     def edit(initial: str) -> str:
         return initial.split(_MARKER)[0] + _MARKER + "\nkey: : : not yaml\n"

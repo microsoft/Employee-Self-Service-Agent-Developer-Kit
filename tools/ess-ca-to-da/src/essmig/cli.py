@@ -27,7 +27,12 @@ from essmig import knowledge as knowledge_module
 from essmig import made, package_source
 from essmig import reference as reference_module
 from essmig.assessment import Assessment, assess
-from essmig.auth import discover_tenant, provider_for, provider_for_target
+from essmig.auth import (
+    discover_tenant,
+    provider_for,
+    provider_for_minimalbot,
+    provider_for_target,
+)
 from essmig.dataverse import DataverseClient
 from essmig.deliver import ImportResult, ImportTarget, import_package
 from essmig.discovery import (
@@ -39,7 +44,16 @@ from essmig.discovery import (
 )
 from essmig.ess import TARGETS
 from essmig.instructions import keep_target_instructions, skip_instruction_reconciliation
-from essmig.merge import Outcome, merge
+from essmig.merge import MergeResult, Outcome, merge
+from essmig.minimalbot_deliver import (
+    DEFAULT_RING,
+    RING_CONFIG,
+    MinimalBotDeliveryResult,
+    MinimalBotTarget,
+    deliver_minimalbot,
+    parse_agent_url,
+    scope_for_ring,
+)
 from essmig.packaging import check_pointers, package_bytes, write_package, zip_package
 from essmig.report import summarize, write_reports
 from essmig.resolve import console_resolver_factory
@@ -126,8 +140,10 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--target-tenant-id",
-        help="target tenant GUID; defaults to the source environment's tenant "
-        "(the source and target share a tenant)",
+        help="target tenant GUID. Optional: defaults to the source environment's "
+        "tenant when --environment-url is given, otherwise to interactive sign-in "
+        "(the 'organizations' authority — you pick the tenant when you log in). "
+        "Pass it to force a specific tenant, e.g. when you are a guest in several.",
     )
     parser.add_argument(
         "--target-schema-name",
@@ -139,6 +155,45 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
         "--target-api-base",
         help="base URL of the Copilot Studio ALM import API "
         "(default https://api.powerplatform.com; also ESSMIG_TARGET_API_BASE)",
+    )
+    parser.add_argument(
+        "--deliver-minimalbot",
+        dest="deliver_minimalbot",
+        action="store_true",
+        help="deliver the migrated customizations straight into a live Declarative "
+        "Agent via the MinimalBot components API — the prod-capable write path. "
+        "Point it at the target agent with --target-agent-url (paste the agent's "
+        "Copilot Studio link) or with --target-environment-id + --target-bot-id. "
+        "Dry-run by default (nothing is written) unless --deliver-apply is also "
+        "given.",
+    )
+    parser.add_argument(
+        "--target-agent-url",
+        help="the target Declarative Agent's Copilot Studio URL, e.g. "
+        "https://copilotstudio.microsoft.com/environments/<env>/copilots/<botId>/details"
+        " — the tool parses both the environment id and the botId from it. The "
+        "simplest way to target a customer's live DA (a Cosmos-backed agent cannot "
+        "be looked up by name; the botId only exists on this URL).",
+    )
+    parser.add_argument(
+        "--target-bot-id",
+        help="GUID of the live target Declarative Agent (its botId). Use together "
+        "with --target-environment-id instead of --target-agent-url, or to override "
+        "the botId parsed from the URL.",
+    )
+    parser.add_argument(
+        "--target-ring",
+        choices=sorted(RING_CONFIG),
+        help="Power Platform ring the target agent lives on (test/preprod/prod). "
+        "Defaults to prod — a real customer agent is never assumed to be on a "
+        "development ring.",
+    )
+    parser.add_argument(
+        "--deliver-apply",
+        dest="deliver_apply",
+        action="store_true",
+        help="with --deliver-minimalbot, actually write the change set to the live "
+        "agent (the default only previews it). Review the dry-run output first.",
     )
 
 
@@ -398,12 +453,17 @@ def _migrate_one(
     if args.do_import:
         import_result = _deliver(args, reference, package_bytes(plugin))
 
+    minimalbot_result: MinimalBotDeliveryResult | None = None
+    if getattr(args, "deliver_minimalbot", False):
+        minimalbot_result = _deliver_minimalbot(args, merged, reference)
+
     markdown, _ = write_reports(
         out,
         discovery,
         merged,
         package_path=package_path,
         import_result=import_result,
+        minimalbot_result=minimalbot_result,
         flow_findings=flow_findings,
         flows_zip=flows_zip,
         knowledge_bindings=knowledge_bindings,
@@ -426,9 +486,14 @@ def _migrate_one(
         print(f"\nPackage: {package_path}")
     if import_result is not None:
         _print_import(import_result)
+    if minimalbot_result is not None:
+        _print_minimalbot(minimalbot_result)
     print(f"Report:  {markdown}")
     print(f"Changes: {made_path}")
-    if merged.count(Outcome.FAILED) or (import_result is not None and not import_result.ok):
+    delivery_failed = (import_result is not None and not import_result.ok) or (
+        minimalbot_result is not None and not minimalbot_result.ok
+    )
+    if merged.count(Outcome.FAILED) or delivery_failed:
         return 1
     return 0
 
@@ -467,6 +532,96 @@ def _print_import(result: ImportResult) -> None:
     print(f"{outcome}{status}: {result.detail}")
     if result.operation_url:
         print(f"  Track: {result.operation_url}")
+
+
+def _deliver_minimalbot(
+    args: argparse.Namespace,
+    merged: MergeResult,
+    reference: reference_module.ReferenceSet,
+) -> MinimalBotDeliveryResult:
+    """Build the live target from the flags and deliver the migration delta into it.
+
+    The target is addressed by ``--target-agent-url`` (the agent's Copilot Studio
+    link, from which the environment id and botId are parsed) or by
+    ``--target-environment-id`` + ``--target-bot-id``. A Cosmos-backed DA cannot be
+    looked up by name, so one of those two forms is required.
+    """
+    environment_id = args.target_environment_id
+    bot_id = args.target_bot_id
+    if args.target_agent_url:
+        url_env, url_bot = parse_agent_url(args.target_agent_url)
+        environment_id = environment_id or url_env
+        bot_id = bot_id or url_bot
+
+    if not environment_id or not bot_id:
+        raise ValueError(
+            "--deliver-minimalbot needs the target agent: pass --target-agent-url "
+            "(the agent's Copilot Studio link), or both --target-environment-id and "
+            "--target-bot-id. The botId is the GUID in the agent's Copilot Studio "
+            "URL (.../copilots/<botId>/details)."
+        )
+
+    tenant_id = args.target_tenant_id
+    if not tenant_id:
+        if args.environment_url:
+            tenant_id = discover_tenant(args.environment_url.rstrip("/"))
+        else:
+            # The Copilot Studio URL carries the environment id and botId but not
+            # the tenant. Fall back to the multi-tenant "organizations" authority
+            # so interactive sign-in resolves the tenant from the account the
+            # operator signs in with; --target-tenant-id forces a specific one.
+            tenant_id = "organizations"
+
+    ring = args.target_ring or DEFAULT_RING
+    scope = scope_for_ring(ring)
+    provider = provider_for_minimalbot(tenant_id, scope)
+
+    target = MinimalBotTarget(
+        bot_id=bot_id,
+        environment_id=environment_id,
+        tenant_id=tenant_id,
+        ring=ring,
+    )
+    dry_run = not args.deliver_apply
+    mode = "dry-run (no writes)" if dry_run else "APPLY (writing)"
+    print(
+        f"\nDelivering customizations into bot {target.bot_id} on the {ring} ring "
+        f"[{mode}] ..."
+    )
+    config_values = (
+        reference.config.get("values")
+        if isinstance(reference.config, dict)
+        else None
+    )
+    return deliver_minimalbot(
+        target,
+        merged.agent,
+        merged.results,
+        provider,
+        dry_run=dry_run,
+        config_values=config_values if isinstance(config_values, dict) else None,
+    )
+
+
+def _print_minimalbot(result: MinimalBotDeliveryResult) -> None:
+    status = f" (HTTP {result.status})" if result.status is not None else ""
+    if result.dry_run:
+        headline = "Live delivery dry-run" if result.ok else "Live delivery dry-run FAILED"
+    else:
+        headline = "Delivered" if result.ok else "Live delivery FAILED"
+    print(f"{headline}{status}: {result.detail}")
+    if result.renamed_to:
+        print(f"  Agent renamed to: {result.renamed_to}")
+    for change in result.planned:
+        print(f"  {change.action:<8} {change.kind:<22} {change.schema_name}")
+    if result.deferred:
+        print("  New topics routed to the ALM package import (run with --import):")
+        for change in result.deferred:
+            print(f"  {'package':<8} {change.kind:<22} {change.schema_name}")
+    if result.notes:
+        print("  Edits that could not be overlaid (reproduced in the report):")
+        for note in result.notes:
+            print(f"    - {note}")
 
 
 def _validate_source(args: argparse.Namespace) -> None:

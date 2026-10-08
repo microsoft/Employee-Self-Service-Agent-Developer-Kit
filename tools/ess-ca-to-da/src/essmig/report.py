@@ -21,6 +21,7 @@ from essmig.discovery import DiscoveryResult
 from essmig.flows import FlowFindings
 from essmig.knowledge import GraphConnection
 from essmig.merge import ComponentResult, MergeResult, Outcome
+from essmig.minimalbot_deliver import MinimalBotDeliveryResult
 from essmig.projection import dump
 
 _HEADLINE = {
@@ -55,6 +56,7 @@ def write_reports(
     *,
     package_path: Path | None = None,
     import_result: ImportResult | None = None,
+    minimalbot_result: MinimalBotDeliveryResult | None = None,
     flow_findings: FlowFindings | None = None,
     flows_zip: Path | None = None,
     knowledge_bindings: list[GraphConnection] | None = None,
@@ -72,12 +74,20 @@ def write_reports(
             flow_findings,
             flows_zip,
             knowledge_bindings,
+            minimalbot_result,
         ),
         encoding="utf-8",
     )
     json_path.write_text(
         json.dumps(
-            render_json(discovery, merged, import_result, flow_findings, knowledge_bindings),
+            render_json(
+                discovery,
+                merged,
+                import_result,
+                flow_findings,
+                knowledge_bindings,
+                minimalbot_result,
+            ),
             indent=2,
             default=str,
         ),
@@ -92,6 +102,7 @@ def render_json(
     import_result: ImportResult | None = None,
     flow_findings: FlowFindings | None = None,
     knowledge_bindings: list[GraphConnection] | None = None,
+    minimalbot_result: MinimalBotDeliveryResult | None = None,
 ) -> dict[str, Any]:
     return {
         "generatedUtc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -99,6 +110,9 @@ def render_json(
         "sourceSolution": discovery.solution_unique_name,
         "assessment": assess(merged).to_json(),
         "delivery": import_result.to_json() if import_result is not None else None,
+        "liveDelivery": (
+            minimalbot_result.to_json() if minimalbot_result is not None else None
+        ),
         "flows": _flows_json(flow_findings),
         "knowledgeSources": _knowledge_json(knowledge_bindings),
         "summary": {outcome.value: merged.count(outcome) for outcome in _ORDER},
@@ -163,6 +177,7 @@ def render_markdown(
     flow_findings: FlowFindings | None = None,
     flows_zip: Path | None = None,
     knowledge_bindings: list[GraphConnection] | None = None,
+    minimalbot_result: MinimalBotDeliveryResult | None = None,
 ) -> str:
     verdict = assess(merged)
     lines: list[str] = [
@@ -178,9 +193,13 @@ def render_markdown(
     if import_result is not None:
         state = "succeeded" if import_result.ok else "FAILED"
         lines.append(f"- Delivery to target: **{state}**")
+    if minimalbot_result is not None:
+        lines.append(f"- Live delivery: **{_live_state(minimalbot_result)}**")
     lines += ["", f"## Verdict: {verdict.verdict}", ""] + _verdict_body(verdict)
     if import_result is not None:
         lines += _delivery_body(import_result)
+    if minimalbot_result is not None:
+        lines += _live_delivery_body(minimalbot_result)
     lines += _flows_body(flow_findings, flows_zip, package_path)
     lines += _knowledge_body(knowledge_bindings)
     lines += ["", "## Summary", "", "| Outcome | Count |", "| --- | ---: |"]
@@ -395,6 +414,81 @@ def _flows_body(
             "",
         ]
         lines += [f"- `{flow_id}`" for flow_id in flow_findings.dangling]
+    return lines
+
+
+def _live_state(result: MinimalBotDeliveryResult) -> str:
+    if result.dry_run:
+        return "dry-run (nothing written)" if result.ok else "dry-run FAILED"
+    return "delivered" if result.ok else "FAILED"
+
+
+def _live_delivery_body(result: MinimalBotDeliveryResult) -> list[str]:
+    lines = ["", "## Live delivery to the target Declarative Agent", ""]
+    verb = "would apply" if result.dry_run else ("applied" if result.ok else "attempted")
+    lines.append(
+        f"Customer edits to shipped topics are overlaid live via the MinimalBot "
+        f"components API ({verb}) to bot `{result.bot_id}` on the **{result.ring}** "
+        f"ring: {result.updated} topic edit(s). {result.detail}"
+    )
+    if result.dry_run:
+        lines += [
+            "",
+            "> This was a **dry-run** — nothing was written. Review the planned changes "
+            "below, then re-run with `--deliver-apply` to write them to the live agent.",
+        ]
+    if result.renamed_to:
+        verb_rename = "would rename" if result.dry_run else "renamed"
+        lines += [
+            "",
+            f"The agent was {verb_rename} to **{result.renamed_to}** (the main-panel "
+            "agent name, carried on the bot entity).",
+        ]
+    if result.planned:
+        lines += [
+            "",
+            "### Shipped-topic edits delivered live",
+            "",
+            "| Action | Component kind | Schema name |",
+            "| --- | --- | --- |",
+        ]
+        lines += [
+            f"| {change.action} | {change.kind} | `{change.schema_name}` |"
+            for change in result.planned
+        ]
+    if result.deferred:
+        lines += [
+            "",
+            "### New topics routed to the ALM package import",
+            "",
+            "These are brand-new, customer-authored topics with no counterpart on the "
+            "template. They cannot be compiled to the components-API runtime form, so "
+            "they ride in the ALM package instead — re-run with `--import` (or import "
+            "the built package manually).",
+            "",
+            "| Component kind | Schema name |",
+            "| --- | --- |",
+        ]
+        lines += [
+            f"| {change.kind} | `{change.schema_name}` |" for change in result.deferred
+        ]
+    if result.notes:
+        lines += [
+            "",
+            "### Edits that need your attention",
+            "",
+            "These per-field edits touch expression, structured, or template fields "
+            "that could not be fully overlaid onto the live component. Review each and "
+            "finish it by hand in the agent:",
+            "",
+        ]
+        lines += [f"- {note}" for note in result.notes]
+    if not result.ok and not result.dry_run:
+        lines += [
+            "",
+            f"- Endpoint: `{result.endpoint}`",
+            f"- Reason: {result.detail}",
+        ]
     return lines
 
 

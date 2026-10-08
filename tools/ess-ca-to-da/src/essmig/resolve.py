@@ -7,9 +7,8 @@ chosen version straight into the package.
 
 This module is the console side of that: it renders one :class:`~essmig.merge.Conflict`
 in plain terms and asks *keep ESS's*, *keep mine*, or *open an editor to merge by
-hand*, with an "apply to the rest of this topic" shortcut so a customer need not
-answer the same way twenty times. The merge itself stays pure — it only calls the
-resolver callback this module builds.
+hand*. Each contested spot is answered on its own. The merge itself stays pure — it
+only calls the resolver callback this module builds.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ import tempfile
 from collections.abc import Callable
 
 from essmig.discovery import CaComponent
-from essmig.merge import Conflict, ConflictResolver, Decision, Resolution
+from essmig.merge import Conflict, ConflictResolver, Decision
 from essmig.projection import dump, load_fragment
 
 Prompt = Callable[[str], str]
@@ -52,8 +51,8 @@ def console_resolver_factory(
 class _ConsoleResolver:
     """Resolves a single component's conflicts by asking at the console.
 
-    Fresh per component, so the "apply to the rest of this topic" choice is scoped
-    to that component and never leaks into the next one.
+    Each contested spot is asked independently; one answer never carries over to
+    the next spot.
     """
 
     def __init__(
@@ -63,7 +62,6 @@ class _ConsoleResolver:
         self._prompt = prompt
         self._echo = echo
         self._edit = edit
-        self._sticky: Decision | None = None
         self._headed = False
 
     def __call__(self, conflict: Conflict) -> Decision | None:
@@ -71,8 +69,6 @@ class _ConsoleResolver:
         # keep-mine/keep-ESS pick — let it flow through to that path untouched.
         if conflict.path.endswith(".instructions"):
             return None
-        if self._sticky is not None:
-            return self._sticky
 
         self._render(conflict)
         while True:
@@ -82,10 +78,7 @@ class _ConsoleResolver:
                 if merged is _EDIT_FAILED:
                     continue  # parsing failed; back to the choice prompt
                 return Decision.manual(merged)
-            decision = Decision.theirs() if answer == "theirs" else Decision.ours()
-            if self._ask_apply_rest(decision.resolution):
-                self._sticky = decision
-            return decision
+            return Decision.theirs() if answer == "theirs" else Decision.ours()
 
     def _render(self, conflict: Conflict) -> None:
         if not self._headed:
@@ -124,13 +117,6 @@ class _ConsoleResolver:
             if answer in ("o", "open", "edit", "editor"):
                 return "manual"
             self._echo("  Please answer E (keep ESS's), M (keep mine), or O (open an editor).")
-
-    def _ask_apply_rest(self, choice: Resolution) -> bool:
-        which = "yours" if choice is Resolution.OURS else "ESS's"
-        answer = self._prompt(
-            f"  Apply 'keep {which}' to the rest of this topic too? [y/N]: "
-        ).strip().lower()
-        return answer in ("y", "yes")
 
     def _hand_merge(self, conflict: Conflict) -> object:
         """Open both versions in an editor and parse back the value the human saves.
