@@ -6,14 +6,7 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 ## Getting started
 
-One command installs everything (VS Code, Python 3.12, Git, GitHub CLI, .NET runtime, NuGet, Copilot extensions, pip dependencies) and opens the `ess-maker-skills` workspace in VS Code.
-
-**What happens after you run it:**
-
-1. The installer prepares the local toolchain, asks whether you want Maker or Developer mode, and opens the maker workspace.
-2. Review the VS Code workspace trust prompt, then sign in to GitHub Copilot with the account that has your Copilot subscription.
-3. Start setup yourself. In Maker mode, click **Start setup** in **Quick start**. In Developer mode, open Copilot Chat and enter `/setup`. Setup connects the workspace to your Power Platform environment and ESS agent and may open a separate Microsoft sign-in for the work account that can access them.
-4. During setup, VS Code asks before running local commands. If setup is interrupted by a trust, sign-in, or command-approval prompt, return to the workspace and click **Start setup** or enter `/setup` again; setup continues from saved progress when available.
+One command installs everything (VS Code, Python 3.12, Git, GitHub CLI, .NET runtime, NuGet, Copilot extensions, pip dependencies) and opens `ess-maker-skills` in VS Code so `/setup` works out of the box.
 
 **Windows** (PowerShell):
 
