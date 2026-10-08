@@ -263,11 +263,11 @@ function actionState(action, completed) {
 
 async function applySettings(settings, target) {
     const cfg = vscode.workspace.getConfiguration();
-    for (const [key, value] of Object.entries(settings)) {
+    await Promise.all(Object.entries(settings).map(async ([key, value]) => {
         try { await cfg.update(key, value, target); } catch (err) {
             console.warn(`[ess-maker] could not set ${key}:`, err.message);
         }
-    }
+    }));
 }
 
 async function clearSettings(keys, target) {
@@ -746,8 +746,10 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
 
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
 
-    // Wait for VS Code to finish wiring up surfaces and restoring state.
-    await new Promise((r) => setTimeout(r, 2000));
+    // Startup activation runs before VS Code finishes restoring the workspace.
+    // Yield briefly for the initial window surfaces without adding the old
+    // multi-second post-activation delay.
+    await new Promise((r) => setTimeout(r, 250));
 
     // Close all editor tabs (welcome page, restored files, etc).
     try {
@@ -932,8 +934,9 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
 
     await applySettings(GUIDED_LAYOUT, vscode.ConfigurationTarget.Global);
 
-    // Let VS Code settle after folder/editor restore.
-    await new Promise((r) => setTimeout(r, firstRun ? 1200 : 400));
+    // Let VS Code settle after folder/editor restore without delaying the
+    // first visible Maker layout behind the default startup experience.
+    await new Promise((r) => setTimeout(r, firstRun ? 350 : 200));
 
     // Left: reveal the Agent Developer Kit rail.
     await tryRun('workbench.view.extension.essMakerActions');
@@ -955,7 +958,7 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
         // Center: open the getting-started walkthrough.
         await openGettingStarted();
         // Right: open Copilot Chat in the secondary side bar.
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 200));
         await tryRun('workbench.action.chat.open');
         // Folder restore can steal focus back to the Explorer — re-reveal the
         // rail a couple of times so it stays put.
@@ -1567,7 +1570,7 @@ async function firstInstallDispatch(context, installerMode) {
     }
 }
 
-function activate(context) {
+async function activate(context) {
     _extensionContext = context;
     // Ignore passive rail auto-restore during the launch window so it does not
     // clobber the mode-specific launch layout; cleared shortly after activation.
@@ -1667,27 +1670,29 @@ function activate(context) {
         // Restore any legacy chat-only chrome before applying/settling a layout,
         // then dispatch on the current mode. Layout work is chained after the
         // migration so the guided layout snapshots clean, restored settings.
-        migrateLegacyChatOnlyLayout(context).then(() => {
+        try {
+            await migrateLegacyChatOnlyLayout(context);
             if (isDeveloperMode) {
                 // Developer mode: no guided layout, just the rendered README
                 // preview on first launch and every reopen. /setup is
                 // user-driven — neither the installer nor the extension runs it.
-                if (!alreadyApplied) context.globalState.update(APPLIED_KEY, true);
+                if (!alreadyApplied) await context.globalState.update(APPLIED_KEY, true);
                 setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
                 setTimeout(() => { tryRun('workbench.action.chat.open').catch(() => {}); }, 1800);
             } else if (!alreadyApplied) {
                 // First maker launch: activity bar + rail visible, walkthrough
                 // in the center, Copilot Chat on the right. Setup is user-driven
                 // from the walkthrough / rail, so we do not auto-inject /setup.
-                applyGuidedLayout({ silent: false, firstRun: true })
-                    .then(() => context.globalState.update(APPLIED_KEY, true))
-                    .catch(() => {});
+                await applyGuidedLayout({ silent: true, firstRun: true });
+                await context.globalState.update(APPLIED_KEY, true);
             } else {
                 // Subsequent maker launch: settings persist, so just make sure
                 // the rail is reachable without re-opening walkthrough/chat.
-                setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
+                await applyGuidedLayout({ silent: true, firstRun: false });
             }
-        }).catch((err) => _log(`activate: migration/dispatch error: ${err && err.message}`));
+        } catch (err) {
+            _log(`activate: migration/dispatch error: ${err && err.message}`);
+        }
 
         // Auto-update nudge (ADO 7569528 / 7569530): check whether the local
         // clone is behind origin/main and, if so, offer a one-click pull.
