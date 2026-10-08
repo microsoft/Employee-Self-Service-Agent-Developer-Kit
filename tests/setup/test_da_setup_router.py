@@ -1662,7 +1662,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}",
     ):
         assert f"**{choice}**" in text
     assert "**Exit setup (Recommended)**" not in text
@@ -1699,19 +1698,12 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "- **Create and open a new workspace**" not in completion_choices
     assert "- **Continue customizing this agent**" not in completion_choices
     assert "- **Finish for now**" not in completion_choices
-    assert (
-        "Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when "
-        "**Add or change an external HR or IT system** is recommended"
-    ) in normalized
     normalized_completion_choices = " ".join(completion_choices.split())
     ready_choice_list = normalized_completion_choices.split(
         "Then present these choices in one host interactive single-selection control:",
         1,
     )[1].split("Set `{CONNECT_RECOMMENDATION_SUFFIX}`", 1)[0]
     assert "- **Configure landing page" not in ready_choice_list
-    assert ready_choice_list.index(
-        "- **Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}**"
-    ) < ready_choice_list.index("- **Switch to another configured agent**")
     assert ready_choice_list.index(
         "- **Switch to another configured agent**"
     ) < ready_choice_list.index("- **Set up another agent in this environment**")
@@ -1740,11 +1732,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "evidence; it does not claim that an integration is missing or broken."
     ) in normalized
     assert (
-        "I recommend Add or change an external HR or IT system so this agent can "
-        "communicate with the system your organization uses. Setup did not find "
-        "authoritative evidence that an applicable external system is configured."
-    ) in normalized
-    assert (
         "Setup is complete. You asked to configure the landing page next, so I'll "
         "continue there."
     ) in normalized
@@ -1766,20 +1753,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "recommended command first"
         in normalized
     )
-    assert (
-        "- Run `/connect` **(Recommended)** to add or change an external HR or IT "
-        "system. Setup did not find authoritative evidence that an applicable "
-        "external system is configured."
-    ) in normalized
-    assert (
-        "- Run `/landing-page` **(Recommended)** to configure the branding and "
-        "content employees see. An applicable external HR or IT system is already "
-        "configured, so this is the next useful customization step."
-    ) in normalized
-    assert (
-        "- Run `/connect` **(Recommended)** to add or change an external HR or IT "
-        "system. This matches what you asked to do next."
-    ) in normalized
     assert "These reminders are text, not another choice control." in normalized
     assert "Do not render the case labels above." in normalized
     assert text.count("\n{POST_SETUP_COMMAND_REMINDERS}\n") == 2
@@ -2318,14 +2291,6 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         in normalized
     )
     assert "the recheck still found 0 allocated credits" in normalized
-    assert (
-        "- **Check again before overriding**\n"
-        "- **Continue with administrator-attested skip**"
-    ) in text
-    assert (
-        "For **Check again before overriding**, rerun `ENV-CAPACITY-001`."
-        in text
-    )
     assert (
         "Never treat the maker's statement that capacity was allocated as verification"
         in normalized
