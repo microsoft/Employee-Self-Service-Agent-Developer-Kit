@@ -24,7 +24,7 @@ See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only
 
 > [!NOTE]
 >
-> **Run the installer as your normal user; you do not need to start PowerShell or Terminal as an administrator.** After installation, `/setup` and other operations identify the specific login, environment role, consent, or administrator handoff required for that operation.
+> **The installer can be run as a normal user; elevated administrator privileges are not required.** After installation, `/setup` and other operations identify any login, environment role, consent, or administrator handoff needed for the requested action.
 
 ## New to VS Code?
 
