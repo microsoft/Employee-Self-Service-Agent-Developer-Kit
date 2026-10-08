@@ -208,14 +208,16 @@ For **Not yet**, leave capacity unresolved. The final readiness table remains av
 
 For **Check again**, rerun `ENV-CAPACITY-001` before applying capacity state. If the new result is `Passed`, apply it normally. If it is still `Warning`, say that the recheck still found 0 allocated credits and present:
 
-- **Check again**
+- **Check again before overriding**
 - **Continue with administrator-attested skip**
 - **Not yet**
 - **Help me decide**
 
 Before offering **Continue with administrator-attested skip**, state that an appropriate administrator must be present and must attest that Setup may skip this capacity check. This choice does not allocate capacity, change the observed 0-credit result, or verify that capacity is available.
 
-For **Help me decide**, follow the shared contract in `SKILL.md`. Recommend **Check again** when the administrator has allocated credits or the maker wants fresh evidence. Recommend **Continue with administrator-attested skip** only when an appropriate administrator is present and accepts that Setup will complete without a verified positive allocation. Recommend **Not yet** otherwise. This conversation does not apply the attestation.
+For **Check again before overriding**, rerun `ENV-CAPACITY-001`. If it still returns `Warning`, present the same four choices again.
+
+For **Help me decide**, follow the shared contract in `SKILL.md`. Recommend **Check again before overriding** when the administrator has allocated credits or the maker wants fresh evidence. Recommend **Continue with administrator-attested skip** only when an appropriate administrator is present and accepts that Setup will complete without a verified positive allocation. Recommend **Not yet** otherwise. This conversation does not apply the attestation.
 
 If the recheck cannot produce a verdict, preserve its failure category and safe request or correlation evidence, explain why verification is unavailable, and follow the matching current-status branch. Never treat the maker's statement that capacity was allocated as verification.
 

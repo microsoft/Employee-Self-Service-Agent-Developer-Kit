@@ -2320,6 +2320,14 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     )
     assert "the recheck still found 0 allocated credits" in normalized
     assert (
+        "- **Check again before overriding**\n"
+        "- **Continue with administrator-attested skip**"
+    ) in text
+    assert (
+        "For **Check again before overriding**, rerun `ENV-CAPACITY-001`."
+        in text
+    )
+    assert (
         "Never treat the maker's statement that capacity was allocated as verification"
         in normalized
     )
