@@ -48,14 +48,22 @@ plan-in-progress message or the opening question.
 - If `init` above shows any completed step or an advanced active step, this is a
   **resume** — go straight to dispatch, no question; `/setup` is never asked again
   once environment setup is under way.
-- Otherwise it is a first `/setup` (active step `SETUP-01`, nothing completed). If
-  `workspace/plan/plan.json` exists the maker is **already planning**, so a
-  separate `/setup` is **not required** — the plan already carries the "run
-  `/setup`" task for when an environment is actually needed. Show the
-  **plan-in-progress message**, then read `src/skills/planner/SKILL.md` and resume
-  their plan — unless they explicitly ask to configure the environment now.
-- Only when there is **no** plan and no prior progress, ask the opening question
-  below.
+- Otherwise it is a first `/setup` (active step `SETUP-01`, nothing completed).
+  Silently run `python scripts/planner/cli.py setup-status` (read-only JSON, no
+  narration) and branch on its fields:
+  - **No plan** (`hasPlan` false) — ask the opening question below.
+  - **Plan, but the environment still needs creating** (`hasPlan` true **and**
+    `setupTaskOpen` true **and** `environmentPinned` false) — the plan's "run
+    `/setup`" task is still open and no environment is pinned yet, so **this
+    `/setup` IS that task**: the maker running it is the admin who owns
+    environment creation. Do **not** show the plan-in-progress message — go
+    straight to the opening question below and set the environment up.
+  - **Plan, and the environment already exists** (`hasPlan` true **and**
+    (`environmentPinned` true **or** `setupTaskOpen` false)) — the environment the
+    plan runs on is already set up, so a separate `/setup` is not required. Show
+    the **plan-in-progress message**, then read `src/skills/planner/SKILL.md` and
+    resume their plan — unless they explicitly ask to reconfigure the environment
+    now.
 
 **Message — a plan is already in progress:**
 

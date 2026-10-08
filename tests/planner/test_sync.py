@@ -111,8 +111,9 @@ def test_export_assignee_pool():
         new_task("x", "t", assigned_to=principal_pool("WorkdayAdmin"))
     )
     assert body["assignedToType"] == "Role"
-    assert body["assignedToId"] == "WorkdayAdmin"
-    assert body["assignedToRoleId"] == "WorkdayAdmin"
+    # Exported as the backend wire display name so it matches the attestation grant.
+    assert body["assignedToId"] == "Workday administrator"
+    assert body["assignedToRoleId"] == "Workday administrator"
 
 
 def test_export_assignee_person_for_role():
@@ -120,9 +121,30 @@ def test_export_assignee_person_for_role():
         new_task("x", "t", assigned_to=principal_person(PAUL, "ServiceNowAdmin"))
     )
     assert body["assignedToId"] == PAUL
-    assert body["assignedToRoleId"] == "ServiceNowAdmin"
+    # The grounding role rides along as the wire display name too, for parity.
+    assert body["assignedToRoleId"] == "ServiceNow Administrator"
     # A person owner leaves assignedToType implicit (defaults to User server-side).
     assert "assignedToType" not in body
+
+
+def test_export_assignee_pool_canonicalizes_compact_to_wire():
+    # The live defect: a pooled task stored with the compact id must go out as the
+    # wire display name, or the service's caller-expansion never matches the grant.
+    body = sync.to_remote_task_body(
+        new_task("x", "t", assigned_to=principal_pool("EntraPowerPlatformAdministrator"))
+    )
+    assert body["assignedToId"] == "Power Platform Administrator"
+    assert body["assignedToRoleId"] == "Power Platform Administrator"
+
+
+def test_export_assignee_pool_passes_non_attestable_role_through():
+    # A role outside the closed attestable set can't be canonicalized; keep it
+    # verbatim rather than silently dropping the maker's intent.
+    body = sync.to_remote_task_body(
+        new_task("x", "t", assigned_to=principal_pool("SomeFutureRole"))
+    )
+    assert body["assignedToId"] == "SomeFutureRole"
+    assert body["assignedToRoleId"] == "SomeFutureRole"
 
 
 def test_export_assignee_plain_person():
@@ -266,6 +288,36 @@ def test_hydrate_pool_from_flat_fields_only():
     data = sync.hydrate_from_remote(_remote_plan(), tasks)
     principal = data["tasks"][0]["assignedTo"]
     assert principal["type"] == "Role" and principal["role"]["roleId"] == "WorkdayAdmin"
+
+
+def test_hydrate_pool_normalizes_wire_name_to_compact():
+    # The service returns the wire display name; the local model keys roles by the
+    # compact id (local matching is an exact string compare), so fold it home.
+    tasks = [
+        {
+            "taskId": "rt-pp",
+            "title": "t",
+            "assignedTo": {"type": "Role", "id": "Power Platform Administrator"},
+            "assignedToRoleId": "Power Platform Administrator",
+        }
+    ]
+    data = sync.hydrate_from_remote(_remote_plan(), tasks)
+    principal = data["tasks"][0]["assignedTo"]
+    assert principal["type"] == "Role"
+    assert principal["role"]["roleId"] == "EntraPowerPlatformAdministrator"
+
+
+def test_role_pool_survives_export_import_round_trip_as_compact():
+    # Local compact id -> export wire name -> import back to the same compact id,
+    # so a published-and-rehydrated plan stays uniform for local role matching.
+    body = sync.to_remote_task_body(
+        new_task("rt", "t", assigned_to=principal_pool("EntraPowerPlatformAdministrator"))
+    )
+    assert body["assignedToId"] == "Power Platform Administrator"
+    remote = {"taskId": "rt", "title": "t", **body}
+    data = sync.hydrate_from_remote(_remote_plan(), [remote])
+    principal = data["tasks"][0]["assignedTo"]
+    assert principal["role"]["roleId"] == "EntraPowerPlatformAdministrator"
 
 
 def test_hydrate_unassigned_task():
@@ -501,6 +553,81 @@ def test_cli_import_remote_plan_roundtrip(tmp_path):
     assert {t["id"] for t in plan.tasks} == {"rt-1", "rt-2"}
     # The Markdown view is regenerated alongside plan.json.
     assert (tmp_path / "ESS-scenario-plan.md").exists()
+
+
+def _tool_dump(payload) -> str:
+    """Mimic a Copilot CLI tool-result spill: the payload followed by the trailing
+    ``{"result": "<stringified payload>"}`` envelope the runtime appends."""
+    return json.dumps(payload) + "\n" + json.dumps({"result": json.dumps(payload)})
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"a": 1}', {"a": 1}),
+        ('  \n  {"a": 1}', {"a": 1}),
+        ('\ufeff{"a": 1}', {"a": 1}),
+        # Payload followed by the trailing {"result": "<stringified>"} envelope.
+        ('{"a": 1}\n{"result": "{\\"a\\": 1}"}', {"a": 1}),
+        # A lone envelope (object or JSON-encoded string) is unwrapped.
+        ('{"result": {"a": 1}}', {"a": 1}),
+        ('{"result": "{\\"a\\": 1}"}', {"a": 1}),
+    ],
+)
+def test_extract_json_payload(text, expected):
+    assert sync.extract_json_payload(text) == expected
+
+
+def test_extract_json_payload_keeps_plan_tasks_object():
+    # A {plan, tasks} combined object is not a lone {"result": ...} envelope, so it
+    # must pass through untouched.
+    obj = {"plan": {"planId": "p"}, "tasks": {"value": []}}
+    assert sync.extract_json_payload(json.dumps(obj)) == obj
+
+
+def test_extract_json_payload_rejects_empty():
+    with pytest.raises(ValueError):
+        sync.extract_json_payload("   ")
+
+
+def test_cli_import_remote_plan_from_tool_dumps(tmp_path):
+    # The raw get_project_plan / list_project_plan_tasks dumps each carry a trailing
+    # envelope; the CLI must extract the payload without a hand-built {plan, tasks}.
+    plan_path = str(tmp_path / "plan.json")
+    plan_file = tmp_path / "plan.dump.txt"
+    tasks_file = tmp_path / "tasks.dump.txt"
+    plan_file.write_text(_tool_dump(_remote_plan()), encoding="utf-8")
+    tasks_file.write_text(_tool_dump(_remote_tasks()), encoding="utf-8")
+
+    assert _run(
+        "--plan", plan_path, "import-remote-plan",
+        "--plan-file", str(plan_file), "--tasks-file", str(tasks_file),
+    ) == 0
+    plan = Plan.load(plan_path)
+    assert plan.data["planId"] == "plan-1"
+    assert {t["id"] for t in plan.tasks} == {"rt-1", "rt-2"}
+
+
+def test_cli_import_remote_plan_input_tolerates_envelope(tmp_path):
+    # Even the combined --input path is read past a trailing envelope.
+    plan_path = str(tmp_path / "plan.json")
+    input_file = tmp_path / "remote.json"
+    input_file.write_text(
+        _tool_dump({"plan": _remote_plan(), "tasks": _remote_tasks()}),
+        encoding="utf-8",
+    )
+    assert _run("--plan", plan_path, "import-remote-plan", "--input", str(input_file)) == 0
+    assert Plan.load(plan_path).data["planId"] == "plan-1"
+
+
+def test_cli_import_remote_plan_tasks_file_requires_plan_file(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    tasks_file = tmp_path / "tasks.dump.txt"
+    tasks_file.write_text(_tool_dump(_remote_tasks()), encoding="utf-8")
+    assert _run(
+        "--plan", plan_path, "import-remote-plan", "--tasks-file", str(tasks_file),
+    ) == 1
+    assert "requires --plan-file" in capsys.readouterr().err
 
 
 def test_cli_stamp_remote(tmp_path):

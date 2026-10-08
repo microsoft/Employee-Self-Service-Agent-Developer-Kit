@@ -32,8 +32,10 @@ Vocabulary bridges handled here:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from planner.attestable import ATTESTABLE_ROLE_WIRE_NAMES, resolve_attestable_role_id
 from planner.plan_model import (
     ACCEPTANCE_GROUP,
     CONFIGURING_AGENT_NAMES,
@@ -128,6 +130,38 @@ def remote_plan_status(raw: Any) -> str:
 # Export — local plan  ->  service create body.
 # --------------------------------------------------------------------------- #
 
+def _to_wire_role(role_label: str | None) -> str | None:
+    """Canonicalize a role label to the backend **wire display name** for export.
+
+    The service stores attestation grants under the wire display name (that is
+    what :func:`attest_plan_role` posts), but the local plan and ``model.md`` key
+    roles by the compact id. A role-pooled task only surfaces to its attested
+    holders when its ``assignedToId`` matches the grant verbatim (the service
+    compares with Ordinal equality), so fold the compact id to the wire name on
+    the way out. A non-attestable label — which the service would reject anyway —
+    passes through unchanged so no maker intent is silently dropped.
+    """
+    if not role_label:
+        return role_label
+    compact = resolve_attestable_role_id(role_label)
+    if compact is None:
+        return role_label
+    return ATTESTABLE_ROLE_WIRE_NAMES.get(compact, role_label)
+
+
+def _to_compact_role(role_label: str | None) -> str | None:
+    """Canonicalize a role label back to the local **compact id** on import.
+
+    Symmetric to :func:`_to_wire_role`: the service returns the wire display name,
+    but local role matching is an exact string compare against the compact ids the
+    agent and ``model.md`` use, so fold the wire name home. Non-attestable labels
+    pass through unchanged.
+    """
+    if not role_label:
+        return role_label
+    return resolve_attestable_role_id(role_label) or role_label
+
+
 def to_remote_task_body(task: dict[str, Any]) -> dict[str, Any]:
     """Flatten one local task into the service's task-create shape.
 
@@ -148,17 +182,22 @@ def to_remote_task_body(task: dict[str, Any]) -> dict[str, Any]:
     role_id = assignee_role_id(assigned_to)
     oid = assignee_user_oid(assigned_to)
     if ptype == "Role":
-        # Open pool: anyone holding the role may claim it.
+        # Open pool: anyone holding the role may claim it. Send the role as the
+        # backend **wire display name** so it matches the attestation grant (which
+        # ``attest_plan_role`` also stores under the wire name) — otherwise the
+        # service's caller-task expansion compares a compact id against a display
+        # name with Ordinal equality and the task never surfaces to its holders.
         body["assignedToType"] = "Role"
-        body["assignedToId"] = assigned_to.get("id") or role_id or ""
+        body["assignedToId"] = _to_wire_role(assigned_to.get("id") or role_id or "")
         if role_id:
-            body["assignedToRoleId"] = role_id
+            body["assignedToRoleId"] = _to_wire_role(role_id)
     elif ptype == "User" and oid:
         # Owned by a person (default type User is left implicit). A retained role
-        # rides along as the grounding ``assignedToRoleId``.
+        # rides along as the grounding ``assignedToRoleId`` — wire-named for parity
+        # with attestation and the pooled case.
         body["assignedToId"] = oid
         if role_id:
-            body["assignedToRoleId"] = role_id
+            body["assignedToRoleId"] = _to_wire_role(role_id)
     # Otherwise unassigned — emit no assignee fields.
 
     produces = task.get("produces")
@@ -338,13 +377,15 @@ def _principal_from_remote(task: dict[str, Any]) -> dict[str, Any]:
 
     if ptype == "Role":
         # Open pool — the role id may arrive as assignedToRoleId or (since a pool's
-        # assignedToId *is* the role id) as assignedToId.
+        # assignedToId *is* the role id) as assignedToId. The service carries the
+        # wire display name; fold it back to the local compact id so local role
+        # matching (an exact string compare) stays uniform.
         pool_role = role_id or oid
-        return principal_pool(pool_role) if pool_role else {}
+        return principal_pool(_to_compact_role(pool_role)) if pool_role else {}
     if role_id and not oid:
-        return principal_pool(role_id)
+        return principal_pool(_to_compact_role(role_id))
     if oid:
-        return principal_person(oid, role_id or None)
+        return principal_person(oid, _to_compact_role(role_id) or None)
     return {}
 
 
@@ -393,6 +434,49 @@ def _output_from_remote(artifact: dict[str, Any]) -> dict[str, Any]:
         source="Agent",
         state=state,
     )
+
+
+def extract_json_payload(text: str) -> Any:
+    """Return the payload JSON from a (possibly enveloped) tool-result dump.
+
+    When a planner tool's result is large, the Copilot CLI spills it to a temp
+    file as the structured payload followed by a *second* top-level
+    ``{"result": "<stringified payload>"}`` document — both carry identical data.
+    A single-document parser (PowerShell's ``ConvertFrom-Json`` or a bare
+    ``json.loads``) chokes on that concatenation ("Additional text encountered
+    after finished reading JSON content"), which is why the sync flow must not
+    hand-stitch the ``{plan, tasks}`` object itself. This reads the first complete
+    JSON value and ignores any trailing envelope, so raw tool-output files can be
+    fed straight to ``import-remote-plan``.
+
+    If the first document is itself a lone ``{"result": ...}`` envelope (the inner
+    payload may be a nested object or a JSON-encoded string), it is unwrapped.
+    """
+    decoder = json.JSONDecoder()
+    index, length = 0, len(text)
+    # Tolerate a leading BOM and surrounding whitespace before the first value.
+    while index < length and text[index] in " \t\r\n\ufeff":
+        index += 1
+    if index >= length:
+        raise ValueError("tool output contained no JSON")
+    try:
+        value, _ = decoder.raw_decode(text, index)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"could not parse JSON from tool output: {exc}") from exc
+    return _unwrap_result_envelope(value)
+
+
+def _unwrap_result_envelope(value: Any) -> Any:
+    """Unwrap a lone ``{"result": <payload>}`` harness envelope (string or object)."""
+    if isinstance(value, dict) and set(value) == {"result"}:
+        inner = value["result"]
+        if isinstance(inner, str):
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                return inner
+        return inner
+    return value
 
 
 def hydrate_from_remote(

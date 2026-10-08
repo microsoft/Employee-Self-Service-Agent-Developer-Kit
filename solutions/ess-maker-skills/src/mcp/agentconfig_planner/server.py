@@ -241,7 +241,12 @@ async def list_project_plan_tasks_for_caller(
     directly to them AND tasks pooled to any attestable role the caller holds an
     active role assignment for (role-expanded). Attesting a caller into a role
     (attest_plan_role) is what makes that role's pooled tasks appear here. The
-    caller Entra id is taken from the access token, not an argument."""
+    caller Entra id is taken from the access token, not an argument. This tool
+    always sends that id as the top-level caller marker
+    (assignedToId eq '<caller>') — the service needs it to run the role
+    expansion — and always excludes Completed tasks (state ne 'Completed').
+    Any query.filter you pass is ANDed on as a residual that narrows further;
+    it cannot drop the marker or surface Completed work."""
     return _format(
         await get_client().list_project_plan_tasks_for_caller(
             projectId, planId, query

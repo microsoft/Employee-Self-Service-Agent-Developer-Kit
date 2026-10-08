@@ -74,6 +74,25 @@ def test_public_setup_routes_to_foundation_module() -> None:
     assert "Do not route directly to `src/skills/onboarding/SKILL.md`" in prompt
 
 
+def test_first_run_gate_is_fre_aware_for_the_environment_owner() -> None:
+    """A plan whose `/setup` task is still open must not bounce the admin who
+    owns environment creation; both gates consult `setup-status` and proceed
+    when no environment is pinned yet."""
+
+    foundation = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    onboarding = " ".join(_ONBOARDING.read_text(encoding="utf-8").split())
+
+    for gate in (foundation, onboarding):
+        # The deterministic signal drives the decision, not plan existence alone.
+        assert "scripts/planner/cli.py setup-status" in gate
+        assert "setupTaskOpen" in gate
+        assert "environmentPinned" in gate
+        # The owner of the open setup task proceeds instead of being bounced.
+        assert "owns environment creation" in gate
+        # The bounce is still reachable when the environment already exists.
+        assert "plan-in-progress message" in gate
+
+
 def test_workday_routing_remains_unchanged() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
 

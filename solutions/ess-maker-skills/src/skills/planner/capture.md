@@ -118,6 +118,34 @@ Use `capture-setup` for the environment (observed); use `pin-output` for
 connections / apps / suites an assignee created (asked). Confirm the values with
 the person before committing.
 
+### When `/setup` is blocked before it records the environment
+
+`/setup` only writes the environment into `.local/config.json` once it finishes
+connecting to the deployed agent. If it's blocked **earlier** — most often because
+the ESS agent (the Marketplace declarative agent) isn't available for the tenant
+yet, so the install can't complete — nothing lands in `config.json`, so
+`capture-setup` has nothing to observe and the environment the maker **did**
+create would be lost from the plan. Don't let that happen. When the Power
+Platform admin tells you they created (or decided) the environment but setup
+couldn't finish, persist it from what they tell you via the **ask** path — pin
+`primaryEnvironment` directly, and **without** `--complete`:
+
+```
+python scripts/planner/cli.py pin-output --task <setupTaskId> --key primaryEnvironment \
+  --kind Environment --attr environmentUrl=<org-url> [--attr environmentId=<guid>] --source User
+```
+
+(`setupTaskId` comes from `setup-status`; confirm the environment URL with them
+first.) This records `primaryEnvironment` on the plan — so `setup-status` now
+reports it and every *other* persona's `task-brief` can nudge them to `/setup`
+into **that** environment — while the setup task stays **open**. Never pass
+`--complete` here: the agent still isn't installed, so the setup task's work isn't
+done. Keep it moving but unfinished:
+`python scripts/planner/cli.py set-state --task <setupTaskId> --state InProgress`.
+When the install is later unblocked and `/setup` finishes for real, the normal
+observed capture (`capture-setup --complete`) pins the cloned agent and closes the
+task.
+
 ## Guide the assignee with what earlier tasks produced
 
 Before an assignee starts a task, brief them — this back-propagates the details

@@ -978,6 +978,31 @@ class Plan:
             "environmentUrl": attrs.get("environmentUrl", ""),
         }
 
+    def first_run_setup_pending(self, task_id: str) -> bool:
+        """Whether this task is the plan's **first-run setup** still waiting to run.
+
+        True only for the ``/setup`` task (the one that **produces**
+        `primaryEnvironment`) while it is not yet Completed **and no environment
+        is pinned on the plan yet**. This is the deterministic first-run-experience
+        (FRE) signal: when the Power Platform admin asks "what are my tasks?" and
+        their setup task is still open with no environment decided, nudge them to
+        run ``/setup`` **now** (it decides or creates the environment the whole
+        plan runs on).
+
+        Returns ``False`` once an environment is pinned (the env decision is
+        already made — e.g. a setup that ran but was blocked before it could
+        finish still pins `primaryEnvironment`, so it is no longer *first* run) or
+        the task is Completed. This is the mirror image of :meth:`kit_setup_nudge`,
+        which nudges *other* personas to connect **after** the env exists; together
+        they cover both sides of the environment handshake without overlapping.
+        """
+        task = self._require_task(task_id)
+        if PRIMARY_ENVIRONMENT_KEY not in (task.get("produces") or []):
+            return False
+        if task.get("state") == "Completed":
+            return False
+        return self.output(PRIMARY_ENVIRONMENT_KEY) is None
+
     def task_brief(self, task_id: str) -> dict[str, Any]:
         """A briefing for a task's assignee: what to do (title + description), the
         role, the resolved values it consumes (e.g. the env id to use), and the
@@ -990,6 +1015,7 @@ class Plan:
             "role": assignee_role_id(task.get("assignedTo")),
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
+            "firstRunSetup": self.first_run_setup_pending(task_id),
             "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
             "blockedBy": self.blocking_inputs(task_id),

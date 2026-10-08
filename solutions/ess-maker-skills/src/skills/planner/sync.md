@@ -15,6 +15,16 @@ authored plan as one object.
   CLI (`scripts/planner/cli.py`) only reads/writes the local cache. The planner
   tools only talk to the service. You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
+- **Importing: hand each tool result to the CLI as its own file — never splice
+  them yourself.** Re-hydrating always means
+  `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`,
+  pointing each flag at the file holding that tool's result (the temp file the
+  runtime saves a large result to, or a file you write the result to). **Do not**
+  build a combined `{plan, tasks}` object or pipe the results through PowerShell
+  `ConvertFrom-Json`/`ConvertTo-Json`: a large tool result is stored as the
+  payload followed by a trailing `{"result": …}` envelope, so a single-document
+  JSON parser fails with *"Additional text encountered after finished reading
+  JSON content"*. The CLI extracts the payload past that envelope for you.
 
 **Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
 planner tool authenticates itself, and on an expired/rejected token (a 401) it
@@ -87,13 +97,11 @@ Run this the moment `/planner` starts, before deciding whether to interview:
    it:
    1. **`get_project_plan`** (`projectId`, `planId`) — the plan entity.
    2. **`list_project_plan_tasks`** (`projectId`, `planId`) — its tasks.
-   3. Write the two results into a temp file as one object:
-      `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
-      at `workspace/plan/.remote.json`.
-   4. Hydrate the cache:
-      `python scripts/planner/cli.py import-remote-plan --input workspace/plan/.remote.json`
-      then delete the temp file.
-   5. Resume from the refreshed cache (`summary`, Flow 2, next actions) exactly as
+   3. Hydrate the cache by handing each result to the CLI as its own file (see
+      the import rule above — do **not** hand-stitch a `{plan, tasks}` object or
+      run the results through PowerShell JSON cmdlets):
+      `python scripts/planner/cli.py import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   4. Resume from the refreshed cache (`summary`, Flow 2, next actions) exactly as
       the **First** section of `SKILL.md` describes.
 3. **If the service has no plan but a local `plan.json` exists**, it's an
    un-pushed draft — resume it locally and, once the sponsor is happy, **push** it
@@ -147,10 +155,11 @@ interview → model), publish it in **one** create call rather than task-by-task
    Activation is therefore an explicit step you take yourself, once the sponsor
    confirms the plan is ready to run (step 6). Do **not** activate here.
 4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
-   `get_project_plan` + `list_project_plan_tasks` → write
-   `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
-   to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
-   the temp file. The plan is now cached as **Draft** with real ids.
+   `get_project_plan` + `list_project_plan_tasks`, then hand each result to
+   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   (one file per flag — never hand-stitch a combined object or run the results
+   through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
+   envelope itself). The plan is now cached as **Draft** with real ids.
 5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
    and offer the Markdown for them to **download and review** — render its clickable
    link in chat first (the `summary` command prints the exact
@@ -204,8 +213,36 @@ After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` 
 
 ## Flow 2 — "what am I assigned?" is answered by the service
 
-The service stores the role→person mapping and filters tasks by the caller's
-roles. So for "what are my tasks?", call **`list_project_plan_tasks_for_caller`**
-(`projectId`, `planId`) and present exactly what it returns — do not re-derive
-role gating locally. Only fall back to the local `mine` command
-(`src/skills/planner/mytasks.md`) when the service is unreachable.
+The service stores the role→person mapping and scopes tasks to the caller
+itself. So for "what are my tasks?", make **one** call —
+**`list_project_plan_tasks_for_caller`** with just `projectId` and `planId` — and
+present exactly what it returns. The caller's identity comes from the signed-in
+token, so:
+
+- **Pass no identity, and don't go looking for one.** Never pass, resolve, or
+  guess the caller's object id (`subjectId`); never call
+  `list_plan_role_assignments` to find yourself; never list the plan's
+  assignments to hunt for your own id; never read the project's owner id as if it
+  were the caller. The tool already knows who you are.
+- **Don't re-derive role gating locally.** What comes back already includes both
+  the tasks assigned directly to the caller *and* the tasks pooled to every role
+  they hold — the service expands the caller's roles server-side (attesting a
+  person into a role is what makes that role's pooled tasks appear). The roles the
+  caller holds are evident from the pooled tasks it returns, so state them in
+  plain language ("you hold the Power Platform admin role") — **never ask "which
+  role(s) do you hold?"**.
+- **Call out a first-run setup plainly.** If what comes back includes the caller's
+  **setup task** (the one that stands up the environment) still open and no
+  environment is on the plan yet, that is their first step — tell them to run
+  `/setup` **now** (their first-run experience). `task-brief --task <setupTaskId>`
+  flags this as the first-run setup. When they return having run it, capture what
+  it produced (`src/skills/planner/capture.md`); and if the ESS agent install was
+  blocked so `/setup` couldn't finish, still persist the environment they created
+  (same file → *When `/setup` is blocked before it records the environment*) so
+  the plan carries it for everyone, while the setup task stays open.
+- **On failure, walk the sign-in ladder at the top of this file** and nothing
+  else: a 401 → one MCP restart + one retry → then local; any other failure, or
+  an unreachable service → local. A rejected call is **never** a cue to start
+  asking the person for their roles, guessing ids, or listing assignments. Fall
+  back to the local `mine` command (`src/skills/planner/mytasks.md`) only, and
+  only when the service is genuinely unreachable.

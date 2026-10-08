@@ -232,26 +232,13 @@ def test_task_routes_lifecycle_and_headers(monkeypatch) -> None:
     assert deleting.headers["If-Match"] == "etag-t"
 
 
-def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
+def test_task_caller_scoping_delegates_role_expansion_to_service(
     monkeypatch,
 ) -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if "agentRoleAssignments" in str(request.url):
-            return httpx.Response(
-                200,
-                json={
-                    # The assignment response projects the role name under
-                    # ``role``; the $filter grammar keys it as ``roleId`` but
-                    # the response body does not carry ``roleId``.
-                    "value": [
-                        {"role": "ServiceNowAdmin"},
-                        {"role": "WorkdayAdmin"},
-                    ]
-                },
-            )
         return httpx.Response(200, json={"value": []})
 
     client = _make_client(monkeypatch, handler)
@@ -263,25 +250,21 @@ def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
 
     role_calls = [r for r in requests if "agentRoleAssignments" in str(r.url)]
     task_calls = [r for r in requests if "agentPlanTasks" in str(r.url)]
-    # The caller's Active role assignments on this plan are resolved first...
-    assert len(role_calls) == 1
-    assert role_calls[0].url.params["$filter"] == (
-        f"targetPlanId eq 'plan1' and subjectObjectId eq '{CALLER_OID}' "
-        "and status eq 'Active'"
-    )
-    # ...then the task query expands to the caller oid plus every active role,
-    # so role-pooled tasks (assignedToRoleId) are not silently dropped.
+    # The service owns the caller expansion (the caller's direct assignments
+    # plus the Role pools they hold), so the client must NOT pre-resolve role
+    # assignments itself.
+    assert role_calls == []
     assert len(task_calls) == 1
-    assert task_calls[0].url.params["$filter"] == (
-        f"(assignedToId eq '{CALLER_OID}' "
-        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedTo/type eq 'Role') "
-        "or (assignedToRoleId eq 'WorkdayAdmin' and assignedTo/type eq 'Role')) "
-        "and state ne 'Completed'"
-    )
-    # Regression guard: the assignee type must be the nested read-model field
-    # (assignedTo/type), never the write-only flat assignedToType, which the
-    # service rejects as an unknown PlanTask property.
-    assert "assignedToType" not in task_calls[0].url.params["$filter"]
+    task_filter = task_calls[0].url.params["$filter"]
+    # The caller marker is a standalone top-level AND term carrying the caller's
+    # own object id; the service strips it and substitutes the authorized scope.
+    assert task_filter == f"assignedToId eq '{CALLER_OID}' and state ne 'Completed'"
+    # Regression guards for the service's AgentPlanTaskQueryScope parser: the
+    # caller marker may appear only as a top-level AND term, never nested in an
+    # OR/group, and never alongside a role-pool / assignedToType clause.
+    assert " or " not in task_filter
+    assert "assignedToRoleId" not in task_filter
+    assert "assignedToType" not in task_filter
 
 
 def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> None:
@@ -289,10 +272,6 @@ def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> No
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if "agentRoleAssignments" in str(request.url):
-            return httpx.Response(
-                200, json={"value": [{"role": "ServiceNowAdmin"}]}
-            )
         return httpx.Response(200, json={"value": []})
 
     client = _make_client(monkeypatch, handler)
@@ -305,12 +284,15 @@ def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> No
     )
 
     task_call = next(r for r in requests if "agentPlanTasks" in str(r.url))
-    assert task_call.url.params["$filter"] == (
-        f"((assignedToId eq '{CALLER_OID}' "
-        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedTo/type eq 'Role')) "
-        "and state ne 'Completed') "
+    task_filter = task_call.url.params["$filter"]
+    # The caller marker stays a standalone top-level AND term; the caller's own
+    # filter rides along as a parenthesised residual conjunct, never wrapping
+    # the marker.
+    assert task_filter == (
+        f"assignedToId eq '{CALLER_OID}' and state ne 'Completed' "
         "and (state eq 'InProgress')"
     )
+    assert " or " not in task_filter
 
 
 def test_caller_scoping_requires_object_id_claim(monkeypatch) -> None:
@@ -341,11 +323,14 @@ def test_role_assigned_task_targets_a_role_pool(monkeypatch) -> None:
         ),
     )
 
+    # The compact id is accepted as input but written as the backend wire display
+    # name, so the pooled task matches the attestation grant (stored under the same
+    # wire name) and surfaces to the role's attested holders.
     assert json.loads(requests[0].content) == {
         "title": "Configure ServiceNow",
-        "assignedToId": "ServiceNowAdmin",
+        "assignedToId": "ServiceNow Administrator",
         "assignedToType": "Role",
-        "assignedToRoleId": "ServiceNowAdmin",
+        "assignedToRoleId": "ServiceNow Administrator",
     }
 
 

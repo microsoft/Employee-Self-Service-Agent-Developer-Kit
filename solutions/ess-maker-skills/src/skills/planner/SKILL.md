@@ -111,7 +111,12 @@ have checked for an existing plan.**
      (`src/skills/planner/sync.md`). Only when the service is unreachable, fall
      back to the local best-effort gating in `src/skills/planner/mytasks.md`
      (resolve the caller's identity or ask which of the plan's roles are theirs,
-     then show only those roles' tasks).
+     then show only those roles' tasks). **If the caller's own ready task is the
+     first-run setup** (it stands up the environment and none is pinned yet), say
+     so and nudge them to run `/setup` **now** — `task-brief` flags this as the
+     first-run setup; when they return, capture what it produced (Phase 6),
+     persisting the environment they created even if the ESS agent install was
+     blocked before `/setup` could finish (`src/skills/planner/capture.md`).
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
      **edit** the plan — they can revise the ESS scenario plan Markdown directly
      or just say what to change, and you reconcile it (`src/skills/planner/edit.md`),

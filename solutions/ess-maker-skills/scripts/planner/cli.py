@@ -57,6 +57,7 @@ from planner.plan_model import (
     read_research_context,
 )
 from planner.sync import (
+    extract_json_payload,
     hydrate_from_remote,
     stamp_remote_ids,
     to_remote_plan_body,
@@ -582,6 +583,11 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     if brief.get("description"):
         print(f"  {brief['description']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    if brief.get("firstRunSetup"):
+        print(
+            "  First-run setup: run /setup now to decide or create the "
+            "environment this plan runs on."
+        )
     nudge = brief.get("kitSetup")
     if nudge:
         env = nudge.get("environmentId") or nudge.get("environmentUrl") or "the plan's environment"
@@ -849,24 +855,40 @@ def cmd_export_remote_plan(args: argparse.Namespace) -> int:
 def cmd_import_remote_plan(args: argparse.Namespace) -> int:
     """Rebuild the local cache from a pushed plan's entities.
 
-    Reads a ``{"plan": <plan>, "tasks": [...]}`` JSON payload (or a bare plan
-    entity) and writes the hydrated document. The service is the source of truth,
-    so this does **not** gate the write on local validation — it only surfaces any
-    validation notes as non-blocking warnings.
+    Accepts either the two raw tool-result dumps (``--plan-file`` +
+    ``--tasks-file``) or a single ``{"plan": <plan>, "tasks": [...]}`` payload / a
+    bare plan entity (``--input``). A large tool result is saved as the payload
+    followed by a trailing ``{"result": ...}`` envelope, so every source is read
+    through :func:`extract_json_payload` (first JSON document wins). The service is
+    the source of truth, so this does **not** gate the write on local validation —
+    it only surfaces any validation notes as non-blocking warnings.
     """
     try:
-        payload = json.loads(_read_input(args.input))
-    except (OSError, json.JSONDecodeError) as exc:
+        if args.plan_file:
+            plan_entity = extract_json_payload(_read_input(args.plan_file))
+            tasks = (
+                extract_json_payload(_read_input(args.tasks_file))
+                if args.tasks_file
+                else None
+            )
+        else:
+            if args.tasks_file:
+                print(
+                    "--tasks-file requires --plan-file (it names the plan's tasks dump).",
+                    file=sys.stderr,
+                )
+                return 1
+            payload = extract_json_payload(_read_input(args.input))
+            if isinstance(payload, dict) and "plan" in payload:
+                plan_entity = payload.get("plan")
+                tasks = payload.get("tasks")
+            else:
+                # Allow passing the plan entity directly (tasks embedded via expansion).
+                plan_entity = payload
+                tasks = None
+    except (OSError, ValueError) as exc:
         print(f"Could not read plan payload: {exc}", file=sys.stderr)
         return 1
-
-    if isinstance(payload, dict) and "plan" in payload:
-        plan_entity = payload.get("plan")
-        tasks = payload.get("tasks")
-    else:
-        # Allow passing the plan entity directly (tasks embedded via expansion).
-        plan_entity = payload
-        tasks = None
 
     try:
         data = hydrate_from_remote(plan_entity, tasks)
@@ -1114,6 +1136,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="rebuild the local cache from a pushed plan's entities (JSON)")
     p.add_argument("--input", default="-",
                    help="path to a {plan, tasks} JSON file, or '-' for stdin (default)")
+    p.add_argument("--plan-file", dest="plan_file",
+                   help="path to the raw get_project_plan tool-result dump; the CLI "
+                        "extracts the payload past any trailing {\"result\": ...} "
+                        "envelope (pair with --tasks-file)")
+    p.add_argument("--tasks-file", dest="tasks_file",
+                   help="path to the raw list_project_plan_tasks tool-result dump "
+                        "(used with --plan-file)")
     p.set_defaults(func=cmd_import_remote_plan)
 
     p = sub.add_parser("stamp-remote",

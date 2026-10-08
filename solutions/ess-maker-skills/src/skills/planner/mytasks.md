@@ -3,6 +3,16 @@
 When a person asks what work is waiting on them, show their Tasks **grouped by
 each role they hold** — which naturally covers a person with more than one role.
 
+> **This is the local, service-unreachable fallback — not the primary path.**
+> When the shared planner is reachable, "what are my tasks?" is answered by a
+> single `list_project_plan_tasks_for_caller` call that scopes to the caller by
+> their signed-in identity and returns their direct *and* role-pooled tasks
+> (`src/skills/planner/sync.md`, Flow 2). On that path you **never** resolve a
+> `subjectId`, list role assignments, or ask the person which roles they hold —
+> the service already knows who they are and expands their roles for you. Drop to
+> the steps below **only** when the service is genuinely unreachable and you must
+> read the local cache instead.
+
 ## Steps
 
 0. **Reconcile a finished first-run setup — once.** Before listing anyone's
@@ -14,11 +24,16 @@ each role they hold** — which naturally covers a person with more than one rol
    (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
    ran*). If `setupTaskOpen` is **false**, there's nothing to reconcile —
    continue.
-1. **Find the person's roles.** The roles source is a separate, unbuilt system,
-   so this is best-effort:
-   - If a roles source is wired, look up the roles this person holds.
-   - If not, resolve the caller's identity (e.g. via Work IQ `/me`) and/or ask
-     them to confirm which of the plan's roles are theirs.
+1. **Find the person's roles — offline, so best-effort.** You're here only
+   because the service (which would scope to the caller and expand their roles
+   for you) is unreachable, so the attested role→person mapping can't be read
+   right now. In this order:
+   - Prefer what's already in hand — if the caller's identity and the roles they
+     hold are known from this session or the local plan, use those.
+   - Otherwise resolve the caller's identity (e.g. via Work IQ `/me`) and, **only
+     as a last resort**, ask them to confirm which of the plan's roles are theirs.
+   Never block on it: if roles stay unknown, show the tasks assigned to them
+   directly and note that the role-pooled view needs the shared planner.
 2. **Show their Tasks, grouped by role:**
 
    ```
@@ -67,9 +82,17 @@ python scripts/planner/cli.py task-brief --task <T#>
   kit: run /setup and choose environment `<envId>`". Nudge them to `/setup` into
   **that** environment (don't let them pick or create a different one), then they
   do their task.
-- **No environment pinned yet** → the admin's `/setup` task is the prerequisite;
-  the environment hasn't been decided. Don't nudge this person to setup — tell
-  them their task is blocked until setup runs, and who owns it.
+- **This person's own ready task IS the setup task** (it produces the environment
+  and none is pinned yet) → `task-brief` prints **"First-run setup: run /setup
+  now…"**. This is their first-run experience — tell them to run `/setup` now.
+  When they come back having run it, capture what it produced (Phase 6); and if
+  the ESS agent install was blocked so `/setup` couldn't finish, still persist the
+  environment they created (`src/skills/planner/capture.md` → *When `/setup` is
+  blocked before it records the environment*), keeping the setup task open.
+- **No environment pinned yet** (and this isn't their setup task) → the admin's
+  `/setup` task is the prerequisite; the environment hasn't been decided. Don't
+  nudge this person to setup — tell them their task is blocked until setup runs,
+  and who owns it.
 
 Present the result in plain language — role headings with their tasks beneath —
 not as raw output.

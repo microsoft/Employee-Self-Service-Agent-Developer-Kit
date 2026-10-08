@@ -66,10 +66,21 @@ setup is not complete here, this is a first run. Unless the maker already asked
 to connect a deployed agent, ask one question before showing the checklist.
 
 **First, is the maker already planning?** If `workspace/plan/plan.json` exists,
-they already started an ESS plan; connecting an environment is **not required** as
-a separate step. Skip the question, show the **plan-in-progress message**, then
-read `src/skills/planner/SKILL.md` and resume their plan — unless they explicitly
-ask to connect a deployed agent now, in which case continue the checklist below.
+they already started an ESS plan. Silently run
+`python scripts/planner/cli.py setup-status` (read-only JSON, no narration) and
+branch on its fields:
+
+- **The environment still needs creating** (`setupTaskOpen` true **and**
+  `environmentPinned` false) — the plan's "run `/setup`" task is still open and no
+  environment is pinned yet, so the maker running this **is the admin who owns
+  environment creation**. Do **not** show the plan-in-progress message; continue
+  the checklist below so they can create the environment.
+- **The environment already exists** (`environmentPinned` true **or**
+  `setupTaskOpen` false) — connecting an environment is **not required** as a
+  separate step. Skip the question, show the **plan-in-progress message**, then
+  read `src/skills/planner/SKILL.md` and resume their plan — unless they
+  explicitly ask to connect a deployed agent now, in which case continue the
+  checklist below.
 
 **Message — a plan is already in progress:**
 

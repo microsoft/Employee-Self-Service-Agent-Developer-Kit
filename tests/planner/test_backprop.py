@@ -70,6 +70,30 @@ def test_kit_setup_nudge_is_plan_env_driven():
     assert p.task_brief("T2")["kitSetup"] == {"environmentId": "e1", "environmentUrl": "u"}
 
 
+def test_first_run_setup_pending_is_the_fre_signal():
+    p = _plan()
+    # The admin's setup task — not yet run, no env pinned — IS the first-run
+    # setup: when they ask "what are my tasks?", nudge them to run /setup now.
+    assert p.first_run_setup_pending("T1") is True
+    assert p.task_brief("T1")["firstRunSetup"] is True
+    # A non-setup task is never the first-run setup (it's the other side of the
+    # handshake — kitSetup — once an env exists).
+    assert p.first_run_setup_pending("T2") is False
+    assert p.task_brief("T2")["firstRunSetup"] is False
+    # Once an environment is pinned the env decision is made, so it's no longer
+    # the *first* run — even while the setup task is still open (e.g. the ESS
+    # agent install was blocked before /setup could finish, yet the environment
+    # the maker created was still persisted).
+    p.add_output(plan_artifact("primaryEnvironment", "Environment",
+                               {"environmentId": "e1", "environmentUrl": "u"},
+                               produced_by_task_id="T1"))
+    assert p.first_run_setup_pending("T1") is False
+    assert p.task_brief("T1")["firstRunSetup"] is False
+    # A Completed setup task is never the first-run nudge either.
+    p.set_task_state("T1", "Completed")
+    assert p.first_run_setup_pending("T1") is False
+
+
 def _run(*argv: str) -> int:
     return cli.main(list(argv))
 
@@ -318,6 +342,21 @@ def test_cli_task_brief_shows_env_and_steps(tmp_path, capsys):
     # The task carries no `action` field — it's described by title + description.
     p = Plan.load(plan_path)
     assert "action" not in p.task("T2")
+
+
+def test_cli_task_brief_nudges_first_run_setup(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    # The admin's setup task, still open, with no environment pinned yet.
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Run setup",
+         "--description", "Run /setup to onboard the ADK to the deployed agent",
+         "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "task-brief", "--task", "T1")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "First-run setup" in out   # the FRE nudge fires for the open setup task
+    assert "/setup" in out            # tells them exactly what to run now
 
 
 def test_task_brief_blocked_when_consumed_not_produced(tmp_path, capsys):

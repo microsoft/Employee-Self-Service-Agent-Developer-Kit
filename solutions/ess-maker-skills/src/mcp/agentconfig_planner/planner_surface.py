@@ -37,7 +37,7 @@ from _odata import (  # noqa: E402
 )
 from base_client import AgentConfigApiError  # noqa: E402
 
-from roles_surface import ATTESTABLE_ROLES  # noqa: E402
+from roles_surface import ATTESTABLE_ROLES, resolve_attestable_role  # noqa: E402
 
 _AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
 _PLANS_RESOURCE = "agentPlans"
@@ -380,42 +380,6 @@ class PlannerMixin:
             transform_payload=False,
         )
 
-    async def _caller_active_role_ids(
-        self, plan_id: str, caller_id: str
-    ) -> list[str]:
-        """Role ids the caller actively holds on this plan.
-
-        Role-pooled tasks are addressed to a role (in ``assignedToRoleId``), not
-        the caller's oid, so scoping "tasks for the caller" to direct
-        assignments alone would hide them. Resolving the caller's Active role
-        assignments for the plan lets the task query expand to those roles.
-        """
-        assignments = await self.list_plan_role_assignments(
-            plan_id, subject_id=caller_id, status="Active"
-        )
-        entities = (
-            assignments.get("value")
-            if isinstance(assignments, dict)
-            else assignments
-        )
-        if not isinstance(entities, list):
-            return []
-        role_ids: list[str] = []
-        seen: set[str] = set()
-        for entity in entities:
-            # Field asymmetry: the $filter grammar keys role on ``roleId`` (see
-            # list_plan_role_assignments), but the assignment response projects
-            # the role name under ``role`` (``roleId`` appears only on older
-            # shapes). Read ``role`` first, falling back to ``roleId``, so the
-            # value matches a task's ``assignedToRoleId`` and role-pooled tasks
-            # are not silently dropped. Verified against the AgentConfiguration
-            # service response shape.
-            role_id = _entity_scalar(entity, "role", "roleId")
-            if role_id and role_id not in seen:
-                seen.add(role_id)
-                role_ids.append(role_id)
-        return role_ids
-
     async def list_project_plan_tasks_for_caller(
         self, project_id: str, plan_id: str, query: Optional[dict[str, Any]] = None
     ) -> Any:
@@ -424,35 +388,29 @@ class PlannerMixin:
             raise AgentConfigApiError(
                 "The access token has no 'oid' claim; cannot scope tasks to the caller."
             )
-        # Direct assignment to the caller, plus every role the caller actively
-        # holds on this plan. create_role_assigned_project_plan_task stores the
-        # role in assignedToRoleId, so role-pooled tasks would otherwise be
-        # invisible here despite the tool contract promising them.
-        clauses = [
+        # The service owns the "for caller" expansion. It recognises a single
+        # top-level ``assignedToId eq '<caller>'`` conjunct as the caller marker,
+        # strips it, and substitutes the authorized scope -- the caller's direct
+        # User assignments plus the Role pools they actively hold (the service's
+        # FiltersForCaller path). So we must NOT resolve roles or OR in
+        # assignedToRoleId clauses here: that both duplicates the server and
+        # breaks the marker. The marker is honoured only as a standalone
+        # top-level AND term, supplied once, carrying the caller's own object id
+        # -- nesting it under or/not/parentheses, or pairing it with a second
+        # assignedToId predicate, makes the service reject the whole query.
+        caller_marker = (
             f"assignedToId eq '{_escape_odata_literal(caller_id, 'callerId')}'"
-        ]
-        for role_id in await self._caller_active_role_ids(plan_id, caller_id):
-            # Pool-only. A person-assigned task keeps its grounding
-            # assignedToRoleId (see scripts/planner/sync.py), so matching the
-            # role id alone would surface work owned by someone else to every
-            # other holder of that role; require the open Role-typed pool too.
-            # The assignee type is queryable on the PlanTask read model only as
-            # the nested assignedTo/type principal field. The flat
-            # assignedToType lives on the write DTO (TaskCreateRequest) alone,
-            # so filtering on it is rejected by the service as an unknown
-            # property.
-            clauses.append(
-                f"(assignedToRoleId eq '{_escape_odata_literal(role_id, 'roleId')}' "
-                "and assignedTo/type eq 'Role')"
-            )
-        caller_filter = " or ".join(clauses)
+        )
         # Completed work is history, not something the caller can pick up
-        # (mirrors the local Flow-2 exclusion in plan_model), so scope it out.
-        scoped_filter = f"({caller_filter}) and state ne 'Completed'"
+        # (mirrors the local Flow-2 exclusion in plan_model). Keep it a sibling
+        # top-level AND term so the caller marker stays standalone.
+        scoped_filter = f"{caller_marker} and state ne 'Completed'"
         merged = dict(query or {})
         existing = merged.get("filter")
+        # Append any caller-supplied filter as a parenthesised residual conjunct;
+        # never wrap the caller marker itself in a group.
         merged["filter"] = (
-            f"({scoped_filter}) and ({existing})" if existing else scoped_filter
+            f"{scoped_filter} and ({existing})" if existing else scoped_filter
         )
         return await self._request(
             "GET",
@@ -508,11 +466,17 @@ class PlannerMixin:
             raise ValueError("role must be one of " + ", ".join(ATTESTABLE_ROLES))
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title must be a non-empty string")
+        # Send the backend **wire display name**, not the compact id: the service
+        # stores attestation grants under the wire name (see ``attest_plan_role``)
+        # and its caller-task expansion compares the two with Ordinal equality, so
+        # a pooled task written with the compact id never surfaces to the role's
+        # attested holders.
+        wire_role, _provider = resolve_attestable_role(role)
         body: dict[str, Any] = {
             "title": title,
-            "assignedToId": role,
+            "assignedToId": wire_role,
             "assignedToType": "Role",
-            "assignedToRoleId": role,
+            "assignedToRoleId": wire_role,
         }
         if description is not None:
             body["description"] = description
