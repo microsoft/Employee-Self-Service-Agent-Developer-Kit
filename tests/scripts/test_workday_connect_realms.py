@@ -551,7 +551,7 @@ def test_maker_validation_completion_is_scoped_to_active_realm(
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
             store.complete_action(
@@ -568,8 +568,8 @@ def test_maker_validation_completion_is_scoped_to_active_realm(
     store.activate_target("dev")
     dev_state = store.load()
     assert dev_state["status"] == "in-progress"
-    assert dev_state["phases"]["employee-validation"]["status"] == "pending"
-    assert dev_state["targets"]["test"]["phases"]["employee-validation"][
+    assert dev_state["phases"]["maker-validation"]["status"] == "pending"
+    assert dev_state["targets"]["test"]["phases"]["maker-validation"][
         "status"
     ] == "complete"
 
@@ -809,7 +809,7 @@ def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
 
     migrated = WorkdayConnectStore(tmp_path).initialize()
 
-    assert migrated["schemaVersion"] == 11
+    assert migrated["schemaVersion"] == 12
     assert migrated["activeTargetRealm"] == "dev"
     assert migrated["targets"]["dev"]["phases"] == migrated["phases"]
     assert migrated["targets"]["test"] is None
@@ -817,7 +817,7 @@ def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
     assert migrated_workday["administrator"]["partialEvidence"] == {}
     assert migrated_workday["administrator"]["invalidFields"] == []
     assert "authorizationOutcome" not in migrated_workday["evidence"][0]
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_controller_handler_returns_realm_discovery_contract(

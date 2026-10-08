@@ -21,6 +21,7 @@ from workday_connect_model import (
     default_lifecycle_state,
     default_state,
     initialize_target_registry,
+    synchronize_active_target,
     utc_now,
     validate_state,
     workday_saml_entity_id,
@@ -29,6 +30,7 @@ from workday_connect_state_policy import (
     discard_legacy_workday_admin_authorization,
     invalidate_from_phase,
     legacy_administrator_partial_evidence,
+    normalize_lifecycle_history,
     reset_phase,
     tenant_foundation_from_state,
 )
@@ -36,6 +38,140 @@ from workday_connect_state_policy import (
 
 class WorkdayConnectMigrationError(ValueError):
     """Raised when no supported Workday Connect migration path exists."""
+
+
+_LEGACY_VALIDATION_PHASE = "employee-validation"
+_MAKER_VALIDATION_PHASE = "maker-validation"
+
+
+def _rename_phase_contract(container: dict[str, Any]) -> None:
+    phases = container.get("phases")
+    if isinstance(phases, dict):
+        legacy = phases.pop(_LEGACY_VALIDATION_PHASE, None)
+        current = phases.get(_MAKER_VALIDATION_PHASE)
+        if legacy is not None:
+            if current is not None and current != legacy:
+                raise WorkdayConnectMigrationError(
+                    "Workday connect state contains conflicting legacy and "
+                    "Maker validation phases."
+                )
+            phases[_MAKER_VALIDATION_PHASE] = legacy
+
+    lifecycle = container.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return
+    for field in ("phaseDurationsMs", "activePhaseStartedAt"):
+        phase_values = lifecycle.get(field)
+        if not isinstance(phase_values, dict):
+            continue
+        if _LEGACY_VALIDATION_PHASE in phase_values:
+            legacy = phase_values.pop(_LEGACY_VALIDATION_PHASE)
+            phase_values.setdefault(_MAKER_VALIDATION_PHASE, legacy)
+    markers = lifecycle.get("eventMarkers")
+    if isinstance(markers, list):
+        lifecycle["eventMarkers"] = list(
+            dict.fromkeys(
+                marker.replace(
+                    f"|{_LEGACY_VALIDATION_PHASE}",
+                    f"|{_MAKER_VALIDATION_PHASE}",
+                )
+                if isinstance(marker, str)
+                else marker
+                for marker in markers
+            )
+        )
+    journal = lifecycle.get("journal")
+    if isinstance(journal, list):
+        for record in journal:
+            if (
+                isinstance(record, dict)
+                and record.get("phase") == _LEGACY_VALIDATION_PHASE
+            ):
+                record["phase"] = _MAKER_VALIDATION_PHASE
+
+
+def _retire_runtime_evidence(container: dict[str, Any]) -> None:
+    phases = container.get("phases")
+    if not isinstance(phases, dict):
+        return
+    phase = phases.get(_MAKER_VALIDATION_PHASE)
+    if not isinstance(phase, dict):
+        return
+    had_attempt = phase.pop("employeeTestAttempt", None) is not None
+    phase["completedActions"] = [
+        action
+        for action in phase.get("completedActions") or []
+        if action != "signed-in-scenario"
+    ]
+    phase["evidence"] = [
+        record
+        for record in phase.get("evidence") or []
+        if not (
+            isinstance(record, dict)
+            and record.get("action") == "signed-in-scenario"
+        )
+    ]
+    blocker = phase.get("blocker")
+    blocker_remediation_id = (
+        str(blocker.get("remediationId") or "").upper()
+        if isinstance(blocker, Mapping)
+        else ""
+    )
+    blocker_operation = (
+        str(blocker.get("operation") or "")
+        if isinstance(blocker, Mapping)
+        else ""
+    )
+    has_current_blocker = (
+        isinstance(blocker, Mapping)
+        and (
+            blocker_remediation_id == "WD-E2E-006"
+            or blocker_operation == "readiness-validation"
+        )
+    )
+    has_maker_progress = (
+        "maker-smoke-test" in (phase.get("completedActions") or [])
+        or any(
+            isinstance(record, dict)
+            and record.get("action") == "maker-smoke-test"
+            for record in (phase.get("evidence") or [])
+        )
+        or has_current_blocker
+    )
+    if (
+        had_attempt
+        and phase.get("status") != PhaseStatus.COMPLETE.value
+        and not has_maker_progress
+    ):
+        reset_phase(phase)
+        runtime = phases.get("runtime")
+        if (
+            isinstance(runtime, Mapping)
+            and runtime.get("status") == PhaseStatus.COMPLETE.value
+        ):
+            phase["status"] = PhaseStatus.ACTIVE.value
+            phase["updatedAt"] = utc_now()
+    container["status"] = (
+        "ready"
+        if all(
+            isinstance(value, Mapping)
+            and value.get("status") == PhaseStatus.COMPLETE.value
+            for value in phases.values()
+        )
+        else "in-progress"
+    )
+
+
+def _normalize_validation_contract(container: dict[str, Any]) -> None:
+    _rename_phase_contract(container)
+    _retire_runtime_evidence(container)
+    migration = container.get("migration")
+    if (
+        isinstance(migration, dict)
+        and migration.get("flightcheckBaselineOutcome")
+        == "employee-validation-required"
+    ):
+        migration["flightcheckBaselineOutcome"] = "maker-validation-required"
 
 
 def _finalize_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -92,12 +228,19 @@ def _legacy_evidence(
 
 def _source_state_was_ready(document: Mapping[str, Any]) -> bool:
     phases = document.get("phases")
+    if not isinstance(phases, Mapping):
+        return False
+
+    def source_phase(phase_id: str) -> Any:
+        if phase_id == _MAKER_VALIDATION_PHASE:
+            return phases.get(phase_id, phases.get(_LEGACY_VALIDATION_PHASE))
+        return phases.get(phase_id)
+
     return (
         document.get("status") == "ready"
-        and isinstance(phases, Mapping)
         and all(
-            isinstance(phases.get(definition.identifier.value), Mapping)
-            and phases[definition.identifier.value].get("status")
+            isinstance(source_phase(definition.identifier.value), Mapping)
+            and source_phase(definition.identifier.value).get("status")
             == PhaseStatus.COMPLETE.value
             for definition in PHASE_DEFINITIONS
         )
@@ -257,7 +400,7 @@ def _migrate_legacy_state(document: Mapping[str, Any]) -> dict[str, Any]:
     ):
         runtime["status"] = PhaseStatus.ACTIVE.value
         runtime["updatedAt"] = utc_now()
-        reset_phase(state["phases"]["employee-validation"])
+        reset_phase(state["phases"][_MAKER_VALIDATION_PHASE])
 
     if all(
         phase["status"] == PhaseStatus.COMPLETE.value
@@ -283,6 +426,7 @@ def _upgrade_structured_state(
     source_version: int,
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
+    _rename_phase_contract(state)
     state["schemaVersion"] = STATE_SCHEMA_VERSION
     if "lifecycle" not in state:
         state["lifecycle"] = default_lifecycle_state()
@@ -309,7 +453,7 @@ def _upgrade_structured_state(
         phase_id = definition.identifier.value
         phase = state["phases"][phase_id]
         phase.setdefault("validationProfiles", {})
-        if phase_id == "employee-validation":
+        if phase_id == _MAKER_VALIDATION_PHASE:
             phase.setdefault("employeeTestAttempt", None)
         else:
             phase.pop("employeeTestAttempt", None)
@@ -335,7 +479,7 @@ def _upgrade_structured_state(
             for record in (phase.get("evidence") or [])
             if isinstance(record, dict)
         }
-        if phase_id == "employee-validation":
+        if phase_id == _MAKER_VALIDATION_PHASE:
             legacy_evidence = next(
                 (
                     record
@@ -409,6 +553,7 @@ def _upgrade_structured_state(
             phase["administrator"]["substage"] = "evidence-validated"
             phase["administrator"]["invalidFields"] = []
             phase["administrator"]["updatedAt"] = utc_now()
+    _retire_runtime_evidence(state)
     state["status"] = (
         "ready"
         if all(
@@ -470,7 +615,7 @@ def _upgrade_readiness_state(
         normalized,
         source_version=source_version,
     )
-    employee_phase = state["phases"]["employee-validation"]
+    employee_phase = state["phases"][_MAKER_VALIDATION_PHASE]
     if employee_phase["status"] != PhaseStatus.COMPLETE.value:
         reset_phase(employee_phase)
         if state["phases"]["runtime"]["status"] == PhaseStatus.COMPLETE.value:
@@ -494,7 +639,7 @@ def _upgrade_readiness_state(
     if preserved_ready:
         migration["flightcheckBaselineOutcome"] = "legacy-ready-preserved"
     elif legacy_ready:
-        migration["flightcheckBaselineOutcome"] = "employee-validation-required"
+        migration["flightcheckBaselineOutcome"] = "maker-validation-required"
     state["migration"] = migration
     if baseline_required:
         state["status"] = "in-progress"
@@ -532,7 +677,7 @@ def _upgrade_v8_state(document: Mapping[str, Any]) -> dict[str, Any]:
 
 def _upgrade_v9_state(document: Mapping[str, Any]) -> dict[str, Any]:
     state = _upgrade_structured_state(document, source_version=9)
-    employee_phase = state["phases"]["employee-validation"]
+    employee_phase = state["phases"][_MAKER_VALIDATION_PHASE]
     if employee_phase["status"] != PhaseStatus.COMPLETE.value:
         reset_phase(employee_phase)
         if state["phases"]["runtime"]["status"] == PhaseStatus.COMPLETE.value:
@@ -547,6 +692,23 @@ def _upgrade_v10_state(document: Mapping[str, Any]) -> dict[str, Any]:
     return _upgrade_structured_state(document, source_version=10)
 
 
+def _upgrade_v11_state(document: Mapping[str, Any]) -> dict[str, Any]:
+    state = copy.deepcopy(dict(document))
+    state["schemaVersion"] = STATE_SCHEMA_VERSION
+    _normalize_validation_contract(state)
+    targets = state.get("targets")
+    if isinstance(targets, dict):
+        for target in targets.values():
+            if isinstance(target, dict):
+                _normalize_validation_contract(target)
+                normalize_lifecycle_history(target)
+    discard_legacy_workday_admin_authorization(state)
+    normalize_lifecycle_history(state)
+    state["updatedAt"] = utc_now()
+    synchronize_active_target(state)
+    return validate_state(state)
+
+
 _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     2: _upgrade_v2_state,
     3: _upgrade_v3_state,
@@ -557,6 +719,7 @@ _UPGRADES: dict[int, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
     8: _upgrade_v8_state,
     9: _upgrade_v9_state,
     10: _upgrade_v10_state,
+    11: _upgrade_v11_state,
 }
 
 
