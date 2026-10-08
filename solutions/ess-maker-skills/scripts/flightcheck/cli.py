@@ -32,7 +32,6 @@ Scopes:
 import argparse
 import json
 import os
-import re
 import sys
 import uuid
 import webbrowser
@@ -97,11 +96,6 @@ from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
 from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck import consent
-
-
-_RUNTIME_EVIDENCE_LABEL_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
-)
 
 
 SCOPE_MAP = {
@@ -1034,42 +1028,6 @@ def _run_exit_code(result) -> int:
     return 1 if result.failed > 0 or result.blocked > 0 or result.errors > 0 else 0
 
 
-def _runtime_evidence_values(args) -> dict[str, object]:
-    """Validate and normalize the standalone runtime-evidence arguments."""
-    label = str(
-        getattr(args, "runtime_evidence_attempt_id", "") or ""
-    ).strip()
-    if label and not _RUNTIME_EVIDENCE_LABEL_RE.fullmatch(label):
-        raise ValueError(
-            "--runtime-evidence-attempt-id must be an opaque label of 1-128 "
-            "letters, numbers, dots, colons, hyphens, or underscores."
-        )
-    return {
-        "runtime_evidence_attempt_id": label,
-        "runtime_evidence_start": str(
-            getattr(args, "runtime_evidence_start", "") or ""
-        ).strip(),
-        "runtime_evidence_end": str(
-            getattr(args, "runtime_evidence_end", "") or ""
-        ).strip(),
-        "runtime_evidence_flow_ids": tuple(
-            str(value).strip()
-            for value in (
-                getattr(args, "runtime_evidence_flow_id", None) or ()
-            )
-            if str(value).strip()
-        ),
-        "runtime_evidence_migration_baseline": bool(
-            getattr(args, "runtime_evidence_migration_baseline", False)
-        ),
-    }
-
-
-def _apply_runtime_evidence_args(runner, args) -> None:
-    for name, value in _runtime_evidence_values(args).items():
-        setattr(runner, name, value)
-
-
 def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
     """Emit anonymous outcome telemetry for a completed run (best-effort).
 
@@ -1228,7 +1186,6 @@ def _run_single_checkpoint(args):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
-        _runtime_evidence_values(args)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
@@ -1673,7 +1630,6 @@ def _run_single_checkpoint(args):
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
-    _apply_runtime_evidence_args(runner, args)
     runner.results.extend(
         _client_blockers(client_availability, "CHECKPOINT")
     )
@@ -2045,7 +2001,6 @@ def _run_profile(args):
                 )
         config = _merge_connect_config(config, getattr(args, "connect_config", None))
         _profile_target_matches_config(args, config)
-        _runtime_evidence_values(args)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: Unable to resolve the profile target: {e}")
         sys.exit(1)
@@ -2532,7 +2487,6 @@ def _run_profile(args):
     runner.runtime_reachability = False
     runner.runtime_reachability_declined = False
     runner.preserve_workday_manual_rows = True
-    _apply_runtime_evidence_args(runner, args)
     runner.results.extend(_profile_client_blockers(client_availability))
 
     for label, fn in plan.ordered_fns:
@@ -2652,36 +2606,6 @@ def main():
     parser.add_argument(
         "--agent-schema-name",
         help="Agent schema name for a --profile validation context.",
-    )
-    parser.add_argument(
-        "--runtime-evidence-attempt-id",
-        help=(
-            "Deprecated compatibility input for retired checkpoint "
-            "WD-DA-RUN-001. It is not accepted as scenario proof."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-evidence-start",
-        help="Deprecated compatibility input for retired runtime evidence.",
-    )
-    parser.add_argument(
-        "--runtime-evidence-end",
-        help="Deprecated compatibility input for retired runtime evidence.",
-    )
-    parser.add_argument(
-        "--runtime-evidence-flow-id",
-        action="append",
-        default=[],
-        help=(
-            "Deprecated compatibility input for retired runtime evidence."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-evidence-migration-baseline",
-        action="store_true",
-        help=(
-            "Deprecated compatibility marker for retired runtime evidence."
-        ),
     )
     parser.add_argument(
         "--connect-config",

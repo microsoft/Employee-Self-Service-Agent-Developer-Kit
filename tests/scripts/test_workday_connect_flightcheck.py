@@ -767,7 +767,7 @@ def test_ready_v7_migration_preserves_completion_without_runtime_profile(
         phase.pop("employeeTestAttempt", None)
         actions = (
             ("signed-in-scenario",)
-            if phase_id == "employee-validation"
+            if phase_id == "maker-validation"
             else model.PHASE_REQUIRED_ACTIONS[phase_id]
         )
         for action in actions:
@@ -778,7 +778,7 @@ def test_ready_v7_migration_preserves_completion_without_runtime_profile(
             ):
                 evidence["flowNames"] = ["REST"]
             if (
-                phase_id == "employee-validation"
+                phase_id == "maker-validation"
                 and action == "signed-in-scenario"
             ):
                 evidence["timestamp"] = "2026-09-28T12:00:00Z"
@@ -991,7 +991,7 @@ def test_legacy_ready_migration_does_not_run_runtime_profile(
         )
     store.set_phase_status("runtime", "complete")
     store.complete_action(
-        "employee-validation",
+        "maker-validation",
         "maker-smoke-test",
         evidence={
             "testUserCategory": "maker",
@@ -999,7 +999,7 @@ def test_legacy_ready_migration_does_not_run_runtime_profile(
             "timestamp": "2026-09-28T12:00:00Z",
         },
     )
-    store.set_phase_status("employee-validation", "complete")
+    store.set_phase_status("maker-validation", "complete")
     state = store.load()
     state["migration"] = {
         "source": "workday-connect-state-v7",

@@ -329,7 +329,6 @@ def test_post_connection_profile_runs_real_workday_category() -> None:
 @pytest.mark.parametrize("target", [
     "WD-DA-FLOW-001",
     "WD-DA-AUTH-001",
-    "WD-DA-RUN-001",
 ])
 def test_runtime_checkpoint_plan_uses_dataverse_inventory(target: str) -> None:
     plan = registry.transitive_requirements(target)
@@ -338,6 +337,10 @@ def test_runtime_checkpoint_plan_uses_dataverse_inventory(target: str) -> None:
     assert registry.DATAVERSE in plan.clients
     assert "External Systems" not in labels
     assert "Workday DA" in labels
+
+
+def test_retired_runtime_evidence_checkpoint_is_not_registered() -> None:
+    assert registry.resolve("WD-DA-RUN-001") is None
 
 
 def test_profile_requirements_rejects_empty_profile(monkeypatch) -> None:

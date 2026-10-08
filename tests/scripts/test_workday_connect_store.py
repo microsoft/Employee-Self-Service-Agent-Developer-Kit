@@ -21,7 +21,7 @@ def test_initialize_creates_only_json_state(tmp_path: Path) -> None:
     store = store_module.WorkdayConnectStore(tmp_path)
     state = store.initialize()
 
-    assert state["schemaVersion"] == 11
+    assert state["schemaVersion"] == 12
     assert state["lifecycle"]["retryCount"] == 0
     assert state["lifecycle"]["resumeCount"] == 0
     assert state["lifecycle"]["journal"] == []
@@ -64,7 +64,7 @@ def test_migrates_legacy_rows_without_using_app_uri_as_saml_id(
     )
     assert state["migration"]["source"] == "legacy-workday-da-config"
     assert state["operators"]["entraAdmin"]["username"] == "admin@example.com"
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_migration_preserves_existing_tasks_as_snapshot(tmp_path: Path) -> None:
@@ -146,11 +146,11 @@ def test_v5_state_migrates_to_privacy_safe_lifecycle_journal(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["lifecycle"]["correlationId"]
     assert upgraded["lifecycle"]["journal"] == []
     assert upgraded["migration"]["source"] == "workday-connect-state-v5"
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_v6_state_migrates_with_administrator_progress(
@@ -172,12 +172,12 @@ def test_v6_state_migrates_with_administrator_progress(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["phases"]["entra"]["administrator"]["substage"] == (
         "not-started"
     )
     assert upgraded["migration"]["source"] == "workday-connect-state-v6"
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 @pytest.mark.parametrize("source_version", [2, 3, 4, 5, 6])
@@ -744,7 +744,7 @@ def test_first_attempt_failure_records_start_pause_and_block(
     ] == ["phase-started", "phase-paused", "blocked"]
 
 
-def test_employee_validation_blocker_retains_bounded_remediation_id(
+def test_maker_validation_blocker_retains_bounded_remediation_id(
     tmp_path: Path,
 ) -> None:
     import workday_connect_store as store_module
@@ -753,7 +753,7 @@ def test_employee_validation_blocker_retains_bounded_remediation_id(
     store.initialize()
 
     state = store.set_phase_status(
-        "employee-validation",
+        "maker-validation",
         "blocked",
         blocker={
             "operation": "record-validation-failure",
@@ -818,7 +818,7 @@ def test_legacy_ready_state_reopens_runtime_for_live_topic_proof(
     assert (
         "workday-topics-activated" not in state["phases"]["runtime"]["completedActions"]
     )
-    assert state["phases"]["employee-validation"]["status"] == "pending"
+    assert state["phases"]["maker-validation"]["status"] == "pending"
 
 
 def test_phase_completion_requires_prerequisite(tmp_path: Path) -> None:
@@ -946,7 +946,7 @@ def test_approved_plan_rejects_changed_target(tmp_path: Path) -> None:
         store.verify_plan("runtime", changed, approved_hash)
 
 
-def test_approving_completed_runtime_invalidates_employee_validation(
+def test_approving_completed_runtime_invalidates_maker_validation(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -972,8 +972,8 @@ def test_approving_completed_runtime_invalidates_employee_validation(
     )
 
     assert state["phases"]["runtime"]["status"] == "active"
-    assert state["phases"]["employee-validation"]["status"] == "pending"
-    assert state["phases"]["employee-validation"]["completedActions"] == []
+    assert state["phases"]["maker-validation"]["status"] == "pending"
+    assert state["phases"]["maker-validation"]["completedActions"] == []
 
 
 def test_approving_changed_plan_clears_current_phase_evidence(
@@ -1106,8 +1106,8 @@ def test_regressing_completed_phase_invalidates_downstream(
     )
 
     assert state["phases"]["runtime"]["status"] == "blocked"
-    assert state["phases"]["employee-validation"]["status"] == "pending"
-    assert state["phases"]["employee-validation"]["completedActions"] == []
+    assert state["phases"]["maker-validation"]["status"] == "pending"
+    assert state["phases"]["maker-validation"]["completedActions"] == []
 
 
 def _complete_phase(store, phase_id: str, actions: set[str]) -> None:
@@ -1118,31 +1118,6 @@ def _complete_phase(store, phase_id: str, actions: set[str]) -> None:
             evidence={"outcome": "verified"},
         )
     store.set_phase_status(phase_id, "complete")
-
-
-def _complete_runtime_for_employee(
-    store,
-    model,
-    *,
-    attachment_names: list[str],
-    flows: list[dict[str, str]] | None = None,
-) -> None:
-    store.approve_plan(
-        "runtime",
-        {
-            "phase": "runtime",
-            "scope": {"environmentId": "environment-id"},
-            "actions": ["Configure runtime"],
-            "flows": flows
-            or [{"name": "REST", "workflowId": "flow-id"}],
-        },
-    )
-    for action in model.PHASE_REQUIRED_ACTIONS["runtime"]:
-        evidence = {"outcome": "verified"}
-        if action == "flow-attachment-confirmed":
-            evidence["flowNames"] = attachment_names
-        store.complete_action("runtime", action, evidence=evidence)
-    store.set_phase_status("runtime", "complete")
 
 
 def _set_foundation_data(store, *, workday_tenant: str = "contoso") -> None:
@@ -1390,7 +1365,7 @@ def test_endpoint_change_invalidates_workday_and_downstream_phases(
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         _complete_phase(
             store,
@@ -1409,7 +1384,7 @@ def test_endpoint_change_invalidates_workday_and_downstream_phases(
     assert state["phases"]["workday-admin"]["status"] == "pending"
     assert state["phases"]["connections"]["status"] == "pending"
     assert state["phases"]["runtime"]["status"] == "pending"
-    assert state["phases"]["employee-validation"]["status"] == "pending"
+    assert state["phases"]["maker-validation"]["status"] == "pending"
 
 
 def test_maker_change_preserves_reusable_tenant_foundation(
@@ -1426,7 +1401,7 @@ def test_maker_change_preserves_reusable_tenant_foundation(
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         _complete_phase(
             store,
@@ -1474,7 +1449,7 @@ def test_v2_state_is_downgraded_when_completion_has_no_evidence(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["phases"]["preflight"]["status"] == "active"
     assert upgraded["migration"]["source"] == "workday-connect-state-v2"
 
@@ -1495,7 +1470,7 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         actions = set(model.PHASE_REQUIRED_ACTIONS[phase_id])
         actions.discard("workday-topics-activated")
@@ -1510,11 +1485,11 @@ def test_v3_runtime_completion_is_reopened_for_live_topic_proof(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["status"] == "in-progress"
     assert upgraded["phases"]["entra"]["status"] == "pending"
     assert upgraded["phases"]["runtime"]["status"] == "pending"
-    assert upgraded["phases"]["employee-validation"]["status"] == "pending"
+    assert upgraded["phases"]["maker-validation"]["status"] == "pending"
     assert upgraded["migration"]["source"] == "workday-connect-state-v3"
 
 
@@ -1577,13 +1552,13 @@ def test_v4_migration_captures_complete_tenant_foundation(
 
     upgraded = store_module.WorkdayConnectStore(tmp_path).initialize()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["migration"]["source"] == "workday-connect-state-v4"
     assert upgraded["tenantFoundation"]["scope"] == {
         "entraTenantId": "tenant-id",
         "workdayTenant": "contoso",
     }
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_v7_ready_state_preserves_valid_employee_completion(
@@ -1612,7 +1587,7 @@ def test_v7_ready_state_preserves_valid_employee_completion(
             "flow-attachment-confirmed",
             "workday-topics-activated",
         ),
-        "employee-validation": ("signed-in-scenario",),
+        "maker-validation": ("signed-in-scenario",),
     }
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
@@ -1621,22 +1596,25 @@ def test_v7_ready_state_preserves_valid_employee_completion(
             phase["completedActions"].append(action)
             evidence = {"action": action, "outcome": "verified"}
             if (
-                phase_id == "employee-validation"
+                phase_id == "maker-validation"
                 and action == "signed-in-scenario"
             ):
                 evidence["timestamp"] = "2026-09-28T12:00:00Z"
             phase["evidence"].append(evidence)
         phase["status"] = "complete"
     document["status"] = "ready"
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["status"] == "ready"
-    assert upgraded["phases"]["employee-validation"]["status"] == "complete"
+    assert upgraded["phases"]["maker-validation"]["status"] == "complete"
     assert upgraded["migration"]["flightcheckBaselineRequired"] is False
     assert (
         upgraded["migration"]["flightcheckBaselineOutcome"]
@@ -1654,7 +1632,7 @@ def test_v7_ready_state_preserves_valid_employee_completion(
     )
 
 
-def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
+def test_v7_ready_migration_cannot_accept_stale_maker_evidence(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -1670,7 +1648,7 @@ def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
         phase.pop("employeeTestAttempt", None)
         actions = (
             ("signed-in-scenario",)
-            if phase_id == "employee-validation"
+            if phase_id == "maker-validation"
             else model.PHASE_REQUIRED_ACTIONS[phase_id]
         )
         for action in actions:
@@ -1680,22 +1658,24 @@ def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
             )
         phase["status"] = "complete"
     document["status"] = "ready"
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
     store = WorkdayConnectStore(tmp_path)
     store.load()
 
-    assert store.prepare_migration_employee_test_attempt() is False
     state = store.load()
-    employee = state["phases"]["employee-validation"]
-    assert employee["status"] == "active"
-    assert employee["completedActions"] == []
-    assert employee["evidence"] == []
-    assert employee["employeeTestAttempt"] is None
+    maker_validation = state["phases"]["maker-validation"]
+    assert maker_validation["status"] == "active"
+    assert maker_validation["completedActions"] == []
+    assert maker_validation["evidence"] == []
+    assert "employeeTestAttempt" not in maker_validation
     assert (
         state["migration"]["flightcheckBaselineOutcome"]
-        == "employee-validation-required"
+        == "maker-validation-required"
     )
 
     with pytest.raises(
@@ -1705,7 +1685,7 @@ def test_v7_ready_migration_cannot_accept_stale_employee_evidence(
         store.complete_flightcheck_migration()
 
 
-def test_v9_incomplete_employee_attempt_reopens_maker_validation(
+def test_v9_incomplete_employee_attempt_is_discarded(
     tmp_path: Path,
 ) -> None:
     import workday_connect_model as model
@@ -1727,7 +1707,7 @@ def test_v9_incomplete_employee_attempt_reopens_maker_validation(
         phase.pop("employeeTestAttempt", None)
         actions = (
             ("signed-in-scenario",)
-            if phase_id == "employee-validation"
+            if phase_id == "maker-validation"
             else model.PHASE_REQUIRED_ACTIONS[phase_id]
         )
         for action in actions:
@@ -1738,18 +1718,18 @@ def test_v9_incomplete_employee_attempt_reopens_maker_validation(
             ):
                 evidence["flowNames"] = ["REST"]
             if (
-                phase_id == "employee-validation"
+                phase_id == "maker-validation"
                 and action == "signed-in-scenario"
             ):
                 evidence["timestamp"] = "2026-09-28T12:00:00Z"
             phase["completedActions"].append(action)
             phase["evidence"].append(evidence)
         phase["status"] = "complete"
-    employee = document["phases"]["employee-validation"]
-    employee["status"] = "active"
-    employee["completedActions"] = []
-    employee["evidence"] = []
-    employee["employeeTestAttempt"] = {
+    maker_validation = document["phases"]["maker-validation"]
+    maker_validation["status"] = "active"
+    maker_validation["completedActions"] = []
+    maker_validation["evidence"] = []
+    maker_validation["employeeTestAttempt"] = {
         "attemptId": "legacy-attempt",
         "scenarioId": "workday-signed-in-employee-read",
         "status": "validating",
@@ -1762,22 +1742,432 @@ def test_v9_incomplete_employee_attempt_reopens_maker_validation(
         "outcome": "",
     }
     document["status"] = "in-progress"
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
     store = WorkdayConnectStore(tmp_path)
     state = store.load()
-    employee = state["phases"]["employee-validation"]
+    maker_validation = state["phases"]["maker-validation"]
 
-    assert state["schemaVersion"] == 11
+    assert state["schemaVersion"] == 12
     assert state["status"] == "in-progress"
-    assert employee["status"] == "active"
-    assert employee["completedActions"] == []
-    assert employee["evidence"] == []
-    assert employee["employeeTestAttempt"] is None
-    assert employee["validationProfiles"] == {}
+    assert maker_validation["status"] == "active"
+    assert maker_validation["completedActions"] == []
+    assert maker_validation["evidence"] == []
+    assert "employeeTestAttempt" not in maker_validation
+    assert maker_validation["validationProfiles"] == {}
     assert state["migration"]["source"] == "workday-connect-state-v9"
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
+
+
+def test_v11_migration_renames_all_validation_state(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    document["operators"]["snapshot"] = "active"
+    document["migration"] = {
+        "flightcheckBaselineOutcome": "employee-validation-required",
+    }
+    document["targets"]["dev"]["operators"]["snapshot"] = "dev-only"
+    document["targets"]["test"] = deepcopy(document["targets"]["dev"])
+    document["targets"]["test"]["realm"] = "test"
+    document["targets"]["test"]["operators"]["snapshot"] = "stale-test"
+    document["activeTargetRealm"] = "test"
+
+    def use_legacy_contract(
+        container: dict,
+        attempt_id: str,
+    ) -> None:
+        phases = container["phases"]
+        legacy = phases.pop("maker-validation")
+        legacy["employeeTestAttempt"] = {
+            "attemptId": attempt_id,
+            "status": "validating",
+        }
+        phases["employee-validation"] = legacy
+        lifecycle = container["lifecycle"]
+        lifecycle["phaseDurationsMs"]["employee-validation"] = (
+            lifecycle["phaseDurationsMs"].pop("maker-validation")
+        )
+        lifecycle["activePhaseStartedAt"]["employee-validation"] = (
+            lifecycle["activePhaseStartedAt"].pop("maker-validation")
+        )
+        lifecycle["eventMarkers"] = ["blocked|employee-validation"]
+        lifecycle["journal"] = [
+            {
+                "sequence": 1,
+                "correlationId": lifecycle["correlationId"],
+                "event": "blocked",
+                "phase": "employee-validation",
+                "outcome": "blocked",
+                "blockerCategory": "platform",
+                "remediationId": "",
+                "durationMs": 0,
+                "retryCount": 0,
+                "resumeCount": 0,
+                "timestamp": "2026-09-28T00:00:00Z",
+            }
+        ]
+
+    use_legacy_contract(document, "active-attempt")
+    use_legacy_contract(document["targets"]["dev"], "dev-attempt")
+    use_legacy_contract(document["targets"]["test"], "test-attempt")
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+
+    assert state["schemaVersion"] == 12
+    assert state["migration"]["flightcheckBaselineOutcome"] == (
+        "maker-validation-required"
+    )
+    assert state["operators"]["snapshot"] == "active"
+    assert state["targets"]["dev"]["operators"]["snapshot"] == "dev-only"
+    assert state["targets"]["test"]["operators"]["snapshot"] == "active"
+    for container in (
+        state,
+        state["targets"]["dev"],
+        state["targets"]["test"],
+    ):
+        assert "employee-validation" not in container["phases"]
+        maker_validation = container["phases"]["maker-validation"]
+        assert "employeeTestAttempt" not in maker_validation
+        lifecycle = container["lifecycle"]
+        assert "employee-validation" not in lifecycle["phaseDurationsMs"]
+        assert "employee-validation" not in lifecycle[
+            "activePhaseStartedAt"
+        ]
+        assert lifecycle["eventMarkers"] == ["blocked|maker-validation"]
+        assert lifecycle["journal"][0]["phase"] == "maker-validation"
+
+    backup = path.with_name("config.pre-v12.json")
+    assert backup.exists()
+    assert "employee-validation" in backup.read_text(encoding="utf-8")
+
+
+def test_v11_migration_preserves_maker_remediation_state(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    maker_validation = document["phases"]["maker-validation"]
+    maker_validation["status"] = "blocked"
+    maker_validation["completedActions"] = ["maker-smoke-test"]
+    maker_validation["evidence"] = [
+        {
+            "action": "maker-smoke-test",
+            "outcome": "verified",
+            "timestamp": "2026-09-28T12:00:00Z",
+        }
+    ]
+    maker_validation["blocker"] = {
+        "operation": "record-validation",
+        "errorType": "WorkdayAuthorizationRemediationRequired",
+        "message": "Retest the affected Workday domain.",
+        "remediationId": "WD-E2E-006",
+        "scenarioName": "View my time off balance",
+        "affectedDomain": "Worker Data: Time Off",
+    }
+    maker_validation["employeeTestAttempt"] = {
+        "attemptId": "retired-attempt",
+        "status": "validating",
+    }
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
+    document["targets"]["dev"] = model.target_state_from_active(
+        document,
+        "dev",
+    )
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+    maker_validation = state["phases"]["maker-validation"]
+
+    assert maker_validation["status"] == "blocked"
+    assert maker_validation["completedActions"] == ["maker-smoke-test"]
+    assert maker_validation["evidence"][0]["action"] == "maker-smoke-test"
+    assert maker_validation["blocker"]["remediationId"] == "WD-E2E-006"
+    assert "employeeTestAttempt" not in maker_validation
+
+
+def test_v11_migration_preserves_readiness_blocker(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    maker_validation = document["phases"]["maker-validation"]
+    maker_validation["status"] = "blocked"
+    maker_validation["blocker"] = {
+        "operation": "readiness-validation",
+        "errorType": "FlightCheckExecutionError",
+        "message": "The readiness profile could not complete.",
+        "remediation": "Retry readiness validation.",
+    }
+    maker_validation["employeeTestAttempt"] = {
+        "attemptId": "retired-attempt",
+        "status": "validating",
+    }
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
+    document["targets"]["dev"] = model.target_state_from_active(
+        document,
+        "dev",
+    )
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+    maker_validation = state["phases"]["maker-validation"]
+
+    assert maker_validation["status"] == "blocked"
+    assert maker_validation["blocker"]["operation"] == (
+        "readiness-validation"
+    )
+    assert "employeeTestAttempt" not in maker_validation
+
+
+def test_v11_migration_resets_profiles_with_retired_attempt(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    maker_validation = document["phases"]["maker-validation"]
+    maker_validation["status"] = "active"
+    maker_validation["employeeTestAttempt"] = {
+        "attemptId": "retired-attempt",
+        "status": "validating",
+    }
+    maker_validation["status"] = "blocked"
+    maker_validation["blocker"] = {
+        "operation": "record-validation",
+        "errorType": "WorkdayConnectContractError",
+        "message": "Non-maker validation is a post-skill activity.",
+    }
+    maker_validation["validationProfiles"] = {
+        "workday-da:post-runtime": {
+            "profile": "workday-da:post-runtime",
+            "sourceProfile": "workday-da:post-runtime",
+            "schemaVersion": "flightcheck.result.v2",
+            "overall": "READY",
+            "target": {
+                "realm": "dev",
+                "environmentId": "",
+                "environmentUrl": "",
+                "tenantId": "",
+                "agentSlug": "",
+                "agentSchemaName": "",
+                "agentId": "",
+            },
+            "checkpointStatuses": {"WD-DA-FLOW-001": "Passed"},
+            "acceptedSuppressions": [],
+            "remediationIds": [],
+            "accepted": True,
+            "migrationBaseline": False,
+            "inputFingerprint": "0" * 64,
+            "validatedAt": "2026-09-28T12:00:00Z",
+        }
+    }
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
+    document["targets"]["dev"] = model.target_state_from_active(
+        document,
+        "dev",
+    )
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+    maker_validation = state["phases"]["maker-validation"]
+
+    assert maker_validation["status"] == "pending"
+    assert maker_validation["blocker"] is None
+    assert maker_validation["validationProfiles"] == {}
+    assert "employeeTestAttempt" not in maker_validation
+
+
+def test_v11_migration_applies_current_state_repairs(
+    tmp_path: Path,
+) -> None:
+    from copy import deepcopy
+
+    import workday_connect_model as model
+    from workday_connect_store import WorkdayConnectStore
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    document["targets"]["test"] = deepcopy(document["targets"]["dev"])
+    document["targets"]["test"]["realm"] = "test"
+
+    def add_legacy_state(container: dict) -> None:
+        workday_admin = container["phases"]["workday-admin"][
+            "administrator"
+        ]
+        workday_admin["partialEvidence"] = {
+            "authorizationOutcome": "passed",
+        }
+        workday_admin["invalidFields"] = [
+            "authorizationRetestOutcome",
+        ]
+        container["phases"]["employee-validation"] = container[
+            "phases"
+        ].pop("maker-validation")
+        lifecycle = container["lifecycle"]
+        lifecycle.pop("phaseDurationsMs")
+        lifecycle.pop("activePhaseStartedAt")
+        lifecycle.pop("eventMarkers")
+        lifecycle["journal"] = [
+            {
+                "sequence": 1,
+                "event": "blocked",
+                "phase": "employee-validation",
+                "outcome": "blocked",
+                "blockerCategory": "employee-authentication",
+                "durationMs": 0,
+                "retryCount": 0,
+                "resumeCount": 0,
+                "timestamp": "2026-09-28T00:00:00Z",
+            }
+        ]
+
+    add_legacy_state(document)
+    add_legacy_state(document["targets"]["dev"])
+    add_legacy_state(document["targets"]["test"])
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    state = WorkdayConnectStore(tmp_path).load()
+
+    for container in (state, state["targets"]["test"]):
+        administrator = container["phases"]["workday-admin"][
+            "administrator"
+        ]
+        assert administrator["partialEvidence"] == {}
+        assert administrator["invalidFields"] == []
+        lifecycle = container["lifecycle"]
+        assert set(lifecycle["phaseDurationsMs"]) == set(
+            model.PHASE_REQUIRED_ACTIONS
+        )
+        assert set(lifecycle["activePhaseStartedAt"]) == set(
+            model.PHASE_REQUIRED_ACTIONS
+        )
+        assert lifecycle["eventMarkers"] == [
+            "blocked|maker-validation"
+        ]
+        event = lifecycle["journal"][0]
+        assert event["phase"] == "maker-validation"
+        assert event["blockerCategory"] == "auth"
+        assert event["remediationId"] == ""
+        assert event["correlationId"] == lifecycle["correlationId"]
+
+
+def test_v11_migration_refreshes_valid_profile_fingerprints(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_flightcheck as flightcheck
+    import workday_connect_model as model
+    import workday_connect_store as store_module
+
+    document = model.default_state()
+    document["schemaVersion"] = 11
+    preflight = document["phases"]["preflight"]
+    for action in model.PHASE_REQUIRED_ACTIONS["preflight"]:
+        preflight["completedActions"].append(action)
+        preflight["evidence"].append(
+            {"action": action, "outcome": "verified"}
+        )
+    preflight["status"] = "complete"
+    document["phases"]["employee-validation"] = document["phases"].pop(
+        "maker-validation"
+    )
+    legacy_effective = flightcheck.effective_validation_state(
+        tmp_path,
+        document,
+    )
+    preflight["validationProfiles"]["workday-da:setup-readiness"] = {
+        "profile": "workday-da:setup-readiness",
+        "sourceProfile": "workday-da:setup-readiness",
+        "schemaVersion": "flightcheck.result.v2",
+        "overall": "READY",
+        "target": {
+            "realm": "dev",
+            "environmentId": "",
+            "environmentUrl": "",
+            "tenantId": "",
+            "agentSlug": "",
+            "agentSchemaName": "",
+            "agentId": "",
+        },
+        "checkpointStatuses": {"DA-AGENT-001": "Passed"},
+        "acceptedSuppressions": [],
+        "remediationIds": [],
+        "accepted": True,
+        "migrationBaseline": False,
+        "inputFingerprint": (
+            store_module._legacy_validation_input_fingerprint(
+                legacy_effective,
+                "workday-da:setup-readiness",
+            )
+        ),
+        "validatedAt": "2026-09-28T12:00:00Z",
+    }
+    document["targets"]["dev"] = model.target_state_from_active(
+        document,
+        "dev",
+    )
+
+    path = _config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(document), encoding="utf-8")
+    store = store_module.WorkdayConnectStore(tmp_path)
+
+    state = store.load()
+    profile = state["phases"]["preflight"]["validationProfiles"][
+        "workday-da:setup-readiness"
+    ]
+    expected = flightcheck.validation_input_fingerprint(
+        flightcheck.effective_validation_state(tmp_path, state),
+        "workday-da:setup-readiness",
+    )
+
+    assert profile["inputFingerprint"] == expected
+    preflight_status = next(
+        phase
+        for phase in store.status()["phases"]
+        if phase["id"] == "preflight"
+    )
+    assert preflight_status["readiness"]["accepted"] is True
 
 
 def test_v9_completed_employee_evidence_migrates_to_v10_ready(
@@ -1791,7 +2181,7 @@ def test_v9_completed_employee_evidence_migrates_to_v10_ready(
     for phase_id, phase in document["phases"].items():
         actions = (
             ("signed-in-scenario",)
-            if phase_id == "employee-validation"
+            if phase_id == "maker-validation"
             else model.PHASE_REQUIRED_ACTIONS[phase_id]
         )
         for action in actions:
@@ -1808,9 +2198,9 @@ def test_v9_completed_employee_evidence_migrates_to_v10_ready(
 
     state = WorkdayConnectStore(tmp_path).load()
 
-    assert state["schemaVersion"] == 11
+    assert state["schemaVersion"] == 12
     assert state["status"] == "ready"
-    employee = state["phases"]["employee-validation"]
+    employee = state["phases"]["maker-validation"]
     assert employee["status"] == "complete"
     assert employee["completedActions"] == ["maker-smoke-test"]
     assert employee["evidence"] == [
@@ -1822,7 +2212,7 @@ def test_v9_completed_employee_evidence_migrates_to_v10_ready(
         }
     ]
     assert state["migration"]["source"] == "workday-connect-state-v9"
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_v7_migration_repairs_malformed_backup(tmp_path: Path) -> None:
@@ -1835,7 +2225,7 @@ def test_v7_migration_repairs_malformed_backup(tmp_path: Path) -> None:
         phase.pop("validationProfiles")
         phase.pop("employeeTestAttempt", None)
     path = tmp_path / ".local" / "connect" / "workday-da" / "config.json"
-    backup = path.with_name("config.pre-v11.json")
+    backup = path.with_name("config.pre-v12.json")
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(document), encoding="utf-8")
     backup.write_text('{"schemaVersion": 7}', encoding="utf-8")
@@ -1872,7 +2262,7 @@ def test_v8_package_evidence_moves_from_preflight_to_connections(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["phases"]["preflight"]["completedActions"] == [
         "verify-target"
     ]
@@ -1882,7 +2272,7 @@ def test_v8_package_evidence_moves_from_preflight_to_connections(
     connections = upgraded["phases"]["connections"]
     assert connections["completedActions"] == ["verify-package"]
     assert connections["evidence"] == [package_evidence]
-    assert path.with_name("config.pre-v11.json").exists()
+    assert path.with_name("config.pre-v12.json").exists()
 
 
 def test_v8_package_action_without_evidence_is_safely_reopened(
@@ -1903,7 +2293,7 @@ def test_v8_package_action_without_evidence_is_safely_reopened(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["phases"]["preflight"]["status"] == "complete"
     assert upgraded["phases"]["preflight"]["completedActions"] == [
         "verify-target"
@@ -1937,7 +2327,7 @@ def test_v8_ready_state_preserves_valid_employee_completion(
             "flow-attachment-confirmed",
             "workday-topics-activated",
         ),
-        "employee-validation": ("signed-in-scenario",),
+        "maker-validation": ("signed-in-scenario",),
     }
     for phase_id, phase in document["phases"].items():
         phase.pop("validationProfiles")
@@ -1946,7 +2336,7 @@ def test_v8_ready_state_preserves_valid_employee_completion(
             phase["completedActions"].append(action)
             evidence = {"action": action, "outcome": "verified"}
             if (
-                phase_id == "employee-validation"
+                phase_id == "maker-validation"
                 and action == "signed-in-scenario"
             ):
                 evidence["timestamp"] = "2026-09-28T12:00:00Z"
@@ -1959,7 +2349,7 @@ def test_v8_ready_state_preserves_valid_employee_completion(
 
     upgraded = WorkdayConnectStore(tmp_path).load()
 
-    assert upgraded["schemaVersion"] == 11
+    assert upgraded["schemaVersion"] == 12
     assert upgraded["status"] == "ready"
     assert upgraded["migration"]["source"] == "workday-connect-state-v8"
     assert upgraded["migration"]["legacyReady"] is True
@@ -1969,7 +2359,7 @@ def test_v8_ready_state_preserves_valid_employee_completion(
         == "legacy-ready-preserved"
     )
     assert upgraded["phases"]["runtime"]["status"] == "complete"
-    assert upgraded["phases"]["employee-validation"]["status"] == "complete"
+    assert upgraded["phases"]["maker-validation"]["status"] == "complete"
 
 
 def test_operation_guard_rejects_overlapping_mutating_session(
@@ -2186,291 +2576,6 @@ def test_successful_retry_persists_current_readiness_fingerprint(
     persisted = updated["phases"]["preflight"]["validationProfiles"][profile]
     assert persisted["inputFingerprint"] != blocked_fingerprint
     assert store.status()["phases"][0]["readiness"]["accepted"] is True
-
-
-def test_employee_attempt_uses_reviewed_runtime_flow_ids(
-    tmp_path: Path,
-) -> None:
-    import workday_connect_model as model
-    from workday_connect_store import WorkdayConnectStore
-
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-    for phase_id in (
-        "preflight",
-        "entra",
-        "workday-admin",
-        "connections",
-    ):
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
-            store.complete_action(
-                phase_id,
-                action,
-                evidence={"outcome": "verified"},
-            )
-        store.set_phase_status(phase_id, "complete")
-    runtime_plan = {
-        "phase": "runtime",
-        "scope": {"environmentId": "environment-id"},
-        "actions": ["Configure runtime"],
-        "flows": [
-            {"name": "REST", "workflowId": "flow-b"},
-            {"name": "SOAP", "workflowId": "flow-a"},
-            {"name": "References", "workflowId": "flow-c"},
-        ],
-    }
-    store.approve_plan("runtime", runtime_plan)
-    for action in model.PHASE_REQUIRED_ACTIONS["runtime"]:
-        evidence = {"outcome": "verified"}
-        if action == "flow-attachment-confirmed":
-            evidence["flowNames"] = ["REST", "SOAP"]
-        store.complete_action(
-            "runtime",
-            action,
-            evidence=evidence,
-        )
-    store.set_phase_status("runtime", "complete")
-
-    state = store.begin_employee_test_attempt()
-    attempt = state["phases"]["employee-validation"][
-        "employeeTestAttempt"
-    ]
-
-    assert attempt["status"] == "active"
-    assert attempt["expectedFlowIds"] == ["flow-a", "flow-b"]
-    assert attempt["correlationMode"] == "bounded-window-flow-set"
-
-    store.freeze_employee_test_attempt(
-        evidence_timestamp=attempt["startedAt"],
-    )
-    replay = store.freeze_employee_test_attempt(
-        evidence_timestamp=attempt["startedAt"],
-    )
-    assert (
-        replay["phases"]["employee-validation"]["employeeTestAttempt"][
-            "status"
-        ]
-        == "validating"
-    )
-
-
-@pytest.mark.parametrize(
-    "attachment_names",
-    [
-        [],
-        ["REST", "Missing"],
-        ["REST", "REST"],
-    ],
-)
-def test_employee_attempt_requires_exact_attachment_flow_mapping(
-    tmp_path: Path,
-    attachment_names: list[str],
-) -> None:
-    import workday_connect_model as model
-    from workday_connect_store import (
-        WorkdayConnectStore,
-        WorkdayConnectStoreError,
-    )
-
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-    for phase_id in (
-        "preflight",
-        "entra",
-        "workday-admin",
-        "connections",
-    ):
-        _complete_phase(
-            store,
-            phase_id,
-            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
-        )
-    _complete_runtime_for_employee(
-        store,
-        model,
-        attachment_names=attachment_names,
-    )
-
-    with pytest.raises(
-        WorkdayConnectStoreError,
-        match="does not map",
-    ):
-        store.begin_employee_test_attempt()
-
-
-def test_abandoned_employee_attempt_is_journaled_and_retryable(
-    tmp_path: Path,
-) -> None:
-    import workday_connect_model as model
-    from workday_connect_store import WorkdayConnectStore
-
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-    for phase_id in (
-        "preflight",
-        "entra",
-        "workday-admin",
-        "connections",
-    ):
-        _complete_phase(
-            store,
-            phase_id,
-            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
-        )
-    _complete_runtime_for_employee(
-        store,
-        model,
-        attachment_names=["REST"],
-    )
-    first = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
-
-    abandoned = store.abandon_employee_test_attempt()
-    attempt = abandoned["phases"]["employee-validation"][
-        "employeeTestAttempt"
-    ]
-    replay = store.abandon_employee_test_attempt()
-    second = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
-
-    assert attempt["status"] == "failed"
-    assert attempt["outcome"] == "abandoned"
-    assert (
-        replay["phases"]["employee-validation"]["employeeTestAttempt"]
-        == attempt
-    )
-    assert second["attemptId"] != first["attemptId"]
-    assert any(
-        event["event"] == "abandoned"
-        and event["phase"] == "employee-validation"
-        for event in abandoned["lifecycle"]["journal"]
-    )
-
-
-def test_employee_attempt_rejects_evidence_outside_bounded_window(
-    tmp_path: Path,
-) -> None:
-    import workday_connect_model as model
-    from workday_connect_store import (
-        WorkdayConnectStore,
-        WorkdayConnectStoreError,
-    )
-
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-    for phase_id in (
-        "preflight",
-        "entra",
-        "workday-admin",
-        "connections",
-    ):
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
-            store.complete_action(
-                phase_id,
-                action,
-                evidence={"outcome": "verified"},
-            )
-        store.set_phase_status(phase_id, "complete")
-    runtime_plan = {
-        "phase": "runtime",
-        "scope": {"environmentId": "environment-id"},
-        "actions": ["Configure runtime"],
-        "flows": [{"name": "REST", "workflowId": "flow-id"}],
-    }
-    store.approve_plan("runtime", runtime_plan)
-    for action in model.PHASE_REQUIRED_ACTIONS["runtime"]:
-        evidence = {"outcome": "verified"}
-        if action == "flow-attachment-confirmed":
-            evidence["flowNames"] = ["REST"]
-        store.complete_action(
-            "runtime",
-            action,
-            evidence=evidence,
-        )
-    store.set_phase_status("runtime", "complete")
-    store.begin_employee_test_attempt()
-
-    with pytest.raises(
-        WorkdayConnectStoreError,
-        match="outside the bounded",
-    ):
-        store.freeze_employee_test_attempt(
-            evidence_timestamp="2000-01-01T00:00:00Z",
-        )
-
-
-def test_blocked_final_readiness_allows_a_new_employee_attempt(
-    tmp_path: Path,
-) -> None:
-    import workday_connect_model as model
-    from workday_connect_flightcheck import (
-        effective_validation_state,
-        validation_input_fingerprint,
-    )
-    from workday_connect_store import WorkdayConnectStore
-
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-    for phase_id in (
-        "preflight",
-        "entra",
-        "workday-admin",
-        "connections",
-    ):
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
-            store.complete_action(
-                phase_id,
-                action,
-                evidence={"outcome": "verified"},
-            )
-        store.set_phase_status(phase_id, "complete")
-    store.approve_plan(
-        "runtime",
-        {
-            "phase": "runtime",
-            "scope": {"environmentId": "environment-id"},
-            "actions": ["Configure runtime"],
-            "flows": [{"name": "REST", "workflowId": "flow-id"}],
-        },
-    )
-    for action in model.PHASE_REQUIRED_ACTIONS["runtime"]:
-        evidence = {"outcome": "verified"}
-        if action == "flow-attachment-confirmed":
-            evidence["flowNames"] = ["REST"]
-        store.complete_action(
-            "runtime",
-            action,
-            evidence=evidence,
-        )
-    store.set_phase_status("runtime", "complete")
-    first = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
-    store.freeze_employee_test_attempt(
-        evidence_timestamp=first["startedAt"],
-    )
-    state = store.load()
-    store.block_validation_profile(
-        "employee-validation",
-        "workday-da:final",
-        error_type="flightcheck-transport-error",
-        message="Readiness service failed.",
-        customer_remediation="Retry employee validation.",
-        input_fingerprint=validation_input_fingerprint(
-            effective_validation_state(tmp_path, state),
-            "workday-da:final",
-        ),
-        source_profile="workday-da:final",
-    )
-
-    second = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
-
-    assert second["attemptId"] != first["attemptId"]
-    assert second["status"] == "active"
 
 
 def test_profile_result_is_rejected_after_target_changes(

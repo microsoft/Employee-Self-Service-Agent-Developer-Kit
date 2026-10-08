@@ -17,11 +17,11 @@ and tenant-foundation comparisons used by persistence and migration. Skills
 must use `scripts/workday_connect.py`; they must not edit this file directly
 or create a Markdown state mirror.
 
-## Schema version 11
+## Schema version 12
 
 ```json
 {
-  "schemaVersion": 11,
+  "schemaVersion": 12,
   "provider": "workday",
   "status": "in-progress",
   "activeTargetRealm": "dev",
@@ -145,8 +145,8 @@ These values are independent and must never be aliases:
   evidence exists for every compact required action.
 - The provider status becomes `ready` only when all six phases are complete.
 
-Schema-v2 through schema-v10, or legacy row-based state, is backed up to
-`config.pre-v11.json` before one-time migration. Schema-v6 administrator
+Schema-v2 through schema-v11, or legacy row-based state, is backed up to
+`config.pre-v12.json` before one-time migration. Schema-v6 administrator
 evidence is preserved as safe partial evidence, while Entra and downstream
 phases reopen for the expanded directory, application-pairing, federation, and
 least-privilege checks. A previously complete runtime phase is reopened when
@@ -155,8 +155,8 @@ Schema-v8 package verification evidence moves from Preflight to Connections
 so an existing installation is reused without repeating package installation.
 Schema-v9 completed employee evidence with a valid timezone-qualified
 timestamp is converted to a grandfathered `maker-smoke-test` completion
-record. In-progress employee runtime-evidence attempts are cleared and resume
-at Maker validation because run-history windows cannot identify the
-conversation that initiated a flow.
+record. Schema-v11 `employee-validation` state is renamed to
+`maker-validation`; retired runtime-evidence attempts are discarded and
+resume at Maker validation.
 Legacy Markdown task files, when present, are historical snapshots and are
 never rewritten.

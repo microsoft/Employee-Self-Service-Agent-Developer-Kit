@@ -35,11 +35,6 @@ def _args(**overrides):
         "tenant_id": None,
         "runtime_reachability": False,
         "alm_import_probe": False,
-        "runtime_evidence_attempt_id": None,
-        "runtime_evidence_start": None,
-        "runtime_evidence_end": None,
-        "runtime_evidence_flow_id": [],
-        "runtime_evidence_migration_baseline": False,
         "output": "out",
         "no_telemetry": True,
     }
@@ -1294,12 +1289,12 @@ def test_client_error_reason_does_not_persist_exception_text() -> None:
 def test_profile_checkpoint_contract_blocks_missing_and_unresolved_rows() -> None:
     profile = registry.ProfileSpec(
         name="workday-da:test",
-        checkpoint_ids=("WD-DA-PKG-001", "WD-DA-RUN-001"),
+        checkpoint_ids=("WD-DA-PKG-001", "TEST-REQUIRED-001"),
         description="test",
     )
     runner = SimpleNamespace(results=[
         CheckResult(
-            checkpoint_id="WD-DA-RUN-001",
+            checkpoint_id="TEST-REQUIRED-001",
             category="Workday DA",
             priority=Priority.CRITICAL.value,
             status=Status.NOT_CONFIGURED.value,
@@ -1345,20 +1340,20 @@ def test_profile_checkpoint_contract_flags_guided_rows() -> None:
 def test_required_not_configured_row_makes_profile_not_ready() -> None:
     profile = registry.ProfileSpec(
         name="workday-da:test",
-        checkpoint_ids=("WD-DA-RUN-001",),
+        checkpoint_ids=("TEST-REQUIRED-001",),
         description="test",
     )
     runner = FlightCheckRunner(
         scope="profile:workday-da:test",
         target_matcher=lambda checkpoint_id: (
-            checkpoint_id == "WD-DA-RUN-001"
+            checkpoint_id == "TEST-REQUIRED-001"
             or checkpoint_id.startswith("PROFILE-CHECKPOINT-")
         ),
     )
     runner.register(
         "Workday DA",
         lambda _runner: [CheckResult(
-            checkpoint_id="WD-DA-RUN-001",
+            checkpoint_id="TEST-REQUIRED-001",
             category="Workday DA",
             priority=Priority.CRITICAL.value,
             status=Status.NOT_CONFIGURED.value,

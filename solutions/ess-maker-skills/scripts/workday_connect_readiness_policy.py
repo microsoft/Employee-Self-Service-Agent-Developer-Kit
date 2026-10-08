@@ -15,7 +15,7 @@ PHASE_ORDER = (
     "workday-admin",
     "connections",
     "runtime",
-    "employee-validation",
+    "maker-validation",
 )
 
 
@@ -91,7 +91,6 @@ CHECKPOINT_POLICIES: dict[str, CheckpointPolicy] = {
         "runtime",
         (("runtime", "flow-attachment-confirmed"),),
     ),
-    "WD-DA-RUN-001": CheckpointPolicy("employee-validation"),
 }
 
 
@@ -159,13 +158,13 @@ PROFILE_POLICIES: dict[str, ProfilePolicy] = {
         clients=("agentbuilder",),
     ),
     "workday-da:post-runtime": ProfilePolicy(
-        phase_id="employee-validation",
+        phase_id="maker-validation",
         checkpoints=("WD-DA-FLOW-001",),
         families={},
         clients=("dataverse",),
     ),
     "workday-da:final": ProfilePolicy(
-        phase_id="employee-validation",
+        phase_id="maker-validation",
         checkpoints=(
             "DA-AGENT-001",
             "DA-CONTENT-001",
