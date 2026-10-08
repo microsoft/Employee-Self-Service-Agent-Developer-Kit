@@ -284,6 +284,12 @@ async function tryRun(commandId, ...args) {
     catch (err) { console.warn(`[ess-maker] ${commandId} failed:`, err.message); return false; }
 }
 
+async function requireRun(commandId, ...args) {
+    if (!await tryRun(commandId, ...args)) {
+        throw new Error(`required command failed: ${commandId}`);
+    }
+}
+
 function isMakerLayout() {
     const cfg = vscode.workspace.getConfiguration();
     return cfg.get('workbench.activityBar.location') === 'hidden';
@@ -939,8 +945,13 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
     await new Promise((r) => setTimeout(r, firstRun ? 350 : 200));
 
     // Left: reveal the Agent Developer Kit rail.
-    await tryRun('workbench.view.extension.essMakerActions');
-    await tryRun('essMaker.actionsView.focus');
+    if (firstRun) {
+        await requireRun('workbench.view.extension.essMakerActions');
+        await requireRun('essMaker.actionsView.focus');
+    } else {
+        await tryRun('workbench.view.extension.essMakerActions');
+        await tryRun('essMaker.actionsView.focus');
+    }
 
     if (firstRun) {
         // Standard-mode workspaces ship a "README on startup" setting, and VS
@@ -956,10 +967,10 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
         await tryRun('workbench.action.closeAllEditors');
 
         // Center: open the getting-started walkthrough.
-        await openGettingStarted();
+        await openGettingStarted(undefined, { required: true });
         // Right: open Copilot Chat in the secondary side bar.
         await new Promise((r) => setTimeout(r, 200));
-        await tryRun('workbench.action.chat.open');
+        await requireRun('workbench.action.chat.open');
         // Folder restore can steal focus back to the Explorer — re-reveal the
         // rail a couple of times so it stays put.
         for (const delay of [800, 2000]) {
@@ -1082,7 +1093,7 @@ const WALKTHROUGH_ID = 'microsoft-ess.ess-maker-profile#essMaker.gettingStarted'
 
 // Open the built-in VS Code walkthrough (center panel). When `stepId` is given
 // we focus that specific step; otherwise the walkthrough opens at its start.
-async function openGettingStarted(stepId) {
+async function openGettingStarted(stepId, { required = false } = {}) {
     try {
         if (stepId) {
             await vscode.commands.executeCommand(
@@ -1093,8 +1104,11 @@ async function openGettingStarted(stepId) {
         } else {
             await vscode.commands.executeCommand('workbench.action.openWalkthrough', WALKTHROUGH_ID, false);
         }
+        return true;
     } catch (err) {
         try { _log(`openGettingStarted error: ${err && err.message}`); } catch {}
+        if (required) throw err;
+        return false;
     }
 }
 

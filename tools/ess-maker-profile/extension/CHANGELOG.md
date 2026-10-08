@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.36 (POC)
+
+- Start the Maker guided experience earlier during VS Code startup and retain
+  first-run state only after the essential rail, walkthrough, and Chat commands
+  succeed.
+
 ## 0.4.35 (POC)
 
 - **Topic actions stop at the DA capability gate.** **Create a topic** and
