@@ -27,9 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 11' in schema
+    assert '"schemaVersion": 12' in schema
     assert '"substage": "not-started"' in schema
-    assert "config.pre-v11.json" in schema
+    assert "config.pre-v12.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()

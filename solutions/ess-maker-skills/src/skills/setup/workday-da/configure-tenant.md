@@ -177,7 +177,7 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
-   firewall change is required. Do not wait until final employee validation to
+   firewall change is required. Do not wait until final Maker validation to
    discover a known allowlist requirement.
 
 ### Existing non-Entra federation coexistence or transition handoff

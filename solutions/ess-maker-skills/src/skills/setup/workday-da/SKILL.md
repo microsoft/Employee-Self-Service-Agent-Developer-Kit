@@ -275,7 +275,7 @@ from `nextPhaseId`:
 | `workday-admin`       | Workday Administrator                                                                                                                                                                                       |
 | `connections`         | Power Platform Environment Maker with package installation access                                                                                                                                           |
 | `runtime`             | Power Platform Environment Maker with Dataverse System Administrator access for runtime authorization                                                                                                       |
-| `employee-validation` | Environment Maker                                                                                                                                                                                           |
+| `maker-validation`    | Environment Maker                                                                                                                                                                                           |
 
 When `nextPhaseId` is `entra`, dispatch to `provision-entra-app.md` without the
 form below. That phase asks whether the maker has looped in the administrator,
@@ -342,7 +342,7 @@ Dispatch from `nextPhaseId`:
 - `entra` -> read `provision-entra-app.md`
 - `workday-admin` -> read `configure-tenant.md`
 - `connections` or `runtime` -> read `configure-power-platform.md`
-- `employee-validation` -> read `verify-connection.md`
+- `maker-validation` -> read `verify-connection.md`
 
 When a phase returns, run `status` again and continue from the controller's
 next phase. Never restart completed phases because the user asked a side

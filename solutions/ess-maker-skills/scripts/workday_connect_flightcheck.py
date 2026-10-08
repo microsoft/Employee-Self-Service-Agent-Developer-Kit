@@ -124,11 +124,9 @@ def _customer_remediation(phase_id: str, error_type: str) -> str:
             "Review the runtime flows, connection references, authorization, "
             "topic wiring, and selected-agent attachment, then rerun Runtime."
         ),
-        "employee-validation": (
-            "Review the employee runtime evidence result. Reuse the current "
-            "attempt for a pending or transient readiness check; run another "
-            "employee scenario only when the result explicitly requires a "
-            "fresh evidence window."
+        "maker-validation": (
+            "Resolve the focused Maker Test-pane blocker, then rerun the "
+            "same read-only scenario when the remediation requires a retest."
         ),
     }
     return guidance[phase_id]
@@ -160,7 +158,6 @@ def validation_input_fingerprint(
             "approvedPlan": phase.get("approvedPlan"),
             "evidence": list(phase.get("evidence") or []),
             "administrator": phase.get("administrator"),
-            "employeeTestAttempt": phase.get("employeeTestAttempt"),
         }
     operators = state.get("operators") or {}
     payload = {

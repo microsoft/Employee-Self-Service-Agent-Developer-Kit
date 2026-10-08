@@ -91,10 +91,9 @@ Then run:
 python scripts/workday_connect.py record-validation --evidence-file ".local\connect\workday-da\maker-validation.json"
 ```
 
-The controller marks the guided lifecycle complete immediately. It also clears
-any earlier pending validation attempt. Do not run `begin-employee-test`, wait
-for Power Automate run-history evidence, rerun final runtime correlation, or
-ask the maker or employee to repeat a successful scenario.
+The controller marks the guided lifecycle complete immediately. Do not wait
+for Power Automate run-history evidence, run a separate runtime-correlation
+step, or ask the maker or employee to repeat a successful scenario.
 
 ## Finish with post-skill next steps
 

@@ -37,8 +37,8 @@ from workday_connect_contracts import (
 from workday_connect_evidence_contracts import (
     WorkdayConnectContractError,
     validate_agent_binding_evidence,
-    validate_employee_evidence,
-    validate_employee_failure_evidence,
+    validate_maker_evidence,
+    validate_maker_failure_evidence,
 )
 from workday_connect_flightcheck import (
     WorkdayConnectFlightCheckError,
@@ -77,12 +77,6 @@ from workday_connect_telemetry import (
 
 RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
 ERROR_MARKER = "WORKDAY_CONNECT_ERROR_JSON:"
-
-
-class WorkdayConnectRetiredOperationError(WorkdayConnectStoreError):
-    """Raised when a compatibility-only operation has been retired."""
-
-    suppress_blocker_persistence = True
 
 
 def _json_object(value: str, label: str) -> dict[str, Any]:
@@ -278,8 +272,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record_validation = subparsers.add_parser("record-validation")
     _add_json_input(record_validation, "evidence")
-    subparsers.add_parser("begin-employee-test")
-    subparsers.add_parser("abandon-employee-test")
     record_validation_failure = subparsers.add_parser(
         "record-validation-failure"
     )
@@ -1135,132 +1127,87 @@ def _record_validation(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    with store.employee_validation_guard():
-        evidence = validate_employee_evidence(
-            _json_input(args, "evidence", "employee validation evidence")
+    with store.maker_validation_guard():
+        evidence = validate_maker_evidence(
+            _json_input(args, "evidence", "maker validation evidence")
         )
-        phase = store.load()["phases"]["employee-validation"]
-        if evidence["testUserCategory"].casefold() == "maker":
-            maker_evidence = {
-                "testUserCategory": "maker",
-                "timestamp": evidence["timestamp"],
-                "outcome": evidence["outcome"],
-            }
-            blocker = phase.get("blocker")
-            if (
-                isinstance(blocker, Mapping)
-                and blocker.get("remediationId") == "WD-E2E-006"
-            ):
-                scenario_name = str(evidence.get("scenarioName") or "").strip()
-                if scenario_name != blocker.get("scenarioName"):
-                    raise WorkdayConnectContractError(
-                        "Retest the same named scenario that observed "
-                        "'Task not authorized'."
-                    )
-                maker_evidence.update(
-                    {
-                        "scenarioName": scenario_name,
-                        "authorizationOutcome": (
-                            "task-not-authorized-remediated"
-                        ),
-                        "authorizationRemediationDomain": blocker[
-                            "affectedDomain"
-                        ],
-                        "authorizationRetestOutcome": (
-                            "verified-after-remediation"
-                        ),
-                    }
+        phase = store.load()["phases"]["maker-validation"]
+        maker_evidence = {
+            "testUserCategory": "maker",
+            "timestamp": evidence["timestamp"],
+            "outcome": evidence["outcome"],
+        }
+        blocker = phase.get("blocker")
+        if (
+            isinstance(blocker, Mapping)
+            and blocker.get("remediationId") == "WD-E2E-006"
+        ):
+            scenario_name = str(evidence.get("scenarioName") or "").strip()
+            if scenario_name != blocker.get("scenarioName"):
+                raise WorkdayConnectContractError(
+                    "Retest the same named scenario that observed "
+                    "'Task not authorized'."
                 )
-            elif evidence.get("scenarioName"):
-                maker_evidence["scenarioName"] = evidence["scenarioName"]
-            replayed = (
-                phase["status"] == "complete"
-                and _action_evidence(
-                    {"phases": {"employee-validation": phase}},
-                    "employee-validation",
-                    "maker-smoke-test",
-                )
-                == maker_evidence
-            )
-            if not replayed:
-                store.complete_action(
-                    "employee-validation",
-                    "maker-smoke-test",
-                    evidence=maker_evidence,
-                )
-            _run_final_readiness(store)
-            final_state = store.finalize_maker_validation_success()
-            active_realm = final_state["activeTargetRealm"]
-            status = store.status()
-            if replayed:
-                return {
-                    "verified": True,
-                    "replayed": True,
-                    "lifecycleComplete": True,
-                    "activeTargetRealm": active_realm,
-                    "postSkillNextSteps": _post_skill_next_steps(active_realm),
-                    "status": status,
+            maker_evidence.update(
+                {
+                    "scenarioName": scenario_name,
+                    "authorizationOutcome": (
+                        "task-not-authorized-remediated"
+                    ),
+                    "authorizationRemediationDomain": blocker[
+                        "affectedDomain"
+                    ],
+                    "authorizationRetestOutcome": (
+                        "verified-after-remediation"
+                    ),
                 }
+            )
+        elif evidence.get("scenarioName"):
+            maker_evidence["scenarioName"] = evidence["scenarioName"]
+        replayed = (
+            phase["status"] == "complete"
+            and _action_evidence(
+                {"phases": {"maker-validation": phase}},
+                "maker-validation",
+                "maker-smoke-test",
+            )
+            == maker_evidence
+        )
+        if not replayed:
+            store.complete_action(
+                "maker-validation",
+                "maker-smoke-test",
+                evidence=maker_evidence,
+            )
+        _run_final_readiness(store)
+        final_state = store.finalize_maker_validation_success()
+        active_realm = final_state["activeTargetRealm"]
+        status = store.status()
+        if replayed:
             return {
                 "verified": True,
+                "replayed": True,
                 "lifecycleComplete": True,
                 "activeTargetRealm": active_realm,
                 "postSkillNextSteps": _post_skill_next_steps(active_realm),
                 "status": status,
             }
-        raise WorkdayConnectRetiredOperationError(
-            "Signed-in employee runtime-evidence validation has been retired. "
-            "Complete the guided lifecycle with the maker's successful "
-            "Copilot Studio Test pane scenario."
-        )
-
-
-def _begin_employee_test(
-    _args: argparse.Namespace,
-    _store: WorkdayConnectStore,
-) -> dict[str, Any]:
-    raise WorkdayConnectRetiredOperationError(
-        "Employee runtime-evidence windows have been retired. Complete the "
-        "guided lifecycle with the maker's successful Copilot Studio Test "
-        "pane scenario."
-    )
-
-
-def _abandon_employee_test(
-    _args: argparse.Namespace,
-    store: WorkdayConnectStore,
-) -> dict[str, Any]:
-    with store.employee_validation_guard():
-        state = store.load()
-        attempt = state["phases"]["employee-validation"].get(
-            "employeeTestAttempt"
-        )
-        abandoned = (
-            isinstance(attempt, dict)
-            and attempt.get("status") in {"active", "validating"}
-        )
-        store.abandon_employee_test_attempt()
-    return {"abandoned": abandoned, "status": store.status()}
+        return {
+            "verified": True,
+            "lifecycleComplete": True,
+            "activeTargetRealm": active_realm,
+            "postSkillNextSteps": _post_skill_next_steps(active_realm),
+            "status": status,
+        }
 
 
 def _record_validation_failure(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    evidence = validate_employee_failure_evidence(
+    evidence = validate_maker_failure_evidence(
         _json_input(args, "evidence", "maker validation failure")
     )
-    if evidence["remediationId"] != "WD-E2E-006":
-        raise WorkdayConnectRetiredOperationError(
-            "Only a maker-observed 'Task not authorized' result uses this "
-            "focused remediation path. Resolve other Test pane failures "
-            "before completing maker validation."
-        )
-    if not evidence.get("scenarioName") or not evidence.get("affectedDomain"):
-        raise WorkdayConnectContractError(
-            "A named failed scenario and the affected Workday security "
-            "domain are required for 'Task not authorized' remediation."
-        )
     state = store.load()
     if state["phases"]["runtime"]["status"] != "complete":
         raise WorkdayConnectStoreError(
@@ -1268,7 +1215,7 @@ def _record_validation_failure(
             "validation remediation."
         )
     store.set_phase_status(
-        "employee-validation",
+        "maker-validation",
         "blocked",
         blocker={
             "operation": "record-validation",
@@ -1364,8 +1311,6 @@ _COMMAND_HANDLERS: dict[
     "record-topic-activation": _record_topic_activation,
     "record-runtime-template-wiring": _record_runtime_template_wiring,
     "record-agent-binding": _record_agent_binding,
-    "begin-employee-test": _begin_employee_test,
-    "abandon-employee-test": _abandon_employee_test,
     "record-validation": _record_validation,
     "record-validation-failure": _record_validation_failure,
     "preflight": _preflight,
@@ -1390,10 +1335,8 @@ _COMMAND_PHASES = {
     "record-topic-activation": "runtime",
     "record-runtime-template-wiring": "runtime",
     "record-agent-binding": "runtime",
-    "begin-employee-test": "employee-validation",
-    "abandon-employee-test": "employee-validation",
-    "record-validation": "employee-validation",
-    "record-validation-failure": "employee-validation",
+    "record-validation": "maker-validation",
+    "record-validation-failure": "maker-validation",
     "prepare-connections": "connections",
     "prepare-connections-approve": "connections",
 }
@@ -1447,7 +1390,7 @@ def main() -> None:
                     "errorType": type(exc).__name__,
                     "message": str(exc),
                 }
-                if phase_id == "employee-validation":
+                if phase_id == "maker-validation":
                     existing_phase = (
                         store.load().get("phases", {}).get(phase_id, {})
                     )

@@ -20,8 +20,8 @@ from workday_connect_contracts import (  # noqa: E402
     parse_workday_admin_return_worksheet,
     validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
-    validate_employee_evidence,
-    validate_employee_failure_evidence,
+    validate_maker_evidence,
+    validate_maker_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
@@ -1485,7 +1485,7 @@ def test_workday_admin_rejects_unused_response_fields():
         )
 
 
-def test_agent_binding_and_employee_evidence_are_strict():
+def test_agent_binding_and_maker_evidence_are_strict():
     state = _state()
     state["scope"].update(
         {
@@ -1553,10 +1553,10 @@ def test_agent_binding_and_employee_evidence_are_strict():
     ]
 
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
-        validate_employee_evidence(
+        validate_maker_evidence(
             {
                 "scenarioName": "Read-only scenario",
-                "testUserCategory": "standard employee",
+                "testUserCategory": "maker",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "outcome": "passed",
                 "employeeName": "not allowed",
@@ -1730,58 +1730,22 @@ def test_workday_admin_rejects_non_workday_or_mixed_endpoint_hosts():
         validate_workday_admin_response(state, response)
 
 
-def test_employee_evidence_rejects_maker_and_invalid_timestamp():
-    with pytest.raises(WorkdayConnectContractError, match="non-maker"):
-        validate_employee_evidence(
+def test_maker_evidence_rejects_non_maker_and_invalid_timestamp() -> None:
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="post-skill activity",
+    ):
+        validate_maker_evidence(
             {
                 "scenarioName": "Read-only scenario",
-                "testUserCategory": "Environment Maker",
+                "testUserCategory": "non-maker employee",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "outcome": "passed",
             }
         )
 
     with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
-            {
-                "testUserCategory": "non-maker employee",
-                "timestamp": "not-a-time",
-                "outcome": "passed",
-            }
-        )
-
-
-def test_employee_evidence_does_not_require_scenario_name():
-    assert validate_employee_evidence(
-        {
-            "testUserCategory": "non-maker employee",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "outcome": "passed",
-        }
-    ) == {
-        "testUserCategory": "non-maker employee",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "outcome": "passed",
-    }
-
-
-def test_maker_validation_evidence_is_accepted() -> None:
-    assert validate_employee_evidence(
-        {
-            "testUserCategory": "maker",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "outcome": "passed",
-        }
-    ) == {
-        "testUserCategory": "maker",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "outcome": "passed",
-    }
-
-
-def test_maker_validation_rejects_invalid_timestamp() -> None:
-    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
+        validate_maker_evidence(
             {
                 "testUserCategory": "maker",
                 "timestamp": "not-a-time",
@@ -1790,145 +1754,80 @@ def test_maker_validation_rejects_invalid_timestamp() -> None:
         )
 
 
-def test_employee_failure_evidence_derives_safe_canonical_fields():
-    for remediation_id, contract in (
-        contracts.EMPLOYEE_VALIDATION_REMEDIATIONS.items()
-    ):
-        evidence = {
-            "remediationId": remediation_id.lower(),
+def test_maker_validation_evidence_is_accepted() -> None:
+    assert validate_maker_evidence(
+        {
+            "scenarioName": "View my time off balance",
+            "testUserCategory": "maker",
+            "timestamp": "2026-09-25T00:00:00+00:00",
+            "outcome": "passed",
+        }
+    ) == {
+        "scenarioName": "View my time off balance",
+        "testUserCategory": "maker",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
+
+def test_maker_failure_evidence_derives_bounded_canonical_fields() -> None:
+    contract = contracts.MAKER_VALIDATION_REMEDIATIONS["WD-E2E-006"]
+
+    assert validate_maker_failure_evidence(
+        {
+            "remediationId": "wd-e2e-006",
+            "scenarioName": "View my time off balance",
+            "affectedDomain": "Worker Data: Time Off",
             "timestamp": "2026-09-25T00:00:00+00:00",
         }
-        if remediation_id == "WD-E2E-999":
-            evidence["failureSurface"] = "agent-chat"
-        assert validate_employee_failure_evidence(
-            evidence
-        ) == {
-            "remediationId": remediation_id,
-            "failureCategory": contract["failureCategory"],
-            "failureSurface": (
-                "agent-chat"
-                if remediation_id == "WD-E2E-999"
-                else contract["failureSurface"]
-            ),
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": contract["remediation"],
-        }
-
-
-def test_employee_failure_evidence_migrates_legacy_files():
-    assert validate_employee_failure_evidence(
-        {
-            "failureCategory": "workday-access-denied",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Customer-specific wording is discarded.",
-        }
     ) == {
         "remediationId": "WD-E2E-006",
-        "failureCategory": "workday-access",
-        "failureSurface": "workday-response",
+        "failureCategory": contract["failureCategory"],
+        "failureSurface": contract["failureSurface"],
         "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-006"
-            ]["remediation"]
-        ),
-    }
-    assert validate_employee_failure_evidence(
-        {
-            "failureCategory": "previous-custom-category",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Visit https://customer.example/employee.",
-        }
-    ) == {
-        "remediationId": "WD-E2E-999",
-        "failureCategory": "unknown",
-        "failureSurface": "other",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-999"
-            ]["remediation"]
-        ),
+        "remediation": contract["remediation"],
+        "scenarioName": "View my time off balance",
+        "affectedDomain": "Worker Data: Time Off",
     }
 
 
-def test_employee_failure_evidence_ignores_redundant_caller_text():
-    assert validate_employee_failure_evidence(
-        {
+def test_maker_failure_evidence_requires_guided_remediation_fields() -> None:
+    for missing_field in ("scenarioName", "affectedDomain"):
+        evidence = {
             "remediationId": "WD-E2E-006",
-            "failureCategory": "network",
+            "scenarioName": "View my time off balance",
+            "affectedDomain": "Worker Data: Time Off",
             "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Visit https://customer.example/employee.",
         }
-    ) == {
-        "remediationId": "WD-E2E-006",
-        "failureCategory": "workday-access",
-        "failureSurface": "workday-response",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-006"
-            ]["remediation"]
-        ),
-    }
+        evidence.pop(missing_field)
+        with pytest.raises(
+            WorkdayConnectContractError,
+            match=rf"{missing_field} is required",
+        ):
+            validate_maker_failure_evidence(evidence)
 
 
-def test_employee_failure_evidence_rejects_unsafe_fields():
+def test_maker_failure_evidence_rejects_unsafe_or_unbounded_fields() -> None:
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
-        validate_employee_failure_evidence(
+        validate_maker_failure_evidence(
             {
                 "remediationId": "WD-E2E-006",
+                "scenarioName": "View my time off balance",
+                "affectedDomain": "Worker Data: Time Off",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "accessToken": "must-not-be-recorded",
             }
         )
 
-    with pytest.raises(WorkdayConnectContractError, match="must be one of"):
-        validate_employee_failure_evidence(
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="must be WD-E2E-006",
+    ):
+        validate_maker_failure_evidence(
             {
                 "remediationId": "WD-E2E-123",
+                "scenarioName": "View my time off balance",
+                "affectedDomain": "Worker Data: Time Off",
                 "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="accepted only for WD-E2E-999",
-    ):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-006",
-                "failureSurface": "workday-response",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="failureSurface must be one of",
-    ):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-999",
-                "failureSurface": "https://customer.example/employee",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(WorkdayConnectContractError, match="is required"):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-999",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
-            {
-                "scenarioName": "Read-only scenario",
-                "testUserCategory": "non-maker employee",
-                "timestamp": "not-a-time",
-                "outcome": "passed",
             }
         )

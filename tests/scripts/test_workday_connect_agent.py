@@ -825,8 +825,6 @@ def test_controller_public_command_and_result_contract_is_stable(
         "record-runtime-template-wiring",
         "record-agent-binding",
         "record-validation",
-        "begin-employee-test",
-        "abandon-employee-test",
         "record-validation-failure",
         "preflight",
         "prepare-connections",
@@ -846,22 +844,15 @@ def test_controller_public_command_and_result_contract_is_stable(
     }
 
 
-def test_abandon_employee_test_is_idempotent_without_active_attempt(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.parametrize(
+    "command",
+    ("begin-employee-test", "abandon-employee-test"),
+)
+def test_retired_employee_test_commands_are_rejected(command: str) -> None:
     import workday_connect
-    from workday_connect_store import WorkdayConnectStore
 
-    store = WorkdayConnectStore(tmp_path)
-    store.initialize()
-
-    result = workday_connect._abandon_employee_test(
-        SimpleNamespace(),
-        store,
-    )
-
-    assert result["abandoned"] is False
-    assert result["status"]["blocker"] is None
+    with pytest.raises(SystemExit):
+        workday_connect.build_parser().parse_args([command])
 
 
 def test_controller_persists_valid_partial_administrator_fields(
@@ -1369,54 +1360,6 @@ def test_controller_emits_structured_runtime_error_details(
     assert payload["details"] == details
 
 
-def test_retired_cli_operations_do_not_persist_blockers(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    import pytest
-
-    import workday_connect
-    from workday_connect_store import WorkdayConnectStore
-
-    store = WorkdayConnectStore(tmp_path)
-    original = store.initialize()
-    invocations = (
-        (
-            "begin-employee-test",
-            [],
-            "runtime-evidence windows have been retired",
-        ),
-    )
-
-    for command, command_args, expected_error in invocations:
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "workday_connect.py",
-                "--root",
-                str(tmp_path),
-                command,
-                *command_args,
-            ],
-        )
-
-        with pytest.raises(SystemExit) as exc:
-            workday_connect.main()
-
-        assert exc.value.code == 1
-        error = capsys.readouterr().err
-        payload = json.loads(
-            error.split(workday_connect.ERROR_MARKER, maxsplit=1)[1]
-        )
-        assert expected_error in payload["error"]
-        assert payload["errorType"] == (
-            "WorkdayConnectRetiredOperationError"
-        )
-        assert store.load() == original
-
-
 def test_record_connections_uses_live_verification(
     tmp_path: Path,
     monkeypatch,
@@ -1883,7 +1826,7 @@ def test_record_validation_failure_tracks_maker_authorization_remediation(
         store,
     )
 
-    phase = store.load()["phases"]["employee-validation"]
+    phase = store.load()["phases"]["maker-validation"]
     assert result["recorded"] is True
     assert phase["status"] == "blocked"
     assert phase["blocker"]["scenarioName"] == "Check vacation balance"
@@ -1919,7 +1862,7 @@ def test_record_validation_failure_tracks_maker_authorization_remediation(
         workday_connect.main()
     assert exc.value.code == 1
     capsys.readouterr()
-    preserved_blocker = store.load()["phases"]["employee-validation"][
+    preserved_blocker = store.load()["phases"]["maker-validation"][
         "blocker"
     ]
     assert preserved_blocker["scenarioName"] == "Check vacation balance"
@@ -1945,7 +1888,7 @@ def test_record_validation_failure_tracks_maker_authorization_remediation(
     )
 
     assert result["lifecycleComplete"] is True
-    maker_evidence = store.load()["phases"]["employee-validation"]["evidence"][0]
+    maker_evidence = store.load()["phases"]["maker-validation"]["evidence"][0]
     assert maker_evidence["scenarioName"] == "Check vacation balance"
     assert maker_evidence["authorizationRemediationDomain"] == (
         "Worker Data: Public Worker Reports"
@@ -2056,7 +1999,7 @@ def test_invalid_validation_retry_preserves_stable_failure_evidence(
             )
         store.set_phase_status(phase_id, "complete")
     store.set_phase_status(
-        "employee-validation",
+        "maker-validation",
         "blocked",
         blocker={
             "operation": "record-validation-failure",
@@ -2096,14 +2039,14 @@ def test_invalid_validation_retry_preserves_stable_failure_evidence(
         workday_connect.main()
 
     assert exc.value.code == 1
-    blocker = store.load()["phases"]["employee-validation"]["blocker"]
+    blocker = store.load()["phases"]["maker-validation"]["blocker"]
     assert blocker["remediationId"] == "WD-E2E-006"
     assert blocker["failureSurface"] == "workday-response"
     assert blocker["capturedAt"] == "2026-09-25T00:00:00Z"
     assert blocker["operation"] == "record-validation"
 
 
-def test_employee_success_runtime_correlation_is_retired(
+def test_non_maker_validation_is_explicitly_post_skill(
     tmp_path: Path,
 ) -> None:
     import pytest
@@ -2144,15 +2087,12 @@ def test_employee_success_runtime_correlation_is_retired(
             evidence=evidence,
         )
     store.set_phase_status("runtime", "complete")
-    attempt = store.begin_employee_test_attempt()["phases"][
-        "employee-validation"
-    ]["employeeTestAttempt"]
     evidence_file = tmp_path / "employee.json"
     evidence_file.write_text(
         json.dumps(
             {
                 "testUserCategory": "non-maker employee",
-                "timestamp": attempt["startedAt"],
+                "timestamp": "2026-10-05T18:00:00-07:00",
                 "outcome": "passed",
             }
         ),
@@ -2160,8 +2100,8 @@ def test_employee_success_runtime_correlation_is_retired(
     )
 
     with pytest.raises(
-        workday_connect.WorkdayConnectStoreError,
-        match="runtime-evidence validation has been retired",
+        workday_connect.WorkdayConnectContractError,
+        match="post-skill activity",
     ):
         workday_connect._record_validation(
             SimpleNamespace(evidence_file=evidence_file),
@@ -2170,16 +2110,11 @@ def test_employee_success_runtime_correlation_is_retired(
 
     state = store.load()
     assert state["status"] == "in-progress"
-    assert state["phases"]["employee-validation"]["evidence"] == []
-    assert (
-        state["phases"]["employee-validation"]["employeeTestAttempt"][
-            "status"
-        ]
-        == "active"
-    )
+    assert state["phases"]["maker-validation"]["evidence"] == []
+    assert "employeeTestAttempt" not in state["phases"]["maker-validation"]
 
 
-def test_maker_success_completes_without_runtime_evidence_correlation(
+def test_maker_success_completes_without_run_history_correlation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2221,7 +2156,6 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
                 evidence=evidence,
             )
         store.set_phase_status(phase_id, "complete")
-    store.begin_employee_test_attempt()
     evidence_file = tmp_path / "maker-validation.json"
     evidence_file.write_text(
         json.dumps(
@@ -2292,24 +2226,24 @@ def test_maker_success_completes_without_runtime_evidence_correlation(
         result["postSkillNextSteps"]
     )
     assert state["status"] == "ready"
-    assert state["phases"]["employee-validation"]["employeeTestAttempt"] is None
+    assert "employeeTestAttempt" not in state["phases"]["maker-validation"]
     assert set(
-        state["phases"]["employee-validation"]["validationProfiles"]
+        state["phases"]["maker-validation"]["validationProfiles"]
     ) == {
         "workday-da:post-runtime",
         "workday-da:final",
     }
-    employee_status = next(
+    maker_status = next(
         phase
         for phase in result["status"]["phases"]
-        if phase["id"] == "employee-validation"
+        if phase["id"] == "maker-validation"
     )
-    assert employee_status["readiness"]["accepted"] is True
-    assert employee_status["readiness"]["summary"] == (
+    assert maker_status["readiness"]["accepted"] is True
+    assert maker_status["readiness"]["summary"] == (
         "Maker validation readiness checks passed."
     )
-    assert employee_status["readiness"]["validatedAt"]
-    evidence = state["phases"]["employee-validation"]["evidence"][0]
+    assert maker_status["readiness"]["validatedAt"]
+    evidence = state["phases"]["maker-validation"]["evidence"][0]
     assert evidence["action"] == "maker-smoke-test"
     assert evidence["testUserCategory"] == "maker"
     assert evidence["timestamp"] == "2026-10-06T01:00:00Z"

@@ -100,7 +100,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         assert re.search(
             rf"^\|\s*`{re.escape(phase_id)}`\s*\|",
@@ -183,11 +183,7 @@ def test_every_controller_command_is_documented() -> None:
         re.findall(r"workday_connect\.py\s+([a-z][a-z-]*)", guide_text)
     )
 
-    legacy_commands = {
-        "begin-employee-test",
-        "abandon-employee-test",
-    }
-    assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
+    assert documented == set(controller._COMMAND_HANDLERS)
 
 
 def test_workday_guides_use_file_backed_json_inputs() -> None:
@@ -251,8 +247,12 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "record-validation-failure --evidence-file" in text
     assert "retest that same named scenario" in text
     assert "lifecycleComplete: true" in text
-    assert "do not run `begin-employee-test`" in normalized.casefold()
-    assert "wait for Power Automate run-history evidence" in normalized
+    assert "begin-employee-test" not in text
+    assert "abandon-employee-test" not in text
+    assert (
+        "do not wait for power automate run-history evidence"
+        in normalized.casefold()
+    )
     assert "Promote the agent from Development to Test when ready" in text
     assert "Promote the agent from Test to Production when ready" in text
     assert "Publish and deploy the Production agent when ready" in text
@@ -277,13 +277,13 @@ def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     ) == payload
 
 
-def test_maker_validation_does_not_open_employee_attempt() -> None:
+def test_maker_validation_excludes_retired_runtime_evidence_contract() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split()).casefold()
 
-    assert "do not run `begin-employee-test`" in normalized
+    assert "begin-employee-test" not in normalized
     assert "abandon-employee-test" not in text
     assert "runtime-evidence" not in text
 

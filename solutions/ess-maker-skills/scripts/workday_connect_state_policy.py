@@ -103,8 +103,6 @@ def reset_phase(phase: dict[str, Any]) -> None:
             "updatedAt": utc_now(),
         }
     )
-    if "employeeTestAttempt" in phase:
-        phase["employeeTestAttempt"] = None
     if administrator is not None:
         phase["administrator"] = administrator
 
