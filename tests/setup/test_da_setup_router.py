@@ -1662,7 +1662,7 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}",
+        "Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}",
     ):
         assert f"**{choice}**" in text
     assert "**Exit setup (Recommended)**" not in text
@@ -1701,7 +1701,7 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "- **Finish for now**" not in completion_choices
     assert (
         "Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when "
-        "**Add or change an integration** is recommended"
+        "**Add or change an external HR or IT system** is recommended"
     ) in normalized
     normalized_completion_choices = " ".join(completion_choices.split())
     ready_choice_list = normalized_completion_choices.split(
@@ -1710,7 +1710,7 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     )[1].split("Set `{CONNECT_RECOMMENDATION_SUFFIX}`", 1)[0]
     assert "- **Configure landing page" not in ready_choice_list
     assert ready_choice_list.index(
-        "- **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**"
+        "- **Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}**"
     ) < ready_choice_list.index("- **Switch to another configured agent**")
     assert ready_choice_list.index(
         "- **Switch to another configured agent**"
@@ -1740,9 +1740,9 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "evidence; it does not claim that an integration is missing or broken."
     ) in normalized
     assert (
-        "I recommend Add or change an integration so this agent can communicate "
-        "with your HR or IT systems. Setup did not find authoritative evidence "
-        "that an applicable integration is configured."
+        "I recommend Add or change an external HR or IT system so this agent can "
+        "communicate with the system your organization uses. Setup did not find "
+        "authoritative evidence that an applicable external system is configured."
     ) in normalized
     assert (
         "Setup is complete. You asked to configure the landing page next, so I'll "
@@ -1767,19 +1767,18 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         in normalized
     )
     assert (
-        "- Run `/connect` **(Recommended)** to add or change an integration so "
-        "this agent can communicate with your HR or IT systems. Setup did not "
-        "find authoritative evidence that an applicable integration is configured."
+        "- Run `/connect` **(Recommended)** to add or change an external HR or IT "
+        "system. Setup did not find authoritative evidence that an applicable "
+        "external system is configured."
     ) in normalized
     assert (
         "- Run `/landing-page` **(Recommended)** to configure the branding and "
-        "content employees see. An applicable integration is already configured, "
-        "so this is the next useful customization step."
+        "content employees see. An applicable external HR or IT system is already "
+        "configured, so this is the next useful customization step."
     ) in normalized
     assert (
-        "- Run `/connect` **(Recommended)** to add or change an integration. This "
-        "matches what you asked to do next, and integrations let this agent "
-        "communicate with your HR or IT systems."
+        "- Run `/connect` **(Recommended)** to add or change an external HR or IT "
+        "system. This matches what you asked to do next."
     ) in normalized
     assert "These reminders are text, not another choice control." in normalized
     assert "Do not render the case labels above." in normalized
