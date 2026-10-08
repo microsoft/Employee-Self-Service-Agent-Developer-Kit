@@ -10,6 +10,8 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 
 def _state():
     from workday_connect_model import default_state
@@ -176,7 +178,6 @@ def _workday_partial_evidence() -> dict:
             "Time Off and Leave",
         ],
         "optionalDomains": [],
-        "authorizationOutcome": "verified",
     }
 
 
@@ -1822,6 +1823,7 @@ def test_record_agent_binding_rejects_manual_boolean_evidence(
 def test_record_validation_failure_tracks_maker_authorization_remediation(
     tmp_path: Path,
     monkeypatch,
+    capsys,
 ) -> None:
     import pytest
 
@@ -1901,14 +1903,29 @@ def test_record_validation_failure_tracks_maker_authorization_remediation(
         ),
         encoding="utf-8",
     )
-    with pytest.raises(
-        workday_connect.WorkdayConnectContractError,
-        match="same named scenario",
-    ):
-        workday_connect._record_validation(
-            SimpleNamespace(evidence_file=success_file),
-            store,
-        )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "record-validation",
+            "--evidence-file",
+            str(success_file),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+    assert exc.value.code == 1
+    capsys.readouterr()
+    preserved_blocker = store.load()["phases"]["employee-validation"][
+        "blocker"
+    ]
+    assert preserved_blocker["scenarioName"] == "Check vacation balance"
+    assert preserved_blocker["affectedDomain"] == (
+        "Worker Data: Public Worker Reports"
+    )
 
     success_file.write_text(
         json.dumps(
@@ -1936,6 +1953,80 @@ def test_record_validation_failure_tracks_maker_authorization_remediation(
     assert maker_evidence["authorizationRetestOutcome"] == (
         "verified-after-remediation"
     )
+
+
+@pytest.mark.parametrize("transport_failure", [False, True])
+def test_runtime_apply_revalidation_failure_does_not_persist_blocker(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+    transport_failure: bool,
+) -> None:
+    import pytest
+
+    import workday_connect
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    dev_identity = {
+        "environmentId": "dev-environment-id",
+        "environmentUrl": "https://contoso-dev.crm.dynamics.com",
+        "tenantId": "tenant-id",
+        "agentId": "dev-agent-id",
+        "agentSchemaName": "gptagent_copilotforemployeeselfservicehr",
+        "agentSlug": "ess-hr",
+        "almFamilyId": "family-id",
+        "commitSha": "dev123",
+        "sourceAgentId": "dev-agent-id",
+    }
+    test_identity = {
+        **dev_identity,
+        "environmentId": "test-environment-id",
+        "environmentUrl": "https://contoso-test.crm.dynamics.com",
+        "agentId": "test-agent-id",
+        "commitSha": "test123",
+    }
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.record_target_discovery("dev", dev_identity, ring="test")
+    store.record_target_discovery("test", test_identity, ring="test")
+    store.activate_target("test")
+    approved_state = store.load()
+    def rediscover(*_args, **_kwargs):
+        if transport_failure:
+            raise OSError("network unavailable")
+        return {**test_identity, "commitSha": "drifted"}, "test"
+
+    monkeypatch.setattr(
+        realms,
+        "_discover_promoted_realm_identity",
+        rediscover,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "runtime-apply",
+            "--plan-hash",
+            "unused-after-revalidation-failure",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    expected = (
+        "discovery failed before mutation"
+        if transport_failure
+        else "changed after approval: commitSha"
+    )
+    assert expected in error
+    assert store.load() == approved_state
 
 
 def test_invalid_validation_retry_preserves_stable_failure_evidence(

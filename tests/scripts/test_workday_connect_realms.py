@@ -672,9 +672,24 @@ def test_revalidating_dev_target_does_not_call_promoted_discovery(
     }
 
 
-def test_revalidating_promoted_target_rejects_identity_drift(
+@pytest.mark.parametrize(
+    "changed_field",
+    [
+        "environmentId",
+        "environmentUrl",
+        "tenantId",
+        "agentId",
+        "agentSchemaName",
+        "agentSlug",
+        "almFamilyId",
+        "commitSha",
+        "sourceAgentId",
+    ],
+)
+def test_revalidating_promoted_target_rejects_identity_drift_without_writing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    changed_field: str,
 ) -> None:
     import workday_connect_realms as realms
     from workday_connect_realms import WorkdayConnectRealmError
@@ -691,33 +706,97 @@ def test_revalidating_promoted_target_rejects_identity_drift(
     )
     store.record_target_discovery("test", identity, ring="test")
     store.activate_target("test")
+    approved_state = store.load()
 
-    def rediscover(_root, target_store, **_kwargs):
-        target_store.record_target_discovery(
+    monkeypatch.setattr(
+        realms,
+        "_discover_promoted_realm_identity",
+        lambda *_args, **_kwargs: (
+            {**identity, changed_field: "drifted-value"},
             "test",
-            {**identity, "commitSha": "def456"},
-            ring="test",
-        )
-        target_store.activate_target("test")
-        return {"realm": "test"}
-
-    monkeypatch.setattr(realms, "discover_and_record_realm_target", rediscover)
+        ),
+    )
 
     with pytest.raises(
         WorkdayConnectRealmError,
-        match="changed after approval: commitSha",
+        match=f"changed after approval: {changed_field}",
     ):
         realms.revalidate_active_realm_target(tmp_path, store)
 
+    assert store.load() == approved_state
+
+
+def test_revalidating_promoted_target_accepts_complete_identity_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import workday_connect_realms as realms
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    _record_dev(store)
+    identity = _identity(
+        environment_id=TEST_ENVIRONMENT_ID,
+        environment_url=TEST_URL,
+        agent_id=TEST_AGENT_ID,
+        commit_sha="abc123",
+    )
+    store.record_target_discovery("test", identity, ring="test")
+    store.activate_target("test")
+    approved_state = store.load()
+    monkeypatch.setattr(
+        realms,
+        "_discover_promoted_realm_identity",
+        lambda *_args, **_kwargs: (dict(identity), "test"),
+    )
+
+    assert realms.revalidate_active_realm_target(tmp_path, store) == {
+        "realm": "test",
+        "revalidated": True,
+    }
+    assert store.load() == approved_state
+
 
 def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
-    from workday_connect_model import default_state
+    from workday_connect_model import PHASE_REQUIRED_ACTIONS, default_state
     from workday_connect_store import WorkdayConnectStore
 
     state = default_state()
     state["schemaVersion"] = 10
     state.pop("activeTargetRealm")
     state.pop("targets")
+    for phase_id in ("preflight", "entra"):
+        phase = state["phases"][phase_id]
+        phase["status"] = "complete"
+        phase["completedActions"] = list(
+            PHASE_REQUIRED_ACTIONS[phase_id]
+        )
+        phase["evidence"] = [
+            {"action": action, "outcome": "verified"}
+            for action in PHASE_REQUIRED_ACTIONS[phase_id]
+        ]
+    workday_phase = state["phases"]["workday-admin"]
+    workday_phase["status"] = "active"
+    workday_phase["administrator"]["partialEvidence"].update(
+        {
+            "authorizationOutcome": "task-not-authorized-remediated",
+            "authorizationRemediationDomain": (
+                "Worker Data: Public Worker Reports"
+            ),
+            "authorizationRemediationScenario": "Check vacation balance",
+            "authorizationRetestOutcome": "verified-after-remediation",
+        }
+    )
+    workday_phase["administrator"]["invalidFields"] = [
+        "authorizationRetestOutcome"
+    ]
+    workday_phase["evidence"].append(
+        {
+            "action": "administrator-response-validated",
+            "authorizationOutcome": "verified",
+        }
+    )
     path = (
         tmp_path
         / ".local"
@@ -734,6 +813,10 @@ def test_v10_state_migrates_to_realm_registry(tmp_path: Path) -> None:
     assert migrated["activeTargetRealm"] == "dev"
     assert migrated["targets"]["dev"]["phases"] == migrated["phases"]
     assert migrated["targets"]["test"] is None
+    migrated_workday = migrated["phases"]["workday-admin"]
+    assert migrated_workday["administrator"]["partialEvidence"] == {}
+    assert migrated_workday["administrator"]["invalidFields"] == []
+    assert "authorizationOutcome" not in migrated_workday["evidence"][0]
     assert path.with_name("config.pre-v11.json").exists()
 
 

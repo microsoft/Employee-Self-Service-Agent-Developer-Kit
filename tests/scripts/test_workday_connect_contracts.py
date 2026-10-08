@@ -1137,7 +1137,6 @@ def test_workday_admin_response_validates_exact_endpoints():
                 "Time Off and Leave",
             ],
             "optionalDomains": [],
-            "authorizationOutcome": "verified",
         },
     )
 
@@ -1230,9 +1229,11 @@ def test_workday_admin_response_accepts_legacy_authorization_retest():
         },
     )
 
-    assert result["evidence"]["authorizationRetestOutcome"] == (
-        "verified-after-remediation"
-    )
+    assert "authorizationOutcome" not in result["evidence"]
+    assert "authorizationRemediationDomain" not in result["evidence"]
+    assert "authorizationRemediationScenario" not in result["evidence"]
+    assert "authorizationRetestOutcome" not in result["evidence"]
+    assert "authorizationOutcome" not in result["partialEvidence"]
 
 
 def test_partial_workday_evidence_keeps_valid_siblings() -> None:
@@ -1251,6 +1252,18 @@ def test_partial_workday_evidence_keeps_valid_siblings() -> None:
         "rolloutType": "limited-or-test",
     }
     assert set(result["fieldErrors"]) == {"oauthTokenUrl"}
+
+
+def test_partial_workday_evidence_rejects_legacy_authorization_fields() -> None:
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="unsupported fields: authorizationOutcome",
+    ):
+        validate_administrator_partial_evidence(
+            _state(),
+            "workday-admin",
+            {"authorizationOutcome": "verified"},
+        )
 
 
 def test_partial_administrator_evidence_rejects_secret_material() -> None:

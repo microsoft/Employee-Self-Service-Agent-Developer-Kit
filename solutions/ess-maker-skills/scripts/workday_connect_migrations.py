@@ -26,6 +26,7 @@ from workday_connect_model import (
     workday_saml_entity_id,
 )
 from workday_connect_state_policy import (
+    discard_legacy_workday_admin_authorization,
     invalidate_from_phase,
     legacy_administrator_partial_evidence,
     reset_phase,
@@ -38,6 +39,7 @@ class WorkdayConnectMigrationError(ValueError):
 
 
 def _finalize_state(state: dict[str, Any]) -> dict[str, Any]:
+    discard_legacy_workday_admin_authorization(state)
     migration = state.get("migration")
     provenance = (
         str(migration.get("source") or "state-migration")

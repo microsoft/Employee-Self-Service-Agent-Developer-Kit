@@ -282,10 +282,6 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
             "integrationPermissionsGetOutcome",
             "functionalAreaScopes",
             "optionalDomains",
-            "authorizationOutcome",
-            "authorizationRemediationDomain",
-            "authorizationRemediationScenario",
-            "authorizationRetestOutcome",
         }
     ),
 }
@@ -305,14 +301,7 @@ ADMINISTRATOR_REQUIRED_FIELDS = {
     ),
     Phase.WORKDAY_ADMIN.value: (
         ADMINISTRATOR_PARTIAL_FIELDS[Phase.WORKDAY_ADMIN.value]
-        - {
-            "certificateValidFrom",
-            "employeeSecurityGroup",
-            "authorizationOutcome",
-            "authorizationRemediationDomain",
-            "authorizationRemediationScenario",
-            "authorizationRetestOutcome",
-        }
+        - {"certificateValidFrom", "employeeSecurityGroup"}
     ),
 }
 TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS = frozenset(

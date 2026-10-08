@@ -1207,7 +1207,7 @@ def test_promoted_target_reuses_complete_tenant_foundation(
     store.capture_tenant_foundation()
     dev_state = store.load()
 
-    store.record_target_discovery(
+    initialized, reused = store.record_and_initialize_promoted_target(
         "test",
         {
             "environmentId": "test-environment-id",
@@ -1222,8 +1222,6 @@ def test_promoted_target_reuses_complete_tenant_foundation(
         },
         ring="test",
     )
-    store.activate_target("test")
-    initialized, reused = store.initialize_promoted_target_from_foundation()
 
     assert reused is True
     assert initialized["activeTargetRealm"] == "test"
@@ -1241,6 +1239,106 @@ def test_promoted_target_reuses_complete_tenant_foundation(
         evidence["action"] == "tenant-foundation-reused"
         for evidence in initialized["phases"]["entra"]["evidence"]
     )
+
+
+def test_promoted_target_foundation_failure_is_atomic(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    import workday_connect_model as model
+    from workday_connect_store import (
+        WorkdayConnectStore,
+        WorkdayConnectStoreError,
+    )
+
+    store = WorkdayConnectStore(tmp_path)
+    store.initialize()
+    store.merge_section(
+        "scope",
+        {
+            "entraTenantId": "tenant-id",
+            "workdayTenant": "contoso",
+        },
+    )
+    _set_foundation_data(store)
+    for phase_id in ("preflight", "entra", "workday-admin"):
+        _complete_phase(
+            store,
+            phase_id,
+            set(model.PHASE_REQUIRED_ACTIONS[phase_id]),
+        )
+    store.capture_tenant_foundation()
+    approved_state = store.load()
+
+    with pytest.raises(
+        WorkdayConnectStoreError,
+        match="does not match the recorded Workday tenant foundation",
+    ):
+        store.record_and_initialize_promoted_target(
+            "test",
+            {
+                "environmentId": "test-environment-id",
+                "environmentUrl": "https://contoso-test.crm.dynamics.com",
+                "tenantId": "different-tenant-id",
+                "agentId": "test-agent-id",
+                "agentSchemaName": (
+                    "gptagent_copilotforemployeeselfservicehr"
+                ),
+                "agentSlug": "ess-hr",
+                "almFamilyId": "family-id",
+                "commitSha": "abc123",
+                "sourceAgentId": "dev-agent-id",
+            },
+            ring="test",
+        )
+
+    assert store.load() == approved_state
+
+
+def test_current_state_discards_legacy_workday_authorization_fields(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    from workday_connect_model import default_state
+    from workday_connect_store import WorkdayConnectStore
+
+    state = default_state()
+    workday = state["phases"]["workday-admin"]
+    workday["administrator"]["partialEvidence"] = {
+        "authorizationOutcome": "verified",
+    }
+    workday["administrator"]["invalidFields"] = [
+        "authorizationRetestOutcome"
+    ]
+    workday["evidence"] = [
+        {
+            "action": "administrator-response-validated",
+            "authorizationOutcome": "verified",
+        }
+    ]
+    state["targets"]["dev"]["phases"] = state["phases"]
+    path = (
+        tmp_path
+        / ".local"
+        / "connect"
+        / "workday-da"
+        / "config.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    normalized = WorkdayConnectStore(tmp_path).initialize()
+
+    for phases in (
+        normalized["phases"],
+        normalized["targets"]["dev"]["phases"],
+    ):
+        phase = phases["workday-admin"]
+        assert phase["administrator"]["partialEvidence"] == {}
+        assert phase["administrator"]["invalidFields"] == []
+        assert "authorizationOutcome" not in phase["evidence"][0]
 
 
 def test_pre_v7_migration_preserves_existing_valid_tenant_foundation(

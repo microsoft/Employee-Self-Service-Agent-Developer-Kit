@@ -32,6 +32,61 @@ _FOUNDATION_ENTRA_IDENTIFIER_KEYS = (
     "scopeGuid",
     "signingCertificate",
 )
+_LEGACY_WORKDAY_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "authorizationOutcome",
+        "authorizationRemediationDomain",
+        "authorizationRemediationScenario",
+        "authorizationRetestOutcome",
+    }
+)
+
+
+def discard_legacy_workday_admin_authorization(
+    state: dict[str, Any],
+) -> None:
+    """Remove obsolete Phase 3 authorization fields from persisted snapshots."""
+
+    def clean_phase(phase: Any) -> None:
+        if not isinstance(phase, dict):
+            return
+        administrator = phase.get("administrator")
+        if isinstance(administrator, dict):
+            partial = administrator.get("partialEvidence")
+            if isinstance(partial, dict):
+                for field in _LEGACY_WORKDAY_AUTHORIZATION_FIELDS:
+                    partial.pop(field, None)
+            invalid = administrator.get("invalidFields")
+            if isinstance(invalid, list):
+                administrator["invalidFields"] = [
+                    field
+                    for field in invalid
+                    if field not in _LEGACY_WORKDAY_AUTHORIZATION_FIELDS
+                ]
+        evidence = phase.get("evidence")
+        if isinstance(evidence, list):
+            for record in evidence:
+                if not isinstance(record, dict):
+                    continue
+                for field in _LEGACY_WORKDAY_AUTHORIZATION_FIELDS:
+                    record.pop(field, None)
+
+    phases = state.get("phases")
+    if isinstance(phases, dict):
+        clean_phase(phases.get("workday-admin"))
+    foundation = state.get("tenantFoundation")
+    if isinstance(foundation, dict):
+        foundation_phases = foundation.get("phases")
+        if isinstance(foundation_phases, dict):
+            clean_phase(foundation_phases.get("workday-admin"))
+    targets = state.get("targets")
+    if isinstance(targets, dict):
+        for target in targets.values():
+            if not isinstance(target, dict):
+                continue
+            target_phases = target.get("phases")
+            if isinstance(target_phases, dict):
+                clean_phase(target_phases.get("workday-admin"))
 
 
 def reset_phase(phase: dict[str, Any]) -> None:

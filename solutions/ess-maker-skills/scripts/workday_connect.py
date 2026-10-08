@@ -1454,7 +1454,12 @@ def main() -> None:
                     existing_blocker = existing_phase.get("blocker") or {}
                     for key in (
                         "remediationId",
+                        "failureCategory",
                         "failureSurface",
+                        "timestamp",
+                        "remediation",
+                        "scenarioName",
+                        "affectedDomain",
                         "capturedAt",
                     ):
                         if key in existing_blocker:

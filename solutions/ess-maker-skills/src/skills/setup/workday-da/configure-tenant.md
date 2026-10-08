@@ -453,8 +453,10 @@ time component.
 - approved existing client -> `apiClientOutcome:
 existing-client-verified`;
 - newly registered client -> `apiClientOutcome: new-client-registered`;
-- **SAML Bearer** -> `clientGrantType: saml-bearer`;
-- **Yes** for Workday owned scope -> `includeWorkdayOwnedScope: yes`;
+- successful **API client access** confirmation ->
+  `clientGrantType: saml-bearer`, `includeWorkdayOwnedScope: yes`, and
+  `functionalAreaScopes` populated with `Core Payroll`, `Organizations and
+  Roles`, `Staffing`, and `Time Off and Leave`;
 - the entered connection/policy fields -> their corresponding controller
   keys;
 - existing active policy -> `existing-active-policy`;
@@ -466,28 +468,18 @@ existing-client-verified`;
 - configured limited/test population -> `rolloutType: limited-or-test`;
 - an unconfigured or uncertain employee population -> stop for administrator
   remediation instead of submitting successful evidence;
-- each verified domain permission ->
-  `get-permission-verified`;
-- **Yes, all four required functional areas are present** ->
-  `functionalAreaScopes` populated with `Core Payroll`,
-  `Organizations and Roles`, `Staffing`, and `Time Off and Leave`;
-- **No additional domains are required** -> `optionalDomains: []`;
-- additional domain lines -> `optionalDomains` objects with one `domain` and
-  one named supported `scenario` per line;
+- successful **Required employee access** confirmation ->
+  `publicWorkerReportsOutcome: get-permission-verified` and
+  `integrationPermissionsGetOutcome: get-permission-verified`;
+- **No additional scenario domains are required** -> `optionalDomains: []`;
+- additional scenario-domain lines -> `optionalDomains` objects with one
+  `domain` and one named supported `scenario` per line;
 - a missing or uncertain required functional area, or an uncertain optional
   domain outcome -> stop for administrator remediation instead of submitting
-  successful evidence;
-- verified authorization -> `authorizationOutcome: verified`;
-- remediated and retested authorization ->
-  `authorizationOutcome: task-not-authorized-remediated`, plus
-  `authorizationRemediationDomain`, `authorizationRemediationScenario`, and
-  `authorizationRetestOutcome: verified-after-remediation`.
+  successful evidence.
 
 Any unsupported provider, mismatch, missing certificate, date mismatch, or
-**I'm not sure** answer is a remediation outcome, not successful evidence. An
-unresolved `Task not authorized` result reopens only the affected domain and
-employee-security evidence; it must not discard valid endpoints, certificate,
-or federation evidence.
+**I'm not sure** answer is a remediation outcome, not successful evidence.
 Show the affected remediation step and keep the phase waiting.
 
 If the administrator omits a required value or replies only with wording such
@@ -558,9 +550,7 @@ Use these exact outcome values:
 - `includeWorkdayOwnedScope`: `yes`;
 - `rolloutType`: `entire-workforce` or `limited-or-test`;
 - `publicWorkerReportsOutcome` and `integrationPermissionsGetOutcome`:
-  `get-permission-verified`;
-- `authorizationOutcome`: `verified` or
-  `task-not-authorized-remediated`.
+  `get-permission-verified`.
 
 For example:
 
@@ -590,8 +580,7 @@ For example:
     "Staffing",
     "Time Off and Leave"
   ],
-  "optionalDomains": [],
-  "authorizationOutcome": "verified"
+  "optionalDomains": []
 }
 ```
 

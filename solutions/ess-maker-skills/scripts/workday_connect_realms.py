@@ -26,7 +26,7 @@ from agentbuilder import (
     list_environments,
     validate_environment_host,
 )
-from workday_connect_model import load_catalog
+from workday_connect_model import TARGET_IDENTITY_FIELDS, load_catalog
 from workday_connect_store import WorkdayConnectStore
 
 
@@ -404,7 +404,7 @@ def _read_foundation(root: Path) -> dict[str, Any]:
     return document
 
 
-def discover_and_record_realm_target(
+def _discover_promoted_realm_identity(
     root: Path,
     store: WorkdayConnectStore,
     *,
@@ -416,7 +416,7 @@ def discover_and_record_realm_target(
     authenticator: Callable[..., tuple[str, str]] = authenticate_agent_inventory,
     client_factory: Callable[..., AgentBuilderClient] = AgentBuilderClient,
     environment_loader: Callable[..., list[dict[str, Any]]] = list_environments,
-) -> dict[str, Any]:
+) -> tuple[dict[str, str], str]:
     state = store.load()
     dev_target = state["targets"]["dev"]
     if not isinstance(dev_target, Mapping):
@@ -572,24 +572,49 @@ def discover_and_record_realm_target(
         identity = discovered[0]
     except WorkdayConnectRealmError:
         raise
-    except (AgentBuilderError, ValueError) as exc:
+    except (AgentBuilderError, OSError, ValueError) as exc:
         raise WorkdayConnectRealmError(
             "The promoted Workday target could not be verified. Confirm "
             "maker access, environment selection, and deployment state."
         ) from exc
-    store.record_target_discovery(
-        str(realm).casefold(),
+    return identity, ring
+
+
+def discover_and_record_realm_target(
+    root: Path,
+    store: WorkdayConnectStore,
+    *,
+    realm: str,
+    environment_id: str | None = None,
+    environment_url: str | None = None,
+    environment_selector: str | None = None,
+    account_hint: str | None = None,
+    authenticator: Callable[..., tuple[str, str]] = authenticate_agent_inventory,
+    client_factory: Callable[..., AgentBuilderClient] = AgentBuilderClient,
+    environment_loader: Callable[..., list[dict[str, Any]]] = list_environments,
+) -> dict[str, Any]:
+    normalized_realm = str(realm).casefold()
+    identity, ring = _discover_promoted_realm_identity(
+        root,
+        store,
+        realm=normalized_realm,
+        environment_id=environment_id,
+        environment_url=environment_url,
+        environment_selector=environment_selector,
+        account_hint=account_hint,
+        authenticator=authenticator,
+        client_factory=client_factory,
+        environment_loader=environment_loader,
+    )
+    persisted, foundation_reused = store.record_and_initialize_promoted_target(
+        normalized_realm,
         identity,
         ring=ring,
     )
-    store.activate_target(str(realm).casefold())
-    persisted, foundation_reused = (
-        store.initialize_promoted_target_from_foundation()
-    )
     return {
-        "realm": str(realm).casefold(),
+        "realm": normalized_realm,
         "targetStatus": persisted["targets"][
-            str(realm).casefold()
+            normalized_realm
         ]["deploymentStatus"],
         "foundationReused": foundation_reused,
         "status": store.status(),
@@ -617,41 +642,52 @@ def revalidate_active_realm_target(
         and isinstance(target.get("identity"), Mapping)
         else {}
     )
-    required = {
-        "environmentId": str(identity.get("environmentId") or "").strip(),
-        "environmentUrl": str(identity.get("environmentUrl") or "").strip(),
-        "tenantId": str(identity.get("tenantId") or "").strip(),
-        "agentId": str(identity.get("agentId") or "").strip(),
-        "almFamilyId": str(identity.get("almFamilyId") or "").strip(),
-        "commitSha": str(identity.get("commitSha") or "").strip(),
+    approved_identity = {
+        key: str(identity.get(key) or "").strip()
+        for key in TARGET_IDENTITY_FIELDS
     }
-    missing = [key for key, value in required.items() if not value]
+    missing = [
+        key for key, value in approved_identity.items() if not value
+    ]
     if missing:
         raise WorkdayConnectRealmError(
             f"The active {realm.title()} target identity is incomplete: "
             + ", ".join(sorted(missing))
         )
-    discover_and_record_realm_target(
-        root,
-        store,
-        realm=realm,
-        environment_id=required["environmentId"],
-        environment_url=required["environmentUrl"],
-        account_hint=account_hint,
-        authenticator=authenticator,
-        client_factory=client_factory,
-        environment_loader=environment_loader,
-    )
-    refreshed = store.load()["targets"][realm]["identity"]
+    try:
+        discovered_identity, _ring = _discover_promoted_realm_identity(
+            root,
+            store,
+            realm=realm,
+            environment_id=approved_identity["environmentId"],
+            environment_url=approved_identity["environmentUrl"],
+            account_hint=account_hint,
+            authenticator=authenticator,
+            client_factory=client_factory,
+            environment_loader=environment_loader,
+        )
+    except WorkdayConnectRealmError as exc:
+        exc.suppress_blocker_persistence = True
+        raise
+    except OSError as exc:
+        error = WorkdayConnectRealmError(
+            f"The active {realm.title()} target could not be revalidated "
+            "because promoted-target discovery failed before mutation."
+        )
+        error.suppress_blocker_persistence = True
+        raise error from exc
     changed = [
         key
-        for key, expected in required.items()
-        if str(refreshed.get(key) or "").casefold() != expected.casefold()
+        for key, expected in approved_identity.items()
+        if str(discovered_identity.get(key) or "").casefold()
+        != expected.casefold()
     ]
     if changed:
-        raise WorkdayConnectRealmError(
+        error = WorkdayConnectRealmError(
             f"The active {realm.title()} target changed after approval: "
             + ", ".join(sorted(changed))
             + ". Generate and approve a new runtime plan."
         )
+        error.suppress_blocker_persistence = True
+        raise error
     return {"realm": realm, "revalidated": True}

@@ -41,7 +41,7 @@ WORKDAY_ROLLOUT_TYPES = {
 WORKDAY_DOMAIN_PERMISSION_OUTCOMES = {
     "get-permission-verified",
 }
-WORKDAY_AUTHORIZATION_OUTCOMES = {
+LEGACY_WORKDAY_AUTHORIZATION_OUTCOMES = {
     "verified",
     "task-not-authorized-remediated",
 }
@@ -55,7 +55,7 @@ WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES = (
     "Staffing",
     "Time Off and Leave",
 )
-WORKDAY_AUTHORIZATION_RETEST_OUTCOMES = {
+LEGACY_WORKDAY_AUTHORIZATION_RETEST_OUTCOMES = {
     "verified-after-remediation",
 }
 WORKDAY_ADMIN_WORKSHEET_LABELS = (
@@ -1002,40 +1002,50 @@ def validate_workday_admin_response(
         )
     functional_area_scopes = list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES)
     optional_domains = _optional_domains(response.get("optionalDomains"))
-    remediation_evidence: dict[str, str] = {}
     legacy_authorization = str(response.get("authorizationOutcome") or "").strip()
+    legacy_remediation_fields = {
+        "authorizationRemediationDomain": str(
+            response.get("authorizationRemediationDomain") or ""
+        ).strip(),
+        "authorizationRemediationScenario": str(
+            response.get("authorizationRemediationScenario") or ""
+        ).strip(),
+        "authorizationRetestOutcome": str(
+            response.get("authorizationRetestOutcome") or ""
+        ).strip(),
+    }
     if legacy_authorization:
-        if legacy_authorization not in WORKDAY_AUTHORIZATION_OUTCOMES:
+        if legacy_authorization not in LEGACY_WORKDAY_AUTHORIZATION_OUTCOMES:
             raise WorkdayConnectContractError(
-                "authorizationOutcome is unsupported."
+                "Legacy authorizationOutcome is unsupported."
             )
-        remediation_evidence["authorizationOutcome"] = legacy_authorization
+    elif any(legacy_remediation_fields.values()):
+        raise WorkdayConnectContractError(
+            "Legacy authorization remediation fields require "
+            "authorizationOutcome."
+        )
     if legacy_authorization == "task-not-authorized-remediated":
-        remediation_evidence.update(
-            {
-            "authorizationRemediationDomain": _safe_nonsecret_text(
-                response.get("authorizationRemediationDomain"),
-                "authorizationRemediationDomain",
-            ),
-            "authorizationRemediationScenario": _safe_nonsecret_text(
-                response.get("authorizationRemediationScenario"),
-                "authorizationRemediationScenario",
-            ),
-            "authorizationRetestOutcome": _required_text(
-                response,
-                "authorizationRetestOutcome",
-                "authorizationRetestOutcome",
-            ),
-            }
+        _safe_nonsecret_text(
+            legacy_remediation_fields["authorizationRemediationDomain"],
+            "authorizationRemediationDomain",
+        )
+        _safe_nonsecret_text(
+            legacy_remediation_fields["authorizationRemediationScenario"],
+            "authorizationRemediationScenario",
         )
         if (
-            remediation_evidence["authorizationRetestOutcome"]
-            not in WORKDAY_AUTHORIZATION_RETEST_OUTCOMES
+            legacy_remediation_fields["authorizationRetestOutcome"]
+            not in LEGACY_WORKDAY_AUTHORIZATION_RETEST_OUTCOMES
         ):
             raise WorkdayConnectContractError(
-                "authorizationRetestOutcome must confirm verification after "
-                "the bounded authorization remediation."
+                "Legacy authorizationRetestOutcome must confirm verification "
+                "after remediation."
             )
+    elif any(legacy_remediation_fields.values()):
+        raise WorkdayConnectContractError(
+            "Legacy authorization remediation fields must be omitted when "
+            "authorizationOutcome is verified."
+        )
     result = {
         "identifiers": {
             "workdaySamlEntityId": expected_entity_id,
@@ -1061,7 +1071,6 @@ def validate_workday_admin_response(
             ],
             "functionalAreaScopes": functional_area_scopes,
             "optionalDomains": optional_domains,
-            **remediation_evidence,
         },
         "partialEvidence": {
             "identityProviderOutcome": identity_provider_outcome,
@@ -1084,7 +1093,6 @@ def validate_workday_admin_response(
             ],
             "functionalAreaScopes": functional_area_scopes,
             "optionalDomains": optional_domains,
-            **remediation_evidence,
         },
     }
     if employee_security_group:
