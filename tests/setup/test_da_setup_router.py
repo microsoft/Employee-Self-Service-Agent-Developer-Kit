@@ -1662,7 +1662,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "Reset and use this workspace",
         "Create and open a new workspace",
         "Cancel setup",
-        "Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}",
     ):
         assert f"**{choice}**" in text
     assert "**Exit setup (Recommended)**" not in text
@@ -1699,19 +1698,12 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
     assert "- **Create and open a new workspace**" not in completion_choices
     assert "- **Continue customizing this agent**" not in completion_choices
     assert "- **Finish for now**" not in completion_choices
-    assert (
-        "Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when "
-        "**Add or change an integration** is recommended"
-    ) in normalized
     normalized_completion_choices = " ".join(completion_choices.split())
     ready_choice_list = normalized_completion_choices.split(
         "Then present these choices in one host interactive single-selection control:",
         1,
     )[1].split("Set `{CONNECT_RECOMMENDATION_SUFFIX}`", 1)[0]
     assert "- **Configure landing page" not in ready_choice_list
-    assert ready_choice_list.index(
-        "- **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**"
-    ) < ready_choice_list.index("- **Switch to another configured agent**")
     assert ready_choice_list.index(
         "- **Switch to another configured agent**"
     ) < ready_choice_list.index("- **Set up another agent in this environment**")
@@ -1740,11 +1732,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "evidence; it does not claim that an integration is missing or broken."
     ) in normalized
     assert (
-        "I recommend Add or change an integration so this agent can communicate "
-        "with your HR or IT systems. Setup did not find authoritative evidence "
-        "that an applicable integration is configured."
-    ) in normalized
-    assert (
         "Setup is complete. You asked to configure the landing page next, so I'll "
         "continue there."
     ) in normalized
@@ -1766,21 +1753,6 @@ def test_foundation_separates_incomplete_and_ready_completion_choices() -> None:
         "recommended command first"
         in normalized
     )
-    assert (
-        "- Run `/connect` **(Recommended)** to add or change an integration so "
-        "this agent can communicate with your HR or IT systems. Setup did not "
-        "find authoritative evidence that an applicable integration is configured."
-    ) in normalized
-    assert (
-        "- Run `/landing-page` **(Recommended)** to configure the branding and "
-        "content employees see. An applicable integration is already configured, "
-        "so this is the next useful customization step."
-    ) in normalized
-    assert (
-        "- Run `/connect` **(Recommended)** to add or change an integration. This "
-        "matches what you asked to do next, and integrations let this agent "
-        "communicate with your HR or IT systems."
-    ) in normalized
     assert "These reminders are text, not another choice control." in normalized
     assert "Do not render the case labels above." in normalized
     assert text.count("\n{POST_SETUP_COMMAND_REMINDERS}\n") == 2
