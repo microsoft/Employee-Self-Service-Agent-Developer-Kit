@@ -26,6 +26,12 @@ If the user specified an integration as an argument (e.g., "workday"),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
 
+Treat an explicit promotion statement such as **I promoted the agent to
+Test**, **the Workday agent moved to Production**, or **configure the promoted
+Workday realm** as Workday already selected. Preserve the stated target realm
+when routing to the native DA Workday lifecycle. Do not ask which integration
+the user means, and do not invent a realm-specific slash command.
+
 Read `src/skills/connect/step1.md` and follow it. That file records anonymous
 usage telemetry after routing knows which integration was chosen, so the
 Connect capability event carries the correct `connector` attribution

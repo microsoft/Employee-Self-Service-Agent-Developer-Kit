@@ -186,7 +186,6 @@ def test_every_controller_command_is_documented() -> None:
     legacy_commands = {
         "begin-employee-test",
         "abandon-employee-test",
-        "record-validation-failure",
     }
     assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
 
@@ -248,11 +247,17 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "without publishing the agent" in text
     assert '"header": "Maker smoke test"' in text
     assert '"testUserCategory": "maker"' in text
+    assert '"remediationId": "WD-E2E-006"' in text
+    assert "record-validation-failure --evidence-file" in text
+    assert "retest that same named scenario" in text
     assert "lifecycleComplete: true" in text
     assert "do not run `begin-employee-test`" in normalized.casefold()
     assert "wait for Power Automate run-history evidence" in normalized
-    assert "Publish and deploy the agent when ready" in text
+    assert "Promote the agent from Development to Test when ready" in text
+    assert "Promote the agent from Test to Production when ready" in text
+    assert "Publish and deploy the Production agent when ready" in text
     assert "employee establish their own Workday connections" in text
+    assert "Do not add Production employee-adoption steps" in text
     assert "outside this guided setup lifecycle" in normalized
 
 
@@ -475,25 +480,29 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
 
     packet = text.index("workday_connect.py workday-admin-packet")
     provider_question = text.index("`identityProviderQuestion` from the packet")
-    unsupported_stop = text.index(
+    non_entra_branch = text.index(
         "For **Okta**, **Ping Identity**, or **Another sign-in provider**"
     )
     capture_table = text.index("Before the numbered tasks")
     existing_handoff = text.index("### Existing Microsoft Entra federation handoff")
+    coexistence_handoff = text.index(
+        "### Existing non-Entra federation coexistence or transition handoff"
+    )
     greenfield_handoff = text.index("### New Microsoft Entra federation handoff")
     completion = text.index(
         "Has the Workday administrator completed every applicable task"
     )
     form = text.index('"header": "SAML row settings"')
 
-    assert packet < provider_question < unsupported_stop
-    assert unsupported_stop < capture_table < existing_handoff < greenfield_handoff
+    assert packet < provider_question < non_entra_branch
+    assert non_entra_branch < capture_table < existing_handoff
+    assert existing_handoff < coexistence_handoff < greenfield_handoff
     assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
-    assert (
-        "Do not reopen Entra, re-engage the Entra administrator, show the "
-        "completion question, or show the response form"
-    ) in normalized
+    assert "Do not return to Entra or re-engage the Entra administrator" in (
+        normalized
+    )
+    assert "resume the same handoff after approval" in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
     assert "share this whole section" in text
     assert "both the capture guide and\nthe return worksheet" in text
@@ -544,6 +553,13 @@ def test_workday_topic_activation_uses_complete_mapped_scope() -> None:
     assert "--activate --dry-run" in action
     assert "--activate --yes" in action
     assert "state` and `status` to `Active`" in action
+    assert "Refresh the Copilot\nStudio page" in action
+    assert '"header": "Confirm Workday topics"' in action
+    assert "all Workday topics show as On" in action
+    assert action.index("Confirm Workday topics") < action.index(
+        "record-topic-activation"
+    )
+    assert "does not replace the\ncontroller's live reread" in action
     assert "record-topic-activation" in action
     assert "do not treat them as an activation failure" in action
     assert "--activate" not in redirect
@@ -730,6 +746,7 @@ def test_runtime_apply_persists_verified_stages_before_later_failure(
         fail_after_two_stages,
     )
     args = argparse.Namespace(
+        root=tmp_path,
         plan_hash="approved",
         workday_connection_id=None,
         dataverse_connection_id=None,

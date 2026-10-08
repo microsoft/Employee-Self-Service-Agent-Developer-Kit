@@ -28,6 +28,15 @@ ACTIVE_FLOW_STATE = 1
 ACTIVE_FLOW_STATUS = 2
 CLOUD_FLOW_CATEGORY = 5
 AUTHORIZATION_SCRIPT = "alm/Enable-CosmosDAFlowAuthorization.ps1"
+REALM_DISPLAY_NAMES = {
+    "dev": "Development",
+    "test": "Test",
+    "prod": "Production",
+}
+REALM_TEAM_NAMES = {
+    realm: f"ESS DA HR Workday - {display_name}"
+    for realm, display_name in REALM_DISPLAY_NAMES.items()
+}
 
 
 class WorkdayConnectRuntimeError(RuntimeError):
@@ -56,6 +65,10 @@ def _required_text(
 
 def _odata_literal(value: str) -> str:
     return value.replace("'", "''")
+
+
+def _powershell_literal(value: Any) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _connector_name(connection: Mapping[str, Any]) -> str:
@@ -313,6 +326,66 @@ def _runtime_discovery_context(
     scope = state.get("scope") or {}
     operators = state.get("operators") or {}
     agent = scope.get("agent") or {}
+    realm = str(state.get("activeTargetRealm") or "dev").casefold()
+    if realm not in REALM_DISPLAY_NAMES:
+        raise WorkdayConnectRuntimeError(
+            "The active Workday target realm is invalid."
+        )
+    targets = state.get("targets") or {}
+    target = targets.get(realm)
+    target_identity = (
+        target.get("identity")
+        if isinstance(target, Mapping)
+        and isinstance(target.get("identity"), Mapping)
+        else {}
+    )
+    environment_id = str(
+        target_identity.get("environmentId")
+        or scope.get("environmentId")
+        or ""
+    ).strip()
+    tenant_id = str(
+        target_identity.get("tenantId")
+        or scope.get("entraTenantId")
+        or ""
+    ).strip()
+    bot_id = _required_text(
+        {"botId": target_identity.get("agentId") or agent.get("botId")},
+        "botId",
+        "Workday agent bot ID",
+    )
+    if realm != "dev":
+        required_target_identity = {
+            "environmentId": environment_id,
+            "tenantId": tenant_id,
+            "almFamilyId": str(
+                target_identity.get("almFamilyId") or ""
+            ).strip(),
+            "commitSha": str(
+                target_identity.get("commitSha") or ""
+            ).strip(),
+        }
+        missing = [
+            key for key, value in required_target_identity.items() if not value
+        ]
+        if missing:
+            raise WorkdayConnectRuntimeError(
+                f"The {REALM_DISPLAY_NAMES[realm]} target identity is "
+                "incomplete: "
+                + ", ".join(sorted(missing))
+            )
+        if (
+            str(scope.get("environmentId") or "").casefold()
+            != environment_id.casefold()
+            or str(agent.get("botId") or "").casefold()
+            != bot_id.casefold()
+            or str(scope.get("entraTenantId") or "").casefold()
+            != tenant_id.casefold()
+        ):
+            raise WorkdayConnectRuntimeError(
+                f"The active {REALM_DISPLAY_NAMES[realm]} target projection "
+                "does not match its verified identity."
+            )
     package_flavor = _required_text(scope, "packageFlavor", "Workday package flavor")
     active_catalog = catalog or load_catalog()
     package = (active_catalog.get("packages") or {}).get(package_flavor)
@@ -328,12 +401,20 @@ def _runtime_discovery_context(
         )
     ring = str(scope.get("ring") or "prod").casefold()
     return {
+        "realm": realm,
+        "realmDisplayName": REALM_DISPLAY_NAMES[realm],
         "agent": agent,
         "environmentUrl": _required_text(
             scope, "dataverseUrl", "Dataverse environment URL"
         ).rstrip("/"),
+        "environmentId": environment_id,
+        "tenantId": tenant_id,
         "packageFlavor": package_flavor,
-        "botId": _required_text(agent, "botId", "Workday agent bot ID"),
+        "botId": bot_id,
+        "almFamilyId": str(
+            target_identity.get("almFamilyId") or ""
+        ).strip(),
+        "commitSha": str(target_identity.get("commitSha") or "").strip(),
         "maker": _required_text(
             operators.get("powerPlatformMaker") or {},
             "username",
@@ -426,8 +507,14 @@ def _build_runtime_discovery(
     plan = {
         "phase": "runtime",
         "scope": {
+            "realm": context["realm"],
+            "realmDisplayName": context["realmDisplayName"],
             "dataverseUrl": context["environmentUrl"],
+            "environmentId": context["environmentId"],
+            "tenantId": context["tenantId"],
             "botId": context["botId"],
+            "almFamilyId": context["almFamilyId"],
+            "commitSha": context["commitSha"],
             "packageFlavor": context["packageFlavor"],
             "makerUsername": context["maker"],
         },
@@ -437,6 +524,7 @@ def _build_runtime_discovery(
             "botId": context["botId"],
             "workflowIds": [target["workflowId"] for target in flow_targets],
             "script": AUTHORIZATION_SCRIPT,
+            "teamName": REALM_TEAM_NAMES[context["realm"]],
         },
         "actions": [
             "Bind the reviewed Workday and Dataverse connection references",
@@ -467,12 +555,14 @@ def _build_runtime_discovery(
     return {
         "plan": {**plan, "planHash": plan_hash(plan)},
         "approvalSummary": {
+            "targetRealm": context["realmDisplayName"],
             "environmentUrl": context["environmentUrl"],
             "agentName": str(context["agent"].get("name") or "ESS HR agent"),
             "connections": [
                 value["displayName"] for value in target_connections.values()
             ],
             "flows": [target["name"] for target in flow_targets],
+            "authorizationTeamName": REALM_TEAM_NAMES[context["realm"]],
         },
         "observed": observed,
     }
@@ -717,7 +807,16 @@ def run_runtime_operation(
             f"Runtime target discovery failed: {exc}"
         ) from exc
     if not apply:
-        return {**discovery, "authenticatedAccount": identity["username"]}
+        authorization_preview = _run_authorization(
+            discovery["plan"],
+            runner=authorization_runner,
+            preview=True,
+        )
+        return {
+            **discovery,
+            "authorizationPreview": authorization_preview,
+            "authenticatedAccount": identity["username"],
+        }
     if not approved_hash or verifier is None:
         raise WorkdayConnectRuntimeError(
             "Runtime apply requires an approved plan hash."
@@ -749,7 +848,8 @@ def _run_authorization(
     plan: Mapping[str, Any],
     *,
     runner: Callable[..., subprocess.CompletedProcess],
-) -> None:
+    preview: bool = False,
+) -> dict[str, Any]:
     authorization = plan["delegatedAuthorization"]
     script = str(authorization["script"])
     shell = shutil.which("pwsh") or shutil.which("powershell")
@@ -761,88 +861,239 @@ def _run_authorization(
         raise WorkdayConnectRuntimeError(
             "PowerShell is required for delegated flow authorization."
         )
-    flow_names = {
-        str(flow.get("workflowId") or "").casefold(): str(flow.get("name") or "")
+    workflow_ids = [
+        str(value) for value in authorization.get("workflowIds") or []
+    ]
+    if not workflow_ids or len(set(workflow_ids)) != len(workflow_ids):
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization requires unique reviewed Workday flows."
+        )
+    flow_names = [
+        str(flow.get("name") or "")
         for flow in plan.get("flows", [])
         if isinstance(flow, Mapping)
+    ]
+    if len(flow_names) != len(workflow_ids):
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization flow metadata is incomplete."
+        )
+    realm = str(plan["scope"].get("realmDisplayName") or "selected target")
+    operation = "Previewing" if preview else "Running"
+    print(
+        f"[INFO] {operation} {script} once for {len(workflow_ids)} reviewed "
+        f"Workday flows in {realm}.",
+        file=sys.stderr,
+    )
+    workflow_array = "@(" + ",".join(
+        _powershell_literal(workflow_id) for workflow_id in workflow_ids
+    ) + ")"
+    invocation = " ".join(
+        [
+            "&",
+            _powershell_literal(Path(__file__).parent / script),
+            "-OrgUrl",
+            _powershell_literal(plan["scope"]["dataverseUrl"]),
+            "-BotId",
+            _powershell_literal(authorization["botId"]),
+            "-PreferredUsername",
+            _powershell_literal(plan["scope"]["makerUsername"]),
+            "-WorkflowId",
+            workflow_array,
+            "-TeamName",
+            _powershell_literal(authorization["teamName"]),
+        ]
+    )
+    if preview:
+        invocation += " -WhatIf"
+    command = [shell, "-NoProfile", "-Command", invocation]
+    try:
+        result = runner(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=600,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        print(
+            f"[ERROR] {script} failed in {realm}: "
+            "execution did not finish within 10 minutes.",
+            file=sys.stderr,
+        )
+        raise WorkdayConnectRuntimeError(
+            "Delegated flow authorization did not finish within 10 minutes."
+        ) from exc
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    if preview:
+        return _classify_authorization_preview(
+            plan,
+            result.returncode,
+            output,
+            flow_names,
+        )
+    if (
+        result.returncode != 0
+        or "[FAIL]" in output
+        or "Dataverse authorization is in place." not in output
+    ):
+        normalized = output.casefold()
+        if "403" in normalized or "forbidden" in normalized:
+            evidence = (
+                "The authorization script received an explicit forbidden "
+                "response from Dataverse."
+            )
+        elif "multiple" in normalized:
+            evidence = (
+                "The authorization script found ambiguous existing "
+                "authorization records."
+            )
+        elif "[fail]" in normalized:
+            evidence = "The authorization script emitted an explicit [FAIL] result."
+        else:
+            evidence = (
+                f"The authorization script exited with code "
+                f"{result.returncode} without its success marker."
+            )
+        print(
+            f"[ERROR] {script} failed in {realm}: {evidence}",
+            file=sys.stderr,
+        )
+        raise WorkdayConnectRuntimeError(
+            f"Delegated flow authorization failed in {realm}. {evidence}"
+        )
+    print(
+        f"[INFO] {script} completed in {realm}; Dataverse authorization "
+        "was verified.",
+        file=sys.stderr,
+    )
+    return {
+        "outcome": "verified",
+        "realm": plan["scope"]["realm"],
+        "teamName": authorization["teamName"],
+        "workflowCount": len(workflow_ids),
     }
-    for workflow_id in authorization["workflowIds"]:
-        flow_name = flow_names.get(str(workflow_id).casefold())
-        target = f'flow "{flow_name}"' if flow_name else f"workflow {workflow_id}"
-        print(
-            f"[INFO] Running {script} for {target}.",
-            file=sys.stderr,
+
+
+def _classify_authorization_preview(
+    plan: Mapping[str, Any],
+    returncode: int,
+    output: str,
+    flow_names: list[str],
+) -> dict[str, Any]:
+    normalized = output.casefold()
+    normalized_lines = [
+        " ".join(line.casefold().split()) for line in output.splitlines()
+    ]
+    authorization = plan["delegatedAuthorization"]
+    workflow_ids = [
+        str(value).casefold()
+        for value in authorization.get("workflowIds") or []
+    ]
+    authorization_create = "would create delegatedauthorization" in normalized
+    authorization_reuse = any(
+        line.startswith("[reuse] delegatedauthorization ")
+        for line in normalized_lines
+    )
+    team_create = "would create access team" in normalized
+    team_reuse = any(
+        line.startswith("[reuse] team ") for line in normalized_lines
+    )
+    if not (authorization_create or authorization_reuse):
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization preview could not prove the exact "
+            "authorization record."
         )
-        try:
-            result = runner(
-                [
-                    shell,
-                    "-NoProfile",
-                    "-File",
-                    str(Path(__file__).parent / script),
-                    "-OrgUrl",
-                    plan["scope"]["dataverseUrl"],
-                    "-BotId",
-                    authorization["botId"],
-                    "-PreferredUsername",
-                    plan["scope"]["makerUsername"],
-                    "-WorkflowId",
-                    workflow_id,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=600,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            print(
-                f"[ERROR] {script} failed for {target}: "
-                "execution did not finish within 10 minutes.",
-                file=sys.stderr,
-            )
+    if not (team_create or team_reuse):
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization preview could not prove the exact access "
+            "team."
+        )
+
+    planned_workflow_ids: set[str] = set()
+    for workflow_id, flow_name in zip(workflow_ids, flow_names, strict=True):
+        share_create = f"would share '{flow_name.casefold()}' with the team"
+        share_reuse = f"'{flow_name.casefold()}' already shared with the team"
+        if share_create in normalized:
+            planned_workflow_ids.add(workflow_id)
+        elif share_reuse not in normalized:
             raise WorkdayConnectRuntimeError(
-                "Delegated flow authorization did not finish within "
-                f"10 minutes for workflow {workflow_id}."
-            ) from exc
-        output = (result.stdout or "") + "\n" + (result.stderr or "")
+                "Delegated authorization preview did not account for every "
+                "reviewed Workday flow."
+            )
+
+    unexpected_failures = []
+    expected_failure_count = 0
+    for line in output.splitlines():
+        lowered = line.casefold()
+        if "[fail]" not in lowered:
+            continue
         if (
-            result.returncode != 0
-            or "[FAIL]" in output
-            or "Dataverse authorization is in place." not in output
+            "getteamsforbotid returned 0 teams" in lowered
+            and (authorization_create or team_create)
         ):
-            normalized = output.casefold()
-            if "403" in normalized or "forbidden" in normalized:
-                evidence = (
-                    "The authorization script received an explicit forbidden "
-                    "response from Dataverse."
-                )
-            elif "multiple" in normalized:
-                evidence = (
-                    "The authorization script found ambiguous existing "
-                    "authorization records."
-                )
-            elif "[fail]" in normalized:
-                evidence = "The authorization script emitted an explicit [FAIL] result."
-            else:
-                evidence = (
-                    f"The authorization script exited with code "
-                    f"{result.returncode} without its success marker."
-                )
-            print(
-                f"[ERROR] {script} failed for {target}: {evidence}",
-                file=sys.stderr,
-            )
-            raise WorkdayConnectRuntimeError(
-                "Delegated flow authorization failed for workflow "
-                f"{workflow_id}. {evidence}"
-            )
-        print(
-            f"[INFO] {script} completed for {target}; "
-            "Dataverse authorization was verified.",
-            file=sys.stderr,
+            expected_failure_count += 1
+            continue
+        if "verification failed - see [fail] lines above" in lowered:
+            continue
+        if any(
+            workflow_id in lowered
+            and "is not shared with the team with writeaccess" in lowered
+            and workflow_id in planned_workflow_ids
+            for workflow_id in workflow_ids
+        ):
+            expected_failure_count += 1
+            continue
+        unexpected_failures.append(line.strip())
+    unsafe_markers = (
+        "403",
+        "forbidden",
+        "unauthorized",
+        "access denied",
+        "permission denied",
+    )
+    if unexpected_failures or any(
+        marker in normalized for marker in unsafe_markers
+    ):
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization preview reported an unsafe or "
+            "ambiguous target state."
         )
+
+    changes_required = bool(
+        authorization_create or team_create or planned_workflow_ids
+    )
+    success_marker = "dataverse authorization is in place." in normalized
+    if changes_required:
+        recognized_whatif_failure = (
+            returncode == 1
+            and expected_failure_count > 0
+            and "verification failed - see [fail] lines above" in normalized
+        )
+        if not (
+            returncode == 0 and success_marker
+            or recognized_whatif_failure
+        ):
+            raise WorkdayConnectRuntimeError(
+                "Delegated authorization preview did not return a recognized "
+                "safe WhatIf result."
+            )
+        outcome = "changes-required"
+    elif returncode == 0 and success_marker:
+        outcome = "already-configured"
+    else:
+        raise WorkdayConnectRuntimeError(
+            "Delegated authorization preview did not return a recognized "
+            "safe result."
+        )
+    return {
+        "outcome": outcome,
+        "realm": plan["scope"]["realm"],
+        "teamName": authorization["teamName"],
+        "workflowCount": len(workflow_ids),
+        "changesRequired": changes_required,
+    }
 
 
 def _require_approved_flow_targets(
@@ -1023,7 +1274,7 @@ def apply_runtime_plan(
         stage_recorder,
     )
 
-    _run_authorization(plan, runner=authorization_runner)
+    authorization = _run_authorization(plan, runner=authorization_runner)
     _record_runtime_stage(
         verified_stages,
         "delegated-authorization-configured",
@@ -1036,5 +1287,5 @@ def apply_runtime_plan(
         "verifiedStages": verified_stages,
         "connectionBindings": connection_bindings,
         "flows": flow_names,
-        "delegatedAuthorization": "verified-by-script",
+        "delegatedAuthorization": authorization,
     }

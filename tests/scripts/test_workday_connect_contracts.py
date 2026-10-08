@@ -203,7 +203,6 @@ def _workday_response(**overrides):
             "Time Off and Leave",
         ],
         "optionalDomains": [],
-        "authorizationOutcome": "verified",
     }
     response.update(overrides)
     return response
@@ -233,23 +232,15 @@ Certificate: The certificate transferred from the completed Entra handoff
 Certificate expiration: Yes, the expiration date matches exactly
 OAuth client ID: safe-client-id
 API client: An existing approved client was verified
-Client grant type: SAML Bearer
-Workday owned scope: Yes
 OAuth token URL: https://example.workday.com/ccx/oauth2/contoso_impl/token
 REST base URL: https://example.workday.com/ccx/api
 SOAP base URL: https://example.workday.com/ccx/service
 Authentication policy: An existing active policy allows SAML
 Network readiness: Both Workday hosts are allowed
 Rollout: Entire workforce - All Employees access is configured
-Public worker reports: Yes, Get permission is verified
-Integration permissions: Yes, Get permission is verified
-Functional-area scopes: Yes, all four required functional areas are present
-Optional domains: No additional domains are required
-Additional domain mappings:
-Authorization: Verified without an authorization error
-Remediated domain:
-Remediation scenario:
-Authorization retest:
+API client access: Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured
+Required employee access: Yes, Get permission is verified for Public Worker Reports and Integration Permissions
+Additional scenario domains: No additional scenario domains are required
 """
 
 
@@ -271,7 +262,7 @@ def _worksheet_table(packet: dict, worksheet: str) -> str:
         if matched is not None:
             values[matched] = raw_line[len(matched) + 1 :].strip()
             current_label = matched
-        elif current_label == "Additional domain mappings":
+        elif current_label == "Additional scenario domains":
             values[current_label] += "\n" + raw_line.strip()
         else:
             raise AssertionError(f"Unexpected worksheet line: {raw_line}")
@@ -936,26 +927,37 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["evidence"]["optionalDomains"] == []
 
 
+def test_workday_phase_three_worksheet_excludes_runtime_authorization() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    labels = packet["responseForm"]["collection"]["labels"]
+    required = packet["responseForm"]["required"]
+
+    assert "API client access" in labels
+    assert "Required employee access" in labels
+    assert "Additional scenario domains" in labels
+    assert "optionalDomains" not in required
+    assert "optionalDomains" not in ADMINISTRATOR_REQUIRED_FIELDS[
+        "workday-admin"
+    ]
+    assert not any("authorization" in label.casefold() for label in labels)
+    assert not any("retest" in label.casefold() for label in labels)
+
+
 def test_workday_customer_labeled_response_accepts_common_labels() -> None:
     worksheet = _workday_worksheet()
     for canonical, customer_label in {
         "SAML row settings": "SAML configuration",
         "Certificate expiration": "Certificate expiry date",
         "OAuth client ID": "Client ID",
-        "Client grant type": "Grant type",
-        "Workday owned scope": "Include Workday Owned Scope",
         "OAuth token URL": "Token URL",
         "REST base URL": "REST URL",
         "SOAP base URL": "SOAP URL",
         "Authentication policy": "Auth policy",
         "Network readiness": "Network access",
         "Rollout": "Employee population",
-        "Functional-area scopes": "Functional areas",
-        "Additional domain mappings": "Domain mappings",
-        "Authorization": "Authorization result",
-        "Remediated domain": "Affected domain",
-        "Remediation scenario": "Affected scenario",
-        "Authorization retest": "Retest result",
+        "API client access": "API access",
+        "Required employee access": "Employee access",
+        "Additional scenario domains": "Additional domains",
     }.items():
         worksheet = worksheet.replace(
             f"{canonical}:",
@@ -989,10 +991,8 @@ def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:
 
 def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
-        "Optional domains: No additional domains are required\n"
-        "Additional domain mappings:\n",
-        "Optional domains: Yes, additional supported scenarios require domains\n"
-        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Additional scenario domains: No additional scenario domains are required\n",
+        "Additional scenario domains: Worker Data | custom worker lookup\n"
         "Absence | custom leave lookup\n",
     )
 
@@ -1013,12 +1013,40 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required\n"
+            ),
+            "",
+        ),
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required"
+            ),
+            "Additional scenario domains:",
+        ),
+    ],
+)
+def test_workday_optional_domains_may_be_omitted_or_blank(
+    worksheet: str,
+) -> None:
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["optionalDomains"] == []
+
+
 def test_workday_capture_table_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
-        "Optional domains: No additional domains are required\n"
-        "Additional domain mappings:\n",
-        "Optional domains: Yes, additional supported scenarios require domains\n"
-        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Additional scenario domains: No additional scenario domains are required\n",
+        "Additional scenario domains: Worker Data | custom worker lookup\n"
         "Absence | custom leave lookup\n",
     )
     packet = build_workday_admin_packet(_workday_state())
@@ -1040,12 +1068,32 @@ def test_workday_capture_table_parses_multiline_optional_domains() -> None:
     ]
 
 
+def test_workday_capture_table_may_omit_optional_domains_row() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    table = _worksheet_table(packet, _workday_worksheet())
+    table = "\n".join(
+        line
+        for line in table.splitlines()
+        if not line.startswith("| Additional scenario domains |")
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        table,
+    )
+
+    assert parsed["optionalDomains"] == []
+
+
 @pytest.mark.parametrize(
     "worksheet",
     [
         _workday_worksheet().replace(
-            "Workday owned scope: Yes",
-            "Workday owned scope: No or not sure",
+            (
+                "API client access: Yes, SAML Bearer, Workday Owned Scope, "
+                "and all four required functional areas are configured"
+            ),
+            "API client access: No, one or more settings are missing",
         ),
         _workday_worksheet().replace(
             "OAuth client ID: safe-client-id\n",
@@ -1141,7 +1189,6 @@ def test_workday_admin_response_validates_exact_endpoints():
                 "Time Off and Leave",
             ],
             "optionalDomains": [],
-            "authorizationOutcome": "verified",
         },
     )
 
@@ -1166,6 +1213,19 @@ def test_workday_admin_response_enforces_limited_rollout_group():
             _workday_state(),
             _workday_response(employeeSecurityGroup="All Employees"),
         )
+
+
+def test_workday_admin_response_defaults_omitted_optional_domains() -> None:
+    response = _workday_response()
+    response.pop("optionalDomains")
+
+    result = validate_workday_admin_response(
+        _workday_state(),
+        response,
+    )
+
+    assert result["evidence"]["optionalDomains"] == []
+    assert result["partialEvidence"]["optionalDomains"] == []
 
 
 def test_workday_admin_response_requires_exact_functional_area_scopes():
@@ -1210,7 +1270,7 @@ def test_workday_admin_response_enforces_api_client_and_saml_mapping(
         )
 
 
-def test_workday_admin_response_requires_bounded_authorization_retest():
+def test_workday_admin_response_accepts_legacy_authorization_retest():
     response = _workday_response(
         authorizationOutcome="task-not-authorized-remediated",
     )
@@ -1234,9 +1294,11 @@ def test_workday_admin_response_requires_bounded_authorization_retest():
         },
     )
 
-    assert result["evidence"]["authorizationRetestOutcome"] == (
-        "verified-after-remediation"
-    )
+    assert "authorizationOutcome" not in result["evidence"]
+    assert "authorizationRemediationDomain" not in result["evidence"]
+    assert "authorizationRemediationScenario" not in result["evidence"]
+    assert "authorizationRetestOutcome" not in result["evidence"]
+    assert "authorizationOutcome" not in result["partialEvidence"]
 
 
 def test_partial_workday_evidence_keeps_valid_siblings() -> None:
@@ -1255,6 +1317,18 @@ def test_partial_workday_evidence_keeps_valid_siblings() -> None:
         "rolloutType": "limited-or-test",
     }
     assert set(result["fieldErrors"]) == {"oauthTokenUrl"}
+
+
+def test_partial_workday_evidence_rejects_legacy_authorization_fields() -> None:
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="unsupported fields: authorizationOutcome",
+    ):
+        validate_administrator_partial_evidence(
+            _state(),
+            "workday-admin",
+            {"authorizationOutcome": "verified"},
+        )
 
 
 def test_partial_administrator_evidence_rejects_secret_material() -> None:
