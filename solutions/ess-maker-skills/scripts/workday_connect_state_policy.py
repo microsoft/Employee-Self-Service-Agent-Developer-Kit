@@ -10,6 +10,8 @@ from typing import Any, Mapping
 
 from workday_connect_model import (
     ADMINISTRATOR_PARTIAL_FIELDS,
+    LIFECYCLE_BLOCKER_CATEGORIES,
+    PHASE_BY_ID,
     PHASE_DEFINITIONS,
     TENANT_FOUNDATION_REQUIRED_ENDPOINT_KEYS,
     TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS,
@@ -40,6 +42,162 @@ _LEGACY_WORKDAY_AUTHORIZATION_FIELDS = frozenset(
         "authorizationRetestOutcome",
     }
 )
+_BLOCKER_CATEGORY_KEYWORDS = (
+    ("timeout", ("timeout", "timedout")),
+    (
+        "permissions",
+        (
+            "permission",
+            "access",
+            "authorization",
+            "unauthorized",
+            "consent",
+            "forbidden",
+            "role",
+        ),
+    ),
+    (
+        "auth",
+        ("auth", "credential", "signin", "sign-in", "token", "entra"),
+    ),
+    (
+        "connection",
+        ("connection", "network", "endpoint", "dns", "ssl", "http"),
+    ),
+    (
+        "validation",
+        ("validation", "contract", "evidence", "invalid"),
+    ),
+    ("state", ("state", "store", "schema", "migration", "planchanged")),
+    (
+        "platform",
+        ("platform", "preflight", "dataverse", "package", "solution"),
+    ),
+    ("runtime", ("runtime", "flow", "topic", "agent")),
+)
+_BLOCKER_CATEGORY_EXACT = {
+    "employee-authentication": "auth",
+    "workday-connection": "connection",
+    "runtime-flow": "runtime",
+    "employee-context": "validation",
+    "network": "connection",
+    "workday-access": "permissions",
+    "publish-or-agent": "runtime",
+    "unknown": "unknown",
+}
+
+
+def blocker_category(blocker: Mapping[str, Any] | None) -> str:
+    if not blocker:
+        return ""
+    raw = str(
+        blocker.get("category")
+        or blocker.get("failureCategory")
+        or blocker.get("errorType")
+        or "unknown"
+    ).strip().casefold()
+    if raw in LIFECYCLE_BLOCKER_CATEGORIES:
+        return raw
+    if raw in _BLOCKER_CATEGORY_EXACT:
+        return _BLOCKER_CATEGORY_EXACT[raw]
+    compact = "".join(character for character in raw if character.isalnum())
+    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
+        if any(
+            "".join(character for character in keyword if character.isalnum())
+            in compact
+            for keyword in keywords
+        ):
+            return category
+    return "unknown"
+
+
+def normalize_lifecycle_history(container: dict[str, Any]) -> None:
+    lifecycle = container.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return
+    correlation_id = lifecycle.get("correlationId")
+    journal = lifecycle.get("journal")
+    if not isinstance(correlation_id, str) or not isinstance(journal, list):
+        return
+    markers: list[str] = []
+    phase_durations = {phase_id: 0 for phase_id in PHASE_BY_ID}
+    active_starts = {phase_id: None for phase_id in PHASE_BY_ID}
+    for record in journal:
+        if not isinstance(record, dict):
+            continue
+        record.setdefault("correlationId", correlation_id)
+        record.setdefault("remediationId", "")
+        raw_category = record.get("blockerCategory")
+        if raw_category:
+            record["blockerCategory"] = blocker_category(
+                {"category": raw_category}
+            )
+        if record.get("correlationId") != correlation_id:
+            continue
+        event = str(record.get("event") or "")
+        phase = str(record.get("phase") or "")
+        marker = f"{event}|{phase}"
+        if marker not in markers:
+            markers.append(marker)
+        if phase not in phase_durations:
+            continue
+        if event in {"phase-started", "phase-resumed"}:
+            active_starts[phase] = record.get("timestamp")
+        elif event == "phase-paused":
+            phase_durations[phase] += max(
+                0,
+                int(record.get("durationMs") or 0),
+            )
+            active_starts[phase] = None
+        elif event == "phase-completed":
+            phase_durations[phase] = max(
+                0,
+                int(record.get("durationMs") or 0),
+            )
+            active_starts[phase] = None
+    existing_durations = lifecycle.get("phaseDurationsMs")
+    if isinstance(existing_durations, dict):
+        merged_durations: dict[str, Any] = {}
+        for phase_id in PHASE_BY_ID:
+            existing_duration = existing_durations.get(phase_id)
+            if (
+                isinstance(existing_duration, int)
+                and not isinstance(existing_duration, bool)
+                and existing_duration >= 0
+            ):
+                merged_durations[phase_id] = max(
+                    existing_duration,
+                    phase_durations[phase_id],
+                )
+            else:
+                merged_durations[phase_id] = existing_duration
+        lifecycle["phaseDurationsMs"] = merged_durations
+    else:
+        lifecycle["phaseDurationsMs"] = phase_durations
+    existing_starts = lifecycle.get("activePhaseStartedAt")
+    if isinstance(existing_starts, dict):
+        lifecycle["activePhaseStartedAt"] = {
+            phase_id: (
+                existing_starts.get(phase_id)
+                or active_starts[phase_id]
+            )
+            for phase_id in PHASE_BY_ID
+        }
+    else:
+        lifecycle["activePhaseStartedAt"] = active_starts
+    existing_markers = lifecycle.get("eventMarkers")
+    lifecycle["eventMarkers"] = list(
+        dict.fromkeys(
+            [
+                *(
+                    existing_markers
+                    if isinstance(existing_markers, list)
+                    else []
+                ),
+                *markers,
+            ]
+        )
+    )
 
 
 def discard_legacy_workday_admin_authorization(
@@ -103,8 +261,6 @@ def reset_phase(phase: dict[str, Any]) -> None:
             "updatedAt": utc_now(),
         }
     )
-    if "employeeTestAttempt" in phase:
-        phase["employeeTestAttempt"] = None
     if administrator is not None:
         phase["administrator"] = administrator
 

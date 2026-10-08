@@ -1,12 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Runtime and employee evidence contracts for Workday Connect."""
+"""Runtime and Maker validation evidence contracts for Workday Connect."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import re
 from typing import Any, Mapping
 
 from workday_connect_model import WorkdayConnectModelError, load_catalog
@@ -27,116 +26,15 @@ def required_text(
     return value
 
 
-EMPLOYEE_VALIDATION_REMEDIATIONS: dict[str, dict[str, str]] = {
-    "WD-E2E-001": {
-        "failureCategory": "employee-authentication",
-        "failureSurface": "authentication-prompt",
-        "remediation": (
-            "Verify the employee assignment and identify which sign-in "
-            "surface is prompting again."
-        ),
-    },
-    "WD-E2E-002": {
-        "failureCategory": "workday-connection",
-        "failureSurface": "workday-connection",
-        "remediation": (
-            "Verify the selected Workday connection is authenticated and "
-            "targets the reviewed Workday resource."
-        ),
-    },
-    "WD-E2E-003": {
-        "failureCategory": "runtime-flow",
-        "failureSurface": "flow-run",
-        "remediation": (
-            "Inspect the failed Workday flow run and reverify delegated "
-            "authorization before retrying."
-        ),
-    },
-    "WD-E2E-004": {
-        "failureCategory": "employee-context",
-        "failureSurface": "agent-chat",
-        "remediation": (
-            "Verify the employee NameID and User Context V2 mapping before "
-            "retrying."
-        ),
-    },
-    "WD-E2E-005": {
-        "failureCategory": "network",
-        "failureSurface": "network-path",
-        "remediation": (
-            "Verify the required Workday REST and SOAP hosts are reachable "
-            "from the configured runtime."
-        ),
-    },
+MAKER_VALIDATION_REMEDIATIONS: dict[str, dict[str, str]] = {
     "WD-E2E-006": {
         "failureCategory": "workday-access",
         "failureSurface": "workday-response",
         "remediation": (
-            "Ask a Workday administrator to verify the test employee's "
-            "functional-area and domain access."
+            "Ask a Workday administrator to correct the affected domain "
+            "security policy, then have the maker retest the same scenario."
         ),
     },
-    "WD-E2E-007": {
-        "failureCategory": "publish-or-agent",
-        "failureSurface": "agent-availability",
-        "remediation": (
-            "Publish the selected agent and verify the employee is testing "
-            "the reviewed agent in the target environment."
-        ),
-    },
-    "WD-E2E-999": {
-        "failureCategory": "unknown",
-        "failureSurface": "other",
-        "remediation": (
-            "Capture the failing surface without employee data and route it "
-            "to ESS support for classification."
-        ),
-    },
-}
-
-EMPLOYEE_VALIDATION_RESULT_IDS = {
-    "Failed - repeated sign-in": "WD-E2E-001",
-    "Failed - connector error": "WD-E2E-002",
-    "Failed - flow error": "WD-E2E-003",
-    "Failed - employee mismatch": "WD-E2E-004",
-    "Failed - network error": "WD-E2E-005",
-    "Failed - Workday access denied": "WD-E2E-006",
-    "Failed - agent not published or unavailable": "WD-E2E-007",
-    "Failed - another issue": "WD-E2E-999",
-}
-
-EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES = {
-    "Agent chat": "agent-chat",
-    "Authentication prompt": "authentication-prompt",
-    "Workday connection": "workday-connection",
-    "Flow run": "flow-run",
-    "Network path": "network-path",
-    "Workday response": "workday-response",
-    "Agent availability": "agent-availability",
-    "Other": "other",
-}
-
-EMPLOYEE_VALIDATION_FAILURE_SURFACES = frozenset(
-    EMPLOYEE_VALIDATION_FAILURE_SURFACE_CHOICES.values()
-)
-
-_LEGACY_EMPLOYEE_FAILURE_IDS = {
-    "employee-authentication": "WD-E2E-001",
-    "repeated-sign-in": "WD-E2E-001",
-    "sign-in-loop": "WD-E2E-001",
-    "connector-error": "WD-E2E-002",
-    "workday-connection": "WD-E2E-002",
-    "flow-error": "WD-E2E-003",
-    "runtime-flow": "WD-E2E-003",
-    "employee-context": "WD-E2E-004",
-    "employee-mismatch": "WD-E2E-004",
-    "network": "WD-E2E-005",
-    "network-error": "WD-E2E-005",
-    "workday-access": "WD-E2E-006",
-    "workday-access-denied": "WD-E2E-006",
-    "agent-not-published": "WD-E2E-007",
-    "publish-or-agent": "WD-E2E-007",
-    "unknown": "WD-E2E-999",
 }
 
 
@@ -158,18 +56,18 @@ def _normalized_timestamp(value: str, label: str) -> str:
     )
 
 
-def validate_employee_evidence(
+def validate_maker_evidence(
     evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
     if not isinstance(evidence, Mapping):
         raise WorkdayConnectContractError(
-            "Employee validation evidence must contain a JSON object."
+            "Maker validation evidence must contain a JSON object."
         )
     allowed = {"scenarioName", "testUserCategory", "timestamp", "outcome"}
     unexpected = sorted(set(evidence) - allowed)
     if unexpected:
         raise WorkdayConnectContractError(
-            "Employee validation evidence contains unsupported fields: "
+            "Maker validation evidence contains unsupported fields: "
             + ", ".join(unexpected)
         )
     required = {"testUserCategory", "timestamp", "outcome"}
@@ -179,123 +77,70 @@ def validate_employee_evidence(
         result["scenarioName"] = scenario_name
     if result["outcome"].casefold() not in {"passed", "verified"}:
         raise WorkdayConnectContractError(
-            "Employee validation outcome must be passed or verified."
+            "Maker validation outcome must be passed or verified."
         )
     result["timestamp"] = _normalized_timestamp(
         result["timestamp"],
-        "Employee validation timestamp",
+        "Maker validation timestamp",
     )
-    category = result["testUserCategory"].casefold()
-    if category == "maker":
-        return result
-    explicitly_non_maker = (
-        "non-maker" in category or "non maker" in category
-    )
-    if (
-        "employee" not in category
-        or "admin" in category
-        or ("maker" in category and not explicitly_non_maker)
-    ):
-        raise WorkdayConnectContractError(
-            "Employee validation must use a signed-in non-maker employee."
+    if result["testUserCategory"].casefold() != "maker":
+        error = WorkdayConnectContractError(
+            "Maker validation requires testUserCategory 'maker'. Signed-in "
+            "non-maker validation is a post-skill activity."
         )
+        error.suppress_blocker_persistence = True
+        raise error
     return result
 
 
-def validate_employee_failure_evidence(
+def validate_maker_failure_evidence(
     evidence: Mapping[str, Any],
 ) -> dict[str, str]:
     if not isinstance(evidence, Mapping):
         raise WorkdayConnectContractError(
-            "Employee validation failure must contain a JSON object."
+            "Maker validation failure must contain a JSON object."
         )
     allowed = {
         "remediationId",
-        "failureCategory",
-        "failureSurface",
         "timestamp",
-        "remediation",
         "scenarioName",
         "affectedDomain",
     }
     unexpected = sorted(set(evidence) - allowed)
     if unexpected:
         raise WorkdayConnectContractError(
-            "Employee validation failure contains unsupported fields: "
+            "Maker validation failure contains unsupported fields: "
             + ", ".join(unexpected)
         )
     timestamp = _normalized_timestamp(
         required_text(evidence, "timestamp", "timestamp"),
-        "Employee validation failure timestamp",
+        "Maker validation failure timestamp",
     )
-    supplied_remediation_id = str(evidence.get("remediationId") or "").strip()
-    if supplied_remediation_id:
-        remediation_id = supplied_remediation_id.upper()
-    else:
-        legacy_category = required_text(
-            evidence,
-            "failureCategory",
-            "failureCategory",
-        )
-        required_text(evidence, "remediation", "remediation")
-        normalized_category = re.sub(
-            r"[^a-z0-9]+",
-            "-",
-            legacy_category.casefold(),
-        ).strip("-")
-        remediation_id = _LEGACY_EMPLOYEE_FAILURE_IDS.get(
-            normalized_category,
-            "WD-E2E-999",
-        )
-    contract = EMPLOYEE_VALIDATION_REMEDIATIONS.get(remediation_id)
+    remediation_id = required_text(
+        evidence,
+        "remediationId",
+        "remediationId",
+    ).upper()
+    contract = MAKER_VALIDATION_REMEDIATIONS.get(remediation_id)
     if contract is None:
         raise WorkdayConnectContractError(
-            "Employee validation remediationId must be one of: "
-            + ", ".join(EMPLOYEE_VALIDATION_REMEDIATIONS)
-            + "."
+            "Maker validation remediationId must be WD-E2E-006."
         )
-    failure_surface = contract["failureSurface"]
-    supplied_surface = str(evidence.get("failureSurface") or "").strip()
-    if supplied_surface:
-        if remediation_id != "WD-E2E-999":
-            raise WorkdayConnectContractError(
-                "Employee validation failureSurface is accepted only for "
-                "WD-E2E-999."
-            )
-        if supplied_surface not in EMPLOYEE_VALIDATION_FAILURE_SURFACES:
-            raise WorkdayConnectContractError(
-                "Employee validation failureSurface must be one of: "
-                + ", ".join(sorted(EMPLOYEE_VALIDATION_FAILURE_SURFACES))
-                + "."
-            )
-        failure_surface = supplied_surface
-    elif supplied_remediation_id and remediation_id == "WD-E2E-999":
-        raise WorkdayConnectContractError(
-            "Employee validation failureSurface is required for WD-E2E-999."
-        )
+    scenario_name = required_text(evidence, "scenarioName", "scenarioName")
+    affected_domain = required_text(
+        evidence,
+        "affectedDomain",
+        "affectedDomain",
+    )
     result = {
         "remediationId": remediation_id,
         "failureCategory": contract["failureCategory"],
-        "failureSurface": failure_surface,
+        "failureSurface": contract["failureSurface"],
         "timestamp": timestamp,
         "remediation": contract["remediation"],
+        "scenarioName": scenario_name,
+        "affectedDomain": affected_domain,
     }
-    scenario_name = str(evidence.get("scenarioName") or "").strip()
-    affected_domain = str(evidence.get("affectedDomain") or "").strip()
-    if remediation_id == "WD-E2E-006":
-        if bool(scenario_name) != bool(affected_domain):
-            raise WorkdayConnectContractError(
-                "scenarioName and affectedDomain must be supplied together "
-                "for Workday access remediation."
-            )
-        if scenario_name:
-            result["scenarioName"] = scenario_name
-            result["affectedDomain"] = affected_domain
-    elif scenario_name or affected_domain:
-        raise WorkdayConnectContractError(
-            "scenarioName and affectedDomain are accepted only for "
-            "WD-E2E-006."
-        )
     return result
 
 

@@ -8,7 +8,7 @@ Use only intent supplied in the current request and results observed in this inv
 
 ## Identify the target
 
-Read `src/skills/foundation-setup/da-environment-target.md` and follow it, including its exact **Resolve the service ring** decision surface whenever the ring is not identified. Retain the resolved environment ID and ring for every operation in this invocation. Do not ask the maker to classify an agent template before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
+Read `src/skills/foundation-setup/da-environment-target.md` and follow its **Resolve the service ring** precedence whenever the ring is not identified. Retain the resolved environment ID and ring for every operation in this invocation. Do not ask the maker to classify an agent template before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
 ## Use the workspace environment
 

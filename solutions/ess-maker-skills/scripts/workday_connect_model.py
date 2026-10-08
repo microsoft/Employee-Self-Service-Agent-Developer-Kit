@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import uuid
 
 
-STATE_SCHEMA_VERSION = 11
+STATE_SCHEMA_VERSION = 12
 CONTROLLER_CONTRACT_VERSION = 4
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
@@ -59,7 +59,7 @@ class Phase(str, Enum):
     WORKDAY_ADMIN = "workday-admin"
     CONNECTIONS = "connections"
     RUNTIME = "runtime"
-    EMPLOYEE_VALIDATION = "employee-validation"
+    MAKER_VALIDATION = "maker-validation"
 
 
 class PhaseStatus(str, Enum):
@@ -127,9 +127,9 @@ PHASE_DEFINITIONS = (
         identifier=Phase.ENTRA,
         title="Microsoft Entra",
         what_happens=(
-            "Give the Microsoft Entra administrator one complete guided "
+            "Give the Microsoft Entra app administrator one complete guided "
             "handoff.",
-            "Guide an Entra administrator through the required SAML, "
+            "Guide that app administrator through the required SAML, "
             "permission, consent, assignment, and employee sign-in settings.",
             "Validate and record the administrator's returned non-secret "
             "application and signing-certificate evidence.",
@@ -175,7 +175,7 @@ PHASE_DEFINITIONS = (
         prerequisite=Phase.CONNECTIONS,
     ),
     PhaseDefinition(
-        identifier=Phase.EMPLOYEE_VALIDATION,
+        identifier=Phase.MAKER_VALIDATION,
         title="Maker validation",
         what_happens=(
             "Smoke-test an enabled read-only Workday scenario in the Copilot "
@@ -216,7 +216,7 @@ PHASE_REQUIRED_ACTIONS = {
             "workday-topics-activated",
         }
     ),
-    Phase.EMPLOYEE_VALIDATION.value: frozenset({"maker-smoke-test"}),
+    Phase.MAKER_VALIDATION.value: frozenset({"maker-smoke-test"}),
 }
 ADMINISTRATOR_PHASES = frozenset(
     {
@@ -349,7 +349,7 @@ LEGACY_PHASE_ROWS = {
         "DA4.7",
         "DA4.8",
     ),
-    Phase.EMPLOYEE_VALIDATION: ("DA5.1",),
+    Phase.MAKER_VALIDATION: ("DA5.1",),
 }
 
 _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -536,8 +536,6 @@ def default_phase_state(phase_id: str | None = None) -> dict[str, Any]:
         "blocker": None,
         "updatedAt": None,
     }
-    if phase_id == Phase.EMPLOYEE_VALIDATION.value:
-        state["employeeTestAttempt"] = None
     if phase_id in ADMINISTRATOR_PHASES:
         state["administrator"] = default_administrator_state()
     return state
@@ -1188,71 +1186,6 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
             profile["validatedAt"],
             f"Phase '{phase_id}' validation profile validatedAt",
         )
-    employee_test_attempt = value.get("employeeTestAttempt")
-    if phase_id != Phase.EMPLOYEE_VALIDATION.value:
-        if employee_test_attempt is not None:
-            raise WorkdayConnectModelError(
-                f"Phase '{phase_id}' cannot contain an employee test attempt."
-            )
-    elif employee_test_attempt is not None:
-        if not isinstance(employee_test_attempt, dict):
-            raise WorkdayConnectModelError(
-                "Employee test attempt must be an object or null."
-            )
-        required_attempt_fields = {
-            "attemptId",
-            "scenarioId",
-            "status",
-            "startedAt",
-            "completedAt",
-            "expectedFlowIds",
-            "clockSkewSeconds",
-            "targetFingerprint",
-            "correlationMode",
-            "outcome",
-        }
-        if set(employee_test_attempt) != required_attempt_fields:
-            raise WorkdayConnectModelError(
-                "Employee test attempt has an invalid contract."
-            )
-        if (
-            not isinstance(employee_test_attempt["attemptId"], str)
-            or not employee_test_attempt["attemptId"]
-            or employee_test_attempt["scenarioId"]
-            != "workday-signed-in-employee-read"
-            or employee_test_attempt["status"]
-            not in {"active", "validating", "succeeded", "failed"}
-            or employee_test_attempt["correlationMode"]
-            != "bounded-window-flow-set"
-            or employee_test_attempt["outcome"]
-            not in {"", "success", "failure", "abandoned"}
-        ):
-            raise WorkdayConnectModelError(
-                "Employee test attempt contains invalid bounded fields."
-            )
-        _validate_timestamp(
-            employee_test_attempt["startedAt"],
-            "Employee test attempt startedAt",
-        )
-        if employee_test_attempt["completedAt"] is not None:
-            _validate_timestamp(
-                employee_test_attempt["completedAt"],
-                "Employee test attempt completedAt",
-            )
-        flow_ids = employee_test_attempt["expectedFlowIds"]
-        if (
-            not isinstance(flow_ids, list)
-            or not flow_ids
-            or any(not isinstance(flow_id, str) or not flow_id for flow_id in flow_ids)
-            or len(flow_ids) != len(set(flow_ids))
-            or not isinstance(employee_test_attempt["clockSkewSeconds"], int)
-            or employee_test_attempt["clockSkewSeconds"] != 120
-            or not isinstance(employee_test_attempt["targetFingerprint"], str)
-            or not employee_test_attempt["targetFingerprint"]
-        ):
-            raise WorkdayConnectModelError(
-                "Employee test attempt runtime correlation is invalid."
-            )
     approved_plan = value["approvedPlan"]
     approved_hash = value["approvedPlanHash"]
     if approved_plan is not None:
@@ -1356,7 +1289,7 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
                 )
             ):
                 raise WorkdayConnectModelError(
-                    "Entra administrator entraChecks must contain named "
+                    "Entra app administrator entraChecks must contain named "
                     "evidence objects."
                 )
             continue

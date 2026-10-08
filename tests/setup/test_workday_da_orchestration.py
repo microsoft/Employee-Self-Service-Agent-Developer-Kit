@@ -41,10 +41,16 @@ def test_orchestrator_resumes_from_controller_status() -> None:
 
 
 def test_role_availability_is_state_aware_at_phase_boundary() -> None:
+    from workday_connect_entra_contracts import (
+        ENTRA_ADMIN_COMPLETION_QUESTION,
+        ENTRA_ADMIN_ENGAGEMENT_QUESTION,
+    )
+
     skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
     entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
     tenant = (_WORKDAY_DA / "configure-tenant.md").read_text(encoding="utf-8")
     normalized_skill = " ".join(skill.split())
+    normalized_entra = " ".join(entra.split())
 
     briefing = skill.index("> Here's who may be needed")
     status = skill.index("python scripts/workday_connect.py status")
@@ -100,7 +106,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ):
         assert re.search(
             rf"^\|\s*`{re.escape(phase_id)}`\s*\|",
@@ -134,16 +140,26 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
         "do not repeat the question while `nextPhaseId` remains unchanged"
         in " ".join(skill.split())
     )
-    assert "Show the exact required Entra role" in entra
+    assert "alternative accepted\nroles, not two required people" in entra
     assert "Do not silently reuse Entra configuration" in entra
     assert "must not authenticate the maker to Graph" in skill
     assert "reread Graph" not in skill
     assert "read-only discovery" not in skill
-    assert '"header": "Microsoft Entra administrator"' in entra
+    assert '"header": "Microsoft Entra app administrator"' in entra
     assert "engagement answer is not configuration evidence" in entra
-    assert "Have you looped in the Microsoft Entra administrator" in entra
+    assert ENTRA_ADMIN_ENGAGEMENT_QUESTION in entra
     assert "Information to return to the maker" in entra
-    assert "Has the Microsoft Entra administrator completed" in entra
+    assert ENTRA_ADMIN_COMPLETION_QUESTION in normalized_entra
+    assert "consent-capable administrator" not in (
+        ENTRA_ADMIN_ENGAGEMENT_QUESTION
+    )
+    assert "same person does not need both" in normalized_entra
+    assert 'not a general "cloud administrator."' in normalized_entra
+    assert "separate consent-capable administrator only" in normalized_entra
+    assert "does not need to arrange\none up front" in entra
+    assert "Render `packet.consentNote` exactly here" in entra
+    assert "Yes, that administrator is engaged" in entra
+    assert "No, I still need to engage that administrator" in entra
     assert (
         "Do not add a second engagement question here"
         in " ".join(tenant.split())
@@ -169,7 +185,7 @@ def test_entra_waiting_boundary_follows_guided_handoff() -> None:
     assert handoff < waiting
     assert "requiresRediscovery" not in entra
     assert "does not authenticate the maker\nto Microsoft Graph" in entra
-    assert "guided handoff to\nthe Entra administrator" in entra
+    assert "guided handoff to\nthe Entra app administrator" in entra
 
 
 def test_every_controller_command_is_documented() -> None:
@@ -183,11 +199,7 @@ def test_every_controller_command_is_documented() -> None:
         re.findall(r"workday_connect\.py\s+([a-z][a-z-]*)", guide_text)
     )
 
-    legacy_commands = {
-        "begin-employee-test",
-        "abandon-employee-test",
-    }
-    assert documented == set(controller._COMMAND_HANDLERS) - legacy_commands
+    assert documented == set(controller._COMMAND_HANDLERS)
 
 
 def test_workday_guides_use_file_backed_json_inputs() -> None:
@@ -251,8 +263,12 @@ def test_maker_validation_ends_guided_lifecycle() -> None:
     assert "record-validation-failure --evidence-file" in text
     assert "retest that same named scenario" in text
     assert "lifecycleComplete: true" in text
-    assert "do not run `begin-employee-test`" in normalized.casefold()
-    assert "wait for Power Automate run-history evidence" in normalized
+    assert "begin-employee-test" not in text
+    assert "abandon-employee-test" not in text
+    assert (
+        "do not wait for power automate run-history evidence"
+        in normalized.casefold()
+    )
     assert "Promote the agent from Development to Test when ready" in text
     assert "Promote the agent from Test to Production when ready" in text
     assert "Publish and deploy the Production agent when ready" in text
@@ -277,13 +293,13 @@ def test_controller_reads_json_payload_from_file(tmp_path: Path) -> None:
     ) == payload
 
 
-def test_maker_validation_does_not_open_employee_attempt() -> None:
+def test_maker_validation_excludes_retired_runtime_evidence_contract() -> None:
     text = (_WORKDAY_DA / "verify-connection.md").read_text(
         encoding="utf-8"
     )
     normalized = " ".join(text.split()).casefold()
 
-    assert "do not run `begin-employee-test`" in normalized
+    assert "begin-employee-test" not in normalized
     assert "abandon-employee-test" not in text
     assert "runtime-evidence" not in text
 
@@ -499,7 +515,7 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     assert existing_handoff < coexistence_handoff < greenfield_handoff
     assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
-    assert "Do not return to Entra or re-engage the Entra administrator" in (
+    assert "Do not return to Entra or re-engage the Entra app administrator" in (
         normalized
     )
     assert "resume the same handoff after approval" in normalized

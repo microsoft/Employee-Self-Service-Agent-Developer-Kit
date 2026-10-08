@@ -27,9 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 11' in schema
+    assert '"schemaVersion": 12' in schema
     assert '"substage": "not-started"' in schema
-    assert "config.pre-v11.json" in schema
+    assert "config.pre-v12.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
@@ -82,7 +82,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "--discovery-json" not in entra
     assert "--verification-json" not in entra
     assert "does not authenticate the maker" in " ".join(entra.split())
-    assert "guided handoff to the Entra administrator" in " ".join(
+    assert "guided handoff to the Entra app administrator" in " ".join(
         entra.split()
     )
     assert "Enter the Workday tenant name, or paste a Workday" in entra
@@ -108,7 +108,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "renders an array of questions as a sequential wizard" in entra
     assert "containing exactly one free-form question" in entra
     assert "Do not replay the full worksheet" in entra
-    assert '"header": "Entra administrator details"' in entra
+    assert '"header": "Microsoft Entra app administrator details"' in entra
     assert "Certificate valid from" not in entra
     assert "Do not\nsay only \"paste a revised worksheet\"" in entra
     for removed_header in (

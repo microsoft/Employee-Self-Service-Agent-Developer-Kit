@@ -50,7 +50,7 @@ administrator finished configuration.
   provider and guide the Workday administrator to either add a separate
   Microsoft Entra row for the approved target environment or perform a
   customer-approved transition of only that target environment. Do not return
-  to Entra or re-engage the Entra administrator. If the routing decision still
+  to Entra or re-engage the Entra app administrator. If the routing decision still
   needs customer governance approval, show the exact approval and inventory
   steps, preserve this phase, and resume the same handoff after approval
   instead of terminating the workflow.
@@ -177,7 +177,7 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
-   firewall change is required. Do not wait until final employee validation to
+   firewall change is required. Do not wait until final Maker validation to
    discover a known allowlist requirement.
 
 ### Existing non-Entra federation coexistence or transition handoff
@@ -321,7 +321,7 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 If the administrator reports that the provider state changed from the branch
 selected above, repeat provider discovery within this Workday phase using the
 same recorded Entra reference values. Do not return to the Entra phase or ask
-the Entra administrator to participate again.
+the Entra app administrator to participate again.
 
 Collect the Workday administrator's details in one response. Do not ask for
 these values as a sequence of separate chat or form questions. The response

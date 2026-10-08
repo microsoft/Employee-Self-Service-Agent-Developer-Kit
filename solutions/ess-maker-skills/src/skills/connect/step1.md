@@ -17,7 +17,7 @@ Build a list of connected integrations (if any):
   - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
     its `agentSlug` exactly matches the active agent, and every phase is
     `done`; or
-  - `.local/connect/workday-da/config.json` has `schemaVersion: 11`, and one
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 12`, and one
     `targets.dev`, `targets.test`, or `targets.prod` snapshot has
     `deploymentStatus: "ready"` with an identity whose agent slug and BotId
     exactly match the active native agent.
