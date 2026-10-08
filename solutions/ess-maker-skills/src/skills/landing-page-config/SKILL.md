@@ -1,11 +1,7 @@
 ---
 name: landing-page-config
 description: >-
-  View or configure an ESS landing page through the AgentConfiguration MCP server.
-  Use for viewing current or default accent colors, branding, quick links, starter prompts, Stay Up
-  to Date, Quick Access, reading the agent name or icon, deleting all landing
-  page configuration, suggesting context-grounded landing-page changes, and
-  any call to the ess-landing-page-config MCP server.
+  View or configure an ESS landing page through the AgentConfiguration MCP server. Use for viewing current or default accent colors, branding, quick links, starter prompts, Stay up to date, reading the agent name or icon, deleting all landing-page configuration, suggesting context-grounded landing-page changes, and any call to the ess-landing-page-config MCP server.
 ---
 
 # Landing Page Configuration
@@ -158,6 +154,7 @@ unavailable, tell the maker to reload the VS Code window, rerun
     skill can suggest changes, follow **Describe landing-page capabilities**.
     Include context-grounded suggested drafts as a first-class capability.
 24. After every successful `open_*` call, follow **Widget supporting guidance** to explain the setting, Publish timing, and the actual opening state. Use "end users" in maker-facing guidance.
+25. Insight-card configuration supports only **Stay up to date** (`insightCardsConfig.isStayUpToDateEnabled`). Follow **Insight cards** for all reads, drafts, updates, and maker-facing replies.
 
 ## Resolve the target
 
@@ -235,7 +232,7 @@ Use this sequence for every model-driven update that modifies existing content, 
 
 1. Resolve the target, the requested edits, and any widget-draft association. Complete other lookups, missing-input questions, color validation, and required confirmations first. Preliminary reads may help resolve these prerequisites, but do not serve as the final baseline.
 2. Call a fresh `get_agent_config` for the affected `titleId` immediately before constructing and issuing the update. Each update needs its own fresh get, including two successive updates in one turn. Neither a snapshot baseline nor the previous update's result can replace this read. Complete **Consume tool results** for that get before constructing the payload.
-3. Apply only the requested changes to that parsed fresh result and preserve unrelated current values in the complete affected section. Saved membership, ordering, and untouched field values come exclusively from this parsed server baseline. Historical widget content can supply the requested edit values only. For "add a quick link", retain every link returned by the fresh get, including links absent from the widget snapshot. Preserve untouched themes, prompt categories, and insight-card toggles in their respective sections.
+3. Apply only the requested changes to that parsed fresh result and preserve unrelated current values in the complete affected section. Saved membership, ordering, and untouched field values come exclusively from this parsed server baseline. Historical widget content can supply the requested edit values only. For "add a quick link", retain every link returned by the fresh get, including links absent from the widget snapshot. Preserve untouched themes and prompt categories in their respective sections. For insight-card changes, send only the supported field listed in **Insight cards**.
 4. Check the complete merged payload against the section schema and limits. Compare the outgoing section with the parsed baseline: only the requested additions, removals, field edits, or reorderings are permitted. For an addition, every existing entry's values and relative order must remain unchanged. Any unrelated difference blocks the update until the payload is corrected and checked.
 5. After consuming the result and checking the payload, call `update_agent_config` as the next server operation. File/continuation reads and local parsing or validation that consume or check this response are allowed between get and update. If an unrelated lookup, a new approval, a target change, or a conflict requires more work, resolve it and restart from a fresh get. Response consumption alone does not require another get.
 6. If the required read fails, the target cannot be established, or the response cannot supply the affected section's baseline, surface the problem and withhold the dependent update. Do not fall back to cached data or assume an empty baseline. An absent section in a successful complete configuration can represent an unconfigured section according to its schema.
@@ -317,7 +314,6 @@ only these sections:
 - **Configure accent colors**
 - **Configure quick links**
 - **Configure Stay up to date**
-- **Configure Quick Access**
 
 The page describes another administration surface. Do not use or repeat its
 navigation, upload, save, role, or configuration instructions. This skill and
@@ -329,7 +325,6 @@ the MCP tool contracts define how configuration is performed here.
 | Accent colors | Customize the agent's look and feel in light and dark themes. Default Copilot colors apply when unset. |
 | Quick links | Surface important tenant resources directly on the landing page. No quick links appear when the list is empty. |
 | Stay up to date | Show a personalized carousel of actionable cards for in-progress ticket status, required follow-ups, and time-sensitive tasks. End users can select a card to start a related conversation. Cards come from configured ticket-related sources and do not create or modify tickets. |
-| Quick Access | Show personalized, high-frequency information cards, such as time-off balance/status, upcoming paid holidays, and service anniversaries. End users can select a card to start a conversation. |
 
 ## Describe landing-page capabilities
 
@@ -360,7 +355,7 @@ Use this flow for a bare `/landing-page` invocation and whole-page requests such
 
 1. Resolve the target and establish that its configuration exists.
 2. Obtain the complete current configuration with a fresh `get_agent_config` for this request, following **Read current canonical values**. A successful get just performed during target resolution for this request can be used; snapshots and results from earlier requests cannot supply the overview.
-3. Introduce the overview with "Here's the current landing-page configuration for **{agent name}**:", then render exactly these three columns and five settings in this order. Replace each state placeholder using **Current-state labels** below. Keep the purpose descriptions concise and grounded in **Explain landing-page settings**:
+3. Introduce the overview with "Here's the current landing-page configuration for **{agent name}**:", then render exactly these three columns and four settings in this order. Replace each state placeholder using **Current-state labels** below. Keep the purpose descriptions concise and grounded in **Explain landing-page settings**:
 
    | Setting | Current state | Purpose |
    |---|---|---|
@@ -368,14 +363,13 @@ Use this flow for a bare `/landing-page` invocation and whole-page requests such
    | Quick links | {quick links state} | Gives end users direct access to important resources. |
    | Starter prompts | {starter prompts state} | Shows common ways to engage with the agent and guides end users into supported scenarios. |
    | Stay up to date | {stay up to date state} | Shows personalized ticket updates, follow-ups, and time-sensitive tasks. |
-   | Quick Access | {quick access state} | Shows personal information, such as time-off balances, upcoming holidays, and service anniversaries. |
 
 4. After the table, include this brief summary grounded in **Describe landing-page capabilities**:
 
-   > I can help you choose accent colors, organize quick links, and suggest starter prompts based on what your agent can do. I can also help you configure Stay up to date and Quick Access, or suggest changes for you to review before publishing.
+   > I can help you choose accent colors, organize quick links, and suggest starter prompts based on what your agent can do. I can also help you configure Stay up to date or suggest changes for you to review before publishing.
 
 5. Add this sentence outside the table: "You can also view the agent icon (read-only)."
-6. Ask "What would you like to customize?" using the five settings above as the choices.
+6. Ask "What would you like to customize?" using the four settings above as the choices.
 7. Complete one setting at a time. Open a widget only after the maker chooses a widget-supported setting or specifically requests it. Do not repeat `get_agent_config` before opening each selected widget. Accent-color lookups follow **View accent colors**.
 
 ### Current-state labels
@@ -386,7 +380,6 @@ Derive every state from the saved server configuration. Unpublished drafts and l
 - **Quick links:** Count saved entries in `quickLinksConfig.quickLinks`. An absent, null, or empty list is `Not configured`. Otherwise use `1 link configured` or `{N} links configured`, for example `3 links configured`.
 - **Starter prompts:** Count saved `pivots` categories that contain at least one `conversationStarterPrompts` item. If there are none, use `Not configured`. For exactly one non-empty category, count its prompts and use `1 prompt configured` or `{N} prompts configured`, for example `3 prompts configured`. For multiple non-empty categories, use `{N} categories configured`, for example `2 categories configured`. Empty categories and unpublished suggestions do not contribute to these counts.
 - **Stay up to date:** Read `insightCardsConfig.isStayUpToDateEnabled`. Use `Enabled` for `true`, `Disabled` for `false`, and `Not configured` when the field is absent or null.
-- **Quick Access:** Read `insightCardsConfig.isQuickAccessEnabled`. Use `Enabled` for `true`, `Disabled` for `false`, and `Not configured` when the field is absent or null.
 
 ## Route the request
 
@@ -407,7 +400,7 @@ Derive every state from the saved server configuration. Unpublished drafts and l
 | Explore or edit starter prompts with an open value | Resolve the target and establish existence -> `open_starter_prompts` with `titleId` only; the widget opens existing values, or localized default draft suggestions when the saved baseline is empty, then validates and publishes |
 | Submit values entered in a widget | Follow **Use widget context** -> map the matching draft to the intended update scope -> follow **Route exact changes directly** |
 | Ask about current saved links, prompts, or settings | Follow **Read current canonical values** -> answer from the fresh server result |
-| Update insight cards or another surface without an editor | Resolve the target and establish existence -> follow **Fresh read-modify-write** for partial changes -> `update_agent_config` |
+| Update Stay up to date | Resolve the target and establish existence -> follow **Fresh read-modify-write** -> send only `insightCardsConfig.isStayUpToDateEnabled` through `update_agent_config` |
 | Remove all landing-page configuration | Follow **Delete all landing-page configuration** |
 | Update the agent name or icon | Explain that the field is read-only and do not call an update tool |
 
@@ -808,25 +801,20 @@ Add, remove, and reorder operations follow **Fresh read-modify-write** for direc
 
 ## Insight cards
 
-The insight-card section contains both settings:
+The insight-card section contains only **Stay up to date** (`insightCardsConfig.isStayUpToDateEnabled`). It surfaces personalized, actionable cards for in-progress ticket status, required follow-ups, and time-sensitive tasks. End users can select a card to start a related conversation. The cards use configured ticket-related sources and do not create or modify tickets.
 
-- **Stay up to date** surfaces personalized, actionable cards for in-progress
-  ticket status, required follow-ups, and time-sensitive tasks. End users can
-  select a card to start a related conversation. The cards use configured
-  ticket-related sources and do not create or modify tickets.
-- **Quick Access** surfaces high-frequency personal information, such as
-  time-off balance/status, upcoming paid holidays, and service anniversaries.
-  End users can select a card to start a conversation.
+Backend responses can include `insightCardsConfig.isQuickAccessEnabled`. Ignore Quick Access completely regardless of its value. Do not display, describe, summarize, offer, or modify it. Do not mention its presence, value, or omission to the maker, including in explanations, current-state summaries, choices, drafts, or success messages. Exclude it from update payloads, including when applying the section-preservation rules. Do not reproduce raw configuration that exposes it. This applies to every tool response and reference source.
 
-For a partial toggle change, follow **Fresh read-modify-write** and preserve the other toggle from that fresh result. Submit both values together:
+If a request concerns only unsupported insight-card settings, offer the supported landing-page settings without naming the unsupported setting or performing a write.
+
+For a Stay up to date toggle change, follow **Fresh read-modify-write** and submit only `isStayUpToDateEnabled`. Apply preservation and difference checks only to this supported field. Omit `insightCardsConfig` entirely when updating another section. For example, enabling Stay up to date sends:
 
 ```json
 {
   "titleId": "<titleId>",
   "config": {
     "insightCardsConfig": {
-      "isStayUpToDateEnabled": true,
-      "isQuickAccessEnabled": false
+      "isStayUpToDateEnabled": true
     }
   }
 }

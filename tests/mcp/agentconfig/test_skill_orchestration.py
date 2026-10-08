@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -152,7 +153,7 @@ def test_whole_page_requests_share_the_guided_overview() -> None:
     assert "Accent-color lookups follow **View accent colors**" in guided
 
 
-def test_guided_overview_has_five_settings_with_states_and_purposes() -> None:
+def test_guided_overview_has_four_settings_with_states_and_purposes() -> None:
     guided = _section(
         SKILL_PATH.read_text(encoding="utf-8"),
         "Start a guided configuration",
@@ -170,7 +171,6 @@ def test_guided_overview_has_five_settings_with_states_and_purposes() -> None:
         "Quick links",
         "Starter prompts",
         "Stay up to date",
-        "Quick Access",
     ]
     assert all(len(row) == 3 and all(row) for row in rows)
     for row, purpose in zip(
@@ -180,7 +180,6 @@ def test_guided_overview_has_five_settings_with_states_and_purposes() -> None:
             "direct access to important resources",
             "guides end users into supported scenarios",
             "ticket updates, follow-ups, and time-sensitive tasks",
-            "time-off balances, upcoming holidays, and service anniversaries",
         ),
         strict=True,
     ):
@@ -188,7 +187,7 @@ def test_guided_overview_has_five_settings_with_states_and_purposes() -> None:
     assert "**Explain landing-page settings**" in guided
     assert 'outside the table: "You can also view the agent icon (read-only)."' in guided
     assert 'Ask "What would you like to customize?"' in guided
-    assert "using the five settings above as the choices" in guided
+    assert "using the four settings above as the choices" in guided
 
 
 def test_guided_overview_explains_configuration_help_before_selection() -> None:
@@ -200,7 +199,8 @@ def test_guided_overview_explains_configuration_help_before_selection() -> None:
     assert "**Describe landing-page capabilities**" in guided
     assert "choose accent colors, organize quick links" in guided
     assert "suggest starter prompts based on what your agent can do" in guided
-    assert "configure Stay up to date and Quick Access" in guided
+    assert "configure Stay up to date" in guided
+    assert "Quick Access" not in guided
     assert "suggest changes for you to review before publishing" in guided
     assert (
         guided.index("| Accent color |")
@@ -240,15 +240,26 @@ def test_guided_overview_uses_saved_state_counts_and_semantic_colors() -> None:
     assert "For exactly one non-empty category, count its prompts" in labels
     assert "For multiple non-empty categories" in labels
     assert "Empty categories and unpublished suggestions do not contribute" in labels
-    for setting, field in (
-        ("Stay up to date", "isStayUpToDateEnabled"),
-        ("Quick Access", "isQuickAccessEnabled"),
-    ):
-        assert (
-            f"**{setting}:** Read `insightCardsConfig.{field}`. "
-            "Use `Enabled` for `true`, `Disabled` for `false`, "
-            "and `Not configured` when the field is absent or null."
-        ) in labels
+    assert (
+        "**Stay up to date:** Read `insightCardsConfig.isStayUpToDateEnabled`. "
+        "Use `Enabled` for `true`, `Disabled` for `false`, "
+        "and `Not configured` when the field is absent or null."
+    ) in labels
+    assert "isQuickAccessEnabled" not in labels
+
+
+def test_maker_facing_guidance_lists_only_supported_insight_settings() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    surfaces = [
+        text.split("---", 2)[1],
+        _section(text, "Explain landing-page settings"),
+        _section(text, "Describe landing-page capabilities"),
+        _section(text, "Start a guided configuration"),
+        (SKILL_PATH.parents[3] / "README.md").read_text(encoding="utf-8"),
+    ]
+    for surface in surfaces:
+        assert "quick access" not in surface.lower()
+        assert "isQuickAccessEnabled" not in surface
 
 
 def test_starter_prompt_guidance_covers_each_baseline_draft_combination() -> None:
@@ -902,9 +913,9 @@ def test_add_link_preserves_newer_server_links_and_unrelated_section_values() ->
         "including links absent from the widget snapshot"
     ) in update
     assert (
-        "Preserve untouched themes, prompt categories, and insight-card toggles "
-        "in their respective sections"
+        "Preserve untouched themes and prompt categories in their respective sections"
     ) in update
+    assert "For insight-card changes, send only the supported field listed in **Insight cards**" in update
 
 
 def test_successive_partial_updates_each_require_their_own_fresh_get() -> None:
@@ -1159,17 +1170,38 @@ def test_prompt_append_uses_the_fresh_category_and_preserves_other_prompts() -> 
     ) in append
 
 
-def test_partial_insight_changes_preserve_the_other_fresh_toggle() -> None:
+def test_insight_changes_send_only_stay_up_to_date() -> None:
     text = SKILL_PATH.read_text(encoding="utf-8")
-    insight = _prose_section(text, "Insight cards")
+    insight = _section(text, "Insight cards")
     route = _section(text, "Route the request")
 
+    assert "contains only **Stay up to date**" in insight
+    assert "follow **Fresh read-modify-write**" in insight
+    assert "Apply preservation and difference checks only to this supported field" in insight
+    payload = json.loads(insight.split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert payload == {
+        "titleId": "<titleId>",
+        "config": {"insightCardsConfig": {"isStayUpToDateEnabled": True}},
+    }
     assert (
-        "For a partial toggle change, follow **Fresh read-modify-write** and "
-        "preserve the other toggle from that fresh result. Submit both values together"
-    ) in insight
-    assert (
-        "| Update insight cards or another surface without an editor | Resolve "
+        "| Update Stay up to date | Resolve "
         "the target and establish existence -> follow **Fresh read-modify-write** "
-        "for partial changes -> `update_agent_config` |"
+        "-> send only `insightCardsConfig.isStayUpToDateEnabled` through "
+        "`update_agent_config` |"
     ) in route
+
+
+def test_backend_quick_access_is_ignored_without_maker_facing_disclosure() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    insight = _prose_section(text, "Insight cards")
+    hard_rules = _prose_section(text, "Hard rules")
+
+    assert "Insight-card configuration supports only **Stay up to date**" in hard_rules
+    assert "Follow **Insight cards** for all reads, drafts, updates, and maker-facing replies" in hard_rules
+    assert "Backend responses can include `insightCardsConfig.isQuickAccessEnabled`" in insight
+    assert "Ignore Quick Access completely" in insight
+    assert "Do not display, describe, summarize, offer, or modify it" in insight
+    assert "Do not mention its presence, value, or omission to the maker" in insight
+    assert "Exclude it from update payloads" in insight
+    assert "including when applying the section-preservation rules" in insight
+    assert "without naming the unsupported setting or performing a write" in insight

@@ -38,8 +38,6 @@ page** Quick Action.
 - **Quick links** give employees direct access to important tenant resources.
 - **Stay up to date** shows personalized, actionable cards for in-progress
   ticket status, required follow-ups, and time-sensitive tasks.
-- **Quick Access** shows high-frequency personal information, such as time-off
-  balances, paid holidays, and service anniversaries, at a glance.
 
 The agent can apply exact changes directly or open rich editors for exploratory
 updates. Landing-page configuration is saved through the production

@@ -10,6 +10,8 @@ import ast
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import warnings
 
 from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
@@ -86,6 +88,43 @@ def test_server_exposes_the_skill_tool_contract() -> None:
     for tool_name in ("open_accent_color", "open_quick_links", "open_starter_prompts"):
         expected_tools[tool_name].append("draft")
     assert _tool_functions() == expected_tools
+
+
+def test_insight_card_tool_descriptions_limit_the_supported_setting() -> None:
+    tools = {
+        tool.name: tool
+        for tool in asyncio.run(agentconfig_server.mcp.list_tools())
+    }
+    for name in ("get_agent_config", "update_agent_config"):
+        description = tools[name].description
+        assert "only" in description
+        assert "isStayUpToDateEnabled" in description
+        assert "isQuickAccessEnabled" in description
+        assert "never mention" in description
+    assert "send only isStayUpToDateEnabled" in tools["update_agent_config"].description
+
+
+def test_insight_card_responses_retain_both_backend_fields(monkeypatch) -> None:
+    response = {
+        "titleId": "test-title",
+        "insightCardsConfig": {
+            "isStayUpToDateEnabled": True,
+            "isQuickAccessEnabled": False,
+        },
+    }
+    client = SimpleNamespace(
+        get_agent_config=AsyncMock(return_value=response),
+        update_agent_config=AsyncMock(return_value=response),
+    )
+    monkeypatch.setattr(agentconfig_server, "get_client", lambda: client)
+
+    assert json.loads(asyncio.run(agentconfig_server.get_agent_config("test-title"))) == response
+    config = {"insightCardsConfig": {"isStayUpToDateEnabled": True}}
+    result = asyncio.run(agentconfig_server.update_agent_config("test-title", config))
+
+    assert result.structuredContent == response
+    client.get_agent_config.assert_awaited_once_with("test-title")
+    client.update_agent_config.assert_awaited_once_with("test-title", config)
 
 
 def test_widget_openers_advertise_surface_specific_draft_schemas() -> None:
