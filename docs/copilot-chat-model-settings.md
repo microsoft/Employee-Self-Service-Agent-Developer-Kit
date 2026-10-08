@@ -9,13 +9,13 @@ The ADK uses these defaults for skill-driven Copilot Chat work:
 
 | Setting | ADK-controlled? | Classification |
 |---|---:|---|
-| Model version | Yes | `gpt-6-sol` |
+| Model version | Yes | `gpt6.1-sol` |
 | Reasoning effort | Policy default | Medium |
 | Context-window size | Policy default | Standard (do not opt into extended context by default) |
 
 The model is pinned in two supported places: the ADK workspace sets
 `sessions.chat.defaultModel`, and every ADK prompt file declares
-`model: gpt-6-sol`. The prompt-level declaration is the authoritative setting
+`model: gpt6.1-sol`. The prompt-level declaration is the authoritative setting
 when a maker invokes a skill; the workspace setting covers new chat sessions
 started outside a prompt.
 
@@ -39,7 +39,7 @@ the model picker rather than a documented workspace setting. The ADK therefore
 cannot enforce Medium reasoning or Standard context with a supported JSON key.
 The defaults above are the required operating policy for ADK work:
 
-1. Use `gpt-6-sol` for every ADK prompt.
+1. Use `gpt6.1-sol` for every ADK prompt.
 2. Use Medium thinking effort when the model picker exposes the choice.
 3. Use the standard context option unless the task requires extended context.
 4. Record any host-side override in validation results.

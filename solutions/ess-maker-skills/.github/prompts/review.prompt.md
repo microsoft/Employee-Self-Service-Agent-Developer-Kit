@@ -1,6 +1,6 @@
 ---
 mode: agent
-model: gpt-6-sol
+model: gpt6.1-sol
 description: "Review authored topics or evaluation test sets tagged for review"
 ---
 
