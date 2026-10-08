@@ -84,10 +84,12 @@ def validate_maker_evidence(
         "Maker validation timestamp",
     )
     if result["testUserCategory"].casefold() != "maker":
-        raise WorkdayConnectContractError(
+        error = WorkdayConnectContractError(
             "Maker validation requires testUserCategory 'maker'. Signed-in "
             "non-maker validation is a post-skill activity."
         )
+        error.suppress_blocker_persistence = True
+        raise error
     return result
 
 

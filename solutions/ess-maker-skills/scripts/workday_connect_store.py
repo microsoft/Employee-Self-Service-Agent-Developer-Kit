@@ -24,7 +24,6 @@ from workday_connect_model import (
     ADMINISTRATOR_REQUIRED_FIELDS,
     ADMINISTRATOR_SUBSTAGES,
     LEGACY_PHASE_ROWS as LEGACY_PHASE_ROWS,
-    LIFECYCLE_BLOCKER_CATEGORIES,
     LIFECYCLE_EVENT_TYPES,
     LIFECYCLE_JOURNAL_MAX_EVENTS,
     LIFECYCLE_OUTCOMES,
@@ -35,6 +34,7 @@ from workday_connect_model import (
     TARGET_IDENTITY_FIELDS,
     TARGET_REALMS,
     PhaseStatus,
+    WorkdayConnectModelError,
     default_administrator_state,
     default_state,
     next_phase_summary,
@@ -50,11 +50,13 @@ from workday_connect_migrations import (
     migrate_state,
 )
 from workday_connect_state_policy import (
+    blocker_category as _blocker_category,
     discard_legacy_workday_admin_authorization,
     foundation_matches_current_entra as _foundation_matches_current_entra,
     invalidate_after_phase as _invalidate_after_phase,
     invalidate_from_phase as _invalidate_from_phase,
     legacy_administrator_partial_evidence,
+    normalize_lifecycle_history,
     reset_phase as _reset_phase,
     tenant_foundation_from_state as _tenant_foundation_from_state,
 )
@@ -95,41 +97,6 @@ _LIFECYCLE_TARGET_SCOPE_KEYS = {
     "entraTenantId",
     "workdayTenant",
 }
-_BLOCKER_CATEGORY_KEYWORDS = (
-    ("timeout", ("timeout", "timedout")),
-    (
-        "permissions",
-        (
-            "permission",
-            "access",
-            "authorization",
-            "unauthorized",
-            "consent",
-            "forbidden",
-            "role",
-        ),
-    ),
-    (
-        "auth",
-        ("auth", "credential", "signin", "sign-in", "token", "entra"),
-    ),
-    (
-        "connection",
-        ("connection", "network", "endpoint", "dns", "ssl", "http"),
-    ),
-    (
-        "validation",
-        ("validation", "contract", "evidence", "invalid"),
-    ),
-    ("state", ("state", "store", "schema", "migration", "planchanged")),
-    (
-        "platform",
-        ("platform", "preflight", "dataverse", "package", "solution"),
-    ),
-    ("runtime", ("runtime", "flow", "topic", "agent")),
-)
-
-
 def _project_target_into_active_state(
     state: dict[str, Any],
     target: Mapping[str, Any],
@@ -144,16 +111,6 @@ def _project_target_into_active_state(
         state[field] = copy.deepcopy(target[field])
 
 
-_BLOCKER_CATEGORY_EXACT = {
-    "employee-authentication": "auth",
-    "workday-connection": "connection",
-    "runtime-flow": "runtime",
-    "employee-context": "validation",
-    "network": "connection",
-    "workday-access": "permissions",
-    "publish-or-agent": "runtime",
-    "unknown": "unknown",
-}
 _REMEDIATION_ID_RE = re.compile(r"^WD-E2E-\d{3}$")
 class WorkdayConnectStoreError(RuntimeError):
     """Raised when Workday connect state cannot be persisted safely."""
@@ -161,30 +118,6 @@ class WorkdayConnectStoreError(RuntimeError):
 
 class WorkdayConnectPlanChangedError(WorkdayConnectStoreError):
     """Raised when an approved plan no longer matches the current plan."""
-
-
-def _blocker_category(blocker: Mapping[str, Any] | None) -> str:
-    if not blocker:
-        return ""
-    raw = str(
-        blocker.get("category")
-        or blocker.get("failureCategory")
-        or blocker.get("errorType")
-        or "unknown"
-    ).strip().casefold()
-    if raw in LIFECYCLE_BLOCKER_CATEGORIES:
-        return raw
-    if raw in _BLOCKER_CATEGORY_EXACT:
-        return _BLOCKER_CATEGORY_EXACT[raw]
-    compact = "".join(character for character in raw if character.isalnum())
-    for category, keywords in _BLOCKER_CATEGORY_KEYWORDS:
-        if any(
-            "".join(character for character in keyword if character.isalnum())
-            in compact
-            for keyword in keywords
-        ):
-            return category
-    return "unknown"
 
 
 def _remediation_id(blocker: Mapping[str, Any] | None) -> str:
@@ -382,94 +315,12 @@ def _normalize_current_state(
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
     discard_legacy_workday_admin_authorization(state)
-    lifecycle = state.get("lifecycle")
-    if not isinstance(lifecycle, dict):
-        synchronize_active_target(state)
-        return state
-    correlation_id = lifecycle.get("correlationId")
-    journal = lifecycle.get("journal")
-    if not isinstance(correlation_id, str) or not isinstance(journal, list):
-        synchronize_active_target(state)
-        return state
-    markers: list[str] = []
-    phase_durations = {phase_id: 0 for phase_id in PHASE_BY_ID}
-    active_starts = {phase_id: None for phase_id in PHASE_BY_ID}
-    for record in journal:
-        if not isinstance(record, dict):
-            continue
-        record.setdefault("correlationId", correlation_id)
-        record.setdefault("remediationId", "")
-        raw_category = record.get("blockerCategory")
-        if raw_category:
-            record["blockerCategory"] = _blocker_category(
-                {"category": raw_category}
-            )
-        if record.get("correlationId") != correlation_id:
-            continue
-        event = str(record.get("event") or "")
-        phase = str(record.get("phase") or "")
-        marker = f"{event}|{phase}"
-        if marker not in markers:
-            markers.append(marker)
-        if phase not in phase_durations:
-            continue
-        if event in {"phase-started", "phase-resumed"}:
-            active_starts[phase] = record.get("timestamp")
-        elif event == "phase-paused":
-            phase_durations[phase] += max(
-                0,
-                int(record.get("durationMs") or 0),
-            )
-            active_starts[phase] = None
-        elif event == "phase-completed":
-            phase_durations[phase] = max(
-                0,
-                int(record.get("durationMs") or 0),
-            )
-            active_starts[phase] = None
-    existing_durations = lifecycle.get("phaseDurationsMs")
-    if isinstance(existing_durations, dict):
-        merged_durations: dict[str, Any] = {}
-        for phase_id in PHASE_BY_ID:
-            existing_duration = existing_durations.get(phase_id)
-            if (
-                isinstance(existing_duration, int)
-                and not isinstance(existing_duration, bool)
-                and existing_duration >= 0
-            ):
-                merged_durations[phase_id] = max(
-                    existing_duration,
-                    phase_durations[phase_id],
-                )
-            else:
-                merged_durations[phase_id] = existing_duration
-        lifecycle["phaseDurationsMs"] = merged_durations
-    else:
-        lifecycle["phaseDurationsMs"] = phase_durations
-    existing_starts = lifecycle.get("activePhaseStartedAt")
-    if isinstance(existing_starts, dict):
-        lifecycle["activePhaseStartedAt"] = {
-            phase_id: (
-                existing_starts.get(phase_id)
-                or active_starts[phase_id]
-            )
-            for phase_id in PHASE_BY_ID
-        }
-    else:
-        lifecycle["activePhaseStartedAt"] = active_starts
-    existing_markers = lifecycle.get("eventMarkers")
-    lifecycle["eventMarkers"] = list(
-        dict.fromkeys(
-            [
-                *(
-                    existing_markers
-                    if isinstance(existing_markers, list)
-                    else []
-                ),
-                *markers,
-            ]
-        )
-    )
+    normalize_lifecycle_history(state)
+    targets = state.get("targets")
+    if isinstance(targets, dict):
+        for target in targets.values():
+            if isinstance(target, dict):
+                normalize_lifecycle_history(target)
     synchronize_active_target(state)
     return state
 
@@ -913,8 +764,12 @@ def _upgrade_or_migrate_state(
             state,
         )
         return validate_state(state)
-    except WorkdayConnectMigrationError as exc:
-        raise WorkdayConnectStoreError(str(exc)) from exc
+    except (WorkdayConnectMigrationError, WorkdayConnectModelError) as exc:
+        raise WorkdayConnectStoreError(
+            "The persisted Workday state could not be migrated safely. "
+            "Review config.pre-v12.json before retrying. "
+            f"{exc}"
+        ) from exc
 
 
 def _scope_invalidation_phase(changed_keys: set[str]) -> str:

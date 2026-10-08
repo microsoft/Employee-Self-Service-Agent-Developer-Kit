@@ -30,6 +30,7 @@ from workday_connect_state_policy import (
     discard_legacy_workday_admin_authorization,
     invalidate_from_phase,
     legacy_administrator_partial_evidence,
+    normalize_lifecycle_history,
     reset_phase,
     tenant_foundation_from_state,
 )
@@ -111,6 +112,23 @@ def _retire_runtime_evidence(container: dict[str, Any]) -> None:
         )
     ]
     blocker = phase.get("blocker")
+    blocker_remediation_id = (
+        str(blocker.get("remediationId") or "").upper()
+        if isinstance(blocker, Mapping)
+        else ""
+    )
+    blocker_operation = (
+        str(blocker.get("operation") or "")
+        if isinstance(blocker, Mapping)
+        else ""
+    )
+    has_current_blocker = (
+        isinstance(blocker, Mapping)
+        and (
+            blocker_remediation_id == "WD-E2E-006"
+            or blocker_operation == "readiness-validation"
+        )
+    )
     has_maker_progress = (
         "maker-smoke-test" in (phase.get("completedActions") or [])
         or any(
@@ -118,21 +136,14 @@ def _retire_runtime_evidence(container: dict[str, Any]) -> None:
             and record.get("action") == "maker-smoke-test"
             for record in (phase.get("evidence") or [])
         )
-        or (
-            isinstance(blocker, Mapping)
-            and blocker.get("remediationId") == "WD-E2E-006"
-        )
+        or has_current_blocker
     )
     if (
         had_attempt
         and phase.get("status") != PhaseStatus.COMPLETE.value
         and not has_maker_progress
     ):
-        validation_profiles = copy.deepcopy(
-            phase.get("validationProfiles") or {}
-        )
         reset_phase(phase)
-        phase["validationProfiles"] = validation_profiles
         runtime = phases.get("runtime")
         if (
             isinstance(runtime, Mapping)
@@ -690,6 +701,9 @@ def _upgrade_v11_state(document: Mapping[str, Any]) -> dict[str, Any]:
         for target in targets.values():
             if isinstance(target, dict):
                 _normalize_validation_contract(target)
+                normalize_lifecycle_history(target)
+    discard_legacy_workday_admin_authorization(state)
+    normalize_lifecycle_history(state)
     state["updatedAt"] = utc_now()
     synchronize_active_target(state)
     return validate_state(state)

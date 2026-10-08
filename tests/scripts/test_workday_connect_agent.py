@@ -2114,6 +2114,46 @@ def test_non_maker_validation_is_explicitly_post_skill(
     assert "employeeTestAttempt" not in state["phases"]["maker-validation"]
 
 
+def test_non_maker_cli_rejection_does_not_persist_blocker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import workday_connect
+    from workday_connect_store import WorkdayConnectStore
+
+    store = WorkdayConnectStore(tmp_path)
+    before = store.initialize()
+    evidence_file = tmp_path / "non-maker-validation.json"
+    evidence_file.write_text(
+        json.dumps(
+            {
+                "testUserCategory": "non-maker employee",
+                "timestamp": "2026-10-05T18:00:00-07:00",
+                "outcome": "passed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "workday_connect.py",
+            "--root",
+            str(tmp_path),
+            "record-validation",
+            "--evidence-file",
+            str(evidence_file),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        workday_connect.main()
+
+    assert exc.value.code == 1
+    assert store.load() == before
+
+
 def test_maker_success_completes_without_run_history_correlation(
     tmp_path: Path,
     monkeypatch,
