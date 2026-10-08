@@ -59,9 +59,12 @@ ok "Using Git: $(command -v git)"
 # --- 2. Clone or update the repository --------------------------------------
 if [[ -d "$ROOT/.git" ]]; then
     info "Updating existing clone at $ROOT ..."
+    # A shallow `fetch origin <branch>` populates FETCH_HEAD but does NOT create
+    # a remote-tracking ref (origin/<branch>), so checking out the branch name or
+    # resetting to origin/<branch> fails. Check out FETCH_HEAD directly instead.
     git -C "$ROOT" fetch --depth 1 origin "$BRANCH"
-    git -C "$ROOT" checkout "$BRANCH"
-    git -C "$ROOT" reset --hard "origin/$BRANCH"
+    git -C "$ROOT" checkout -B "$BRANCH" FETCH_HEAD
+    git -C "$ROOT" reset --hard FETCH_HEAD
 else
     info "Cloning $BRANCH into $ROOT ..."
     git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$ROOT"

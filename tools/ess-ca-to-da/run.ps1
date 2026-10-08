@@ -41,48 +41,81 @@ function Write-Warn2 { param([string] $m) Write-Host "  $m" -ForegroundColor Yel
 # Run a native command and return its exit code without throwing.
 function Invoke-Native { param([scriptblock] $Script) & $Script 2>&1 }
 
-# Does this interpreter satisfy the minimum version? $Cmd is an array: exe + prefix args.
+# Does the python.exe at $PythonPath satisfy the minimum version?
+# Uses Start-Process with a hard timeout so a missing, broken, or hanging
+# interpreter can't wedge the launcher forever — we just move on to the next
+# candidate. `--version` keeps the arguments space-free, avoiding brittle -c
+# quoting, and works identically across the classic and PyManager builds.
 function Test-PythonVersion {
-    param([string[]] $Cmd)
+    param([string] $PythonPath, [int] $TimeoutMs = 15000)
+    $outFile = [System.IO.Path]::GetTempFileName()
+    $errFile = [System.IO.Path]::GetTempFileName()
     try {
-        $exe = $Cmd[0]
-        $prefix = @($Cmd[1..($Cmd.Length - 1)] | Where-Object { $_ })
-        $out = & $exe @prefix -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $out) { return $false }
-        $parts = "$($out | Select-Object -Last 1)".Trim().Split('.')
-        return ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge $minMinor)
+        $proc = Start-Process -FilePath $PythonPath -ArgumentList '--version' -NoNewWindow -PassThru `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile -ErrorAction Stop
+        if (-not $proc.WaitForExit($TimeoutMs)) {
+            try { $proc.Kill() } catch { }
+            return $false
+        }
+        if ($proc.ExitCode -ne 0) { return $false }
+        $text = (Get-Content $outFile -Raw -ErrorAction SilentlyContinue) +
+                (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+        if ($text -match 'Python\s+(\d+)\.(\d+)') {
+            return ([int]$Matches[1] -eq 3 -and [int]$Matches[2] -ge $minMinor)
+        }
+        return $false
     } catch {
         return $false
+    } finally {
+        Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
     }
 }
 
-# Resolve a usable Python 3.11+, returned as an array (exe + any prefix args).
-# Mirrors the resolution order proven in setup\Install-EssAdk.ps1.
-function Resolve-Python {
-    # 1. py launcher (most reliable on Windows)
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        foreach ($v in @('-3.12', '-3.11', '-3')) {
-            $cmd = @('py', $v)
-            if (Test-PythonVersion $cmd) { return $cmd }
-        }
+# Concrete python.exe paths known to the py launcher, via its path listing
+# (`py -0p`). This is a launcher-native query that does NOT spawn Python, so it
+# is fast and safe on both the classic launcher and the newer PyManager launcher.
+function Get-PyLauncherPythonPaths {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { return @() }
+    $lines = try { & py -0p 2>$null } catch { @() }
+    $found = foreach ($line in $lines) {
+        if ($line -match '([A-Za-z]:\\[^\r\n]*?python\.exe)') { $Matches[1].Trim() }
     }
-    # 2. python / python3 on PATH (skip the WindowsApps Store alias)
+    return @($found)
+}
+
+# Resolve a usable Python 3.11+, returned as a concrete python.exe path string
+# (or $null). We deliberately avoid the `py -X` command form for execution: the
+# newer PyManager launcher mishandles it (e.g. `py -3.12 -m venv` silently drops
+# `-m venv` and opens an interactive REPL). Invoking python.exe directly is
+# reliable everywhere.
+function Resolve-Python {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    # 1. python / python3 on PATH (skip the WindowsApps Store alias)
     foreach ($name in @('python', 'python3')) {
         $c = Get-Command $name -ErrorAction SilentlyContinue
-        if ($c -and $c.Source -notmatch 'WindowsApps') {
-            if (Test-PythonVersion @($c.Source)) { return @($c.Source) }
+        if ($c -and $c.Source -and $c.Source -notmatch 'WindowsApps') {
+            $candidates.Add($c.Source)
         }
     }
-    # 3. Known install locations
-    $known = @(
-        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:ProgramFiles\Python312\python.exe",
-        "${env:ProgramFiles(x86)}\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-        "$env:ProgramFiles\Python311\python.exe"
+    # 2. Concrete paths the py launcher knows about (classic + PyManager)
+    foreach ($p in (Get-PyLauncherPythonPaths)) { if ($p) { $candidates.Add($p) } }
+    # 3. Known install locations (winget / python.org / PyManager), newest first,
+    #    so an install that never made it onto PATH is still found.
+    $globs = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe",
+        "$env:ProgramFiles\Python3*\python.exe",
+        "${env:ProgramFiles(x86)}\Python3*\python.exe",
+        "$env:LOCALAPPDATA\Python\pythoncore-3.*\python.exe"
     )
-    foreach ($p in $known) {
-        if ((Test-Path $p) -and (Test-PythonVersion @($p))) { return @($p) }
+    foreach ($g in $globs) {
+        Get-ChildItem -Path $g -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            ForEach-Object { $candidates.Add($_.FullName) }
+    }
+
+    foreach ($p in $candidates) {
+        if ($p -and (Test-Path $p) -and (Test-PythonVersion $p)) { return $p }
     }
     return $null
 }
@@ -112,16 +145,14 @@ if (-not $python) {
     Write-Warn2 '  (or download from https://www.python.org/downloads/windows/)'
     exit 1
 }
-Write-Ok "Using Python: $($python -join ' ')"
+Write-Ok "Using Python: $python"
 
 # --- 2. Ensure the virtual environment --------------------------------------
 $venvPython = Join-Path $venvPath 'Scripts\python.exe'
 $freshVenv = $false
 if (-not (Test-Path $venvPython)) {
     Write-Info 'Creating virtual environment (.venv)...'
-    $exe = $python[0]
-    $prefix = @($python[1..($python.Length - 1)] | Where-Object { $_ })
-    & $exe @prefix -m venv $venvPath
+    & $python -m venv $venvPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $venvPython)) {
         Write-Warn2 'Failed to create the virtual environment.'
         exit 1
