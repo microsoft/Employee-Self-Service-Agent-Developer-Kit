@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Run evaluation test sets or view evaluation run results"
 ---
 

@@ -22,7 +22,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only, and Maker vs Developer mode selection. Prefer to clone and open the repo yourself? See the [maker kit quick start](solutions/ess-maker-skills/README.md#quick-start). A **GitHub Copilot subscription is required** for the in-editor maker experience.
 
-For the investigation of model version, reasoning effort, and context-window
+For the ADK defaults for model version, reasoning effort, and context-window
 settings in GitHub Copilot Chat, see
 [Copilot Chat model settings](docs/copilot-chat-model-settings.md).
 

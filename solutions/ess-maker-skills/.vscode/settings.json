@@ -1,5 +1,6 @@
 {
   "git.openRepositoryInParentFolders": "never",
+  "sessions.chat.defaultModel": "gpt-6-sol",
   "[yaml]": {
     "editor.defaultFormatter": "redhat.vscode-yaml",
     "editor.tabSize": 2

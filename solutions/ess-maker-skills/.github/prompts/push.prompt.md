@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Push local changes to Copilot Studio"
 ---
 

@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right"
 ---
 

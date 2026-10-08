@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Create a workflow or an evaluation test set"
 ---
 

@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Generate or manage evaluation test sets"
 ---
 

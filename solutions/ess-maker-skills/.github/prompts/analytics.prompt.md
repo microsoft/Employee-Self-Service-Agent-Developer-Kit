@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Jump to your DA agent's analytics dashboard"
 ---
 

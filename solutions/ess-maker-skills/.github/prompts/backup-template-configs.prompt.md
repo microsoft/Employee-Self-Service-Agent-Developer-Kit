@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Type Enter to back up hybrid Workday template configs"
 ---
 

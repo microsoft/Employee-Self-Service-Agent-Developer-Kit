@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Connect the active ESS HR agent to Workday"
 ---
 

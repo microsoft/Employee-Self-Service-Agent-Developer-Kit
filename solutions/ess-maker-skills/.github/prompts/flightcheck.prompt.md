@@ -1,5 +1,6 @@
 ---
 mode: agent
+model: gpt-6-sol
 description: "Type Enter to run a pre-deployment readiness check on your ESS agent"
 ---
 
