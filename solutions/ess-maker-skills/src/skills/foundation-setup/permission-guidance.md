@@ -241,7 +241,7 @@ When environment discovery returns an authorization failure, say:
 
 `{SETUP_ACCOUNT}` could not list Power Platform environments in the selected service ring. This does not prove that the target environment is missing or inaccessible by its direct URL.
 
-Use another Microsoft login, provide the environment URL, or go back and choose another service ring.
+Use another Microsoft login, provide the environment URL, or restart setup with an explicit service ring.
 
 **End message.**
 
