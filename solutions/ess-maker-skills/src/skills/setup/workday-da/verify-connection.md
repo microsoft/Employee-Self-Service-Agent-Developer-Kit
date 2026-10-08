@@ -40,9 +40,34 @@ Use `vscode_askQuestions`:
 Leave the selection unset.
 Do not mark the passing option as recommended.
 
-If the maker selects **No**, stop before publishing. Ask what failed, show only
-the remediation relevant to that observed surface, and repeat the maker smoke
-test after the issue is corrected. Do not start an employee evidence window or
+If the maker selects **No**, stop before publishing and ask what failed. For
+failures other than the exact Workday response `Task not authorized`, show only
+the remediation relevant to that surface and repeat the maker smoke test after
+the issue is corrected.
+
+For `Task not authorized`, ask the maker for the name of the scenario that
+failed. Ask the Workday administrator to correct the domain security policy
+for that scenario, then collect the affected Workday security domain. Write
+this safe evidence to
+`.local/connect/workday-da/maker-authorization-remediation.json`:
+
+```json
+{
+  "remediationId": "WD-E2E-006",
+  "scenarioName": "{named scenario that failed}",
+  "affectedDomain": "{Workday security domain corrected by the administrator}",
+  "timestamp": "{timezone-qualified timestamp when the failure was observed}"
+}
+```
+
+Run:
+
+```powershell
+python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\maker-authorization-remediation.json"
+```
+
+Then require the maker to retest that same named scenario. Do not accept a
+different scenario as the retest. Do not start an employee evidence window or
 ask a non-maker employee to test.
 
 If the maker selects **Yes**, write this safe evidence to
@@ -52,10 +77,13 @@ tool:
 ```json
 {
   "testUserCategory": "maker",
+  "scenarioName": "{named scenario, required after Task not authorized remediation}",
   "timestamp": "{timezone-qualified current timestamp}",
   "outcome": "passed"
 }
 ```
+
+Omit `scenarioName` when no authorization remediation was required.
 
 Then run:
 
@@ -70,16 +98,42 @@ ask the maker or employee to repeat a successful scenario.
 
 ## Finish with post-skill next steps
 
-After the controller returns `lifecycleComplete: true`, tell the maker:
+After the controller returns `lifecycleComplete: true`, name the completed
+realm from `activeTargetRealm` and render only the returned
+`postSkillNextSteps`. Do not add Production employee-adoption steps to a
+Development or Test completion.
 
-> Workday setup is complete, and the maker Test pane scenario passed.
+For Development, tell the maker:
+
+> Workday setup is complete in Development, and the maker Test pane scenario
+> passed.
 >
 > **Next steps:**
 >
-> 1. Publish and deploy the agent when ready.
+> 1. Promote the agent from Development to Test when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to Test.
+
+For Test, tell the maker:
+
+> Workday setup is complete in Test, and the maker Test pane scenario passed.
+>
+> **Next steps:**
+>
+> 1. Promote the agent from Test to Production when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to
+>    Production.
+
+Only for Production, tell the maker:
+
+> Workday setup is complete in Production, and the maker Test pane scenario
+> passed.
+>
+> **Next steps:**
+>
+> 1. Publish and deploy the Production agent when ready.
 > 2. Have each non-maker employee establish their own Workday connections in
 >    Microsoft 365 Chat.
-> 3. Validate an enabled Workday scenario with the published agent.
+> 3. Validate an enabled Workday scenario with the published Production agent.
 
 Do not wait for those results, record them as lifecycle evidence, or keep the
 Workday skill open. They are deployment and adoption validation outside this

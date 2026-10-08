@@ -38,6 +38,7 @@ from workday_connect_evidence_contracts import (
     WorkdayConnectContractError,
     validate_agent_binding_evidence,
     validate_employee_evidence,
+    validate_employee_failure_evidence,
 )
 from workday_connect_flightcheck import (
     WorkdayConnectFlightCheckError,
@@ -52,6 +53,11 @@ from workday_connect_readiness import (
     ensure_migration_baseline,
     run_final_readiness,
     run_profile_gate,
+)
+from workday_connect_realms import (
+    WorkdayConnectRealmError,
+    discover_and_record_realm_target,
+    revalidate_active_realm_target,
 )
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
@@ -187,6 +193,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    discover_target = subparsers.add_parser("discover-realm-target")
+    discover_target.add_argument(
+        "--realm",
+        choices=("test", "prod"),
+        required=True,
+    )
+    discover_target.add_argument("--environment")
+    discover_target.add_argument("--environment-id")
+    discover_target.add_argument("--dataverse-url")
+    discover_target.add_argument("--maker-username")
 
     tenant = subparsers.add_parser("set-workday-tenant")
     tenant.add_argument("--tenant", required=True)
@@ -295,6 +311,21 @@ def _status(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     return store.status()
+
+
+def _discover_realm_target(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return discover_and_record_realm_target(
+        Path(args.root),
+        store,
+        realm=args.realm,
+        environment_id=args.environment_id,
+        environment_url=args.dataverse_url,
+        environment_selector=getattr(args, "environment", None),
+        account_hint=args.maker_username,
+    )
 
 
 def _run_profile_gate(
@@ -459,6 +490,40 @@ def _action_evidence(
             if key not in {"action", "capturedAt"}
         }
     return None
+
+
+def _post_skill_next_steps(realm: str) -> list[str]:
+    if realm == "dev":
+        return [
+            "Promote the agent from Development to Test when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Test."
+            ),
+        ]
+    if realm == "test":
+        return [
+            "Promote the agent from Test to Production when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Production."
+            ),
+        ]
+    if realm == "prod":
+        return [
+            "Publish and deploy the Production agent when ready.",
+            (
+                "Have each non-maker employee establish their own Workday "
+                "connections in Microsoft 365 Chat."
+            ),
+            (
+                "Validate an enabled Workday scenario with the published "
+                "Production agent."
+            ),
+        ]
+    raise WorkdayConnectStoreError(
+        f"Unsupported Workday target realm: {realm}"
+    )
 
 
 def _entra_handoff(
@@ -797,15 +862,6 @@ def _record_workday_admin(
             "workday-admin",
             "collecting-evidence",
             valid_fields=result["partialEvidence"],
-            invalid_fields=(
-                [
-                    "authorizationRemediationDomain",
-                    "authorizationRemediationScenario",
-                    "authorizationRetestOutcome",
-                ]
-                if result["evidence"]["authorizationOutcome"] == "verified"
-                else []
-            ),
         )
     store.complete_action(
         "workday-admin",
@@ -845,6 +901,7 @@ def _runtime_apply(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    revalidate_active_realm_target(args.root, store)
     result = run_runtime_operation(
         store.load(),
         apply=True,
@@ -1089,6 +1146,33 @@ def _record_validation(
                 "timestamp": evidence["timestamp"],
                 "outcome": evidence["outcome"],
             }
+            blocker = phase.get("blocker")
+            if (
+                isinstance(blocker, Mapping)
+                and blocker.get("remediationId") == "WD-E2E-006"
+            ):
+                scenario_name = str(evidence.get("scenarioName") or "").strip()
+                if scenario_name != blocker.get("scenarioName"):
+                    raise WorkdayConnectContractError(
+                        "Retest the same named scenario that observed "
+                        "'Task not authorized'."
+                    )
+                maker_evidence.update(
+                    {
+                        "scenarioName": scenario_name,
+                        "authorizationOutcome": (
+                            "task-not-authorized-remediated"
+                        ),
+                        "authorizationRemediationDomain": blocker[
+                            "affectedDomain"
+                        ],
+                        "authorizationRetestOutcome": (
+                            "verified-after-remediation"
+                        ),
+                    }
+                )
+            elif evidence.get("scenarioName"):
+                maker_evidence["scenarioName"] = evidence["scenarioName"]
             replayed = (
                 phase["status"] == "complete"
                 and _action_evidence(
@@ -1105,29 +1189,24 @@ def _record_validation(
                     evidence=maker_evidence,
                 )
             _run_final_readiness(store)
-            store.finalize_maker_validation_success()
+            final_state = store.finalize_maker_validation_success()
+            active_realm = final_state["activeTargetRealm"]
+            status = store.status()
             if replayed:
                 return {
                     "verified": True,
                     "replayed": True,
                     "lifecycleComplete": True,
-                    "status": store.status(),
+                    "activeTargetRealm": active_realm,
+                    "postSkillNextSteps": _post_skill_next_steps(active_realm),
+                    "status": status,
                 }
             return {
                 "verified": True,
                 "lifecycleComplete": True,
-                "postSkillNextSteps": [
-                    "Publish and deploy the agent when ready.",
-                    (
-                        "Have each non-maker employee establish their own "
-                        "Workday connections in Microsoft 365 Chat."
-                    ),
-                    (
-                        "Validate an enabled Workday scenario with the "
-                        "published agent."
-                    ),
-                ],
-                "status": store.status(),
+                "activeTargetRealm": active_realm,
+                "postSkillNextSteps": _post_skill_next_steps(active_realm),
+                "status": status,
             }
         raise WorkdayConnectRetiredOperationError(
             "Signed-in employee runtime-evidence validation has been retired. "
@@ -1165,13 +1244,48 @@ def _abandon_employee_test(
 
 
 def _record_validation_failure(
-    _args: argparse.Namespace,
-    _store: WorkdayConnectStore,
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    raise WorkdayConnectRetiredOperationError(
-        "Employee runtime-evidence failure recording has been retired. "
-        "Resolve maker Test pane failures before completing maker validation."
+    evidence = validate_employee_failure_evidence(
+        _json_input(args, "evidence", "maker validation failure")
     )
+    if evidence["remediationId"] != "WD-E2E-006":
+        raise WorkdayConnectRetiredOperationError(
+            "Only a maker-observed 'Task not authorized' result uses this "
+            "focused remediation path. Resolve other Test pane failures "
+            "before completing maker validation."
+        )
+    if not evidence.get("scenarioName") or not evidence.get("affectedDomain"):
+        raise WorkdayConnectContractError(
+            "A named failed scenario and the affected Workday security "
+            "domain are required for 'Task not authorized' remediation."
+        )
+    state = store.load()
+    if state["phases"]["runtime"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete runtime configuration before recording Maker "
+            "validation remediation."
+        )
+    store.set_phase_status(
+        "employee-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation",
+            "errorType": "WorkdayAuthorizationRemediationRequired",
+            "message": (
+                "The maker observed 'Task not authorized'. Correct the "
+                "recorded Workday domain and retest the same scenario."
+            ),
+            **evidence,
+        },
+    )
+    return {
+        "recorded": True,
+        "remediationId": evidence["remediationId"],
+        "scenarioName": evidence["scenarioName"],
+        "status": store.status(),
+    }
 
 
 def _preflight(
@@ -1235,6 +1349,7 @@ _COMMAND_HANDLERS: dict[
     Callable[[argparse.Namespace, WorkdayConnectStore], dict[str, Any]],
 ] = {
     "status": _status,
+    "discover-realm-target": _discover_realm_target,
     "set-workday-tenant": _set_workday_tenant,
     "entra-handoff": _entra_handoff,
     "record-entra": _record_entra,
@@ -1259,6 +1374,7 @@ _COMMAND_HANDLERS: dict[
 }
 
 _COMMAND_PHASES = {
+    "discover-realm-target": None,
     "preflight": "preflight",
     "set-workday-tenant": "entra",
     "entra-handoff": "entra",
@@ -1313,6 +1429,7 @@ def main() -> None:
         WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
+        WorkdayConnectRealmError,
         WorkdayConnectRuntimeError,
         WorkdayConnectStoreError,
         WorkdayConnectFlightCheckError,
@@ -1337,7 +1454,12 @@ def main() -> None:
                     existing_blocker = existing_phase.get("blocker") or {}
                     for key in (
                         "remediationId",
+                        "failureCategory",
                         "failureSurface",
+                        "timestamp",
+                        "remediation",
+                        "scenarioName",
+                        "affectedDomain",
                         "capturedAt",
                     ):
                         if key in existing_blocker:

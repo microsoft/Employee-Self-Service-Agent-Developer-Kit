@@ -31,12 +31,16 @@ from workday_connect_model import (
     PHASE_DEFINITIONS,
     PHASE_REQUIRED_ACTIONS,
     STATE_SCHEMA_VERSION,
+    TARGET_IDENTITY_FIELDS,
+    TARGET_REALMS,
     PhaseStatus,
     default_administrator_state,
     default_state,
     next_phase_summary,
     plan_hash,
     progress_text,
+    synchronize_active_target,
+    target_state_from_active,
     utc_now,
     validate_state,
 )
@@ -45,6 +49,7 @@ from workday_connect_migrations import (
     migrate_state,
 )
 from workday_connect_state_policy import (
+    discard_legacy_workday_admin_authorization,
     foundation_matches_current_entra as _foundation_matches_current_entra,
     invalidate_after_phase as _invalidate_after_phase,
     invalidate_from_phase as _invalidate_from_phase,
@@ -122,6 +127,22 @@ _BLOCKER_CATEGORY_KEYWORDS = (
     ),
     ("runtime", ("runtime", "flow", "topic", "agent")),
 )
+
+
+def _project_target_into_active_state(
+    state: dict[str, Any],
+    target: Mapping[str, Any],
+) -> None:
+    for field in (
+        "status",
+        "scope",
+        "operators",
+        "lifecycle",
+        "phases",
+    ):
+        state[field] = copy.deepcopy(target[field])
+
+
 _BLOCKER_CATEGORY_EXACT = {
     "employee-authentication": "auth",
     "workday-connection": "connection",
@@ -359,12 +380,15 @@ def _normalize_current_state(
     document: Mapping[str, Any],
 ) -> dict[str, Any]:
     state = copy.deepcopy(dict(document))
+    discard_legacy_workday_admin_authorization(state)
     lifecycle = state.get("lifecycle")
     if not isinstance(lifecycle, dict):
+        synchronize_active_target(state)
         return state
     correlation_id = lifecycle.get("correlationId")
     journal = lifecycle.get("journal")
     if not isinstance(correlation_id, str) or not isinstance(journal, list):
+        synchronize_active_target(state)
         return state
     markers: list[str] = []
     phase_durations = {phase_id: 0 for phase_id in PHASE_BY_ID}
@@ -445,6 +469,7 @@ def _normalize_current_state(
             ]
         )
     )
+    synchronize_active_target(state)
     return state
 
 
@@ -843,6 +868,190 @@ def _section_invalidation_phase(
     return None
 
 
+def _record_target_discovery_in_state(
+    state: dict[str, Any],
+    realm: str,
+    identity: Mapping[str, Any],
+    ring: str,
+) -> None:
+    existing = state["targets"].get(realm)
+    same_target = (
+        isinstance(existing, Mapping)
+        and all(
+            str((existing.get("identity") or {}).get(key) or "").casefold()
+            == str(identity[key]).casefold()
+            for key in TARGET_IDENTITY_FIELDS
+        )
+    )
+    if same_target:
+        target = copy.deepcopy(dict(existing))
+        target["identity"] = copy.deepcopy(dict(identity))
+        target["discoveredAt"] = utc_now()
+        target["provenance"] = "agentbuilder-realm-discovery"
+        if target["deploymentStatus"] != "ready":
+            target["deploymentStatus"] = "detected"
+        target["updatedAt"] = utc_now()
+        target["scope"].update(
+            {
+                "environmentId": identity["environmentId"],
+                "dataverseUrl": identity["environmentUrl"],
+                "entraTenantId": identity["tenantId"],
+                "ring": ring,
+                "agent": {
+                    "slug": identity["agentSlug"],
+                    "botId": identity["agentId"],
+                    "schemaName": identity["agentSchemaName"],
+                },
+            }
+        )
+        state["targets"][realm] = target
+        if state["activeTargetRealm"] == realm:
+            _project_target_into_active_state(state, target)
+        return
+
+    target_state = default_state()
+    current_scope = state.get("scope") or {}
+    target_state["scope"] = {
+        key: copy.deepcopy(value)
+        for key, value in current_scope.items()
+        if key
+        in {
+            "architecture",
+            "packageFlavor",
+            "vertical",
+            "workdayTenant",
+        }
+    }
+    target_state["scope"].update(
+        {
+            "environmentId": identity["environmentId"],
+            "dataverseUrl": identity["environmentUrl"],
+            "entraTenantId": identity["tenantId"],
+            "ring": ring,
+            "agent": {
+                "slug": identity["agentSlug"],
+                "botId": identity["agentId"],
+                "schemaName": identity["agentSchemaName"],
+            },
+        }
+    )
+    maker = (state.get("operators") or {}).get("powerPlatformMaker")
+    target_state["operators"] = (
+        {"powerPlatformMaker": copy.deepcopy(maker)}
+        if isinstance(maker, Mapping)
+        else {}
+    )
+    target_state["updatedAt"] = utc_now()
+    state["targets"][realm] = target_state_from_active(
+        target_state,
+        realm,
+        identity=identity,
+        deployment_status="detected",
+        discovered_at=utc_now(),
+        provenance="agentbuilder-realm-discovery",
+    )
+    if state["activeTargetRealm"] == realm:
+        _project_target_into_active_state(state, state["targets"][realm])
+
+
+def _initialize_promoted_target_from_foundation_in_state(
+    state: dict[str, Any],
+) -> bool:
+    realm = state["activeTargetRealm"]
+    if realm == "dev":
+        return False
+    foundation = state.get("tenantFoundation")
+    if not isinstance(foundation, Mapping):
+        return False
+    target = state["targets"].get(realm)
+    identity = (
+        target.get("identity")
+        if isinstance(target, Mapping)
+        and isinstance(target.get("identity"), Mapping)
+        else {}
+    )
+    if (
+        str(identity.get("tenantId") or "").casefold()
+        != str(
+            (foundation.get("scope") or {}).get("entraTenantId") or ""
+        ).casefold()
+        or not _foundation_matches_current_entra(state, foundation)
+    ):
+        raise WorkdayConnectStoreError(
+            "The promoted target does not match the recorded Workday "
+            "tenant foundation."
+        )
+    if (
+        state.get("identifiers") != foundation.get("identifiers")
+        or state.get("endpoints") != foundation.get("endpoints")
+    ):
+        raise WorkdayConnectStoreError(
+            "The recorded Workday tenant foundation changed before "
+            "the promoted target could be initialized."
+        )
+    already_initialized = all(
+        state["phases"][phase_id]["status"]
+        == PhaseStatus.COMPLETE.value
+        for phase_id in ("preflight", "entra", "workday-admin")
+    )
+    if already_initialized:
+        return True
+
+    preflight = state["phases"]["preflight"]
+    _reset_phase(preflight)
+    preflight["status"] = PhaseStatus.COMPLETE.value
+    preflight["completedActions"] = ["verify-target"]
+    preflight["evidence"] = [
+        {
+            "action": "verify-target",
+            "outcome": "verified",
+            "realm": realm,
+            "provenance": "agentbuilder-realm-discovery",
+            "capturedAt": utc_now(),
+        }
+    ]
+    preflight["updatedAt"] = utc_now()
+
+    snapshots = foundation.get("phases") or {}
+    for phase_id in ("entra", "workday-admin"):
+        snapshot = snapshots.get(phase_id)
+        if not isinstance(snapshot, Mapping):
+            raise WorkdayConnectStoreError(
+                "The recorded Workday tenant foundation is missing "
+                f"{phase_id} evidence."
+            )
+        phase = state["phases"][phase_id]
+        _reset_phase(phase)
+        phase["status"] = PhaseStatus.COMPLETE.value
+        phase["completedActions"] = copy.deepcopy(
+            list(snapshot.get("completedActions") or [])
+        )
+        phase["evidence"] = copy.deepcopy(
+            list(snapshot.get("evidence") or [])
+        )
+        phase["evidence"].append(
+            {
+                "action": "tenant-foundation-reused",
+                "outcome": "verified",
+                "realm": realm,
+                "provenance": "verified-promoted-target",
+                "foundationCapturedAt": foundation["capturedAt"],
+                "capturedAt": utc_now(),
+            }
+        )
+        administrator = snapshot.get("administrator")
+        phase["administrator"] = (
+            copy.deepcopy(dict(administrator))
+            if isinstance(administrator, Mapping)
+            else default_administrator_state()
+        )
+        phase["administrator"]["substage"] = "evidence-validated"
+        phase["administrator"]["invalidFields"] = []
+        phase["administrator"]["updatedAt"] = utc_now()
+        phase["updatedAt"] = utc_now()
+    return True
+
+
 
 class WorkdayConnectStore:
     """Own the single durable Workday connect state file."""
@@ -1010,6 +1219,7 @@ class WorkdayConnectStore:
                 else "in-progress"
             )
             state["updatedAt"] = utc_now()
+            synchronize_active_target(state)
             validate_state(state)
             _atomic_write_json(self.config_path, state)
             new_events = [
@@ -1131,6 +1341,108 @@ class WorkdayConnectStore:
                             phase=phase_id,
                             outcome="success",
                         )
+
+        return self._mutate(mutation)
+
+    def record_target_discovery(
+        self,
+        realm: str,
+        identity: Mapping[str, Any],
+        *,
+        ring: str,
+    ) -> dict[str, Any]:
+        if realm not in TARGET_REALMS:
+            raise WorkdayConnectStoreError(
+                f"Unknown Workday target realm: {realm!r}."
+            )
+        if (
+            not isinstance(identity, Mapping)
+            or set(identity) != TARGET_IDENTITY_FIELDS
+            or any(
+                not isinstance(value, str) or not value
+                for value in identity.values()
+            )
+        ):
+            raise WorkdayConnectStoreError(
+                "Workday target discovery must contain complete non-secret "
+                "identity evidence."
+            )
+        if ring not in {"prod", "preprod", "test"}:
+            raise WorkdayConnectStoreError(
+                f"Unsupported Power Platform ring: {ring!r}."
+            )
+
+        def mutation(state: dict[str, Any]) -> None:
+            _record_target_discovery_in_state(
+                state,
+                realm,
+                identity,
+                ring,
+            )
+
+        return self._mutate(mutation)
+
+    def record_and_initialize_promoted_target(
+        self,
+        realm: str,
+        identity: Mapping[str, Any],
+        *,
+        ring: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically record, activate, and initialize a promoted target."""
+        if realm not in {"test", "prod"}:
+            raise WorkdayConnectStoreError(
+                "Only Test or Prod can be initialized as promoted targets."
+            )
+        if (
+            not isinstance(identity, Mapping)
+            or set(identity) != TARGET_IDENTITY_FIELDS
+            or any(
+                not isinstance(value, str) or not value
+                for value in identity.values()
+            )
+        ):
+            raise WorkdayConnectStoreError(
+                "Workday target discovery must contain complete non-secret "
+                "identity evidence."
+            )
+        if ring not in {"prod", "preprod", "test"}:
+            raise WorkdayConnectStoreError(
+                f"Unsupported Power Platform ring: {ring!r}."
+            )
+        reused = False
+
+        def mutation(state: dict[str, Any]) -> None:
+            nonlocal reused
+            _record_target_discovery_in_state(
+                state,
+                realm,
+                identity,
+                ring,
+            )
+            state["activeTargetRealm"] = realm
+            _project_target_into_active_state(state, state["targets"][realm])
+            reused = _initialize_promoted_target_from_foundation_in_state(
+                state
+            )
+
+        state = self._mutate(mutation)
+        return state, reused
+
+    def activate_target(self, realm: str) -> dict[str, Any]:
+        if realm not in TARGET_REALMS:
+            raise WorkdayConnectStoreError(
+                f"Unknown Workday target realm: {realm!r}."
+            )
+
+        def mutation(state: dict[str, Any]) -> None:
+            target = state["targets"].get(realm)
+            if not isinstance(target, Mapping):
+                raise WorkdayConnectStoreError(
+                    f"Workday target realm '{realm}' has not been discovered."
+                )
+            state["activeTargetRealm"] = realm
+            _project_target_into_active_state(state, target)
 
         return self._mutate(mutation)
 
@@ -1283,6 +1595,21 @@ class WorkdayConnectStore:
             state["tenantFoundation"] = foundation
 
         return self._mutate(mutation)
+
+    def initialize_promoted_target_from_foundation(
+        self,
+    ) -> tuple[dict[str, Any], bool]:
+        """Start a promoted target after verified tenant setup phases."""
+        reused = False
+
+        def mutation(state: dict[str, Any]) -> None:
+            nonlocal reused
+            reused = _initialize_promoted_target_from_foundation_in_state(
+                state
+            )
+
+        state = self._mutate(mutation)
+        return state, reused
 
     def restore_workday_foundation(self) -> tuple[dict[str, Any], bool]:
         """Reuse Workday administrator evidence after a fresh Entra reread."""
@@ -2125,18 +2452,6 @@ class WorkdayConnectStore:
                         definition.identifier.value
                     ]
                 )
-                if (
-                    definition.identifier.value == "workday-admin"
-                    and administrator["partialEvidence"].get(
-                        "authorizationOutcome"
-                    )
-                    != "task-not-authorized-remediated"
-                ):
-                    required_fields -= {
-                        "authorizationRemediationDomain",
-                        "authorizationRemediationScenario",
-                        "authorizationRetestOutcome",
-                    }
                 phase_status["administrator"] = {
                     "substage": administrator["substage"],
                     "capturedFields": sorted(
@@ -2157,6 +2472,19 @@ class WorkdayConnectStore:
             "schemaVersion": 1,
             "provider": "workday",
             "status": state["status"],
+            "activeTargetRealm": state["activeTargetRealm"],
+            "targets": [
+                {
+                    "realm": realm,
+                    "status": (
+                        state["targets"][realm]["deploymentStatus"]
+                        if isinstance(state["targets"][realm], Mapping)
+                        else "not-deployed"
+                    ),
+                    "active": realm == state["activeTargetRealm"],
+                }
+                for realm in TARGET_REALMS
+            ],
             "phases": phases,
             "nextPhaseId": next_phase,
             "nextPhaseSummary": next_phase_summary(state),

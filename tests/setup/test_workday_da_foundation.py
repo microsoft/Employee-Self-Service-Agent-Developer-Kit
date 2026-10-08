@@ -27,9 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 10' in schema
+    assert '"schemaVersion": 11' in schema
     assert '"substage": "not-started"' in schema
-    assert "config.pre-v10.json" in schema
+    assert "config.pre-v11.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
@@ -156,6 +156,15 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Another sign-in provider" in tenant
     assert "No enabled SAML row" in tenant
     assert "I'm not sure" in tenant
+    assert "Existing non-Entra federation coexistence or transition" in tenant
+    assert "add a separate Microsoft Entra SAML row" in normalized
+    assert (
+        "controlled transition of only the target employee environment"
+        in tenant
+    )
+    assert "Do not restart the Entra handoff" in tenant
+    assert "resume here after approval" in tenant
+    assert "stop before\n  showing certificate" not in tenant
     assert "Do not infer a match from the provider choice alone" in normalized
     assert "certificateSelectionQuestion" in tenant
     assert (
@@ -175,12 +184,20 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
     assert "reformat a recognizable response" in tenant
-    assert "rejects missing, duplicate, or unknown labels" in normalized
+    assert (
+        "rejects missing mandatory labels, duplicate labels, or unknown labels"
+        in normalized
+    )
     assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant
     assert 'Enter a JSON array of {' not in tenant
-    assert "Yes, all four required functional areas are present" in tenant
+    assert "API client access" in tenant
+    assert "Required employee access" in tenant
+    assert "Additional scenario domains" in tenant
     assert "Domain | supported scenario" in tenant
+    assert "do not ask for it again" in tenant
+    assert '"header": "Authorization"' not in tenant
+    assert '"header": "Authorization retest"' not in tenant
     assert '"all good", "continue", or "proceed"' in tenant
 
 
