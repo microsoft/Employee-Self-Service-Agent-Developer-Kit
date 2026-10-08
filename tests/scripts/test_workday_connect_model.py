@@ -23,7 +23,14 @@ def test_default_state_has_six_primary_phases() -> None:
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 10
+    assert state["schemaVersion"] == 11
+    assert state["activeTargetRealm"] == "dev"
+    assert list(state["targets"]) == ["dev", "test", "prod"]
+    assert state["targets"]["dev"]["deploymentStatus"] == (
+        "needs-configuration"
+    )
+    assert state["targets"]["test"] is None
+    assert state["targets"]["prod"] is None
     assert state["lifecycle"]["correlationId"]
     assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
@@ -37,6 +44,21 @@ def test_default_state_has_six_primary_phases() -> None:
         state["phases"]["entra"]["administrator"]
     )
     assert "administrator" not in state["phases"]["runtime"]
+
+
+def test_active_target_projection_cannot_diverge() -> None:
+    import pytest
+
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["scope"]["environmentId"] = "different"
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="active target projection is inconsistent",
+    ):
+        model.validate_state(state)
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:

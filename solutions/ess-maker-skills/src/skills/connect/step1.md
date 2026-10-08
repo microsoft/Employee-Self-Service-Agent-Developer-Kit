@@ -17,9 +17,10 @@ Build a list of connected integrations (if any):
   - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
     its `agentSlug` exactly matches the active agent, and every phase is
     `done`; or
-  - `.local/connect/workday-da/config.json` has `schemaVersion: 7`,
-    `status: "ready"`, and `scope.agent.slug` and `scope.agent.botId` exactly
-    match the active native agent.
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 11`, and one
+    `targets.dev`, `targets.test`, or `targets.prod` snapshot has
+    `deploymentStatus: "ready"` with an identity whose agent slug and BotId
+    exactly match the active native agent.
   Shared provider state without an exact active-agent match must not make a
   sibling or newly selected agent appear connected.
 
@@ -281,6 +282,9 @@ For `gptagent_copilotforemployeeselfservicehr`, read
 `WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
 `WD-PKG-001`: DA packages share some Workday connection-reference names with
 CEA, so the CEA package fingerprint is not an architecture discriminator.
+If the user arrived with an explicit Test or Production promotion statement,
+preserve that realm intent when entering the Workday DA skill so it can run
+promoted-target discovery instead of restarting DEV.
 
 For the classic DA HR schema `msdyn_copilotforemployeeselfservicedahr`, explain
 that the simplified Workday lifecycle currently supports only the native ESS

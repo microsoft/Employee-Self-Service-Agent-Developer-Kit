@@ -44,14 +44,16 @@ administrator finished configuration.
   Issuer exactly matches the verified Entra issuer.
 - For **No enabled SAML row**, render **Workday Administrator Steps - New
   Microsoft Entra federation** and the greenfield handoff below.
-- For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
-  showing certificate, tenant-security, or API-client changes. Explain that the
-  enabled row belongs to an existing federation and must not be replaced. The
-  Workday administrator must determine, through the customer's Workday
-  governance process, whether a separate Microsoft Entra row can be added
-  safely for the target environment. Do not reopen Entra, re-engage the Entra
-  administrator, show the completion question, or show the response form.
-  Preserve the current Workday phase.
+- For **Okta**, **Ping Identity**, or **Another sign-in provider**, render
+  **Workday Administrator Steps - Existing non-Entra federation** and the
+  coexistence or controlled-transition handoff below. Preserve the existing
+  provider and guide the Workday administrator to either add a separate
+  Microsoft Entra row for the approved target environment or perform a
+  customer-approved transition of only that target environment. Do not return
+  to Entra or re-engage the Entra administrator. If the routing decision still
+  needs customer governance approval, show the exact approval and inventory
+  steps, preserve this phase, and resume the same handoff after approval
+  instead of terminating the workflow.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
   contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
@@ -178,6 +180,72 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    firewall change is required. Do not wait until final employee validation to
    discover a known allowlist requirement.
 
+### Existing non-Entra federation coexistence or transition handoff
+
+1. **Protect and inventory the existing federation.** In Workday, run **Edit
+   Tenant Setup - Security**, open **SAML Setup**, and record the existing
+   provider type, Issuer, **Used for Environments** assignment, selected X.509
+   public key name, and applicable employee authentication-policy routing. Do
+   not collect certificate contents, disable the row, overwrite its Issuer, or
+   replace its certificate.
+2. **Choose the customer-approved routing path.** The Workday administrator
+   must select one of these safe paths:
+   - where the tenant's supported Workday routing design permits it, add a
+     separate Microsoft Entra SAML row for the approved target employee
+     environment and scope its authentication-policy routing to the intended
+     population; or
+   - perform a controlled transition of only the target employee environment
+     from the existing provider to Microsoft Entra during the customer's
+     reviewed change window.
+
+   Preserve every environment and population that is not in scope on the
+   existing provider. Record the existing assignment needed for rollback. If
+   the Workday administrator cannot approve either path yet, provide this
+   inventory and routing decision as the next action, preserve the Workday
+   phase, and resume here after approval. Do not restart the Entra handoff.
+3. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. Run **Create x509
+   Public Key**, paste that public certificate, give it a customer-chosen
+   recognizable name, and save it. Do not modify the key selected by the
+   existing non-Entra row.
+4. **Create the separate Microsoft Entra row.** Add a SAML identity-provider
+   row with the packet's exact expected Microsoft Entra Issuer, select the new
+   Entra-derived public key, set the exact Workday Service Provider ID, set the
+   identity-provider SSO service URL to the packet's **Login URL**, and set the
+   sign-on redirect URL to the packet's **Reply URL**. Do not copy the existing
+   provider's Issuer, endpoints, or certificate.
+5. **Apply only the approved routing change.** For coexistence, assign the new
+   Microsoft Entra row only to the approved target employee environment and
+   apply the approved authentication-policy routing for the intended
+   population. For a controlled transition, move only that approved target
+   environment from the existing row to the new Entra row during the reviewed
+   change window. Verify all out-of-scope assignments remain unchanged and
+   keep the recorded rollback assignment until validation completes.
+6. **Configure tenant security without weakening existing safeguards.** Enable
+   **OAuth 2.0 Clients Enabled** and **SAML** when required. Preserve unrelated
+   authentication policies, administrator safeguards, network restrictions,
+   and non-Entra federation settings.
+7. **Reuse or register the employee API client.** Reuse an approved client only
+   when its **Client Grant Type** is **SAML Bearer**, its functional areas are
+   exactly **Core Payroll**, **Organizations and Roles**, **Staffing**, and
+   **Time Off and Leave**, and **Include Workday Owned Scope** is **Yes**.
+   Otherwise register a new client with those exact settings.
+8. **Configure employee domain security.** Grant the intended employee
+   population **Get** on **Worker Data: Public Worker Reports** and
+   **Integration Permissions**. Add another domain only for a named supported
+   scenario. Preserve unrelated groups and permissions.
+9. **Verify the connection endpoints.** Confirm the OAuth client ID and token
+   endpoint, the REST base ending at `/ccx/api`, and the SOAP base ending at
+   `/ccx/service` without the tenant name. Never return secrets or tokens.
+10. **Review and activate the target authentication policy.** Confirm an active
+    rule allows **SAML** for the intended target employees. Review and activate
+    pending authentication-policy changes through the customer's approved
+    process without changing routing for out-of-scope users.
+11. **Confirm network readiness and final Entra-row values.** Confirm the REST
+    and SOAP hosts are allowed, then verify the new Microsoft Entra row's
+    Issuer, Service Provider ID, identity-provider SSO URL, redirect URL,
+    selected certificate, and certificate expiration exactly match the packet.
+
 ### New Microsoft Entra federation handoff
 
 1. **Confirm the greenfield path.** In Workday, run **Edit Tenant Setup -
@@ -275,14 +343,17 @@ must contain all required evidence:
   registered;
 - exact client grant type and Include Workday Owned Scope outcome;
 - rollout type: entire workforce or limited/test;
-- `Worker Data: Public Worker Reports` Get-permission outcome;
-- `Integration Permissions > Get` outcome;
-- confirmation that all four required API functional-area scopes are present;
+- API-client access: SAML Bearer, Include Workday Owned Scope, and all four
+  required functional-area scopes;
+- required employee access: Get permission for both `Worker Data: Public
+  Worker Reports` and `Integration Permissions`;
 - any additional domain paired with its named supported scenario, only when
-  custom ESS scenarios require one;
-- authorization outcome, including whether a bounded `Task not authorized`
-  remediation was required; when it was, the affected domain, named scenario,
-  and successful retest outcome.
+  custom ESS scenarios require one.
+
+Do not ask the Workday administrator to run an agent scenario or report an
+authorization result in this phase. Connections and runtime configuration do
+not exist yet. A maker-observed `Task not authorized` result is handled only
+during Phase 6 after the same named scenario can be retested.
 
 The worksheet definition below is an internal mapping reference for the exact
 successful values accepted by the controller. Do not render it after the
@@ -336,21 +407,6 @@ and verified certificate expiration date when building the table:
     "allowFreeformInput": false
   },
   {
-    "header": "Client grant type",
-    "question": "What client grant type is configured?",
-    "options": [
-      { "label": "SAML Bearer" },
-      { "label": "Another grant type or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Workday owned scope",
-    "question": "Is Include Workday Owned Scope set to Yes?",
-    "options": [{ "label": "Yes" }, { "label": "No or not sure" }],
-    "allowFreeformInput": false
-  },
-  {
     "header": "OAuth token URL",
     "question": "Enter the OAuth token URL shown by Workday."
   },
@@ -395,73 +451,28 @@ and verified certificate expiration date when building the table:
     "allowFreeformInput": false
   },
   {
-    "header": "Public worker reports",
-    "question": "Was Get permission verified for Worker Data: Public Worker Reports?",
+    "header": "API client access",
+    "question": "Did the administrator verify SAML Bearer, Include Workday Owned Scope, and all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
     "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Integration permissions",
-    "question": "Was Get permission verified under Integration Permissions?",
-    "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Functional-area scopes",
-    "question": "Did the administrator verify that the API client includes all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
-    "options": [
-      { "label": "Yes, all four required functional areas are present" },
-      { "label": "No, one or more required functional areas are missing" },
+      { "label": "Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured" },
+      { "label": "No, one or more API client access settings are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Optional domains",
-    "question": "Are additional Workday domains required for named custom ESS scenarios beyond the standard setup?",
+    "header": "Required employee access",
+    "question": "Did the administrator verify Get permission for both Worker Data: Public Worker Reports and Integration Permissions?",
     "options": [
-      { "label": "No additional domains are required" },
-      { "label": "Yes, additional supported scenarios require domains" },
+      { "label": "Yes, Get permission is verified for Public Worker Reports and Integration Permissions" },
+      { "label": "No, one or both required permissions are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Additional domain mappings",
-    "question": "Only when additional domains are required: enter one per line as Domain | supported scenario. Otherwise leave this blank."
-  },
-  {
-    "header": "Authorization",
-    "question": "What was the final authorization result after the employee security changes?",
-    "options": [
-      { "label": "Verified without an authorization error" },
-      { "label": "Task not authorized was remediated and retested" },
-      { "label": "Task not authorized is unresolved" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Remediated domain",
-    "question": "Only when Task not authorized was remediated: enter the affected domain. Otherwise leave blank."
-  },
-  {
-    "header": "Remediation scenario",
-    "question": "Only when Task not authorized was remediated: enter the named supported scenario. Otherwise leave blank."
-  },
-  {
-    "header": "Authorization retest",
-    "question": "Only when Task not authorized was remediated: was the same scenario retested successfully?",
-    "options": [
-      { "label": "Verified after remediation" },
-      { "label": "Not retested or still failing" }
-    ],
-    "allowFreeformInput": false
+    "header": "Additional scenario domains",
+    "question": "Optional: only when custom ESS scenarios require extra Workday domains, enter one mapping per line as Domain | supported scenario. Otherwise omit this row or leave it blank."
   }
 ]
 ```
@@ -483,11 +494,13 @@ After the administrator confirms completion, use one
 ```
 
 Preserve the response unchanged. The controller recognizes the generated table
-and common customer-facing labels and capitalization, rejects missing,
-duplicate, or unknown labels, and maps only the listed successful choices into
-the structured response object described below. Do not ask the customer to
-reformat a recognizable response. Never infer a missing answer or treat
-unlabeled prose as evidence:
+and common customer-facing labels and capitalization, rejects missing
+mandatory labels, duplicate labels, or unknown labels, and maps only the
+listed successful choices into the structured response object described
+below. Omission of the optional **Additional scenario domains** row means
+`optionalDomains: []`; do not ask for it again. Do not ask the customer to
+reformat a recognizable response. Never infer a missing mandatory answer or
+treat unlabeled prose as evidence:
 
 Certificate comparisons are date-only. Do not ask either administrator for a
 timestamp, time, or timezone. Accept the portal's displayed certificate date
@@ -510,8 +523,10 @@ time component.
 - approved existing client -> `apiClientOutcome:
 existing-client-verified`;
 - newly registered client -> `apiClientOutcome: new-client-registered`;
-- **SAML Bearer** -> `clientGrantType: saml-bearer`;
-- **Yes** for Workday owned scope -> `includeWorkdayOwnedScope: yes`;
+- successful **API client access** confirmation ->
+  `clientGrantType: saml-bearer`, `includeWorkdayOwnedScope: yes`, and
+  `functionalAreaScopes` populated with `Core Payroll`, `Organizations and
+  Roles`, `Staffing`, and `Time Off and Leave`;
 - the entered connection/policy fields -> their corresponding controller
   keys;
 - existing active policy -> `existing-active-policy`;
@@ -523,29 +538,21 @@ existing-client-verified`;
 - configured limited/test population -> `rolloutType: limited-or-test`;
 - an unconfigured or uncertain employee population -> stop for administrator
   remediation instead of submitting successful evidence;
-- each verified domain permission ->
-  `get-permission-verified`;
-- **Yes, all four required functional areas are present** ->
-  `functionalAreaScopes` populated with `Core Payroll`,
-  `Organizations and Roles`, `Staffing`, and `Time Off and Leave`;
-- **No additional domains are required** -> `optionalDomains: []`;
-- additional domain lines -> `optionalDomains` objects with one `domain` and
-  one named supported `scenario` per line;
+- successful **Required employee access** confirmation ->
+  `publicWorkerReportsOutcome: get-permission-verified` and
+  `integrationPermissionsGetOutcome: get-permission-verified`;
+- omitted, blank, or **No additional scenario domains are required** ->
+  `optionalDomains: []`;
+- additional scenario-domain lines -> `optionalDomains` objects with one
+  `domain` and one named supported `scenario` per line;
 - a missing or uncertain required functional area, or an uncertain optional
   domain outcome -> stop for administrator remediation instead of submitting
-  successful evidence;
-- verified authorization -> `authorizationOutcome: verified`;
-- remediated and retested authorization ->
-  `authorizationOutcome: task-not-authorized-remediated`, plus
-  `authorizationRemediationDomain`, `authorizationRemediationScenario`, and
-  `authorizationRetestOutcome: verified-after-remediation`.
+  successful evidence.
 
-Any unsupported provider, mismatch, missing certificate, date mismatch, or
-**I'm not sure** answer is a remediation outcome, not successful evidence. An
-unresolved `Task not authorized` result reopens only the affected domain and
-employee-security evidence; it must not discard valid endpoints, certificate,
-or federation evidence.
-Show the affected remediation step and keep the phase waiting.
+Any unresolved provider identification or routing approval, mismatch, missing
+certificate, date mismatch, or **I'm not sure** answer requires the applicable
+guided step before successful evidence can be submitted. Preserve completed
+evidence and resume the selected handoff rather than restarting the phase.
 
 If the administrator omits a required value or replies only with wording such
 as "done", "all good", "continue", or "proceed", do not move to another field,
@@ -615,9 +622,7 @@ Use these exact outcome values:
 - `includeWorkdayOwnedScope`: `yes`;
 - `rolloutType`: `entire-workforce` or `limited-or-test`;
 - `publicWorkerReportsOutcome` and `integrationPermissionsGetOutcome`:
-  `get-permission-verified`;
-- `authorizationOutcome`: `verified` or
-  `task-not-authorized-remediated`.
+  `get-permission-verified`.
 
 For example:
 
@@ -647,8 +652,7 @@ For example:
     "Staffing",
     "Time Off and Leave"
   ],
-  "optionalDomains": [],
-  "authorizationOutcome": "verified"
+  "optionalDomains": []
 }
 ```
 

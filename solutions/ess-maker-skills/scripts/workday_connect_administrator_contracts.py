@@ -33,8 +33,6 @@ from workday_connect_model import (
 from workday_connect_workday_admin_contracts import (
     WORKDAY_API_CLIENT_OUTCOMES,
     WORKDAY_AUTHENTICATION_POLICY_OUTCOMES,
-    WORKDAY_AUTHORIZATION_OUTCOMES,
-    WORKDAY_AUTHORIZATION_RETEST_OUTCOMES,
     WORKDAY_DOMAIN_PERMISSION_OUTCOMES,
     WORKDAY_NETWORK_READINESS_OUTCOMES,
     WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES,
@@ -319,26 +317,6 @@ def validate_administrator_partial_evidence(
             normalized = str(value or "").strip()
             if normalized not in WORKDAY_DOMAIN_PERMISSION_OUTCOMES:
                 raise WorkdayConnectContractError(f"{name} must verify Get permission.")
-            return normalized
-        if name == "authorizationOutcome":
-            normalized = str(value or "").strip()
-            if normalized not in WORKDAY_AUTHORIZATION_OUTCOMES:
-                raise WorkdayConnectContractError(
-                    "authorizationOutcome is unsupported."
-                )
-            return normalized
-        if name in {
-            "authorizationRemediationDomain",
-            "authorizationRemediationScenario",
-        }:
-            return _safe_nonsecret_text(value, name)
-        if name == "authorizationRetestOutcome":
-            normalized = str(value or "").strip()
-            if normalized not in WORKDAY_AUTHORIZATION_RETEST_OUTCOMES:
-                raise WorkdayConnectContractError(
-                    "authorizationRetestOutcome must confirm verification "
-                    "after remediation."
-                )
             return normalized
         if name == "functionalAreaScopes":
             supplied = _safe_string_list(
