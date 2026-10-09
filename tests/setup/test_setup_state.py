@@ -153,6 +153,7 @@ def test_step_notes_are_specific_and_concise() -> None:
         10 <= len(note.split()) <= 12
         for note in setup_state.STEP_NOTES.values()
     )
+    assert "capacity disposition" in setup_state.STEP_NOTES["SETUP-02.2"]
 
 
 def test_current_state_view_is_compact() -> None:
