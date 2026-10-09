@@ -53,6 +53,10 @@ from flightcheck.runner import (
     BUCKET_ACTION,
     BUCKET_MANUAL,
     BUCKET_PASSED,
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
 )
 from flightcheck.agent_scope import active_agent, validate_agent_slug
 from flightcheck.graph_client import GraphClient
@@ -1272,6 +1276,7 @@ def _run_single_checkpoint(args):
         state = client_availability[client_name]
         state["available"] = False
         state["reason"] = _safe_client_error_reason(error)
+        state["block_reason"] = _classify_client_block(error)
 
     def verify_authenticated_account(
         client_name: str,
@@ -1702,6 +1707,7 @@ def _single_checkpoint_contract_check(target: str):
                     "Restore checkpoint dispatch and rerun the checkpoint."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
             return rows
 
@@ -1727,6 +1733,7 @@ def _single_checkpoint_contract_check(target: str):
                     "rerun the checkpoint."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
 
         if any(
@@ -1783,6 +1790,10 @@ def _client_blockers(
                 "available": False,
             },
             roles=[Role.ESS_MAKER.value],
+            block_reason=(
+                state.get("block_reason")
+                or BLOCK_REASON_ADMIN_API_UNAVAILABLE
+            ),
         ))
     return blockers
 
@@ -1806,6 +1817,29 @@ def _safe_client_error_reason(error: BaseException | str) -> str:
         f" (HTTP {status_code})" if status_code is not None else ""
     )
     return f"{type(error).__name__}{status_hint}"
+
+
+def _classify_client_block(error: BaseException | str) -> str:
+    """Classify a required-client block as an admin-API auth denial vs. a
+    reach/availability failure.
+
+    Returns BLOCK_REASON_ADMIN_API_AUTHORIZATION only when an admin API
+    positively rejected us for identity reasons — HTTP 401/403 or an AADSTS*
+    error. Everything else (connect error, timeout, 404 wrong-env, 5xx, or an
+    unclassifiable failure) returns BLOCK_REASON_ADMIN_API_UNAVAILABLE. Auth
+    must be positively identified so the known test-ring 404-wrong-host bug
+    never inflates the auth metric.
+    """
+    status_code = getattr(
+        getattr(error, "response", None),
+        "status_code",
+        None,
+    )
+    if status_code in (401, 403):
+        return BLOCK_REASON_ADMIN_API_AUTHORIZATION
+    if "AADSTS" in str(error).upper():
+        return BLOCK_REASON_ADMIN_API_AUTHORIZATION
+    return BLOCK_REASON_ADMIN_API_UNAVAILABLE
 
 
 def _profile_family_cardinality_check(
@@ -1850,6 +1884,7 @@ def _profile_family_cardinality_check(
                     "emitted": emitted,
                 },
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_PROFILE_CARDINALITY,
             ))
         return rows
 
@@ -1914,6 +1949,7 @@ def _profile_checkpoint_contract_check(
                     "Restore checkpoint dispatch and rerun the profile."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
         if unresolved:
             rows.append(CheckResult(
@@ -1933,6 +1969,7 @@ def _profile_checkpoint_contract_check(
                     "rerun the profile."
                 ),
                 roles=[Role.ESS_MAKER.value],
+                block_reason=BLOCK_REASON_CHECKPOINT_CONTRACT,
             ))
         if guided:
             rows.append(CheckResult(
@@ -2084,6 +2121,7 @@ def _run_profile(args):
         state["available"] = False
         state["authenticatedAccountVerified"] = False
         state["reason"] = _safe_client_error_reason(error)
+        state["block_reason"] = _classify_client_block(error)
 
     def verified_account(
         client_name: str,
