@@ -814,14 +814,29 @@ def _env_mcs_allocation(powerplatform, env_id) -> int | None:
         return None
     if isinstance(allocations, dict):  # {"_error": ...} sentinel
         return None
+    if not isinstance(allocations, list):
+        return None
     total = 0
     for allocation in allocations:
+        if not isinstance(allocation, dict):
+            return None
         currency = str(allocation.get("currencyType") or "").strip().lower()
         if currency == _MCS_MESSAGES_CURRENCY.lower():
-            try:
-                total += int(allocation.get("allocated") or 0)
-            except (TypeError, ValueError):
-                continue
+            raw_allocated = allocation.get("allocated")
+            if raw_allocated is None or isinstance(raw_allocated, bool):
+                return None
+            if isinstance(raw_allocated, int):
+                parsed_allocated = raw_allocated
+            elif (
+                isinstance(raw_allocated, str)
+                and raw_allocated.strip().isdigit()
+            ):
+                parsed_allocated = int(raw_allocated.strip())
+            else:
+                return None
+            if parsed_allocated < 0:
+                return None
+            total += parsed_allocated
     return total
 
 

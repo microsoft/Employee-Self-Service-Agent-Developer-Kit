@@ -815,6 +815,9 @@ def _run_single_checkpoint(args):
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = None
+    runner.allow_capacity_override = bool(
+        getattr(args, "allow_capacity_override", False)
+    )
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -988,6 +991,14 @@ def main():
              "exclusive with --scope.",
     )
     parser.add_argument(
+        "--allow-capacity-override",
+        action="store_true",
+        help="For foundation setup only: report a trustworthy zero result from "
+             "ENV-CAPACITY-001 as Warning so setup can offer its bounded "
+             "administrator-attested override. Other checkpoints and direct "
+             "capacity runs remain blocking.",
+    )
+    parser.add_argument(
         "--list-checkpoints", action="store_true",
         help="List the registered setup checkpoint IDs and families (no broad "
              "run), then exit.",
@@ -1069,8 +1080,24 @@ def main():
         if args.scope is not None:
             print("ERROR: --checkpoint and --scope are mutually exclusive.")
             sys.exit(2)
+        if (
+            args.allow_capacity_override
+            and args.checkpoint != "ENV-CAPACITY-001"
+        ):
+            print(
+                "ERROR: --allow-capacity-override requires "
+                "--checkpoint ENV-CAPACITY-001."
+            )
+            sys.exit(2)
         _run_single_checkpoint(args)
         return  # _run_single_checkpoint always exits; defensive only.
+
+    if args.allow_capacity_override:
+        print(
+            "ERROR: --allow-capacity-override requires "
+            "--checkpoint ENV-CAPACITY-001."
+        )
+        sys.exit(2)
 
     # Normal scope mode: --scope defaults to "full" when omitted. (Default is
     # None on the parser so checkpoint-mode can detect an explicit --scope.)

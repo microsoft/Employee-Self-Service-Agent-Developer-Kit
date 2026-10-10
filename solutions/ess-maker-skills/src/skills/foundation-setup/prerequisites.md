@@ -7,11 +7,31 @@ playbook immediately and return to the foundation router. Do not rerun
 Dataverse MCP, capacity, or governance checks for a completed prerequisite
 step.
 
-Mark the access and Dataverse substep in progress:
+Inspect `active_step` before updating either substep:
 
 ```text
-python scripts/setup_state.py update-step --step SETUP-02.1 --status in-progress
+python scripts/setup_state.py show --view current
 ```
+
+Branch on the persisted substep:
+
+- If `active_step` is `SETUP-02.1`, mark `SETUP-02.1` in progress and begin at
+  **Access and Dataverse**.
+- If `active_step` is `SETUP-02.2`, do not run any `SETUP-02.1` update or
+  access command. If the current view reported the blocked cause `Copilot
+  Studio message capacity is not allocated`, leave `SETUP-02.2` blocked while
+  rerunning the capacity check and skip directly to **Capacity and billing**.
+  Do not issue an `in-progress` update before that recheck. Otherwise set
+  `SETUP-02.2` to `in-progress` and begin at **Dataverse MCP client**.
+
+```text
+python scripts/setup_state.py update-step \
+  --step "{SETUP-02.1|SETUP-02.2}" \
+  --status in-progress
+```
+
+Run that update only for the branches above that require an `in-progress`
+transition.
 
 Read the locked environment without loading unrelated state:
 
@@ -20,6 +40,8 @@ python scripts/setup_state.py show --view environment
 ```
 
 ## Access and Dataverse
+
+Run this section only for `SETUP-02.1`.
 
 Run:
 
@@ -86,6 +108,7 @@ Run:
 ```text
 python scripts/flightcheck/cli.py \
   --checkpoint ENV-CAPACITY-001 \
+  --allow-capacity-override \
   --quiet-auth \
   --environment-url "{ENVIRONMENT_URL}" \
   --environment-id "{ENVIRONMENT_ID}"
@@ -108,8 +131,9 @@ These outcomes are not eligible for override because setup does not have
 trustworthy evidence of a successful capacity read. Keep `SETUP-02.2` blocked
 with the observed cause; do not replace the failure with manual attestation.
 
-A `Warning` means the Licensing API ran successfully and found zero allocated
-capacity. On the first `Warning`:
+With the setup-only `--allow-capacity-override` flag, a `Warning` means the
+Licensing API ran successfully and found zero allocated capacity. On the first
+`Warning`:
 
 1. Run:
 

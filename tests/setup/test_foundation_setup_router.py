@@ -130,6 +130,7 @@ def test_capacity_override_requires_repeated_confirmed_zero_allocation() -> None
     assert "Manual attestation is available only after two successful checks" in text
     assert "For `Failed`, `Error`, or command failure" in text
     assert "These outcomes are not eligible for override" in text
+    assert "--allow-capacity-override" in text
     assert "--name capacity" in text
     assert '--value "Verified: allocated capacity is greater than zero."' in text
     assert (
@@ -146,6 +147,12 @@ def test_resume_never_replays_completed_prerequisites() -> None:
     assert "do not read or execute `foundation-setup/prerequisites.md`" in router
     assert "only when the current persisted `active_step`" in prerequisites
     assert "Do not rerun Dataverse MCP, capacity, or governance" in prerequisites
+    assert "Inspect `active_step` before updating either substep" in prerequisites
+    assert "If `active_step` is `SETUP-02.2`" in prerequisites
+    assert "do not run any `SETUP-02.1` update" in prerequisites
+    assert "leave `SETUP-02.2` blocked while" in prerequisites
+    assert "Do not issue an `in-progress` update before that recheck" in prerequisites
+    assert "skip directly to **Capacity and billing**" in prerequisites
 
 
 def test_alm_step_reuses_env009_as_an_optional_step_checkpoint() -> None:

@@ -18,7 +18,6 @@ from setup_state import (
     ProductId,
     SetupState,
     SetupStateError,
-    SetupStateService,
     SetupWorkflow,
     StepMode,
     StepStatus,
@@ -256,6 +255,50 @@ def test_json_repository_round_trips_atomically(tmp_path: Path) -> None:
     assert loaded.selected_products == ["da.esshr", "cea.essit"]
     assert loaded.active_step == "SETUP-01"
     assert not list(state_path.parent.glob("*.tmp"))
+
+
+def test_persisted_capacity_pause_resumes_second_substep(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    repository = JsonSetupStateRepository(state_path)
+    state = SetupState()
+    SetupWorkflow.set_scope(
+        state,
+        environment_id="env-1",
+        environment_name="Development",
+        environment_type=EnvironmentType.DEV,
+        tenant_endpoint="https://dev.crm.dynamics.com",
+    )
+    _record_step(state, "SETUP-02.1", checkpoint="ENV-002")
+    SetupWorkflow.update_step(state, "SETUP-02.1", StepStatus.DONE)
+    SetupWorkflow.update_step(state, "SETUP-02.2", StepStatus.IN_PROGRESS)
+    SetupWorkflow.update_step(
+        state,
+        "SETUP-02.2",
+        StepStatus.BLOCKED,
+        ["Copilot Studio message capacity is not allocated"],
+    )
+    state.prerequisites["capacity"] = {
+        "status": "pending",
+        "value": "Verified: zero allocated capacity.",
+    }
+    repository.save(state)
+
+    resumed = repository.load()
+
+    assert resumed.active_step == "SETUP-02.2"
+    assert resumed.steps["SETUP-02.1"].state == StepStatus.DONE
+    assert resumed.steps["SETUP-02.2"].failure_causes == [
+        "Copilot Studio message capacity is not allocated",
+    ]
+    SetupWorkflow.update_step(
+        resumed,
+        "SETUP-02.2",
+        StepStatus.IN_PROGRESS,
+    )
+    assert resumed.active_step == "SETUP-02.2"
+    assert resumed.steps["SETUP-02.1"].state == StepStatus.DONE
 
 
 def test_legacy_validation_collection_is_rejected() -> None:
