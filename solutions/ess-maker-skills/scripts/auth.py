@@ -43,13 +43,14 @@ from http_errors import APIError, raise_api_error  # noqa: E402
 # Scope: user_impersonation only (delegated, no admin consent).
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
-# Delegated scope for the Power Automate Flow Management API
+# ESS-owned public client for the Flow inspector's named delegated permission.
+FLOW_CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+
+# Delegated scope requested by the Flow run-history inspector
 # (https://api.flow.microsoft.com). The double slash is required — the resource
-# URI ends in "/" and the scope name is appended, yielding a token whose `aud`
-# claim is `https://service.flow.microsoft.com/`. The PAC public client above is
-# broadly consented for Power Platform, so no separate app registration is
-# needed. Used by the flow run-history inspection tooling.
-FLOW_API_SCOPE = "https://service.flow.microsoft.com//user_impersonation"
+# URI https://service.flow.microsoft.com/ ends in "/" before the scope name.
+# The named delegated permission must be available to the public client above.
+FLOW_API_SCOPE = "https://service.flow.microsoft.com//Flows.Read.All"
 
 # Kit-internal state directory (token cache, component maps, config).
 # Renamed from "my/" -> ".local/" in PR #2 to separate kit-internal state
@@ -329,8 +330,8 @@ def _persist_token_cache(cache, cache_path):
     The cache holds MSAL refresh tokens; default umask (0o644) would expose them
     to other users on shared dev VMs. No-op when the cache is unchanged. Shared
     by ``authenticate`` (Dataverse scope) and ``get_flow_token`` (Flow scope),
-    which write the same cache file — MSAL keys entries by scope, so the two
-    tokens coexist.
+    which write the same cache file. MSAL keys access tokens by client ID,
+    account, tenant, and scope, so the two clients' tokens coexist.
     """
     if not cache.has_state_changed:
         return
@@ -402,11 +403,11 @@ def get_flow_token(env_url):
 
     The kit's ``authenticate`` acquires a *Dataverse*-scoped token; the Flow
     Management API (https://api.flow.microsoft.com) needs a different audience,
-    so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using the same
-    public client, tenant, and on-disk token cache. MSAL keys cache entries by
-    scope, so the Flow token coexists with any Dataverse token — a silent
-    acquisition succeeds without re-prompting once either has been obtained in
-    the same tenant.
+    so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using
+    ``FLOW_CLIENT_ID``, distinct from the Dataverse ``CLIENT_ID``. The tenant
+    and on-disk token cache are shared, but MSAL selects access tokens by
+    client ID, account, tenant, and scope. Silent acquisition is attempted
+    first; Dataverse sign-in alone does not guarantee silent Flow acquisition.
 
     ``env_url`` is used only to discover the tenant to sign into; the Flow scope
     itself is tenant-global.
@@ -422,7 +423,7 @@ def get_flow_token(env_url):
             cache.deserialize(f.read())
 
     app = msal.PublicClientApplication(
-        CLIENT_ID, authority=authority, token_cache=cache
+        FLOW_CLIENT_ID, authority=authority, token_cache=cache
     )
 
     accounts = app.get_accounts()
