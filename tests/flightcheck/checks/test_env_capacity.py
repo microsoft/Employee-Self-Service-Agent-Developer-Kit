@@ -50,8 +50,15 @@ def _mcs(allocated: int) -> list[dict]:
     return [{"currencyType": "MCSMessages", "allocated": allocated}]
 
 
-def _runner(*, powerplatform, payg=None, env_id="env-guid"):
+def _runner(
+    *,
+    powerplatform,
+    payg=None,
+    env_id="env-guid",
+    allow_capacity_override=False,
+):
     runner = SimpleNamespace(powerplatform=powerplatform, env_id=env_id)
+    runner.allow_capacity_override = allow_capacity_override
     if payg is not None:
         runner._payg_configured = payg
     return runner
@@ -75,26 +82,81 @@ def test_passed_when_capacity_allocated():
     assert "25000" in r.result
 
 
-def test_failed_when_zero_capacity_no_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=False))
-    assert r.status == "Failed"
+def test_warns_when_zero_capacity_no_payg():
+    r = _run(_runner(
+        powerplatform=_FakePP([]),
+        payg=False,
+        allow_capacity_override=True,
+    ))
+    assert r.status == "Warning"
     assert "runtime" in r.result.lower()
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_with_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=True))
-    assert r.status == "Failed"
+def test_warns_zero_capacity_with_payg():
+    r = _run(_runner(
+        powerplatform=_FakePP([]),
+        payg=True,
+        allow_capacity_override=True,
+    ))
+    assert r.status == "Warning"
     assert "does not satisfy" in r.result
     assert "Manage capacity" in r.remediation
 
 
-def test_fails_zero_capacity_unknown_payg():
+def test_warns_zero_capacity_unknown_payg():
     # No _payg_configured on the runner (PRE-005 did not run this scope).
-    r = _run(_runner(powerplatform=_FakePP([])))
-    assert r.status == "Failed"
+    r = _run(_runner(
+        powerplatform=_FakePP([]),
+        allow_capacity_override=True,
+    ))
+    assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "cannot continue" in r.remediation.lower()
+    assert "Manage capacity" in r.remediation
+
+
+@pytest.mark.parametrize("payg", [False, True, None])
+def test_zero_capacity_remains_blocking_without_setup_override(payg):
+    r = _run(_runner(powerplatform=_FakePP([]), payg=payg))
+    assert r.status == "Failed"
+
+
+@pytest.mark.parametrize(
+    "allocated",
+    ["unreadable", "", None, -1, True, 1.5],
+)
+def test_fails_when_matching_allocation_value_is_unreadable(allocated):
+    response = [{
+        "currencyType": "MCSMessages",
+        "allocated": allocated,
+    }]
+    r = _run(_runner(
+        powerplatform=_FakePP(response),
+        payg=False,
+        allow_capacity_override=True,
+    ))
+    assert r.status == "Failed"
+    assert "could not be verified" in r.result
+
+
+def test_empty_allocation_list_remains_trustworthy_zero():
+    r = _run(_runner(
+        powerplatform=_FakePP([]),
+        payg=False,
+        allow_capacity_override=True,
+    ))
+    assert r.status == "Warning"
+
+
+def test_integer_string_allocation_remains_readable():
+    r = _run(_runner(
+        powerplatform=_FakePP([{
+            "currencyType": "MCSMessages",
+            "allocated": "25000",
+        }]),
+    ))
+    assert r.status == "Passed"
+    assert "25000" in r.result
 
 
 def test_fails_when_no_powerplatform_client():

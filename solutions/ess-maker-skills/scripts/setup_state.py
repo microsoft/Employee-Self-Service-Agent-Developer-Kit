@@ -40,8 +40,8 @@ STEP_NOTES = {
         "is provisioned."
     ),
     "SETUP-02.2": (
-        "Confirms MCP, allocated capacity, and governance prerequisites are fully "
-        "satisfied."
+        "Records verified MCP, capacity disposition, billing, and governance "
+        "prerequisite outcomes."
     ),
     "SETUP-03": (
         "Confirms locked Power Platform environment identity remains valid for "
