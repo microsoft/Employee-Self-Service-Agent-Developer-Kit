@@ -30,6 +30,9 @@ class WorkdayConnectPreflightError(RuntimeError):
     """Raised when the Workday target cannot be proven safely."""
 
 
+SUPPORTED_POWER_PLATFORM_RINGS = frozenset({"prod", "preprod", "test"})
+
+
 @dataclass(frozen=True)
 class PreflightTarget:
     agent: dict[str, Any]
@@ -38,7 +41,6 @@ class PreflightTarget:
     package_flavor: str
     dataverse_url: str
     foundation_ring: str
-    pac_ring: str
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -123,17 +125,6 @@ def _require_materialized_workspace(
             "Finish the selected agent's workspace setup before connecting "
             "Workday."
         )
-
-
-def _pac_ring(foundation_ring: str) -> str:
-    normalized = str(foundation_ring or "prod").casefold()
-    if normalized in {"test", "preprod"}:
-        return "preprod"
-    if normalized == "prod":
-        return "prod"
-    raise WorkdayConnectPreflightError(
-        f"Unsupported Power Platform ring: {foundation_ring!r}."
-    )
 
 
 def _cached_dataverse_url(
@@ -269,6 +260,10 @@ def resolve_target(
     _require_materialized_workspace(setup_state, agent)
 
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
+    if foundation_ring not in SUPPORTED_POWER_PLATFORM_RINGS:
+        raise WorkdayConnectPreflightError(
+            f"Unsupported Power Platform ring: {foundation.get('ring')!r}."
+        )
     foundation_environment_id = str(
         foundation.get("environmentId") or ""
     ).strip()
@@ -370,7 +365,6 @@ def resolve_target(
         package_flavor=supported["packageFlavor"],
         dataverse_url=exact_url,
         foundation_ring=foundation_ring,
-        pac_ring=_pac_ring(foundation_ring),
     )
 
 
@@ -410,13 +404,11 @@ def run_preflight(
     store: WorkdayConnectStore | None = None,
     token_provider: Callable[..., str] = authenticate,
     query: Callable[..., list[dict[str, Any]]] = query_all,
-    installer: Callable[..., dict[str, Any]] = install_workday_package,
     identity_provider: Callable[..., dict[str, str]] = require_identity,
     catalog: dict[str, Any] | None = None,
-    approved_install_hash: str | None = None,
-    plan_verifier: Callable[[dict[str, Any], str], Any] | None = None,
     pac_resolver: Callable[[], Path] = resolve_pac_executable,
     pac_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    defer_completion: bool = False,
 ) -> dict[str, Any]:
     active_catalog = catalog or load_catalog()
     state_store = store or WorkdayConnectStore(workspace_root)
@@ -427,20 +419,8 @@ def run_preflight(
         ).get("username")
         or ""
     ).strip()
-    preflight_phase = (state.get("phases") or {}).get("preflight") or {}
-    approved_plan = preflight_phase.get("approvedPlan") or {}
-    approved_scope = (
-        approved_plan.get("scope")
-        if isinstance(approved_plan, dict)
-        else {}
-    )
-    approved_maker = (
-        str((approved_scope or {}).get("makerUsername") or "").strip()
-        if approved_install_hash
-        else ""
-    )
     intended_maker = str(
-        maker_username or stored_maker or approved_maker or ""
+        maker_username or stored_maker or ""
     ).strip() or None
     target = resolve_target(
         workspace_root,
@@ -483,87 +463,7 @@ def run_preflight(
         ) from exc
     package = active_catalog["packages"][target.package_flavor]
     required_schema = package["solutionSchemaName"]
-    package_action = "unchanged"
-    pac_identity = None
-    if required_schema.casefold() not in installed:
-        install_plan = {
-            "phase": "preflight",
-            "scope": {
-                "environmentId": target.environment_id,
-                "dataverseUrl": target.dataverse_url,
-                "agent": {
-                    key: target.agent.get(key)
-                    for key in ("slug", "botId", "schemaName")
-                },
-                "makerUsername": identity["username"],
-            },
-            "package": {
-                "flavor": target.package_flavor,
-                "schemaName": required_schema,
-            },
-            "actions": [
-                "Install the supported Workday runtime package",
-                "Reread Dataverse to verify the package installation",
-            ],
-        }
-        if not approved_install_hash:
-            return {
-                "requiresApproval": True,
-                "plan": {
-                    **install_plan,
-                    "planHash": plan_hash(install_plan),
-                },
-                "approvalSummary": {
-                    "environmentUrl": target.dataverse_url,
-                    "agent": target.agent.get("name") or target.agent.get("slug"),
-                    "makerAccount": identity["username"],
-                    "packageSchema": required_schema,
-                    "actions": install_plan["actions"],
-                },
-                "authenticationPlan": authentication_plan(),
-                "status": state_store.status(),
-            }
-        if plan_verifier is None:
-            raise WorkdayConnectPreflightError(
-                "Package installation requires a stored approved plan."
-            )
-        plan_verifier(install_plan, approved_install_hash)
-        try:
-            install_result = installer(
-                target.dataverse_url,
-                target.package_flavor,
-                ring=target.pac_ring,
-                preferred_username=identity["username"],
-            )
-        except (OSError, PacCliError, RuntimeError) as exc:
-            raise WorkdayConnectPreflightError(
-                f"Workday package installation failed: {exc}"
-            ) from exc
-        pac_identity = install_result.get("authenticatedAccount")
-        if not pac_identity or (
-            pac_identity.casefold() != identity["username"].casefold()
-        ):
-            raise WorkdayConnectPreflightError(
-                "PAC package installation did not prove the intended "
-                "Environment Maker account."
-            )
-        try:
-            installed = _installed_solutions(
-                target.dataverse_url,
-                token,
-                query=query,
-                catalog=active_catalog,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise WorkdayConnectPreflightError(
-                f"Post-install package verification failed: {exc}"
-            ) from exc
-        if required_schema.casefold() not in installed:
-            raise WorkdayConnectPreflightError(
-                "PAC completed, but the required Workday package was not "
-                "found during post-install verification."
-            )
-        package_action = "installed"
+    package_installed = required_schema.casefold() in installed
 
     existing_operator = (
         state_store.load().get("operators", {}).get("powerPlatformMaker") or {}
@@ -573,12 +473,7 @@ def run_preflight(
         if isinstance(existing_operator, dict)
         else {}
     )
-    pac_status = (
-        "verified"
-        if pac_identity
-        or existing_credential_stores.get("pac") == "verified"
-        else "not-required"
-    )
+    pac_status = existing_credential_stores.get("pac") or "not-required"
     state_store.merge_section(
         "scope",
         {
@@ -614,31 +509,225 @@ def run_preflight(
             "account": identity["username"],
         },
     )
-    state_store.complete_action(
-        "preflight",
-        "verify-package",
-        evidence={
-            "outcome": "passed",
-            "packageSchema": required_schema,
-            "packageAction": package_action,
-            "pacAccount": pac_identity,
-        },
-    )
     state_store.record_lifecycle_event(
         "roles-attested",
         phase="preflight",
         outcome="success",
         once_per_lifecycle=True,
     )
-    final_state = state_store.set_phase_status("preflight", "complete")
+    if not defer_completion:
+        state_store.set_phase_status("preflight", "complete")
+    final_state = state_store.load()
     return {
         "scope": final_state["scope"],
         "operator": final_state["operators"]["powerPlatformMaker"],
         "package": {
             "flavor": target.package_flavor,
             "schemaName": required_schema,
+            "installed": package_installed,
+            "action": "unchanged" if package_installed else "deferred",
+        },
+        "verificationChecks": [
+            {
+                "name": "Selected ESS HR agent and Power Platform environment",
+                "status": "verified",
+            },
+            {
+                "name": "Dataverse access, maker account, and Entra tenant",
+                "status": "verified",
+            },
+        ],
+        "authenticationPlan": authentication_plan(),
+        "status": state_store.status(),
+    }
+
+
+def prepare_connections_package(
+    workspace_root: Path,
+    *,
+    store: WorkdayConnectStore | None = None,
+    approved_install_hash: str | None = None,
+    plan_verifier: Callable[[dict[str, Any], str], Any] | None = None,
+    token_provider: Callable[..., str] = authenticate,
+    query: Callable[..., list[dict[str, Any]]] = query_all,
+    installer: Callable[..., dict[str, Any]] = install_workday_package,
+    identity_provider: Callable[..., dict[str, str]] = require_identity,
+    catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Install and verify the selected package at the start of Connections."""
+    active_catalog = catalog or load_catalog()
+    state_store = store or WorkdayConnectStore(workspace_root)
+    state = state_store.load()
+    if state["phases"]["workday-admin"]["status"] != "complete":
+        raise WorkdayConnectPreflightError(
+            "Complete the Microsoft Entra and Workday administrator phases "
+            "before installing the Workday package."
+        )
+    scope = state.get("scope") or {}
+    maker = (
+        (state.get("operators") or {}).get("powerPlatformMaker") or {}
+    )
+    environment_url = str(scope.get("dataverseUrl") or "").strip().rstrip("/")
+    environment_id = str(scope.get("environmentId") or "").strip()
+    package_flavor = str(scope.get("packageFlavor") or "").strip()
+    ring = str(scope.get("ring") or "prod").casefold()
+    maker_username = str(maker.get("username") or "").strip()
+    if not all(
+        (
+            environment_url,
+            environment_id,
+            package_flavor,
+            maker_username,
+        )
+    ):
+        raise WorkdayConnectPreflightError(
+            "Preflight target evidence is incomplete. Rerun Preflight before "
+            "preparing Connections."
+        )
+    package = active_catalog["packages"].get(package_flavor)
+    if not isinstance(package, dict):
+        raise WorkdayConnectPreflightError(
+            f"Unsupported Workday package flavor: {package_flavor}."
+        )
+    required_schema = str(package["solutionSchemaName"])
+    try:
+        token = token_provider(
+            environment_url,
+            preferred_username=maker_username,
+        )
+    except SystemExit as exc:
+        raise WorkdayConnectPreflightError(
+            "Dataverse authentication did not complete."
+        ) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkdayConnectPreflightError(
+            f"Dataverse authentication failed: {exc}"
+        ) from exc
+    try:
+        identity = identity_provider(
+            token,
+            preferred_username=maker_username,
+        )
+        installed = _installed_solutions(
+            environment_url,
+            token,
+            query=query,
+            catalog=active_catalog,
+        )
+    except WorkdayConnectIdentityError as exc:
+        raise WorkdayConnectPreflightError(str(exc)) from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkdayConnectPreflightError(
+            f"Dataverse package discovery failed: {exc}"
+        ) from exc
+
+    install_plan = {
+        "phase": "connections",
+        "scope": {
+            "environmentId": environment_id,
+            "dataverseUrl": environment_url,
+            "agent": {
+                key: (scope.get("agent") or {}).get(key)
+                for key in ("slug", "botId", "schemaName")
+            },
+            "makerUsername": identity["username"],
+        },
+        "package": {
+            "flavor": package_flavor,
+            "schemaName": required_schema,
+        },
+        "actions": [
+            "Install the supported Workday runtime package",
+            "Reread Dataverse to verify the package installation",
+        ],
+    }
+    package_action = "unchanged"
+    pac_identity = None
+    if required_schema.casefold() not in installed:
+        if not approved_install_hash:
+            return {
+                "requiresApproval": True,
+                "plan": {
+                    **install_plan,
+                    "planHash": plan_hash(install_plan),
+                },
+                "approvalSummary": {
+                    "environmentUrl": environment_url,
+                    "agent": (
+                        (scope.get("agent") or {}).get("name")
+                        or (scope.get("agent") or {}).get("slug")
+                    ),
+                    "makerAccount": identity["username"],
+                    "packageSchema": required_schema,
+                    "actions": install_plan["actions"],
+                },
+                "status": state_store.status(),
+            }
+        if plan_verifier is None:
+            raise WorkdayConnectPreflightError(
+                "Package installation requires a stored approved plan."
+            )
+        plan_verifier(install_plan, approved_install_hash)
+        try:
+            install_result = installer(
+                environment_url,
+                package_flavor,
+                ring=("preprod" if ring in {"test", "preprod"} else "prod"),
+                preferred_username=identity["username"],
+            )
+        except (OSError, PacCliError, RuntimeError) as exc:
+            raise WorkdayConnectPreflightError(
+                f"Workday package installation failed: {exc}"
+            ) from exc
+        pac_identity = str(
+            install_result.get("authenticatedAccount") or ""
+        ).strip()
+        if pac_identity.casefold() != identity["username"].casefold():
+            raise WorkdayConnectPreflightError(
+                "PAC package installation did not prove the intended "
+                "Environment Maker account."
+            )
+        try:
+            installed = _installed_solutions(
+                environment_url,
+                token,
+                query=query,
+                catalog=active_catalog,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise WorkdayConnectPreflightError(
+                f"Post-install package verification failed: {exc}"
+            ) from exc
+        if required_schema.casefold() not in installed:
+            raise WorkdayConnectPreflightError(
+                "PAC completed, but the required Workday package was not "
+                "found during post-install verification."
+            )
+        package_action = "installed"
+
+    if pac_identity:
+        state_store.record_operator_credential_store(
+            "powerPlatformMaker",
+            "pac",
+            "verified",
+        )
+    state_store.complete_action(
+        "connections",
+        "verify-package",
+        evidence={
+            "outcome": "passed",
+            "packageSchema": required_schema,
+            "packageInstalled": True,
+            "pacAccount": pac_identity or None,
+        },
+    )
+    return {
+        "requiresApproval": False,
+        "verified": True,
+        "package": {
+            "flavor": package_flavor,
+            "schemaName": required_schema,
             "action": package_action,
         },
-        "authenticationPlan": authentication_plan(),
         "status": state_store.status(),
     }

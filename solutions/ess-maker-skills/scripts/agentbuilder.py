@@ -27,6 +27,7 @@ CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 NATIVE_ALM_API_VERSION = "2022-03-01-preview"
 COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
+AGENT_LIST_CREATION_SOURCES = ("CopilotStudio", "AgentBuilder")
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
 TEST_REALM = 1
@@ -116,6 +117,25 @@ def validate_environment_host(host: str, ring: str) -> str:
             f"AgentBuilder host must be an HTTPS environment host for {ring}."
         )
     return f"https://{hostname}"
+
+
+def environment_id_from_host(host: str, ring: str) -> str:
+    """Return the canonical environment GUID encoded in a PPAPI host."""
+    validated = validate_environment_host(host, ring)
+    hostname = urlparse(validated).hostname or ""
+    suffix = str(RING_CONFIG[ring]["host_suffix"]).casefold()
+    prefix = hostname[: -(len(suffix) + 1)]
+    labels = prefix.split(".")
+    compact = "".join(labels)
+    if (
+        len(labels) != 2
+        or len(compact) != 32
+        or any(char not in "0123456789abcdef" for char in compact)
+    ):
+        raise ValueError(
+            "AgentBuilder host does not encode a valid environment ID."
+        )
+    return str(uuid.UUID(hex=compact))
 
 
 def derive_environment_host(
@@ -398,7 +418,6 @@ def _select_cached_account(
 def _authenticated_account_name(
     result: dict[str, Any],
     selected_account: dict[str, Any] | None,
-    available_accounts: list[dict[str, Any]],
 ) -> str | None:
     """Return the sign-in name used for a successful token acquisition."""
     selected_identifiers = _account_identifiers(selected_account)
@@ -417,12 +436,7 @@ def _authenticated_account_name(
     if result_identifiers:
         return result_identifiers[0]
 
-    usernames = {
-        str(account.get("username") or "").strip()
-        for account in available_accounts
-        if str(account.get("username") or "").strip()
-    }
-    return next(iter(usernames)) if len(usernames) == 1 else None
+    return None
 
 
 def cached_account_names(
@@ -480,7 +494,9 @@ def _acquire_token(
     force_account_selection: bool,
     account_hint: str | None,
     scopes: tuple[str, ...] | None = None,
-) -> str:
+    emit_account_identity: bool = True,
+    return_account_identity: bool = False,
+) -> str | tuple[str, str | None]:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
         CLIENT_ID,
@@ -499,7 +515,7 @@ def _acquire_token(
         else None
     )
     selected_identifiers = _account_identifiers(selected_account)
-    if selected_identifiers:
+    if selected_identifiers and emit_account_identity:
         print(
             "Using cached AgentBuilder account: "
             f"{selected_identifiers[0]}",
@@ -512,6 +528,10 @@ def _acquire_token(
             account_hint,
             force_account_selection,
         )
+        # The successful interactive account is not necessarily the cached
+        # account whose silent acquisition failed. Never let that stale cached
+        # identity satisfy preferred-account verification.
+        selected_account = None
     token = result.get("access_token") if result else None
     if not token:
         error = result.get("error", "unknown_error") if result else "unknown_error"
@@ -523,13 +543,14 @@ def _acquire_token(
     account_name = _authenticated_account_name(
         result,
         selected_account,
-        app.get_accounts(),
     )
-    if account_name:
+    if account_name and emit_account_identity:
         print(
             "DA_AGENTBUILDER_AUTH_JSON:"
             f"{json.dumps({'account': account_name}, ensure_ascii=True)}"
         )
+    if return_account_identity:
+        return token, account_name
     return token
 
 
@@ -611,21 +632,29 @@ def authenticate_flightcheck(
     account_hint: str | None = None,
     include_connectivity: bool = True,
     allow_write: bool = False,
-) -> tuple[str, str]:
+    emit_account_identity: bool = True,
+    return_account_identity: bool = False,
+) -> tuple[str, str] | tuple[str, str, str | None]:
     """Acquire a least-privilege token for native AgentBuilder FlightCheck."""
     scopes = flightcheck_scopes(
         ring,
         allow_write=allow_write,
         include_connectivity=include_connectivity,
     )
-    token = _acquire_token(
+    acquired = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
         ring=ring,
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
         scopes=scopes,
+        emit_account_identity=emit_account_identity,
+        return_account_identity=return_account_identity,
     )
+    if return_account_identity:
+        token, account_name = acquired
+        return token, tenant_id_from_access_token(token), account_name
+    token = acquired
     return token, tenant_id_from_access_token(token)
 
 
@@ -792,15 +821,15 @@ class AgentBuilderClient:
                 f"{operation} returned a non-JSON response."
             ) from exc
 
-    def list_agents(
+    def list_agent_pages(
         self,
         *,
         max_pages: int = 20,
     ) -> list[dict[str, Any]]:
-        """List environment agents through the MakerOperations collection."""
+        """Return untouched MakerOperations agent-list response pages."""
         if max_pages <= 0:
             raise ValueError("Max pages must be a positive integer.")
-        agents: list[dict[str, Any]] = []
+        pages: list[dict[str, Any]] = []
         continuation: str | None = None
         seen_continuations: set[str] = set()
         for _page in range(max_pages):
@@ -819,25 +848,25 @@ class AgentBuilderClient:
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
-            listed = (
-                body["Entities"]
-                if "Entities" in body
-                else body.get("entities")
-            )
+            pages.append(body)
+            if "Entities" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the Entities collection."
+                )
+            listed = body["Entities"]
             if not isinstance(listed, list) or not all(
                 isinstance(item, dict) for item in listed
             ):
                 raise AgentBuilderError(
                     "Agent listing returned an invalid shape."
                 )
-            agents.extend(listed)
-            next_continuation = (
-                body["ContinuationToken"]
-                if "ContinuationToken" in body
-                else body.get("continuationToken")
-            )
-            if next_continuation in (None, ""):
-                return agents
+            if "ContinuationToken" not in body:
+                raise AgentBuilderError(
+                    "Agent listing omitted the ContinuationToken."
+                )
+            next_continuation = body["ContinuationToken"]
+            if next_continuation == "":
+                return pages
             if not isinstance(next_continuation, str):
                 raise AgentBuilderError(
                     "Agent listing returned an invalid continuation token."
@@ -851,6 +880,69 @@ class AgentBuilderClient:
         raise AgentBuilderError(
             f"Agent listing exceeded {max_pages} pages."
         )
+
+    def list_minimal_bots(
+        self,
+        *,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> list[dict[str, Any]]:
+        """Return the untouched MinimalBot cards for explicit creation sources."""
+        if not creation_sources:
+            raise ValueError("At least one creation source is required.")
+        body = self._json(
+            "GET",
+            "/copilotstudio/minimalBots/api",
+            "MinimalBot listing",
+            params={
+                "api-version": NATIVE_ALM_API_VERSION,
+                "creationSource": list(creation_sources),
+            },
+        )
+        if not isinstance(body, list) or not all(
+            isinstance(item, dict) for item in body
+        ):
+            raise AgentBuilderError(
+                "MinimalBot listing returned an invalid shape."
+            )
+        return body
+
+    def list_agent_inventory(
+        self,
+        *,
+        max_maker_operations_pages: int = 20,
+        creation_sources: tuple[str, ...] = AGENT_LIST_CREATION_SOURCES,
+    ) -> dict[str, Any]:
+        """Return both collection responses without merging or interpretation."""
+        def read_source(
+            operation: Callable[[], Any],
+        ) -> dict[str, Any]:
+            try:
+                return {"response": operation(), "error": None}
+            except (AgentBuilderError, requests.RequestException) as exc:
+                error: dict[str, Any] = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                if isinstance(exc, AgentBuilderHTTPError):
+                    error["httpStatus"] = exc.status_code
+                    if exc.error_code is not None:
+                        error["errorCode"] = exc.error_code
+                    if exc.request_id is not None:
+                        error["requestId"] = exc.request_id
+                return {"response": None, "error": error}
+
+        return {
+            "minimalBots": read_source(
+                lambda: self.list_minimal_bots(
+                    creation_sources=creation_sources
+                )
+            ),
+            "copilotStudioAgents": read_source(
+                lambda: self.list_agent_pages(
+                    max_pages=max_maker_operations_pages
+                )
+            ),
+        }
 
     def list_starter_packages(
         self,

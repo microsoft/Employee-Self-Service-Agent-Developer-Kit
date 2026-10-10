@@ -3,21 +3,24 @@
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 
+Apply **Availability** in `src/skills/connect/SKILL.md` before section 1.1,
+including PRE_SELECTED_INTEGRATION. Reapply it to every selection before
+section 1.3.
+
 ---
 
 ## 1.1 — Check what's already connected
 
 Build a list of connected integrations (if any):
 
-- **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
-  all items are checked.
 - **Workday** — connected if either:
   - `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
     its `agentSlug` exactly matches the active agent, and every phase is
     `done`; or
-  - `.local/connect/workday-da/config.json` has `schemaVersion: 7`,
-    `status: "ready"`, and `scope.agent.slug` and `scope.agent.botId` exactly
-    match the active native agent.
+  - `.local/connect/workday-da/config.json` has `schemaVersion: 12`, and one
+    `targets.dev`, `targets.test`, or `targets.prod` snapshot has
+    `deploymentStatus: "ready"` with an identity whose agent slug and BotId
+    exactly match the active native agent.
   Shared provider state without an exact active-agent match must not make a
   sibling or newly selected agent appear connected.
 
@@ -26,19 +29,18 @@ Build a list of connected integrations (if any):
 ## 1.2 — Ask which system
 
 **If PRE_SELECTED_INTEGRATION was passed from SKILL.md** (the user already
-specified "servicenow" or "workday"): skip this question entirely. Set the
-selection to the pre-selected value and go directly to section 1.3.
+specified the supported integration "workday"): skip this question entirely.
+Set the selection to the pre-selected value and go directly to section 1.3.
 
 If there are connected integrations, show them first:
 
 **Message:**
 
-Currently connected: {list of connected integration names, e.g. "ServiceNow"}
+Currently connected: {list of connected integration names, e.g. "Workday"}
 
 Which system do you want to connect next?
 
-1. **ServiceNow** — IT tickets, HR cases, service catalog
-2. **Workday** — Payroll, time off, employee data
+1. **Workday** — Payroll, time off, employee data
 
 **End message.**
 
@@ -48,8 +50,7 @@ If nothing is connected yet:
 
 Which system do you want to connect to your agent?
 
-1. **ServiceNow** — IT tickets, HR cases, service catalog
-2. **Workday** — Payroll, time off, employee data
+1. **Workday** — Payroll, time off, employee data
 
 **End message.**
 
@@ -59,7 +60,10 @@ Wait for the user to respond.
 
 ## 1.3 — Route by selection
 
-### If the user chose ServiceNow (1 or "servicenow")
+### If the user requested ServiceNow
+
+Apply **Availability** in `src/skills/connect/SKILL.md` and STOP.
+The legacy steps below are reference-only.
 
 Record anonymous usage telemetry attributed to ServiceNow (best-effort,
 non-blocking — no user-facing message, and it never fails the step):
@@ -214,7 +218,7 @@ Let's connect ServiceNow to your agent.
 
 Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
-### If the user chose Workday (2 or "workday")
+### If the user chose Workday (1 or "workday")
 
 Record anonymous usage telemetry attributed to Workday (best-effort,
 non-blocking — no user-facing message, and it never fails the step):
@@ -278,6 +282,9 @@ For `gptagent_copilotforemployeeselfservicehr`, read
 `WD-DA-PKG-001`. Do not create CEA Workday lifecycle state or run
 `WD-PKG-001`: DA packages share some Workday connection-reference names with
 CEA, so the CEA package fingerprint is not an architecture discriminator.
+If the user arrived with an explicit Test or Production promotion statement,
+preserve that realm intent when entering the Workday DA skill so it can run
+promoted-target discovery instead of restarting DEV.
 
 For the classic DA HR schema `msdyn_copilotforemployeeselfservicedahr`, explain
 that the simplified Workday lifecycle currently supports only the native ESS
@@ -312,7 +319,7 @@ by both its status and detected flavor:
 
 **Message:**
 
-I didn't catch that. Enter **1** for ServiceNow or **2** for Workday.
+I didn't catch that. Enter **1** for Workday.
 
 **End message.**
 

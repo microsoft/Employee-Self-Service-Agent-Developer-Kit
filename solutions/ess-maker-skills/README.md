@@ -23,6 +23,8 @@ The kit connects VS Code to an existing editable DA Dev agent through the native
 
 Run `/setup` and follow the prompts.
 
+> **Accounts used during setup:** Sign in to GitHub Copilot to activate Copilot Chat, where you run `/setup`. When `/setup` connects your agent, use the separate Microsoft work account that can access the target Power Platform environment and agent. GitHub Copilot authentication does not grant Power Platform access. See [Authentication prompts](../../setup/README.md#authentication-prompts) for the full sequence and the standalone FlightCheck exception.
+
 ### 🎨 Customize the ESS Landing Page
 
 Configure the active agent's tenant landing page directly from chat. Run
@@ -251,7 +253,7 @@ current DA-GA release.
 
 ### ServiceNow (HRSD / ITSM)
 
-Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog items. Run `/connect servicenow` to start.
+Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
 
 **What the kit sets up:**
 - **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
@@ -348,7 +350,7 @@ The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for 
 - **REST API** — Query and create records in any ServiceNow table
 - **Connection testing** — Verify instance connectivity and credentials
 
-Configured automatically during `/connect servicenow`.
+Not configured automatically by ADK.
 
 ---
 

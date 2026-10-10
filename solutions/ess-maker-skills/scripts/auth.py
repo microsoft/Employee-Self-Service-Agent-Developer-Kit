@@ -38,8 +38,13 @@ except ImportError:
 from http_errors import APIError, raise_api_error  # noqa: E402
 
 
-# Shared public client ID used across the ADK's MSAL flows. Delegated access only.
-CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
+# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
+# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
+# Scope: user_impersonation only (delegated, no admin consent).
+CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+
+# ESS-owned public client for the Flow inspector's named delegated permission.
+FLOW_CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 # Delegated scope requested by the Flow run-history inspector
 # (https://api.flow.microsoft.com). The double slash is required — the resource
@@ -192,7 +197,12 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
-def authenticate(env_url, preferred_username=None):
+def authenticate(
+    env_url,
+    preferred_username=None,
+    *,
+    return_account_identity=False,
+):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
@@ -225,8 +235,11 @@ def authenticate(env_url, preferred_username=None):
         accounts[0] if accounts and not preferred else None,
     )
     result = None
+    authenticated_account = None
     if selected_account:
         result = app.acquire_token_silent([scope], account=selected_account)
+        if result and "access_token" in result:
+            authenticated_account = selected_account
 
     if (
         result
@@ -244,6 +257,7 @@ def authenticate(env_url, preferred_username=None):
             CLIENT_ID, authority=authority, token_cache=cache
         )
         result = None
+        authenticated_account = None
 
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
@@ -254,6 +268,7 @@ def authenticate(env_url, preferred_username=None):
             else {"prompt": "select_account"}
         )
         result = app.acquire_token_interactive([scope], **interactive_options)
+        authenticated_account = None
 
     if "access_token" not in result:
         # Don't echo error_description - it can include tenant IDs and
@@ -267,6 +282,12 @@ def authenticate(env_url, preferred_username=None):
     # MSAL refresh tokens; default umask (0o644) would expose them to other
     # users on shared dev VMs.
     _persist_token_cache(cache, cache_path)
+    claims = result.get("id_token_claims", {}) or {}
+    authenticated_username = (
+        claims.get("preferred_username")
+        or claims.get("upn")
+        or (authenticated_account or {}).get("username")
+    )
 
     # Record the tenant + start a telemetry session. No developer identity is
     # collected; active-install counts dedupe on a random instance_id.
@@ -274,7 +295,6 @@ def authenticate(env_url, preferred_username=None):
     try:
         import adk_telemetry
 
-        claims = result.get("id_token_claims", {}) or {}
         tenant_id = claims.get("tid", "") or tenant
         # Resolve the tenant's display name via a SILENT-ONLY Graph token
         # BEFORE emitting adk.session.start, so the very first ADK event on a
@@ -299,6 +319,8 @@ def authenticate(env_url, preferred_username=None):
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass
 
+    if return_account_identity:
+        return result["access_token"], authenticated_username
     return result["access_token"]
 
 
@@ -308,8 +330,8 @@ def _persist_token_cache(cache, cache_path):
     The cache holds MSAL refresh tokens; default umask (0o644) would expose them
     to other users on shared dev VMs. No-op when the cache is unchanged. Shared
     by ``authenticate`` (Dataverse scope) and ``get_flow_token`` (Flow scope),
-    which write the same cache file — MSAL keys entries by scope, so the two
-    tokens coexist.
+    which write the same cache file. MSAL keys access tokens by client ID,
+    account, tenant, and scope, so the two clients' tokens coexist.
     """
     if not cache.has_state_changed:
         return
@@ -381,11 +403,11 @@ def get_flow_token(env_url):
 
     The kit's ``authenticate`` acquires a *Dataverse*-scoped token; the Flow
     Management API (https://api.flow.microsoft.com) needs a different audience,
-    so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using the same
-    public client, tenant, and on-disk token cache. MSAL keys cache entries by
-    scope, so the Flow token coexists with any Dataverse token. Silent
-    acquisition is attempted first; interactive sign-in is still needed if
-    the requested permission cannot be acquired silently.
+    so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using
+    ``FLOW_CLIENT_ID``, distinct from the Dataverse ``CLIENT_ID``. The tenant
+    and on-disk token cache are shared, but MSAL selects access tokens by
+    client ID, account, tenant, and scope. Silent acquisition is attempted
+    first; Dataverse sign-in alone does not guarantee silent Flow acquisition.
 
     ``env_url`` is used only to discover the tenant to sign into; the Flow scope
     itself is tenant-global.
@@ -401,7 +423,7 @@ def get_flow_token(env_url):
             cache.deserialize(f.read())
 
     app = msal.PublicClientApplication(
-        CLIENT_ID, authority=authority, token_cache=cache
+        FLOW_CLIENT_ID, authority=authority, token_cache=cache
     )
 
     accounts = app.get_accounts()

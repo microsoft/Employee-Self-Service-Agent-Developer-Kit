@@ -37,9 +37,15 @@ class _FakeClient:
 
 
 class _FakeRunner:
-    def __init__(self, client: _FakeClient | None, config: dict[str, Any]):
+    def __init__(
+        self,
+        client: _FakeClient | None,
+        config: dict[str, Any],
+        agent_slug: str = "",
+    ):
         self.agentbuilder = client
         self.config = config
+        self.agent_slug = agent_slug
 
 
 # --------------------------------------------------------------------------
@@ -74,9 +80,34 @@ def test_read_active_none_when_no_client():
 
 
 def test_read_active_none_when_no_active_bot_id():
-    # Only multi-agent config; no config["agent"].botId -> active read SKIPs.
-    runner = _FakeRunner(_FakeClient({}), {"agents": [{"botId": "BOT"}]})
+    runner = _FakeRunner(
+        _FakeClient({}),
+        {"agents": [{"slug": "known", "botId": "BOT"}]},
+        agent_slug="missing",
+    )
     assert reader.read_active_agent_connection_references(runner) is None
+
+
+def test_read_active_honors_explicit_selected_slug():
+    payload = ab.components_with_references(
+        references=[ab.workday_connection_reference(connection_id="selected")]
+    )
+    runner = _FakeRunner(
+        _FakeClient({"BOT-SELECTED": payload}),
+        {
+            "activeAgent": "other",
+            "agents": [
+                {"slug": "other", "botId": "BOT-OTHER"},
+                {"slug": "selected", "botId": "BOT-SELECTED"},
+            ],
+        },
+        agent_slug="selected",
+    )
+
+    rows = reader.read_active_agent_connection_references(runner)
+
+    assert rows is not None
+    assert rows[0]["botid"] == "BOT-SELECTED"
 
 
 def test_read_active_normalizes_workday_row():

@@ -1,149 +1,139 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# Phase 6 - Employee validation
 
-This phase requires a real signed-in employee scenario. Configuration checks
-alone cannot complete it.
+# Phase 6 - Maker validation
 
-The skill cannot publish the agent, impersonate an employee, or perform this
-scenario on the employee's behalf. It guides the maker through the test and
-records only the safe outcome.
+This is the final guided Workday setup phase. It ends after the maker
+successfully validates one enabled read-only Workday scenario in the Copilot
+Studio Test pane. Publishing, deployment, and non-maker employee validation
+are next steps outside this skill lifecycle.
+
+The skill cannot perform the Test pane interaction on the maker's behalf. The
+skill cannot publish or deploy the agent; those are post-skill next steps.
+
+## Run the maker smoke test
 
 Ask the maker to:
 
-1. publish the ESS HR agent;
-2. start a new conversation;
-3. sign in as a test employee assigned to the Workday Entra application and
-   authorized in Workday;
-4. run one enabled read-only scenario, such as checking a vacation balance;
-5. confirm the agent identifies the signed-in employee and returns real
+1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
+2. open a new Test pane conversation without publishing the agent;
+3. use the maker's configured Workday connection to run one enabled read-only
+   scenario, such as checking a vacation balance; and
+4. confirm that the agent identifies the maker's Workday user and returns real
    Workday data without an unexpected repeated sign-in.
 
-Use `vscode_askQuestions` for the test result:
+Use `vscode_askQuestions`:
 
 ```json
 [
   {
-    "header": "Employee test result",
-    "question": "What happened in the signed-in employee Workday test?",
+    "header": "Maker smoke test",
+    "question": "Did the Workday scenario succeed in the Copilot Studio Test pane?",
     "options": [
-      { "label": "Passed - employee identified and Workday data returned" },
-      { "label": "Failed - repeated sign-in" },
-      { "label": "Failed - connector error" },
-      { "label": "Failed - flow error" },
-      { "label": "Failed - employee mismatch" },
-      { "label": "Failed - network error" },
-      { "label": "Failed - Workday access denied" },
-      { "label": "Failed - agent not published or unavailable" },
-      { "label": "Failed - another issue" }
+      { "label": "Yes, the Test pane scenario passed" },
+      { "label": "No, the Test pane scenario needs remediation" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Leave the result unset and do not mark the passing outcome as recommended. If
-the test passed, ask for the scenario with this separate structured choice:
+Leave the selection unset.
+Do not mark the passing option as recommended.
+
+If the maker selects **No**, stop before publishing and ask what failed. For
+failures other than the exact Workday response `Task not authorized`, show only
+the remediation relevant to that surface and repeat the maker smoke test after
+the issue is corrected.
+
+For `Task not authorized`, ask the maker for the name of the scenario that
+failed. Ask the Workday administrator to correct the domain security policy
+for that scenario, then collect the affected Workday security domain. Write
+this safe evidence to
+`.local/connect/workday-da/maker-authorization-remediation.json`:
 
 ```json
-[
-  {
-    "header": "Tested scenario",
-    "question": "Which read-only Workday scenario did the test employee run?",
-    "options": [
-      { "label": "Check vacation balance" },
-      { "label": "View employment information" },
-      { "label": "View compensation" },
-      { "label": "View organization or manager information" },
-      { "label": "Another read-only Workday scenario" }
-    ],
-    "allowFreeformInput": true
-  }
-]
+{
+  "remediationId": "WD-E2E-006",
+  "scenarioName": "{named scenario that failed}",
+  "affectedDomain": "{Workday security domain corrected by the administrator}",
+  "timestamp": "{timezone-qualified timestamp when the failure was observed}"
+}
 ```
 
-On success, record only the scenario name, test-user category, timestamp, and
-outcome in `.local/connect/workday-da/employee-validation.json`. Write the
-object using a structured file-write tool rather than a generated shell
-command, then run:
+Run:
 
 ```powershell
-python scripts/workday_connect.py record-validation --evidence-file ".local\connect\workday-da\employee-validation.json"
+python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\maker-authorization-remediation.json"
 ```
 
-Provide only `scenarioName`, `testUserCategory`, `timestamp`, and a passed or
-verified `outcome`. Use a non-maker employee category and a
-timezone-qualified ISO-8601 timestamp. The controller rejects additional
-fields. Never record employee data or credentials.
+Then require the maker to retest that same named scenario. Do not accept a
+different scenario as the retest. Do not start an employee evidence window or
+ask a non-maker employee to test.
 
-On failure, map the selected result to exactly one stable ID below. Do not
-invent a remediation ID.
-
-| Selected result | `remediationId` |
-| --- | --- |
-| Failed - repeated sign-in | `WD-E2E-001` |
-| Failed - connector error | `WD-E2E-002` |
-| Failed - flow error | `WD-E2E-003` |
-| Failed - employee mismatch | `WD-E2E-004` |
-| Failed - network error | `WD-E2E-005` |
-| Failed - Workday access denied | `WD-E2E-006` |
-| Failed - agent not published or unavailable | `WD-E2E-007` |
-| Failed - another issue | `WD-E2E-999` |
-
-For `WD-E2E-999`, ask where the failure was observed using this separate
-structured choice:
+If the maker selects **Yes**, write this safe evidence to
+`.local/connect/workday-da/maker-validation.json` using a structured file-write
+tool:
 
 ```json
-[
-  {
-    "header": "Failure surface",
-    "question": "Where was the other issue observed?",
-    "options": [
-      { "label": "Agent chat" },
-      { "label": "Authentication prompt" },
-      { "label": "Workday connection" },
-      { "label": "Flow run" },
-      { "label": "Network path" },
-      { "label": "Workday response" },
-      { "label": "Agent availability" },
-      { "label": "Other" }
-    ],
-    "allowFreeformInput": false
-  }
-]
+{
+  "testUserCategory": "maker",
+  "scenarioName": "{named scenario, required after Task not authorized remediation}",
+  "timestamp": "{timezone-qualified current timestamp}",
+  "outcome": "passed"
+}
 ```
 
-Map those choices respectively to `agent-chat`, `authentication-prompt`,
-`workday-connection`, `flow-run`, `network-path`, `workday-response`,
-`agent-availability`, or `other`.
+Omit `scenarioName` when no authorization remediation was required.
 
-Record the selected `remediationId` and a timezone-qualified ISO-8601
-`timestamp` in
-`.local/connect/workday-da/employee-validation-failure.json`, then run:
+Then run:
 
 ```powershell
-python scripts/workday_connect.py record-validation-failure --evidence-file ".local\connect\workday-da\employee-validation-failure.json"
+python scripts/workday_connect.py record-validation --evidence-file ".local\connect\workday-da\maker-validation.json"
 ```
 
-For `WD-E2E-999`, also record the selected bounded `failureSurface`. The
-controller derives the safe category and canonical remediation from the ID;
-do not copy those strings into the file. It also migrates existing
-three-field failure files created by earlier kit versions. Unrecognized
-legacy categories widen to `WD-E2E-999` with the `other` surface, and the
-legacy free-form remediation text is discarded. Arbitrary IDs,
-unbounded failure surfaces, and unknown fields are rejected.
+The controller marks the guided lifecycle complete immediately. Do not wait
+for Power Automate run-history evidence, run a separate runtime-correlation
+step, or ask the maker or employee to repeat a successful scenario.
 
-This marks Employee validation blocked and persists the stable remediation ID
-and bounded failure surface while keeping completed prerequisite phases
-intact. Use the failing surface to choose the next check:
+## Finish with post-skill next steps
 
-- sign-in loop -> identify which credential store prompted and whether the
-  account or tenant differs;
-- connector error -> inspect the exact Workday connection status and resource
-  URL;
-- flow error -> inspect the exact flow run and delegated-authorization
-  evidence;
-- employee mismatch -> inspect NameID and User Context V2 evidence;
-- network error -> inspect the exact Workday REST or SOAP host.
+After the controller returns `lifecycleComplete: true`, name the completed
+realm from `activeTargetRealm` and render only the returned
+`postSkillNextSteps`. Do not add Production employee-adoption steps to a
+Development or Test completion.
 
-After remediation, retry with a new conversation. Do not reset completed
-phases.
+For Development, tell the maker:
+
+> Workday setup is complete in Development, and the maker Test pane scenario
+> passed.
+>
+> **Next steps:**
+>
+> 1. Promote the agent from Development to Test when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to Test.
+
+For Test, tell the maker:
+
+> Workday setup is complete in Test, and the maker Test pane scenario passed.
+>
+> **Next steps:**
+>
+> 1. Promote the agent from Test to Production when ready.
+> 2. Return to Connect Workday and say that the agent was promoted to
+>    Production.
+
+Only for Production, tell the maker:
+
+> Workday setup is complete in Production, and the maker Test pane scenario
+> passed.
+>
+> **Next steps:**
+>
+> 1. Publish and deploy the Production agent when ready.
+> 2. Have each non-maker employee establish their own Workday connections in
+>    Microsoft 365 Chat.
+> 3. Validate an enabled Workday scenario with the published Production agent.
+
+Do not wait for those results, record them as lifecycle evidence, or keep the
+Workday skill open. They are deployment and adoption validation outside this
+guided setup lifecycle.

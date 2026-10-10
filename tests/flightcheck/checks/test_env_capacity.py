@@ -34,20 +34,52 @@ def _scripts_on_path():
 
 
 class _FakePP:
-    """Power Platform Licensing stub: only get_currency_allocations is read."""
+    """Power Platform Licensing stub for environment entitlement reads."""
 
-    def __init__(self, allocations):
-        self._alloc = allocations  # list | {"_error": ...} | Exception
+    def __init__(self, entitlements):
+        self._entitlements = entitlements
 
-    def get_currency_allocations(self, _env_id):
-        if isinstance(self._alloc, Exception):
-            raise self._alloc
-        return self._alloc
+    def get_environment_entitlements(self, _env_id):
+        if isinstance(self._entitlements, Exception):
+            raise self._entitlements
+        return self._entitlements
 
 
-def _mcs(allocated: int) -> list[dict]:
-    """One MCSMessages allocation row at the given credit count."""
-    return [{"currencyType": "MCSMessages", "allocated": allocated}]
+def _mcs_entitlement(
+    *,
+    allocated=0,
+    auto_allocated=0,
+    available=0,
+    consumed=0,
+    payg_entitled=0,
+    payg_consumed=0,
+    addons=None,
+):
+    return {
+        "items": [
+            {
+                "entitlementId": "MCSMessages",
+                "addons": list(addons or []),
+                "entitlement": {
+                    "capacity": {
+                        "allocated": {
+                            "value": allocated,
+                            "autoAllocated": auto_allocated,
+                        },
+                        "availableQuantity": available,
+                        "consumed": {"value": consumed},
+                        "status": "WithinCapacity",
+                    },
+                    "payGo": {
+                        "entitled": {"value": payg_entitled},
+                        "consumed": {"value": payg_consumed},
+                    },
+                },
+            }
+        ],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    }
 
 
 def _runner(
@@ -56,11 +88,13 @@ def _runner(
     payg=None,
     env_id="env-guid",
     ring="prod",
+    power_platform_admin_origin=None,
 ):
     runner = SimpleNamespace(
         powerplatform=powerplatform,
         env_id=env_id,
         ring=ring,
+        power_platform_admin_origin=power_platform_admin_origin,
     )
     if payg is not None:
         runner._payg_configured = payg
@@ -80,51 +114,183 @@ def _run(runner):
 
 
 def test_passed_when_capacity_allocated():
-    r = _run(_runner(powerplatform=_FakePP(_mcs(25000))))
+    r = _run(_runner(powerplatform=_FakePP(
+        _mcs_entitlement(
+            allocated=25000.0,
+            auto_allocated=750,
+            available=0,
+            consumed=25000,
+        )
+    )))
     assert r.status == "Passed"
     assert "25000" in r.result
+    assert r.evidence["outcome"] == "verified"
+    assert r.evidence["allocatedCredits"] == 25000
+    assert r.evidence["source"] == "environment-entitlements"
+    assert r.evidence["requestId"] == "entitlement-request-200"
 
 
 def test_warns_when_zero_capacity_no_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=False))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement()), payg=False))
     assert r.status == "Warning"
+    assert r.evidence["outcome"] == "verified"
+    assert r.evidence["allocatedCredits"] == 0
     assert "not configured" in r.result
-    assert "no message capacity" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
 def test_warns_when_zero_capacity_with_payg():
-    r = _run(_runner(powerplatform=_FakePP([]), payg=True))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement()), payg=True))
     assert r.status == "Warning"
     assert "Pay-as-you-go billing is configured" in r.result
-    assert "will be billed through Azure Pay-as-you-go" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
     assert "Manage capacity" in r.remediation
 
 
 def test_warns_when_zero_capacity_unknown_payg():
     # No _payg_configured on the runner (PRE-005 did not run this scope).
-    r = _run(_runner(powerplatform=_FakePP([])))
+    r = _run(_runner(powerplatform=_FakePP(_mcs_entitlement())))
     assert r.status == "Warning"
     assert "not determined" in r.result
-    assert "message capacity is not confirmed" in r.remediation
-    assert "Setup can continue with this risk recorded" in r.remediation
+    assert "administrator may explicitly attest" in r.remediation
 
 
 def test_requires_manual_confirmation_when_no_powerplatform_client():
     r = _run(_runner(powerplatform=None, payg=False))
     assert r.status == "Manual"
-    assert "could not verify" in r.result
+    assert "API capability was unavailable" in r.result
+    assert r.evidence["outcome"] == "unsupported-capability"
     assert "Manage capacity" in r.remediation
-    assert "explicitly attest" in r.remediation
+    assert "capacity check is skipped" in r.remediation
 
 
-def test_requires_manual_confirmation_when_allocation_read_denied():
-    pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
+def test_requires_manual_confirmation_when_entitlement_read_denied():
+    pp_denied = _FakePP({
+        "_error": "insufficient_permissions",
+        "_status": 403,
+        "_request_id": "request-123",
+    })
     r = _run(_runner(powerplatform=pp_denied, payg=False))
     assert r.status == "Manual"
-    assert "could not verify" in r.result
+    assert "access was denied" in r.result
+    assert r.evidence["outcome"] == "denied-access"
+    assert r.evidence["serviceStatus"] == 403
+    assert r.evidence["requestId"] == "request-123"
+
+
+def test_requires_manual_confirmation_when_mcs_entitlement_is_missing():
+    r = _run(_runner(powerplatform=_FakePP({
+        "items": [],
+        "_status": 204,
+        "_request_id": "entitlement-request-204",
+    })))
+
+    assert r.status == "Manual"
+    assert "no MCSMessages entitlement" in r.result
+    assert r.evidence["outcome"] == "missing-entitlement"
+    assert r.evidence["matchingEntitlements"] == 0
+
+
+def test_requires_manual_confirmation_when_mcs_entitlement_is_duplicated():
+    item = _mcs_entitlement()["items"][0]
+    r = _run(_runner(powerplatform=_FakePP({
+        "items": [item, item],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    })))
+
+    assert r.status == "Manual"
+    assert "multiple MCSMessages entitlements" in r.result
+    assert r.evidence["outcome"] == "ambiguous-entitlement"
+    assert r.evidence["matchingEntitlements"] == 2
+
+
+def test_requires_manual_confirmation_when_entitlement_service_fails():
+    class _Response:
+        status_code = 503
+        headers = {"x-ms-request-id": "request-503"}
+
+    error = RuntimeError("service payload must not be exposed")
+    error.response = _Response()
+
+    r = _run(_runner(powerplatform=_FakePP(error), payg=False))
+
+    assert r.status == "Manual"
+    assert "service returned an error" in r.result
+    assert "service payload" not in r.result
+    assert r.evidence == {
+        "environmentId": "env-guid",
+        "source": "environment-entitlements",
+        "outcome": "service-error",
+        "errorType": "RuntimeError",
+        "serviceStatus": 503,
+        "requestId": "request-503",
+    }
+
+
+@pytest.mark.parametrize(
+    "allocated",
+    [
+        "not-a-number",
+        "25000",
+        None,
+        True,
+        1.5,
+        -1,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ],
+)
+def test_requires_manual_confirmation_when_entitlement_value_is_invalid(
+    allocated,
+):
+    r = _run(
+        _runner(
+            powerplatform=_FakePP(
+                _mcs_entitlement(allocated=allocated)
+            ),
+            payg=False,
+        )
+    )
+
+    assert r.status == "Manual"
+    assert "invalid entitlement value" in r.result
+    assert r.evidence == {
+        "environmentId": "env-guid",
+        "source": "environment-entitlements",
+        "outcome": "invalid-response",
+        "serviceStatus": 200,
+        "requestId": "entitlement-request-200",
+        "matchingEntitlements": 1,
+        "errorType": "InvalidEntitlementAllocationValue",
+    }
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"items": {}, "_status": 200},
+        {
+            "items": [
+                {
+                    "entitlementId": "MCSMessages",
+                    "entitlement": {},
+                }
+            ],
+            "_status": 200,
+        },
+    ],
+)
+def test_requires_manual_confirmation_when_entitlement_response_is_malformed(
+    response,
+):
+    r = _run(_runner(powerplatform=_FakePP(response), payg=False))
+
+    assert r.status == "Manual"
+    assert "invalid entitlement response" in r.result
+    assert r.evidence["outcome"] == "invalid-response"
 
 
 @pytest.mark.parametrize(
@@ -143,6 +309,22 @@ def test_capacity_remediation_uses_ring_admin_center(
     assert expected_origin in r.remediation
 
 
+def test_capacity_remediation_uses_retained_preview_admin_origin() -> None:
+    preview_origin = "https://admin.preview.powerplatform.microsoft.com"
+    r = _run(
+        _runner(
+            powerplatform=None,
+            ring="prod",
+            power_platform_admin_origin=preview_origin,
+        )
+    )
+    assert (
+        f"{preview_origin}/billing/licenses/copilotStudio/overview"
+        in r.remediation
+    )
+    assert "https://admin.powerplatform.microsoft.com/billing" not in r.remediation
+
+
 def test_capacity_remediation_falls_back_when_ring_unresolved():
     # Targeted --checkpoint runs never resolve the BAP ring, so runner.ring is
     # None. The capacity row must still be produced (no crash) with a
@@ -155,6 +337,9 @@ def test_capacity_remediation_falls_back_when_ring_unresolved():
 
 
 def test_fails_when_no_env_id():
-    r = _run(_runner(powerplatform=_FakePP(_mcs(10)), env_id=None))
+    r = _run(_runner(
+        powerplatform=_FakePP(_mcs_entitlement(allocated=10)),
+        env_id=None,
+    ))
     assert r.status == "Failed"
     assert "Environment ID is unavailable" in r.result

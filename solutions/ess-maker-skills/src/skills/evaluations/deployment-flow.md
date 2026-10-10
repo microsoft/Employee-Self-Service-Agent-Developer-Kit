@@ -206,7 +206,7 @@ its recovery instructions instead of manually deleting files.
 |---|---|
 | Request Review / Flow R1 | Dataverse: confirm the deployed requested marker and give reviewer handoff. Native: report the actual uploaded/reused set and local request with the shared-review warning. Neither starts a run or sends notification |
 | Run | Pass the verified deployed set identity to `run/SKILL.md`; complete connection prerequisites and start exactly once |
-| Explicit evaluation push | Report deployment only, preserving any existing review state; do not tag or run |
+| Explicit evaluation push | Report deployment only, preserving any existing review state; do not tag or run. After verified success, run `python scripts/analytics_pointer.py --post-deploy` and show any stdout verbatim. This is a one-time reminder for the current DA environment/agent association; it is silent after completion |
 | Reviewer completion / Flow R2 | Dataverse: verify deployed completion. Native: confirm local completion and successful YAML push/reuse, not shared completion. Offer Run subject to the existing review/connection gates |
 
 On error or cancellation, distinguish saved locally, staged, deployed, and

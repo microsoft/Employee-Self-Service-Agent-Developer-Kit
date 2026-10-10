@@ -175,7 +175,7 @@ def test_append_uses_authoring_helper_and_preserves_case_identity():
         "evaluation_authoring.py add",
         '--evaluation-folder "{set-folder}"',
         '--input "{new prompt}"',
-        '--expected-output "{new expected response}"',
+        '--expected-output "{reasoned behavioral assertion}"',
         "file plus row index",
         "Preserve duplicate inputs",
         "100 cases",
@@ -185,6 +185,37 @@ def test_append_uses_authoring_helper_and_preserves_case_identity():
         "Preserve parent identity",
     ):
         assert fragment in text
+
+
+def test_expected_response_edits_reason_over_user_intent_instead_of_copying():
+    contract = _normalized(_contract("experience-contract"))
+    update = _normalized(_skill("update"))
+    for text in (contract, update):
+        assert "Never copy" in text
+        assert "verbatim" in text
+        assert "The agent should ..." in text
+        assert "observable assertion" in text
+        assert '"The agent should respond"' in text
+    assert 'What should the agent do for "{case label}"?' in update
+    assert "What should the new expected response be" not in update
+    assert '--expected-output "{reasoned behavioral assertion}"' in update
+    assert "not the user's verbatim description" in update
+    assert "tell them manager approval is required" in contract
+    assert "The agent should explain that manager approval is required" in contract
+
+
+def test_quality_authentication_requires_recovery_before_manual_scoring():
+    contract = _normalized(_contract("experience-contract"))
+    assert "status=authentication_required" in contract
+    assert "do not silently start manual scoring" in contract
+    assert "structured authentication/manual-scoring choice" in contract
+    assert "at most once after authentication" in contract
+    assert "authenticationRetry" in contract
+    assert "manualFallbackAuthorized" in contract
+    assert (
+        "Manual scoring is allowed only when the user declines authentication "
+        "or that authenticated retry still fails"
+    ) in contract
 
 
 @pytest.mark.parametrize(
@@ -346,6 +377,9 @@ def test_native_deployment_reuses_existing_insert_with_action_aware_consent():
         "Native `--force-delete` remains rejected",
         "pending insertion retry retain their verified or confirmed planned IDs",
         "Do not convert that existing limitation into a failed push",
+        "python scripts/analytics_pointer.py --post-deploy",
+        "one-time reminder",
+        "DA environment/agent association",
     ):
         assert fragment in text
     run = _normalized(_skill("run"))
@@ -489,10 +523,14 @@ def test_entry_prompts_preserve_explicit_push_without_general_deployment_overrid
     assert push.index("## Explicit evaluation push") < push.index("## General component push")
     assert "evaluation_deployment" not in push  # Shared guide owns the CLI.
     assert "deployment-flow.md" in push
+    assert "python scripts/analytics_pointer.py --post-deploy" in push
+    assert "--show" not in push
+    assert "only after deployment verification" in push
+    assert "do not substitute the Copilot Studio home page" in push
     assert "Do NOT add `--yes`" in push.split("## General component push", 1)[1]
     assert "never launch an interactive evaluation push" in _normalized(push).lower()
     update = _normalized(_read(".github/prompts/update.prompt.md"))
-    assert "For **topic and workflow updates only**" in update
+    assert "For **workflow updates only**" in update
     assert "This restriction does not apply to evaluation operations" in update
     evaluate = _normalized(_read(".github/prompts/evaluate.prompt.md"))
     assert "**quality review** / **Run another quality review**" in evaluate

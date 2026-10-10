@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.36 (POC)
+
+- Start the Maker guided experience earlier during VS Code startup and retain
+  first-run state only after the essential rail, walkthrough, and Chat commands
+  succeed.
+
+## 0.4.35 (POC)
+
+- **Topic actions stop at the DA capability gate.** **Create a topic** and
+  **Update a topic** now send explicit topic intent so direct and legacy
+  commands show the applicable "not yet available" message instead of entering
+  retained legacy authoring flows. Their extension labels include **(Coming
+  Soon)** so availability is clear before the maker selects either action.
+
+## 0.4.34 (POC)
+
+- **Customize landing page** opens `/landing-page` and appears immediately after **Push to Copilot Studio** at the bottom of the **Customization** tree. Customization actions are always clickable; the Getting started walkthrough asks users to complete setup first. The detailed tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
+
 ## 0.4.33 (POC)
 
 - **Honor the current installer mode on every activation.** The extension now

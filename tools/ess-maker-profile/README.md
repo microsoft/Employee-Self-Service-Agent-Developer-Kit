@@ -1,41 +1,45 @@
 # ESS Maker Profile — POC
 
-A proof-of-concept VS Code experience that strips the editor down to a **chat-first, big-button** surface for the ESS HR/IT admin persona.
+A proof-of-concept VS Code experience that provides a **guided, plain-English** surface for the ESS HR/IT admin persona.
 
 > **POC status.** This is an exploratory build to validate the UX direction. It is not productized, not signed, and not intended for customer distribution as-is.
 
 ## What it does (v0.4)
 
-When the extension activates inside the ESS Maker workspace it:
+In Maker mode, the extension opens the **Agent Developer Kit** rail on the left, a native getting-started walkthrough in the center, and Copilot Chat on the right. The activity bar stays visible, and menus, tabs, and other developer surfaces retain the user's settings.
 
-1. **Hides every developer surface** — activity bar, status bar, editor tabs, minimap, breadcrumbs, layout controls, menu bar, command center, custom title bar, and bottom panel.
-2. **Opens GitHub Copilot Chat in the editor area** — chat lives in the center of the window, not tucked into a side panel.
-3. **Pins a "Quick actions" button rail in the primary sidebar** — a custom Webview view with big icon-labeled buttons:
-   - **Connect** → `/setup`
-   - **Customize landing page** → guided landing-page configuration
-   - **Create a topic** → `/create`
-   - **Update a topic** → `/update`
-   - **Scan for issues** → `/scan`
-   - **Run a flightcheck** → `/flightcheck`
-   - **Generate tests** → `/evaluate` (available after setup)
-   - **Push to Copilot Studio** → `/push` (available after setup)
-   - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
-4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
-5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
+| Rail panel | Contents |
+|---|---|
+| **Quick start** | **Tutorial** opens the walkthrough; **Start setup** sends `/setup` and shows connected-agent information after setup completes. |
+| **Customization** | The actions below, in display order. Every action is clickable; complete setup before customizing the agent. |
+| **Help** | **Documentation** opens the repository documentation. |
 
-The customer never sees code, a file tree, or a menu. The whole window is: **chat in the center, big buttons on the left**.
+| Customization action | Copilot Chat command |
+|---|---|
+| Create a topic (Coming Soon) | Topic creation availability message |
+| Update a topic (Coming Soon) | Topic update availability message |
+| Scan for issues | `/scan` |
+| Run a flightcheck | `/flightcheck` |
+| Generate tests | `/evaluate` |
+| Push to Copilot Studio | `/push` |
+| Customize landing page | `/landing-page` |
+
+The walkthrough has **What ADK does** and **Getting started** steps. Setup is user-driven in both modes: select **Start setup**, type `/setup`, or ask Copilot for setup help.
 
 ## Layout
 
-| Stock VS Code | ESS Maker (lite mode) |
+| Mode | Layout |
 |---|---|
-| Menu bar, activity bar, file tree, editor tabs, status bar | Chat fills the editor area; "Quick actions" button rail on the left; everything else hidden |
+| Maker | Agent Developer Kit rail, native walkthrough, and Copilot Chat; normal VS Code chrome remains available. |
+| Developer | Default VS Code layout with a rendered workspace README preview. Revealing the Agent Developer Kit rail opens the guided walkthrough. |
+
+The installer selects the mode in the terminal and writes `essMaker.mode`. The extension reads that setting on each activation. The accepted values are `maker` and `developer`, with `lite` and `standard` supported as compatibility aliases.
 
 ## Try it
 
 ### Via the one-shot installer (recommended)
 
-The lite mode installer installs VS Code + the Maker Profile extension:
+These Maker-mode shortcuts install VS Code and the Maker Profile extension:
 
 **Windows** (PowerShell):
 ```powershell
@@ -47,21 +51,25 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 ```
 
-The standard installer (`bootstrap.ps1` / `bootstrap-mac.sh`) does NOT install the Maker Profile — it uses stock VS Code with `code chat /setup`.
+The shared installer (`bootstrap.ps1`/`bootstrap-mac.sh`) supports Maker and Developer modes and installs the extension for both. See the [installation guide](../../setup/README.md) for mode selection and unattended options.
 
 ### From source (development)
 
 Requires Node.js 18+ and VS Code 1.86+.
 
+Every extension behavior change must include a version increment in `extension/package.json`, an entry in `extension/CHANGELOG.md`, and a rebuilt `extension/ess-maker-profile-<version>.vsix` in the same PR. Run the extension checks, package the current source, and confirm the archive's manifest version and `extension.js` match the working tree. Remove the superseded VSIX so the installers select the current package. Build each mirrored branch's VSIX from that branch's source to preserve its setup behavior.
+
 ```pwsh
 cd tools\ess-maker-profile\extension
+npm test
+npm run validate
 npx @vscode/vsce package --no-dependencies
 code --install-extension ess-maker-profile-*.vsix --force
 ```
 
 Or press **F5** from `tools/ess-maker-profile/extension` for an Extension Development Host.
 
-On first activation the maker layout auto-applies. To restore the standard workbench, click "Switch to standard mode" in Quick Actions or run **ESS Maker: Restore Standard Layout** from the command palette.
+On first activation in Maker mode, the guided layout applies automatically. Run **ESS Maker: Restore Developer Layout** to restore the saved settings, or **Agent Developer Kit: Open guided setup view** to open the guided layout. Set `essMaker.mode` to choose the layout used on subsequent activations.
 
 ## What's in the box
 
@@ -76,8 +84,9 @@ tools/ess-maker-profile/
 │   ├── CHANGELOG.md
 │   ├── .vscodeignore
 │   ├── ess-maker-profile-*.vsix       pre-built extension package
-│   └── walkthrough/                   (legacy reference — not used by extension)
+│   └── walkthrough/                   native walkthrough content and topic references
 │       ├── overview.md
+│       ├── getting-started.md
 │       ├── connect.md
 │       ├── create-topic.md
 │       ├── flightcheck.md
@@ -88,7 +97,6 @@ tools/ess-maker-profile/
 
 ## Known POC gaps
 
-- The native OS title bar still shows on Windows until a window reload.
-- The Webview view header ("Quick actions") is rendered by VS Code and cannot be styled away.
-- `Ctrl+Shift+P` still surfaces every VS Code command.
-- On the very first launch (before reload), Quick Actions may flash briefly as VS Code routes the view.
+- Layout placement depends on the user's VS Code view positions and restored window state.
+- Native tree-view headers and row styling are controlled by VS Code.
+- `Ctrl+Shift+P` exposes every VS Code command.

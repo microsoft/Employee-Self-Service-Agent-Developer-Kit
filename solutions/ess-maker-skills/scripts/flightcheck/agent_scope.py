@@ -12,31 +12,40 @@ from typing import Any
 _AGENT_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
-def active_agent(config: dict[str, Any] | None) -> dict[str, Any]:
+def active_agent(
+    config: dict[str, Any] | None,
+    selected_slug: str | None = None,
+) -> dict[str, Any]:
     """Return the config's active agent record, or ``{}`` when none resolves.
 
-    Canonical resolver so every check picks the same agent: prefer the
-    ``activeAgent`` slug (or the ``agent.slug`` back-compat copy) against the
-    ``agents`` list, then the single ``agent`` copy, then the first agent on
-    file. Mirrors ``checks/native_agent._active_agent`` so DA-CONN-001,
-    ESS-SOLN-001, and DV-CONN-001 resolve identically.
+    Canonical resolver so every check picks the same agent. An explicit
+    ``selected_slug`` is fail-closed: it either resolves that exact record or
+    returns ``{}``. Without an explicit selection, prefer the ``activeAgent``
+    slug (or the ``agent.slug`` back-compat copy), then the single ``agent``
+    copy, then the first agent on file.
     """
     config = config or {}
     agents = config.get("agents") or []
-    active_slug = config.get("activeAgent") or (config.get("agent") or {}).get(
-        "slug"
-    )
+    active_slug = selected_slug or config.get("activeAgent") or (
+        config.get("agent") or {}
+    ).get("slug")
     if active_slug:
-        match = next(
-            (
-                agent
-                for agent in agents
-                if isinstance(agent, dict) and agent.get("slug") == active_slug
-            ),
-            None,
-        )
-        if match is not None:
-            return match
+        matches = [
+            agent
+            for agent in agents
+            if isinstance(agent, dict) and agent.get("slug") == active_slug
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return {}
+        single = config.get("agent")
+        if (
+            isinstance(single, dict)
+            and single.get("slug") == active_slug
+        ):
+            return single
+        return {}
     single = config.get("agent")
     if isinstance(single, dict) and single:
         return single
@@ -46,7 +55,10 @@ def active_agent(config: dict[str, Any] | None) -> dict[str, Any]:
     )
 
 
-def active_agent_bot_id(config: dict[str, Any] | None) -> str | None:
+def active_agent_bot_id(
+    config: dict[str, Any] | None,
+    selected_slug: str | None = None,
+) -> str | None:
     """Return the active agent's ``botId``, or ``None`` when none is recorded.
 
     Resolves the active agent via :func:`active_agent` and returns only that
@@ -56,7 +68,12 @@ def active_agent_bot_id(config: dict[str, Any] | None) -> str | None:
     identity" and skip or degrade explicitly.
     """
     config = config or {}
-    return _clean_bot_id(active_agent(config).get("botId")) or None
+    return (
+        _clean_bot_id(
+            active_agent(config, selected_slug).get("botId")
+        )
+        or None
+    )
 
 
 def _clean_bot_id(value: Any) -> str:

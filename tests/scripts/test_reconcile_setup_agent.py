@@ -84,6 +84,103 @@ def test_known_native_identity_preserves_product_evidence() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("agent", "expected_identity", "observation", "cause_type"),
+    [
+        (
+            {"displayName": "Employee Self-Service"},
+            {"displayName": "Employee Self-Service"},
+            "field-absent",
+            "SchemaNameFieldAbsent",
+        ),
+        (
+            {
+                "displayName": "Employee Self-Service",
+                "schemaName": None,
+            },
+            {
+                "displayName": "Employee Self-Service",
+                "schemaName": None,
+            },
+            "null",
+            "SchemaNameNull",
+        ),
+        (
+            {
+                "displayName": "Employee Self-Service",
+                "schemaName": "  ",
+            },
+            {
+                "displayName": "Employee Self-Service",
+                "schemaName": "",
+            },
+            "empty",
+            "SchemaNameEmpty",
+        ),
+    ],
+)
+def test_native_identity_summary_preserves_unresolved_schema_observation(
+    agent: dict[str, object],
+    expected_identity: dict[str, object],
+    observation: str,
+    cause_type: str,
+) -> None:
+    result = reconcile._native_identity_summary(
+        agent,
+        evidence="minimalbot-components",
+    )
+
+    assert result["outcome"] == "found"
+    assert result["identity"] == expected_identity
+    assert "productFamily" not in result
+    assert result["productIdentity"] == {
+        "outcome": "uncertain",
+        "stage": "schema-identity",
+        "source": "minimalbot-components",
+        "observation": observation,
+        "error": {
+            "causes": [
+                {
+                    "type": cause_type,
+                    "message": result["productIdentity"]["error"]["causes"][0][
+                        "message"
+                    ],
+                }
+            ]
+        },
+    }
+
+
+def test_native_identity_summary_does_not_read_dataverse_aliases() -> None:
+    result = reconcile._native_identity_summary(
+        {
+            "fullBotName": "Alias display name",
+            "schemaname": "gptagent_copilotforemployeeselfservicehr",
+            "ismanaged": True,
+        },
+        evidence="minimalbot-components",
+    )
+
+    assert result["identity"] == {}
+    assert "productFamily" not in result
+    assert result["productIdentity"]["observation"] == "field-absent"
+
+
+def test_dataverse_identity_summary_does_not_read_native_aliases() -> None:
+    result = reconcile._dataverse_identity_summary(
+        {
+            "displayName": "Alias display name",
+            "schemaName": "msdyn_copilotforemployeeselfservicehr",
+            "managedProperties": {"isManaged": True},
+        },
+        evidence="dataverse-direct",
+    )
+
+    assert result["identity"] == {}
+    assert "productFamily" not in result
+    assert result["productIdentity"]["observation"] == "field-absent"
+
+
 def test_native_probe_returns_identity_without_dataverse_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -92,11 +189,11 @@ def test_native_probe_returns_identity_without_dataverse_probe(
         "_probe_native_agent",
         lambda *_args, **_kwargs: (
             {
-                "fullBotName": "Employee Self-Service HR",
+                "displayName": "Employee Self-Service HR",
                 "schemaName": "gptagent_copilotforemployeeselfservicehr",
                 "managedProperties": {"isManaged": True},
             },
-            "minimalbot-direct",
+            "minimalbot-components",
             None,
         ),
     )
@@ -118,7 +215,7 @@ def test_native_probe_returns_identity_without_dataverse_probe(
     assert result == {
         "backend": "native",
         "outcome": "found",
-        "evidence": "minimalbot-direct",
+        "evidence": "minimalbot-components",
         "productFamily": "da-ga",
         "identity": {
             "displayName": "Employee Self-Service HR",
@@ -128,22 +225,19 @@ def test_native_probe_returns_identity_without_dataverse_probe(
     }
 
 
-def test_native_probe_uses_component_identity_when_direct_schema_is_missing(
+def test_native_probe_uses_component_identity_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeClient:
         def get_agent(self, agent_id: str) -> dict[str, object]:
-            assert agent_id == AGENT_ID
-            return {
-                "fullBotName": "Employee Self-Service (HR)",
-                "schemaName": "",
-            }
+            raise AssertionError("Direct agent lookup must not precede components.")
 
         def fetch_components(self, agent_id: str) -> dict[str, object]:
             assert agent_id == AGENT_ID
             return {
                 "bot": {
                     "cdsBotId": AGENT_ID,
+                    "displayName": "Employee Self-Service (HR)",
                     "schemaName": (
                         "gptagent_copilotforemployeeselfservicehr"
                     ),
@@ -184,16 +278,58 @@ def test_native_probe_uses_component_identity_when_direct_schema_is_missing(
     }
 
 
-def test_native_probe_preserves_found_when_component_identity_is_uncertain(
+def test_native_probe_keeps_found_identity_when_component_schema_is_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeClient:
         def get_agent(self, agent_id: str) -> dict[str, object]:
+            raise AssertionError("Direct agent lookup must not precede components.")
+
+        def fetch_components(self, agent_id: str) -> dict[str, object]:
             assert agent_id == AGENT_ID
             return {
-                "fullBotName": "Employee Self-Service (HR)",
-                "schemaName": "",
+                "bot": {
+                    "cdsBotId": AGENT_ID,
+                    "displayName": "Employee Self-Service",
+                }
             }
+
+    monkeypatch.setattr(
+        reconcile,
+        "authenticate_flightcheck",
+        lambda *_args, **_kwargs: ("token", "tenant"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "derive_environment_host",
+        lambda *_args, **_kwargs: "https://environment.example.com",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "AgentBuilderClient",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    result = reconcile.probe_native_identity(
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        ring="preprod",
+    )
+
+    assert result["outcome"] == "found"
+    assert result["identity"] == {"displayName": "Employee Self-Service"}
+    assert "productFamily" not in result
+    assert result["productIdentity"]["outcome"] == "uncertain"
+    assert result["productIdentity"]["source"] == "minimalbot-components"
+    assert result["productIdentity"]["observation"] == "field-absent"
+
+
+def test_native_probe_rejects_mismatched_component_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def get_agent(self, agent_id: str) -> dict[str, object]:
+            raise AssertionError("Direct agent lookup must not precede components.")
 
         def fetch_components(self, agent_id: str) -> dict[str, object]:
             assert agent_id == AGENT_ID
@@ -229,17 +365,10 @@ def test_native_probe_preserves_found_when_component_identity_is_uncertain(
     )
 
     assert result["backend"] == "native"
-    assert result["outcome"] == "found"
-    assert result["evidence"] == "minimalbot-direct"
-    assert result["productFamily"] == "unknown"
-    assert result["identity"] == {
-        "displayName": "Employee Self-Service (HR)",
-        "schemaName": "",
-    }
-    assert result["productIdentity"]["outcome"] == "uncertain"
-    assert result["productIdentity"]["stage"] == "component-identity"
+    assert result["outcome"] == "uncertain"
+    assert result["stage"] == "agent-lookup"
     assert (
-        result["productIdentity"]["error"]["causes"][0]["message"]
+        result["error"]["causes"][0]["message"]
         == "Component fetch returned identity for a different agent."
     )
 
@@ -317,8 +446,9 @@ def test_environment_resolution_uses_user_scoped_api_and_selected_account(
     observed: dict[str, object] = {}
 
     class FakeClient:
-        def __init__(self, tenant: str) -> None:
+        def __init__(self, tenant: str, *, ring: str) -> None:
             observed["tenant"] = tenant
+            observed["ring"] = ring
 
         def authenticate(self, preferred_username=None):
             observed["account"] = preferred_username
@@ -337,11 +467,13 @@ def test_environment_resolution_uses_user_scoped_api_and_selected_account(
     result = reconcile._resolve_dataverse_url(
         ENVIRONMENT_ID,
         "maker@example.com",
+        "test",
     )
 
     assert result == DATAVERSE_URL
     assert observed == {
         "tenant": "organizations",
+        "ring": "test",
         "account": "maker@example.com",
     }
 
@@ -356,7 +488,8 @@ def test_environment_resolution_preserves_permission_failure(
     outcome: str,
 ) -> None:
     class FakeClient:
-        def __init__(self, _tenant: str) -> None:
+        def __init__(self, _tenant: str, *, ring: str) -> None:
+            assert ring == "prod"
             pass
 
         def authenticate(self, preferred_username=None):

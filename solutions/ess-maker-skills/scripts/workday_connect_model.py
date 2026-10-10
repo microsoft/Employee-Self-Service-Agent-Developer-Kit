@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -13,13 +14,39 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Mapping
+from urllib.parse import urlparse
 import uuid
 
 
-STATE_SCHEMA_VERSION = 7
-CONTROLLER_CONTRACT_VERSION = 3
+STATE_SCHEMA_VERSION = 12
+CONTROLLER_CONTRACT_VERSION = 4
 CATALOG_PATH = Path(__file__).with_name("workday_connect_catalog.json")
 LIFECYCLE_JOURNAL_MAX_EVENTS = 200
+TARGET_REALMS = ("dev", "test", "prod")
+TARGET_DEPLOYMENT_STATUSES = frozenset(
+    {
+        "not-deployed",
+        "detected",
+        "needs-configuration",
+        "partially-configured",
+        "blocked",
+        "ready",
+    }
+)
+TARGET_SNAPSHOT_FIELDS = ("scope", "operators", "lifecycle", "phases")
+TARGET_IDENTITY_FIELDS = frozenset(
+    {
+        "environmentId",
+        "environmentUrl",
+        "tenantId",
+        "agentId",
+        "agentSchemaName",
+        "agentSlug",
+        "almFamilyId",
+        "commitSha",
+        "sourceAgentId",
+    }
+)
 
 
 class WorkdayConnectModelError(ValueError):
@@ -32,7 +59,7 @@ class Phase(str, Enum):
     WORKDAY_ADMIN = "workday-admin"
     CONNECTIONS = "connections"
     RUNTIME = "runtime"
-    EMPLOYEE_VALIDATION = "employee-validation"
+    MAKER_VALIDATION = "maker-validation"
 
 
 class PhaseStatus(str, Enum):
@@ -90,8 +117,9 @@ PHASE_DEFINITIONS = (
         what_happens=(
             "Confirm the selected ESS HR agent, Power Platform environment, "
             "and maker account.",
-            "Verify Dataverse is available in the selected environment.",
-            "Install or verify the supported Workday package.",
+            "Reuse setup-complete capacity evidence and verify direct "
+            "Dataverse access to the selected environment.",
+            "Select the supported Workday package without installing it yet.",
         ),
         prerequisite=None,
     ),
@@ -99,11 +127,12 @@ PHASE_DEFINITIONS = (
         identifier=Phase.ENTRA,
         title="Microsoft Entra",
         what_happens=(
-            "Find the exact Workday enterprise application in the selected "
-            "Microsoft Entra tenant.",
-            "Guide an Entra administrator through the required SAML, "
+            "Give the Microsoft Entra app administrator one complete guided "
+            "handoff.",
+            "Guide that app administrator through the required SAML, "
             "permission, consent, assignment, and employee sign-in settings.",
-            "Verify the application and signing-certificate configuration.",
+            "Validate and record the administrator's returned non-secret "
+            "application and signing-certificate evidence.",
         ),
         prerequisite=Phase.PREFLIGHT,
     ),
@@ -124,11 +153,12 @@ PHASE_DEFINITIONS = (
         identifier=Phase.CONNECTIONS,
         title="Connections",
         what_happens=(
+            "Install or verify the supported Workday package in the selected "
+            "environment.",
             "Find or guide creation of the Workday and Microsoft Dataverse "
             "connections in the selected environment.",
-            "Use the verified Workday resource URL, token URL, and OAuth "
-            "client ID.",
-            "Verify both connections are live before runtime configuration.",
+            "Use the verified Workday values and confirm both connections are "
+            "live before runtime configuration.",
         ),
         prerequisite=Phase.WORKDAY_ADMIN,
     ),
@@ -145,13 +175,15 @@ PHASE_DEFINITIONS = (
         prerequisite=Phase.CONNECTIONS,
     ),
     PhaseDefinition(
-        identifier=Phase.EMPLOYEE_VALIDATION,
-        title="Employee validation",
+        identifier=Phase.MAKER_VALIDATION,
+        title="Maker validation",
         what_happens=(
-            "Publish the configured agent.",
-            "Run a real Workday scenario as a signed-in non-maker employee.",
-            "Confirm employee context and Workday data work without an "
-            "unexpected repeated sign-in.",
+            "Smoke-test an enabled read-only Workday scenario in the Copilot "
+            "Studio Test pane without publishing the agent.",
+            "Complete the guided Workday connection lifecycle when the maker "
+            "scenario returns the expected employee context and Workday data.",
+            "Show publishing, deployment, employee-owned connections, and "
+            "non-maker Microsoft 365 Chat validation as post-skill next steps.",
         ),
         prerequisite=Phase.RUNTIME,
     ),
@@ -161,7 +193,7 @@ PHASE_BY_ID = {
 }
 
 PHASE_REQUIRED_ACTIONS = {
-    Phase.PREFLIGHT.value: frozenset({"verify-target", "verify-package"}),
+    Phase.PREFLIGHT.value: frozenset({"verify-target"}),
     Phase.ENTRA.value: frozenset(
         {
             "exact-application-discovered",
@@ -169,7 +201,9 @@ PHASE_REQUIRED_ACTIONS = {
         }
     ),
     Phase.WORKDAY_ADMIN.value: frozenset({"administrator-response-validated"}),
-    Phase.CONNECTIONS.value: frozenset({"physical-connections-verified"}),
+    Phase.CONNECTIONS.value: frozenset(
+        {"verify-package", "physical-connections-verified"}
+    ),
     Phase.RUNTIME.value: frozenset(
         {
             "connection-references-bound",
@@ -182,7 +216,7 @@ PHASE_REQUIRED_ACTIONS = {
             "workday-topics-activated",
         }
     ),
-    Phase.EMPLOYEE_VALIDATION.value: frozenset({"signed-in-scenario"}),
+    Phase.MAKER_VALIDATION.value: frozenset({"maker-smoke-test"}),
 }
 ADMINISTRATOR_PHASES = frozenset(
     {
@@ -248,24 +282,40 @@ ADMINISTRATOR_PARTIAL_FIELDS = {
             "integrationPermissionsGetOutcome",
             "functionalAreaScopes",
             "optionalDomains",
-            "authorizationOutcome",
-            "authorizationRemediationDomain",
-            "authorizationRemediationScenario",
-            "authorizationRetestOutcome",
+        }
+    ),
+}
+ADMINISTRATOR_REQUIRED_FIELDS = {
+    Phase.ENTRA.value: frozenset(
+        {
+            "selectedDirectoryDisplayName",
+            "applicationId",
+            "applicationDisplayName",
+            "replyUrl",
+            "entraChecks",
+            "nameIdSource",
+            "samlSigningOption",
+            "certificateThumbprint",
+            "certificateValidTo",
+        }
+    ),
+    Phase.WORKDAY_ADMIN.value: (
+        ADMINISTRATOR_PARTIAL_FIELDS[Phase.WORKDAY_ADMIN.value]
+        - {
+            "certificateValidFrom",
+            "employeeSecurityGroup",
+            "optionalDomains",
         }
     ),
 }
 TENANT_FOUNDATION_REQUIRED_IDENTIFIER_KEYS = frozenset(
     {
         "entraAppId",
-        "entraAppObjectId",
-        "entraServicePrincipalId",
         "entraAppIdUri",
         "microsoftEntraIdentifier",
         "entraLoginUrl",
         "replyUrl",
         "workdaySamlEntityId",
-        "scopeGuid",
         "signingCertificate",
         "oauthClientId",
     }
@@ -299,7 +349,7 @@ LEGACY_PHASE_ROWS = {
         "DA4.7",
         "DA4.8",
     ),
-    Phase.EMPLOYEE_VALIDATION: ("DA5.1",),
+    Phase.MAKER_VALIDATION: ("DA5.1",),
 }
 
 _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -381,6 +431,41 @@ def workday_saml_entity_id(tenant: str) -> str:
     return f"http://www.workday.com/{normalized}"
 
 
+def normalize_workday_tenant_input(value: str) -> str:
+    """Accept a tenant name or a recognized Workday URL containing it."""
+    normalized = str(value or "").strip()
+    if _TENANT_RE.fullmatch(normalized):
+        return normalized
+
+    parsed = urlparse(normalized)
+    host = str(parsed.hostname or "").casefold()
+    is_workday_host = (
+        host.endswith(".workday.com")
+        or host.endswith(".myworkday.com")
+    )
+    if parsed.scheme != "https" or not is_workday_host:
+        raise WorkdayConnectModelError(
+            "Enter the Workday tenant name or a recognized Workday URL."
+        )
+    path = parsed.path.rstrip("/")
+    patterns = (
+        r"/ccx/oauth2/([^/]+)/token",
+        r"/([^/]+)/login-saml\.htmld",
+        r"/wday/authgwy/([^/]+)(?:/.*)?",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, path, flags=re.IGNORECASE)
+        if match and _TENANT_RE.fullmatch(match.group(1)):
+            return match.group(1)
+    if host.endswith(".myworkday.com"):
+        match = re.fullmatch(r"/([^/]+)(?:/.*)?", path)
+        if match and _TENANT_RE.fullmatch(match.group(1)):
+            return match.group(1)
+    raise WorkdayConnectModelError(
+        "The Workday URL does not contain a recognizable tenant name."
+    )
+
+
 def canonical_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(plan, Mapping):
         raise WorkdayConnectModelError("A Workday change plan must be an object.")
@@ -447,6 +532,7 @@ def default_phase_state(phase_id: str | None = None) -> dict[str, Any]:
         "approvedPlanHash": None,
         "approvedPlan": None,
         "evidence": [],
+        "validationProfiles": {},
         "blocker": None,
         "updatedAt": None,
     }
@@ -474,8 +560,146 @@ def default_lifecycle_state() -> dict[str, Any]:
     }
 
 
-def default_state() -> dict[str, Any]:
+def _target_identity_from_scope(
+    scope: Mapping[str, Any],
+) -> dict[str, str]:
+    agent = scope.get("agent")
+    if not isinstance(agent, Mapping):
+        agent = {}
+    agent_id = str(agent.get("botId") or "")
     return {
+        "environmentId": str(scope.get("environmentId") or ""),
+        "environmentUrl": str(scope.get("dataverseUrl") or ""),
+        "tenantId": str(scope.get("entraTenantId") or ""),
+        "agentId": agent_id,
+        "agentSchemaName": str(agent.get("schemaName") or ""),
+        "agentSlug": str(agent.get("slug") or ""),
+        "almFamilyId": "",
+        "commitSha": "",
+        "sourceAgentId": agent_id,
+    }
+
+
+def _target_deployment_status(
+    state: Mapping[str, Any],
+    current: str = "",
+) -> str:
+    if state.get("status") == "ready":
+        return "ready"
+    phases = state.get("phases") or {}
+    if any(
+        isinstance(phase, Mapping)
+        and phase.get("status") == PhaseStatus.BLOCKED.value
+        for phase in phases.values()
+    ):
+        return "blocked"
+    if any(
+        isinstance(phase, Mapping)
+        and phase.get("status") != PhaseStatus.PENDING.value
+        for phase in phases.values()
+    ):
+        return "partially-configured"
+    if current in {"not-deployed", "detected"}:
+        return current
+    return "needs-configuration"
+
+
+def target_state_from_active(
+    state: Mapping[str, Any],
+    realm: str,
+    *,
+    identity: Mapping[str, Any] | None = None,
+    deployment_status: str | None = None,
+    discovered_at: str | None = None,
+    provenance: str | None = None,
+) -> dict[str, Any]:
+    if realm not in TARGET_REALMS:
+        raise WorkdayConnectModelError(
+            f"Unknown Workday target realm: {realm!r}."
+        )
+    existing_targets = state.get("targets")
+    existing = (
+        existing_targets.get(realm)
+        if isinstance(existing_targets, Mapping)
+        else None
+    )
+    existing_identity = (
+        existing.get("identity")
+        if isinstance(existing, Mapping)
+        and isinstance(existing.get("identity"), Mapping)
+        else {}
+    )
+    normalized_identity = {
+        key: str(
+            (
+                identity.get(key)
+                if isinstance(identity, Mapping) and key in identity
+                else existing_identity.get(key)
+            )
+            or _target_identity_from_scope(state.get("scope") or {}).get(key)
+            or ""
+        )
+        for key in TARGET_IDENTITY_FIELDS
+    }
+    current_deployment_status = str(
+        (existing or {}).get("deploymentStatus") or ""
+    )
+    return {
+        "realm": realm,
+        "deploymentStatus": (
+            deployment_status
+            or _target_deployment_status(
+                state,
+                current_deployment_status,
+            )
+        ),
+        "identity": normalized_identity,
+        "status": str(state.get("status") or "in-progress"),
+        "scope": copy.deepcopy(dict(state.get("scope") or {})),
+        "operators": copy.deepcopy(dict(state.get("operators") or {})),
+        "lifecycle": copy.deepcopy(dict(state.get("lifecycle") or {})),
+        "phases": copy.deepcopy(dict(state.get("phases") or {})),
+        "discoveredAt": (
+            discovered_at
+            if discovered_at is not None
+            else (
+                existing.get("discoveredAt")
+                if isinstance(existing, Mapping)
+                else None
+            )
+        ),
+        "provenance": (
+            provenance
+            or str((existing or {}).get("provenance") or "controller")
+        ),
+        "updatedAt": str(state.get("updatedAt") or utc_now()),
+    }
+
+
+def initialize_target_registry(
+    state: dict[str, Any],
+    *,
+    provenance: str,
+) -> None:
+    state["activeTargetRealm"] = "dev"
+    state["targets"] = {realm: None for realm in TARGET_REALMS}
+    state["targets"]["dev"] = target_state_from_active(
+        state,
+        "dev",
+        provenance=provenance,
+    )
+
+
+def synchronize_active_target(state: dict[str, Any]) -> None:
+    realm = str(state.get("activeTargetRealm") or "")
+    targets = state.get("targets")
+    if realm not in TARGET_REALMS or not isinstance(targets, dict):
+        return
+    targets[realm] = target_state_from_active(state, realm)
+
+
+def default_state() -> dict[str, Any]:
+    state = {
         "schemaVersion": STATE_SCHEMA_VERSION,
         "provider": "workday",
         "status": "in-progress",
@@ -494,6 +718,106 @@ def default_state() -> dict[str, Any]:
         "migration": None,
         "updatedAt": utc_now(),
     }
+    initialize_target_registry(state, provenance="new-lifecycle")
+    return state
+
+
+def _validate_target_state(realm: str, value: Any) -> None:
+    if value is None:
+        if realm == "dev":
+            raise WorkdayConnectModelError(
+                "Workday DEV target state is required."
+            )
+        return
+    if not isinstance(value, dict):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' must be an object or null."
+        )
+    required_fields = {
+        "realm",
+        "deploymentStatus",
+        "identity",
+        "status",
+        "scope",
+        "operators",
+        "lifecycle",
+        "phases",
+        "discoveredAt",
+        "provenance",
+        "updatedAt",
+    }
+    if set(value) != required_fields or value["realm"] != realm:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has an invalid contract."
+        )
+    if value["deploymentStatus"] not in TARGET_DEPLOYMENT_STATUSES:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has an invalid deployment status."
+        )
+    identity = value["identity"]
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != TARGET_IDENTITY_FIELDS
+        or any(not isinstance(item, str) for item in identity.values())
+    ):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' has invalid identity evidence."
+        )
+    for field in ("scope", "operators", "phases"):
+        if not isinstance(value[field], dict):
+            raise WorkdayConnectModelError(
+                f"Workday target '{realm}' field '{field}' must be an object."
+            )
+    _validate_lifecycle_state(value["lifecycle"])
+    if set(value["phases"]) != set(PHASE_BY_ID):
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' must contain exactly the six phases."
+        )
+    for phase_id, phase in value["phases"].items():
+        _validate_phase_state(phase_id, phase)
+    for definition in PHASE_DEFINITIONS:
+        if definition.prerequisite is None:
+            continue
+        phase = value["phases"][definition.identifier.value]
+        prerequisite = value["phases"][definition.prerequisite.value]
+        if (
+            phase["status"] == PhaseStatus.COMPLETE.value
+            and prerequisite["status"] != PhaseStatus.COMPLETE.value
+        ):
+            raise WorkdayConnectModelError(
+                f"Workday target '{realm}' phase "
+                f"'{definition.identifier.value}' cannot be complete before "
+                f"'{definition.prerequisite.value}'."
+            )
+    expected_status = (
+        "ready"
+        if all(
+            phase["status"] == PhaseStatus.COMPLETE.value
+            for phase in value["phases"].values()
+        )
+        else "in-progress"
+    )
+    if value["status"] != expected_status:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' status must be '{expected_status}'."
+        )
+    if value["deploymentStatus"] == "ready" and expected_status != "ready":
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' cannot be ready before all phases complete."
+        )
+    if value["discoveredAt"] is not None:
+        _validate_timestamp(
+            value["discoveredAt"],
+            f"Workday target '{realm}' discoveredAt",
+        )
+    if not isinstance(value["provenance"], str) or not value["provenance"]:
+        raise WorkdayConnectModelError(
+            f"Workday target '{realm}' provenance is required."
+        )
+    _validate_timestamp(
+        value["updatedAt"],
+        f"Workday target '{realm}' updatedAt",
+    )
 
 
 def _validate_lifecycle_state(value: Any) -> None:
@@ -691,6 +1015,7 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         "approvedPlanHash",
         "approvedPlan",
         "evidence",
+        "validationProfiles",
         "blocker",
         "updatedAt",
     }
@@ -736,6 +1061,131 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
         raise WorkdayConnectModelError(
             f"Phase '{phase_id}' evidence must contain action records."
         )
+    validation_profiles = value["validationProfiles"]
+    if not isinstance(validation_profiles, dict):
+        raise WorkdayConnectModelError(
+            f"Phase '{phase_id}' validationProfiles must be an object."
+        )
+    for profile_name, profile in validation_profiles.items():
+        if (
+            not isinstance(profile_name, str)
+            or not profile_name.startswith("workday-da:")
+            or not isinstance(profile, dict)
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' contains an invalid validation profile."
+            )
+        required_profile_fields = {
+            "profile",
+            "sourceProfile",
+            "schemaVersion",
+            "overall",
+            "target",
+            "checkpointStatuses",
+            "acceptedSuppressions",
+            "remediationIds",
+            "accepted",
+            "migrationBaseline",
+            "inputFingerprint",
+            "validatedAt",
+        }
+        if set(profile) != required_profile_fields:
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "has an invalid contract."
+            )
+        if (
+            profile["profile"] != profile_name
+            or not isinstance(profile["sourceProfile"], str)
+            or not profile["sourceProfile"].startswith("workday-da:")
+            or profile["schemaVersion"] != "flightcheck.result.v2"
+            or profile["overall"] != "READY"
+            or profile["accepted"] is not True
+            or not isinstance(profile["migrationBaseline"], bool)
+            or not isinstance(profile["inputFingerprint"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", profile["inputFingerprint"])
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "was not accepted."
+            )
+        target = profile["target"]
+        target_fields = {
+            "realm",
+            "environmentId",
+            "environmentUrl",
+            "tenantId",
+            "agentSlug",
+            "agentSchemaName",
+            "agentId",
+        }
+        if (
+            not isinstance(target, dict)
+            or set(target) != target_fields
+            or any(not isinstance(item, str) for item in target.values())
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "has an invalid target."
+            )
+        statuses = profile["checkpointStatuses"]
+        if (
+            not isinstance(statuses, dict)
+            or not statuses
+            or any(
+                not isinstance(checkpoint_id, str)
+                or not checkpoint_id
+                or status not in {
+                    "Passed",
+                    "Manual",
+                    "Warning",
+                    "Skipped",
+                    "NotConfigured",
+                    "Failed",
+                    "Blocked",
+                    "Error",
+                }
+                for checkpoint_id, status in statuses.items()
+            )
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "has invalid checkpoint statuses."
+            )
+        suppressions = profile["acceptedSuppressions"]
+        if (
+            not isinstance(suppressions, list)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"checkpointId", "reason"}
+                or not all(
+                    isinstance(item[field], str) and item[field]
+                    for field in ("checkpointId", "reason")
+                )
+                for item in suppressions
+            )
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "has invalid accepted suppressions."
+            )
+        remediation_ids = profile["remediationIds"]
+        if (
+            not isinstance(remediation_ids, list)
+            or any(
+                not isinstance(remediation_id, str) or not remediation_id
+                for remediation_id in remediation_ids
+            )
+            or len(remediation_ids) != len(set(remediation_ids))
+        ):
+            raise WorkdayConnectModelError(
+                f"Phase '{phase_id}' validation profile '{profile_name}' "
+                "has invalid remediation IDs."
+            )
+        _validate_timestamp(
+            profile["validatedAt"],
+            f"Phase '{phase_id}' validation profile validatedAt",
+        )
     approved_plan = value["approvedPlan"]
     approved_hash = value["approvedPlanHash"]
     if approved_plan is not None:
@@ -747,10 +1197,10 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
     if value["status"] == PhaseStatus.COMPLETE.value:
         required_actions = PHASE_REQUIRED_ACTIONS[phase_id]
         completed_actions = set(value["completedActions"])
-        missing_actions = sorted(required_actions - completed_actions)
         evidence_actions = {
             str(record.get("action") or "") for record in value["evidence"]
         }
+        missing_actions = sorted(required_actions - completed_actions)
         missing_evidence = sorted(required_actions - evidence_actions)
         if missing_actions or missing_evidence:
             details = []
@@ -839,7 +1289,7 @@ def _validate_phase_state(phase_id: str, value: Any) -> None:
                 )
             ):
                 raise WorkdayConnectModelError(
-                    "Entra administrator entraChecks must contain named "
+                    "Entra app administrator entraChecks must contain named "
                     "evidence objects."
                 )
             continue
@@ -953,11 +1403,11 @@ def _validate_tenant_foundation(value: Any) -> None:
     certificate = value["identifiers"].get("signingCertificate")
     if not isinstance(certificate, dict) or any(
         not str(certificate.get(key) or "").strip()
-        for key in ("thumbprint", "validFrom", "validTo")
+        for key in ("thumbprint", "validTo")
     ):
         raise WorkdayConnectModelError(
             "Workday tenantFoundation signingCertificate must contain "
-            "thumbprint, validFrom, and validTo."
+            "thumbprint and validTo."
         )
     missing_endpoints = sorted(
         key
@@ -1030,6 +1480,23 @@ def validate_state(state: Any) -> dict[str, Any]:
         raise WorkdayConnectModelError(
             "Workday connect state provider must be 'workday'."
         )
+    active_target_realm = state.get("activeTargetRealm")
+    if active_target_realm not in TARGET_REALMS:
+        raise WorkdayConnectModelError(
+            "Workday connect activeTargetRealm must be Dev, Test, or Prod."
+        )
+    targets = state.get("targets")
+    if not isinstance(targets, dict) or set(targets) != set(TARGET_REALMS):
+        raise WorkdayConnectModelError(
+            "Workday connect state must contain exactly the Dev, Test, and "
+            "Prod target slots."
+        )
+    for realm, target in targets.items():
+        _validate_target_state(realm, target)
+    if targets[active_target_realm] is None:
+        raise WorkdayConnectModelError(
+            "Workday connect active target must contain persisted state."
+        )
     for field in ("scope", "identifiers", "endpoints", "operators", "phases"):
         if not isinstance(state.get(field), dict):
             raise WorkdayConnectModelError(
@@ -1068,6 +1535,19 @@ def validate_state(state: Any) -> dict[str, Any]:
         raise WorkdayConnectModelError(
             f"Workday connect status must be '{expected_status}'."
         )
+    active_target = targets[active_target_realm]
+    assert isinstance(active_target, Mapping)
+    for field in TARGET_SNAPSHOT_FIELDS:
+        if active_target.get(field) != state.get(field):
+            raise WorkdayConnectModelError(
+                "Workday connect active target projection is inconsistent "
+                f"for '{field}'."
+            )
+    if active_target.get("status") != state.get("status"):
+        raise WorkdayConnectModelError(
+            "Workday connect active target projection has an inconsistent "
+            "status."
+        )
     return state
 
 
@@ -1082,11 +1562,9 @@ def next_phase_id(state: Mapping[str, Any]) -> str | None:
 def progress_text(state: Mapping[str, Any]) -> str:
     labels = {
         PhaseStatus.PENDING.value: "Pending",
-        PhaseStatus.ACTIVE.value: "In progress",
-        PhaseStatus.BLOCKED.value: "Needs attention",
         PhaseStatus.COMPLETE.value: "Complete",
     }
-    next_phase = next_phase_id(state)
+    current_phase = next_phase_id(state)
     rows = [
         "### Workday connection progress",
         "",
@@ -1095,11 +1573,16 @@ def progress_text(state: Mapping[str, Any]) -> str:
     ]
     for index, definition in enumerate(PHASE_DEFINITIONS, start=1):
         status = state["phases"][definition.identifier.value]["status"]
-        label = labels[status]
-        if status == PhaseStatus.PENDING.value and (
-            definition.identifier.value == next_phase
-        ):
-            label = "Next"
+        if status == PhaseStatus.COMPLETE.value:
+            label = labels[status]
+        elif definition.identifier.value == current_phase:
+            label = (
+                "Current - needs attention"
+                if status == PhaseStatus.BLOCKED.value
+                else "Current"
+            )
+        else:
+            label = "Pending"
         rows.append(f"| {index} | {definition.title} | {label} |")
     return "\n".join(rows)
 

@@ -21,6 +21,7 @@ def _write_foundation(
     *,
     dataverse_url: str | None = None,
     schema_name: str = "gptagent_copilotforemployeeselfservicehr",
+    ring: str = "prod",
 ) -> None:
     local = root / ".local"
     local.mkdir(parents=True, exist_ok=True)
@@ -30,7 +31,7 @@ def _write_foundation(
         "releaseLine": "da",
         "environmentId": "agent-environment",
         "powerPlatformApiEndpoint": "https://api.powerplatform.com",
-        "ring": "prod",
+        "ring": ring,
         "activeAgent": "ess-hr",
         "agent": {
             "slug": "ess-hr",
@@ -86,6 +87,29 @@ def test_resolve_target_rejects_url_that_differs_from_setup(
         preflight.resolve_target(
             tmp_path,
             dataverse_url="https://other.crm.dynamics.com",
+            state=model.default_state(),
+        )
+
+
+def test_resolve_target_rejects_unsupported_power_platform_ring(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+
+    _write_foundation(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        ring="staging",
+    )
+
+    with pytest.raises(
+        preflight.WorkdayConnectPreflightError,
+        match="Unsupported Power Platform ring: 'staging'",
+    ):
+        preflight.resolve_target(
+            tmp_path,
+            dataverse_url=ENV_URL,
             state=model.default_state(),
         )
 
@@ -338,8 +362,6 @@ def test_preflight_skips_install_when_package_exists(tmp_path: Path) -> None:
     import workday_connect_store as store_module
 
     _write_foundation(tmp_path, dataverse_url=ENV_URL)
-    installer_calls = []
-
     def query(_url, _token, entity_set, _select, _filter):
         assert entity_set == "solutions"
         return [{"uniquename": "msdyn_EssWorkdayRuntime"}]
@@ -355,13 +377,16 @@ def test_preflight_skips_install_when_package_exists(tmp_path: Path) -> None:
             "tenantId": "tenant-id",
         },
         query=query,
-        installer=lambda *_args, **_kwargs: installer_calls.append(True),
     )
 
-    assert installer_calls == []
     assert result["package"]["action"] == "unchanged"
+    assert result["package"]["installed"] is True
     assert result["status"]["nextPhaseId"] == "entra"
     assert result["scope"]["entraTenantId"] == "tenant-id"
+    assert [check["status"] for check in result["verificationChecks"]] == [
+        "verified",
+        "verified",
+    ]
 
 
 def test_preflight_carries_verified_tenant_into_entra_handoff(
@@ -395,6 +420,7 @@ def test_preflight_carries_verified_tenant_into_entra_handoff(
     handoff = contracts.build_entra_handoff(
         state,
         {
+            "directoryDisplayName": "Contoso",
             "applications": [
                 {
                     "displayName": "Workday exact",
@@ -414,7 +440,63 @@ def test_preflight_carries_verified_tenant_into_entra_handoff(
     assert handoff["scope"]["entraTenantId"] == "tenant-id"
 
 
-def test_preflight_installs_and_reverifies_with_same_account(
+def test_connections_reuses_existing_package_without_install(
+    tmp_path: Path,
+) -> None:
+    import workday_connect_model as model
+    import workday_connect_preflight as preflight
+    import workday_connect_store as store_module
+
+    _write_foundation(tmp_path, dataverse_url=ENV_URL)
+    store = store_module.WorkdayConnectStore(tmp_path)
+    preflight.run_preflight(
+        tmp_path,
+        dataverse_url=ENV_URL,
+        maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [
+            {"uniquename": "msdyn_EssWorkdayRuntime"}
+        ],
+    )
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    installer_calls = []
+
+    result = preflight.prepare_connections_package(
+        tmp_path,
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [
+            {"uniquename": "msdyn_EssWorkdayRuntime"}
+        ],
+        installer=lambda *_args, **_kwargs: installer_calls.append(True),
+    )
+
+    assert installer_calls == []
+    assert result["requiresApproval"] is False
+    assert result["package"]["action"] == "unchanged"
+    assert (
+        store.load()["phases"]["connections"]["completedActions"]
+        == ["verify-package"]
+    )
+
+
+def test_connections_installs_and_reverifies_with_same_account(
     tmp_path: Path,
 ) -> None:
     import workday_connect_preflight as preflight
@@ -431,10 +513,32 @@ def test_preflight_installs_and_reverifies_with_same_account(
             else []
         )
 
-    plan_result = preflight.run_preflight(
+    preflight_result = preflight.run_preflight(
         tmp_path,
         dataverse_url=ENV_URL,
         maker_username="maker@example.com",
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=query,
+    )
+    assert preflight_result["package"]["action"] == "deferred"
+    assert preflight_result["status"]["nextPhaseId"] == "entra"
+    import workday_connect_model as model
+
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    plan_result = preflight.prepare_connections_package(
+        tmp_path,
         store=store,
         token_provider=lambda *_args, **_kwargs: "token",
         identity_provider=lambda *_args, **_kwargs: {
@@ -449,9 +553,9 @@ def test_preflight_installs_and_reverifies_with_same_account(
         "botId": BOT_ID,
         "schemaName": "gptagent_copilotforemployeeselfservicehr",
     }
-    assert store.status()["nextPhaseId"] == "preflight"
+    assert store.status()["nextPhaseId"] == "connections"
     _state, approved_hash = store.approve_plan(
-        "preflight",
+        "connections",
         plan_result["plan"],
     )
 
@@ -463,10 +567,8 @@ def test_preflight_installs_and_reverifies_with_same_account(
             "authenticatedAccount": kwargs["preferred_username"],
         }
 
-    result = preflight.run_preflight(
+    result = preflight.prepare_connections_package(
         tmp_path,
-        dataverse_url=ENV_URL,
-        maker_username="maker@example.com",
         store=store,
         token_provider=lambda *_args, **_kwargs: "token",
         identity_provider=lambda *_args, **_kwargs: {
@@ -477,15 +579,19 @@ def test_preflight_installs_and_reverifies_with_same_account(
         installer=installer,
         approved_install_hash=approved_hash,
         plan_verifier=lambda plan, value: store.verify_plan(
-            "preflight",
+            "connections",
             plan,
             value,
         ),
     )
 
     assert result["package"]["action"] == "installed"
-    assert result["operator"]["username"] == "maker@example.com"
-    assert result["operator"]["credentialStores"]["pac"] == "verified"
+    assert (
+        store.load()["operators"]["powerPlatformMaker"]["credentialStores"][
+            "pac"
+        ]
+        == "verified"
+    )
 
 
 def test_preflight_reuses_persisted_maker_identity(tmp_path: Path) -> None:
@@ -528,7 +634,7 @@ def test_preflight_reuses_persisted_maker_identity(tmp_path: Path) -> None:
     assert observed["preferred"] == "maker@example.com"
 
 
-def test_preflight_apply_reuses_approved_plan_maker_identity(
+def test_connections_apply_reuses_recorded_maker_identity(
     tmp_path: Path,
 ) -> None:
     import workday_connect_preflight as preflight
@@ -545,7 +651,7 @@ def test_preflight_apply_reuses_approved_plan_maker_identity(
             else []
         )
 
-    plan_result = preflight.run_preflight(
+    preflight.run_preflight(
         tmp_path,
         dataverse_url=ENV_URL,
         maker_username="maker@example.com",
@@ -557,8 +663,28 @@ def test_preflight_apply_reuses_approved_plan_maker_identity(
         },
         query=query,
     )
+    import workday_connect_model as model
+
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    plan_result = preflight.prepare_connections_package(
+        tmp_path,
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=query,
+    )
     _state, approved_hash = store.approve_plan(
-        "preflight",
+        "connections",
         plan_result["plan"],
     )
     observed = {}
@@ -575,10 +701,8 @@ def test_preflight_apply_reuses_approved_plan_maker_identity(
             "authenticatedAccount": kwargs["preferred_username"],
         }
 
-    preflight.run_preflight(
+    preflight.prepare_connections_package(
         tmp_path,
-        dataverse_url=ENV_URL,
-        maker_username=None,
         store=store,
         token_provider=token_provider,
         identity_provider=lambda _token, *, preferred_username: {
@@ -589,7 +713,7 @@ def test_preflight_apply_reuses_approved_plan_maker_identity(
         installer=installer,
         approved_install_hash=approved_hash,
         plan_verifier=lambda plan, value: store.verify_plan(
-            "preflight",
+            "connections",
             plan,
             value,
         ),
@@ -628,14 +752,14 @@ def test_preflight_identity_mismatch_is_structured(tmp_path: Path) -> None:
         )
 
 
-def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
+def test_connections_rejects_unproven_pac_account(tmp_path: Path) -> None:
     import workday_connect_preflight as preflight
 
     _write_foundation(tmp_path, dataverse_url=ENV_URL)
     import workday_connect_store as store_module
 
     store = store_module.WorkdayConnectStore(tmp_path)
-    plan_result = preflight.run_preflight(
+    preflight.run_preflight(
         tmp_path,
         dataverse_url=ENV_URL,
         maker_username="maker@example.com",
@@ -647,8 +771,28 @@ def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
         },
         query=lambda *_args, **_kwargs: [],
     )
+    import workday_connect_model as model
+
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    plan_result = preflight.prepare_connections_package(
+        tmp_path,
+        store=store,
+        token_provider=lambda *_args, **_kwargs: "token",
+        identity_provider=lambda *_args, **_kwargs: {
+            "username": "maker@example.com",
+            "tenantId": "tenant-id",
+        },
+        query=lambda *_args, **_kwargs: [],
+    )
     _state, approved_hash = store.approve_plan(
-        "preflight",
+        "connections",
         plan_result["plan"],
     )
 
@@ -656,10 +800,8 @@ def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
         preflight.WorkdayConnectPreflightError,
         match="did not prove",
     ):
-        preflight.run_preflight(
+        preflight.prepare_connections_package(
             tmp_path,
-            dataverse_url=ENV_URL,
-            maker_username="maker@example.com",
             store=store,
             token_provider=lambda *_args, **_kwargs: "token",
             identity_provider=lambda *_args, **_kwargs: {
@@ -673,7 +815,7 @@ def test_preflight_rejects_unproven_pac_account(tmp_path: Path) -> None:
             },
             approved_install_hash=approved_hash,
             plan_verifier=lambda plan, value: store.verify_plan(
-                "preflight",
+                "connections",
                 plan,
                 value,
             ),
@@ -740,9 +882,24 @@ def test_repeated_preflight_preserves_verified_pac_evidence(
         },
         "query": query,
     }
-    plan_result = preflight.run_preflight(tmp_path, **common_kwargs)
+    preflight.run_preflight(tmp_path, **common_kwargs)
+    for phase_id in ("entra", "workday-admin"):
+        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
+            store.complete_action(
+                phase_id,
+                action,
+                evidence={"outcome": "verified"},
+            )
+        store.set_phase_status(phase_id, "complete")
+    plan_result = preflight.prepare_connections_package(
+        tmp_path,
+        store=store,
+        token_provider=common_kwargs["token_provider"],
+        identity_provider=common_kwargs["identity_provider"],
+        query=query,
+    )
     _state, approved_hash = store.approve_plan(
-        "preflight",
+        "connections",
         plan_result["plan"],
     )
 
@@ -754,25 +911,20 @@ def test_repeated_preflight_preserves_verified_pac_evidence(
             "authenticatedAccount": kwargs["preferred_username"],
         }
 
-    preflight.run_preflight(
+    preflight.prepare_connections_package(
         tmp_path,
-        **common_kwargs,
+        store=store,
+        token_provider=common_kwargs["token_provider"],
+        identity_provider=common_kwargs["identity_provider"],
+        query=query,
         installer=installer,
         approved_install_hash=approved_hash,
         plan_verifier=lambda plan, value: store.verify_plan(
-            "preflight",
+            "connections",
             plan,
             value,
         ),
     )
-    for phase_id in ("entra", "workday-admin"):
-        for action in model.PHASE_REQUIRED_ACTIONS[phase_id]:
-            store.complete_action(
-                phase_id,
-                action,
-                evidence={"outcome": "verified"},
-            )
-        store.set_phase_status(phase_id, "complete")
 
     result = preflight.run_preflight(
         tmp_path,

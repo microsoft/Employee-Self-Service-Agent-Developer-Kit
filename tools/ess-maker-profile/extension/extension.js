@@ -103,19 +103,17 @@ const GUIDED_LAYOUT = {
     'workbench.startupEditor': 'none',
 };
 
-// Copilot queries the user can fire through the Quick Actions button rail.
-// `requires` lists action ids that must already be "done" before this one
-// becomes clickable. The state is tracked in globalState and is also
-// inferred from workspace contents (e.g. presence of topic yaml files).
+// Copilot queries registered as essMaker.run_<id> commands.
+// `requires` records setup prerequisites; Customization keeps every action clickable.
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
-    { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: 'Customize my landing page', requires: ['setup'] },
-    { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
+    { id: 'create',      icon: '✨', label: 'Create a topic (Coming Soon)', sub: 'Describe a new conversation', query: 'Create a topic',            requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic (Coming Soon)', sub: 'Tweak an existing topic',     query: 'Update a topic',            requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
     { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
     { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes',   query: '/push',                     requires: ['setup'] },
+    { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: '/landing-page',           requires: ['setup'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
@@ -265,11 +263,11 @@ function actionState(action, completed) {
 
 async function applySettings(settings, target) {
     const cfg = vscode.workspace.getConfiguration();
-    for (const [key, value] of Object.entries(settings)) {
+    await Promise.all(Object.entries(settings).map(async ([key, value]) => {
         try { await cfg.update(key, value, target); } catch (err) {
             console.warn(`[ess-maker] could not set ${key}:`, err.message);
         }
-    }
+    }));
 }
 
 async function clearSettings(keys, target) {
@@ -284,6 +282,12 @@ async function clearSettings(keys, target) {
 async function tryRun(commandId, ...args) {
     try { await vscode.commands.executeCommand(commandId, ...args); return true; }
     catch (err) { console.warn(`[ess-maker] ${commandId} failed:`, err.message); return false; }
+}
+
+async function requireRun(commandId, ...args) {
+    if (!await tryRun(commandId, ...args)) {
+        throw new Error(`required command failed: ${commandId}`);
+    }
 }
 
 function isMakerLayout() {
@@ -542,13 +546,13 @@ function getTutorialHtml() {
     <nav>
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Setup</a><span class="sep">·</span>
-        <a href="#landing-page">Landing page</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
         <a href="#flightcheck">FlightCheck</a><span class="sep">·</span>
         <a href="#tests">Generate tests</a><span class="sep">·</span>
-        <a href="#push">Push</a>
+        <a href="#push">Push</a><span class="sep">·</span>
+        <a href="#landing-page">Landing page</a>
     </nav>
 
     <section id="how">
@@ -557,46 +561,34 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
-            <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
-            <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
-            <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
+            <li><strong>Create a topic (Coming Soon)</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
+            <li><strong>Update a topic (Coming Soon)</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
             <li><strong>Run a flightcheck</strong> \u2014 Run 41+ automated readiness checks.</li>
             <li><strong>Generate tests</strong> \u2014 Create evaluation test sets for regression testing.</li>
             <li><strong>Push</strong> \u2014 Safely deploy your changes to Copilot Studio.</li>
+            <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
         </ol>
-        <p>Each step is available as a button in the <strong>Quick Actions</strong> panel on the left. Click any button to open a guided chat \u2014 just answer the prompts.</p>
+        <p>Start setup from <strong>Quick start</strong>, then choose an action in the <strong>Customization</strong> panel on the left. Each action opens a guided chat \u2014 just answer the prompts.</p>
         <p>You don\u2019t need to know YAML, JSON or any code.</p>
     </section>
 
     <section id="connect">
         <h2>\u{1f50c} Setup</h2>
-        <p>The <strong>Setup</strong> button signs you in to your Power Platform environment so the kit can:</p>
+        <p><strong>Start setup</strong> signs you in to your Power Platform environment so the kit can:</p>
         <ul>
             <li>Discover your deployed ESS agent and its components.</li>
             <li>Create a local working copy for safe editing.</li>
             <li>Validate connectivity before any changes are pushed.</li>
         </ul>
-        <p>When you click Setup, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
+        <p>When you click <strong>Start setup</strong>, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
         <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
     </section>
 
-    <section id="landing-page">
-        <h2>\u{1f3a8} Customize landing page</h2>
-        <p>The <strong>Customize landing page</strong> button opens a guided chat for configuring what employees see when they open the active agent.</p>
-        <ul>
-            <li><strong>Categorized starter prompts</strong> guide employees into common scenarios and show what the agent can do.</li>
-            <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
-            <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
-            <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
-            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
-        </ul>
-    </section>
-
     <section id="create">
-        <h2>\u2728 Create a topic</h2>
+        <h2>\u2728 Create a topic (Coming Soon)</h2>
         <p>A <strong>topic</strong> is one conversation your agent can handle \u2014 for example, \u201csubmit a time-off request\u201d or \u201creset my password\u201d.</p>
-        <p>When you click <strong>Create a topic</strong>, a chat opens where you describe what you want in plain English. The kit will:</p>
+        <p>When you click <strong>Create a topic (Coming Soon)</strong>, a chat opens with the current availability message.</p>
         <ul>
             <li>Generate trigger phrases (the things employees might say).</li>
             <li>Build the conversation flow and adaptive cards.</li>
@@ -610,8 +602,8 @@ function getTutorialHtml() {
     </section>
 
     <section id="update">
-        <h2>\u270f\ufe0f Update a topic</h2>
-        <p>The <strong>Update a topic</strong> button lets you modify an existing conversation topic. Describe the change you want in plain English and the kit will:</p>
+        <h2>\u270f\ufe0f Update a topic (Coming Soon)</h2>
+        <p>When you click <strong>Update a topic (Coming Soon)</strong>, a chat opens with the current availability message.</p>
         <ul>
             <li>Find the matching topic in your local working copy.</li>
             <li>Apply the change \u2014 add new branches, update card layouts, rewire integrations.</li>
@@ -658,7 +650,7 @@ function getTutorialHtml() {
             <li>Create expected-response pairs for automated regression testing.</li>
             <li>Cover edge cases and variations the agent should handle.</li>
         </ul>
-        <p>The generated tests help you validate that future changes don\u2019t break existing conversations. This button is available after setup.</p>
+        <p>The generated tests help you validate that future changes don\u2019t break existing conversations. Complete setup before generating tests.</p>
     </section>
 
     <section id="push">
@@ -672,6 +664,18 @@ function getTutorialHtml() {
         </ol>
         <p>You\u2019ll see a preview of every change before anything is committed, and you can cancel at any point.</p>
         <blockquote><p>Rollback is always one command away \u2014 just ask the chat to \u201croll back the last push\u201d if something goes wrong.</p></blockquote>
+    </section>
+
+    <section id="landing-page">
+        <h2>\u{1f3a8} Customize landing page</h2>
+        <p>The <strong>Customize landing page</strong> action opens a guided chat with <code>/landing-page</code> for configuring what employees see when they open the active agent. Complete setup before customizing your agent.</p>
+        <ul>
+            <li><strong>Categorized starter prompts</strong> guide employees into common scenarios and show what the agent can do.</li>
+            <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
+            <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
+            <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
+            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
+        </ul>
     </section>
 <script>
     const vscode = acquireVsCodeApi();
@@ -748,8 +752,10 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
 
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
 
-    // Wait for VS Code to finish wiring up surfaces and restoring state.
-    await new Promise((r) => setTimeout(r, 2000));
+    // Startup activation runs before VS Code finishes restoring the workspace.
+    // Yield briefly for the initial window surfaces without adding the old
+    // multi-second post-activation delay.
+    await new Promise((r) => setTimeout(r, 250));
 
     // Close all editor tabs (welcome page, restored files, etc).
     try {
@@ -934,12 +940,18 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
 
     await applySettings(GUIDED_LAYOUT, vscode.ConfigurationTarget.Global);
 
-    // Let VS Code settle after folder/editor restore.
-    await new Promise((r) => setTimeout(r, firstRun ? 1200 : 400));
+    // Let VS Code settle after folder/editor restore without delaying the
+    // first visible Maker layout behind the default startup experience.
+    await new Promise((r) => setTimeout(r, firstRun ? 350 : 200));
 
     // Left: reveal the Agent Developer Kit rail.
-    await tryRun('workbench.view.extension.essMakerActions');
-    await tryRun('essMaker.actionsView.focus');
+    if (firstRun) {
+        await requireRun('workbench.view.extension.essMakerActions');
+        await requireRun('essMaker.actionsView.focus');
+    } else {
+        await tryRun('workbench.view.extension.essMakerActions');
+        await tryRun('essMaker.actionsView.focus');
+    }
 
     if (firstRun) {
         // Standard-mode workspaces ship a "README on startup" setting, and VS
@@ -955,10 +967,10 @@ async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
         await tryRun('workbench.action.closeAllEditors');
 
         // Center: open the getting-started walkthrough.
-        await openGettingStarted();
+        await openGettingStarted(undefined, { required: true });
         // Right: open Copilot Chat in the secondary side bar.
-        await new Promise((r) => setTimeout(r, 500));
-        await tryRun('workbench.action.chat.open');
+        await new Promise((r) => setTimeout(r, 200));
+        await requireRun('workbench.action.chat.open');
         // Folder restore can steal focus back to the Explorer — re-reveal the
         // rail a couple of times so it stays put.
         for (const delay of [800, 2000]) {
@@ -1081,7 +1093,7 @@ const WALKTHROUGH_ID = 'microsoft-ess.ess-maker-profile#essMaker.gettingStarted'
 
 // Open the built-in VS Code walkthrough (center panel). When `stepId` is given
 // we focus that specific step; otherwise the walkthrough opens at its start.
-async function openGettingStarted(stepId) {
+async function openGettingStarted(stepId, { required = false } = {}) {
     try {
         if (stepId) {
             await vscode.commands.executeCommand(
@@ -1092,21 +1104,23 @@ async function openGettingStarted(stepId) {
         } else {
             await vscode.commands.executeCommand('workbench.action.openWalkthrough', WALKTHROUGH_ID, false);
         }
+        return true;
     } catch (err) {
         try { _log(`openGettingStarted error: ${err && err.message}`); } catch {}
+        if (required) throw err;
+        return false;
     }
 }
 
-// The Customization rail mirrors the guided journey. `requires` gates an item
-// behind Setup; locked items show a lock icon and a "complete setup" nudge.
+// Customization actions stay clickable; the walkthrough explains setup prerequisites.
 const CUSTOMIZATION_ITEMS = [
-    { id: 'landingPage', label: 'Customize landing page', run: 'essMaker.run_landingPage', icon: 'browser',   requires: ['setup'], desc: 'Tailor the landing page your audience sees when they open the agent.' },
-    { id: 'create',      label: 'Create a topic',         run: 'essMaker.runCreate',       icon: 'add',       requires: ['setup'], desc: 'Create a new topic, described in plain English.' },
-    { id: 'update',      label: 'Update a topic',         run: 'essMaker.runUpdate',       icon: 'edit',      requires: ['setup'], desc: 'Change an existing topic, described in plain English.' },
+    { id: 'create',      label: 'Create a topic (Coming Soon)', run: 'essMaker.runCreate', icon: 'add',  requires: ['setup'], desc: 'Topic creation is not yet available.' },
+    { id: 'update',      label: 'Update a topic (Coming Soon)', run: 'essMaker.runUpdate', icon: 'edit', requires: ['setup'], desc: 'Topic updates are not yet available.' },
     { id: 'scan',        label: 'Scan for issues',        run: 'essMaker.runScan',         icon: 'search',    requires: ['setup'], desc: 'Scan your agent for errors and common configuration problems.' },
     { id: 'flightcheck', label: 'Run a flightcheck',      run: 'essMaker.runFlightcheck',  icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
     { id: 'evaluate',    label: 'Generate tests',         run: 'essMaker.run_evaluate',    icon: 'beaker',    requires: ['setup'], desc: 'Generate evaluation tests to validate your agent behaves as expected.' },
     { id: 'push',        label: 'Push to Copilot Studio', run: 'essMaker.runPush',         icon: 'rocket',    requires: ['setup'], desc: 'Push your Employee Self-Service agent changes to Copilot Studio.' },
+    { id: 'landingPage', label: 'Customize landing page', run: 'essMaker.run_landingPage', icon: 'browser',   requires: ['setup'], desc: 'Tailor the landing page your audience sees when they open the agent.' },
 ];
 
 class CustomizationTreeProvider {
@@ -1570,7 +1584,7 @@ async function firstInstallDispatch(context, installerMode) {
     }
 }
 
-function activate(context) {
+async function activate(context) {
     _extensionContext = context;
     // Ignore passive rail auto-restore during the launch window so it does not
     // clobber the mode-specific launch layout; cleared shortly after activation.
@@ -1586,8 +1600,8 @@ function activate(context) {
     // Legacy command IDs from 0.1.0 (still referenced by the walkthrough).
     const legacyMap = {
         'essMaker.runSetup': '/setup',
-        'essMaker.runCreate': '/create',
-        'essMaker.runUpdate': '/update',
+        'essMaker.runCreate': 'Create a topic',
+        'essMaker.runUpdate': 'Update a topic',
         'essMaker.runScan': '/scan',
         'essMaker.runFlightcheck': '/flightcheck',
         'essMaker.runPush': '/push',
@@ -1670,27 +1684,29 @@ function activate(context) {
         // Restore any legacy chat-only chrome before applying/settling a layout,
         // then dispatch on the current mode. Layout work is chained after the
         // migration so the guided layout snapshots clean, restored settings.
-        migrateLegacyChatOnlyLayout(context).then(() => {
+        try {
+            await migrateLegacyChatOnlyLayout(context);
             if (isDeveloperMode) {
                 // Developer mode: no guided layout, just the rendered README
                 // preview on first launch and every reopen. /setup is
                 // user-driven — neither the installer nor the extension runs it.
-                if (!alreadyApplied) context.globalState.update(APPLIED_KEY, true);
+                if (!alreadyApplied) await context.globalState.update(APPLIED_KEY, true);
                 setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
                 setTimeout(() => { tryRun('workbench.action.chat.open').catch(() => {}); }, 1800);
             } else if (!alreadyApplied) {
                 // First maker launch: activity bar + rail visible, walkthrough
                 // in the center, Copilot Chat on the right. Setup is user-driven
                 // from the walkthrough / rail, so we do not auto-inject /setup.
-                applyGuidedLayout({ silent: false, firstRun: true })
-                    .then(() => context.globalState.update(APPLIED_KEY, true))
-                    .catch(() => {});
+                await applyGuidedLayout({ silent: true, firstRun: true });
+                await context.globalState.update(APPLIED_KEY, true);
             } else {
                 // Subsequent maker launch: settings persist, so just make sure
                 // the rail is reachable without re-opening walkthrough/chat.
-                setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
+                await applyGuidedLayout({ silent: true, firstRun: false });
             }
-        }).catch((err) => _log(`activate: migration/dispatch error: ${err && err.message}`));
+        } catch (err) {
+            _log(`activate: migration/dispatch error: ${err && err.message}`);
+        }
 
         // Auto-update nudge (ADO 7569528 / 7569530): check whether the local
         // clone is behind origin/main and, if so, offer a one-click pull.

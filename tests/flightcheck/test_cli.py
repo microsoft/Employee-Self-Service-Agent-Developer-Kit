@@ -40,6 +40,33 @@ def test_alm_import_probe_requires_explicit_target(monkeypatch) -> None:
     assert exc.value.code == 2
 
 
+def test_main_accepts_explicit_tenant_id_for_profile(monkeypatch) -> None:
+    tenant_id = "00000000-0000-0000-0000-000000001111"
+    captured = {}
+
+    def _run_profile(args):
+        captured["tenant_id"] = args.tenant_id
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_run_profile", _run_profile)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "cli.py",
+            "--profile",
+            "workday-da:setup-readiness",
+            "--tenant-id",
+            tenant_id,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["tenant_id"] == tenant_id
+
+
 def test_create_alm_import_target_uses_separate_environment(monkeypatch) -> None:
     created = []
     monkeypatch.setattr(
@@ -116,9 +143,12 @@ def test_create_alm_import_target_rejects_source_environment(monkeypatch) -> Non
 def test_workday_da_check_is_explicit_scope_only() -> None:
     """An optional DA HR package must not fail unrelated full runs."""
     assert cli.SCOPE_MAP["workdayda"] == [
-        ("Workday DA", cli.run_workday_da_checks)
+        ("Workday DA", cli.run_workday_da_package_check)
     ]
-    assert ("Workday DA", cli.run_workday_da_checks) not in cli.FULL_SCOPE
+    assert (
+        "Workday DA",
+        cli.run_workday_da_package_check,
+    ) not in cli.FULL_SCOPE
 
 
 class TestOpenReportInBrowser:
@@ -293,6 +323,32 @@ class TestInfrastructureScopeAuthGating:
             cli.main()
 
         assert exc.value.code == 1
+
+    def test_prerequisites_scope_fails_closed_without_ring(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps({
+                "dataverseEndpoint": "https://contoso.crm.dynamics.com",
+                "agents": [],
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["cli.py", "--scope", "prerequisites", "--no-open"],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "could not determine the Power Platform environment ring" in output
+        assert "--ring, configured ring, or powerPlatformApiEndpoint" in output
 
 
 class TestAgentBuilderLocalScope:
@@ -510,6 +566,8 @@ class TestAgentBuilderNativeScopes:
         assert bool(created_agent_clients) is expects_agent_clients
         assert bool(created_connectivity_clients) is expects_agent_clients
         assert bool(created_capacity_clients) is expects_capacity_client
+        if expects_capacity_client:
+            assert created_capacity_clients[0][1] == {"ring": "test"}
         runner = _FakeRunner.last_instance
         assert runner is not None
         assert [category for category, _ in runner.registered] == expected_categories

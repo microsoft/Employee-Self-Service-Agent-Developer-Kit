@@ -1,7 +1,48 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Phases 4 and 5 - Connections and runtime
 
 ## Connections
+
+Begin by preparing the selected Power Platform environment. Do not ask the
+maker to create physical connections until the supported Workday package is
+installed and verified.
+
+Run:
+
+```powershell
+python scripts/workday_connect.py prepare-connections
+```
+
+When the package already exists, the command verifies it and continues without
+an installation approval. When it returns `requiresApproval: true`, show only
+its `approvalSummary`, then use:
+
+```json
+[
+  {
+    "header": "Install Workday package",
+    "question": "The administrator prerequisites are complete. Install the supported Workday package in this verified Power Platform environment?",
+    "options": [{ "label": "Install" }, { "label": "Not now" }],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. If the maker selects **Not now**, leave Connections
+waiting without creating either physical connection.
+
+If approved, write the returned `plan` object directly to
+`.local/connect/workday-da/connections-package-plan.json`, then run:
+
+```powershell
+python scripts/workday_connect.py prepare-connections-approve --plan-file ".local\connect\workday-da\connections-package-plan.json"
+python scripts/workday_connect.py prepare-connections --install-plan-hash "{PLAN_HASH}"
+```
+
+The apply command rediscovers the exact environment, package, agent, and maker,
+rejects stale approval, installs through PAC, and rereads Dataverse. Continue
+only after it confirms the package is ready.
 
 The skill does not create physical connector connections or complete connector
 OAuth. The maker performs those actions; the skill discovers and verifies the
@@ -78,16 +119,16 @@ If the Workday connection is then missing or disconnected, read the already
 validated values from `workdayTarget` and show this complete value card in the
 same order as the Workday connection form:
 
-| Workday connection field | Value |
-| --- | --- |
-| **Display name (optional)** | Leave blank, or enter a maker-chosen recognizable connection name. |
-| **Authentication type** | `Microsoft Entra ID Integrated` |
+| Workday connection field                                 | Value                                                                                                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Display name (optional)**                              | Leave blank, or enter a maker-chosen recognizable connection name.                                                                                     |
+| **Authentication type**                                  | `Microsoft Entra ID Integrated`                                                                                                                        |
 | **Microsoft Entra resource URL (Application ID URI) \*** | The saved Workday SAML Service Provider ID, `http://www.workday.com/{workdayTenant}`. Do not use the Entra application ID URI beginning with `api://`. |
-| **Workday OAuth token URL \*** | The exact saved Token Endpoint copied from **View API Client** in Workday. |
-| **Workday OAuth client ID \*** | The saved Workday OAuth client ID copied from **View API Client**, not the Microsoft Entra application ID. |
-| **SOAP base URL \*** | The saved SOAP service base ending at `/ccx/service`, without the tenant name. |
-| **REST base URL** | The saved REST base ending at `/ccx/api`. |
-| **Tenant name \*** | The saved Workday tenant name. |
+| **Workday OAuth token URL \***                           | The exact saved Token Endpoint copied from **View API Client** in Workday.                                                                             |
+| **Workday OAuth client ID \***                           | The saved Workday OAuth client ID copied from **View API Client**, not the Microsoft Entra application ID.                                             |
+| **SOAP base URL \***                                     | The saved SOAP service base ending at `/ccx/service`, without the tenant name.                                                                         |
+| **REST base URL**                                        | The saved REST base ending at `/ccx/api`.                                                                                                              |
+| **Tenant name \***                                       | The saved Workday tenant name.                                                                                                                         |
 
 These values were collected during the Workday administrator phase. Do not ask
 the maker or administrator to provide them again. If any value is missing,
@@ -176,8 +217,24 @@ python scripts/workday_connect.py runtime-plan
 ```
 
 This discovers the installed connection references, supported package flows,
-and selected agent. Employee-context topic wiring is verified later in this
-phase.
+selected agent, active DEV/TEST/PROD realm, and the realm-specific
+authorization team. It also runs the checked-in authorization script once with
+`-WhatIf` and all reviewed Workday flows in the same process. Employee-context
+topic wiring is verified later in this phase.
+
+The preview may report either:
+
+- `already-configured` when the exact authorization, access team, and every
+  reviewed flow share already verify; or
+- `changes-required` when the recognized `-WhatIf` result would create or
+  repair only the expected realm-specific records.
+
+The controller accepts the first-time nonzero `-WhatIf` result only when it
+would create the expected authorization and access team, would share every
+expected flow, and reports only the verification failures caused by those
+not-yet-created records. Wrong environment, wrong agent, missing flow,
+duplicate or ambiguous records, permission failures, and unrecognized output
+remain blocking.
 
 For a package with a reviewed runtime flow catalog, the controller performs the
 following writes after exact-plan approval. These are real automated changes,
@@ -191,10 +248,7 @@ workflow, or bot identifiers. Then use `vscode_askQuestions`:
   {
     "header": "Apply Workday runtime changes",
     "question": "Apply these exact Workday runtime changes to the selected environment and agent?",
-    "options": [
-      { "label": "Apply changes" },
-      { "label": "Not now" }
-    ],
+    "options": [{ "label": "Apply changes" }, { "label": "Not now" }],
     "allowFreeformInput": false
   }
 ]
@@ -212,7 +266,8 @@ plan will:
 
 - bind the two reviewed connection references;
 - activate only the checked-in Workday flow catalog;
-- authorize the exact agent to invoke those exact workflow IDs;
+- authorize the exact active-realm agent to invoke all reviewed workflows
+  through one environment-specific access team;
 - reread every changed record.
 
 If the setup topic contains custom content, stop and preserve it. Do not
@@ -231,17 +286,31 @@ any:
 python scripts/workday_connect.py runtime-apply --plan-hash "{hash}"
 ```
 
-The controller rediscovers the current target, rejects stale approval, reuses
-one Dataverse token for Python mutations, invokes the checked-in delegated
-authorization script, and verifies connection-reference bindings, flow state,
-and authorization after each ordered stage. User Context V2 and selected-agent
-flow attachment are verified separately below. The controller records each
-verified stage immediately, so a later failure resumes from durable evidence
-rather than hiding earlier successful changes. Runtime apply identifies
-`alm/Enable-CosmosDAFlowAuthorization.ps1` before each invocation and reports
-whether its authorization verification completed or failed for the reviewed
-flow. Report permission issues only from an explicit forbidden response,
-`[FAIL]` marker, ambiguity result, or nonzero script exit.
+For Test and Production, the controller first rereads the exact AgentBuilder
+sibling, ALM family, deployment commit, tenant, environment, and BotId. It then
+rediscovers the Dataverse runtime target, rejects stale approval, reuses one
+Dataverse token for Python mutations, and invokes
+`alm/Enable-CosmosDAFlowAuthorization.ps1` exactly once with every reviewed
+workflow ID and the realm-specific team name:
+
+- Development: `ESS DA HR Workday - Development`
+- Test: `ESS DA HR Workday - Test`
+- Production: `ESS DA HR Workday - Production`
+
+The script verifies the delegated authorization, one linked access team, and
+WriteAccess sharing for every reviewed flow before the stage is recorded.
+Connection-reference bindings and flow state are also reread after mutation.
+User Context V2 and selected-agent flow attachment are verified separately
+below. The existing Dataverse readiness coverage for the selected agent runs
+after that attachment is confirmed, when the agent connection reference can
+be evaluated accurately. The controller records each verified stage
+immediately, so a later failure resumes from durable evidence rather than
+hiding earlier successful changes. A retry may safely rerun idempotent stages;
+an exact no-op rerun remains verified.
+
+Report permission issues only from an explicit forbidden response, `[FAIL]`
+marker, ambiguity result, or nonzero script exit. Do not show BotIds, workflow
+IDs, connection IDs, team IDs, or plan hashes to the maker.
 
 Do not direct the maker to agent Connection Settings unless `runtime-apply`
 returns `applied.verified: true` and confirms all three verified stages:
@@ -250,33 +319,6 @@ returns `applied.verified: true` and confirms all three verified stages:
 is incomplete, keep Runtime active and show the controller's actual blocker.
 
 ## Agent binding after flow activation
-
-Only after runtime apply has activated the reviewed flows, first initialize
-the Workday runtime templates from the native agent's Conversation Start by
-running the guarded action in
-`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
-This scoped action must complete and
-`record-runtime-template-wiring` must record
-`runtime-template-configured` before changing the Admin User Context topic.
-The guarded action runs this live verification command itself; do not invoke
-it a second time here:
-
-```powershell
-python scripts/workday_connect.py record-runtime-template-wiring
-```
-
-Then wire the native agent's local `[Admin] - User Context - Setup` topic to
-`Workday [System] - 1: Set User Context V2` using the existing guarded
-checkpoint, scoped dry-run, approval, and push pattern in
-`src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the
-recorded Power Platform maker as `--preferred-username` so the native push
-cannot silently reuse another cached account. This scoped push changes only
-the setup redirect; Workday topics remain inactive until connection sharing is
-complete. Run `WD-REST-002` after the scoped push and require it to pass:
-
-```powershell
-python scripts/flightcheck/cli.py --checkpoint WD-REST-002 --connect-config ".local/connect/workday-da/config.json" --agent-slug "{AGENT_SLUG}" --preferred-username "{POWER_PLATFORM_MAKER}"
-```
 
 Topic metadata can report stale or transient component-reference diagnostics
 even when the installed package and runtime flows are functioning. Record those
@@ -342,10 +384,7 @@ file-write tool:
 {
   "outcome": "maker-confirmed",
   "botId": "{SELECTED_AGENT_BOT_ID}",
-  "flowNames": [
-    "ESS Workday Runtime",
-    "ESS Workday Runtime REST Execution"
-  ],
+  "flowNames": ["ESS Workday Runtime", "ESS Workday Runtime REST Execution"],
   "parameterSharingOutcome": "enabled-for-exposed-connections"
 }
 ```
@@ -355,7 +394,11 @@ Then run internally:
 derives the complete Workday dialog list from the selected agent's
 `.component-map.json`, previews the exact scope, and uses the native components
 endpoint to set both `state` and `status` to `Active` for every Workday topic.
-Do not activate only the two User Context setup topics.
+Do not activate only the two User Context setup topics. After the live update
+verifies, the action must ask the maker to refresh Copilot Studio and confirm
+that every Workday topic visibly shows as **On** before recording activation.
+This refreshed-page confirmation is a UX gate, not a substitute for the
+controller's live reread.
 
 Then run:
 
@@ -367,24 +410,47 @@ This command proves that every Workday topic included with the agent is
 enabled. Topic diagnostics are retained as supporting detail but do not change
 the activation result or create a package-repair blocker by themselves.
 
+Only after topic activation is verified, initialize the Workday runtime
+templates from the native agent's Conversation Start by running the guarded
+action in
+`src/skills/connect/workday/actions/wire-runtime-template-config.md`.
+This scoped action must complete and
+`record-runtime-template-wiring` must record
+`runtime-template-configured` before changing the Admin User Context topic.
+The guarded action runs this live verification command itself; do not invoke
+it a second time here:
+
+```powershell
+python scripts/workday_connect.py record-runtime-template-wiring
+```
+
+Then wire the native agent's local `[Admin] - User Context - Setup` topic to
+`Workday [System] - 1: Set User Context V2` using the existing guarded
+checkpoint, scoped dry-run, approval, and push pattern in
+`src/skills/connect/workday/actions/wire-user-context-redirect.md`. Pass the
+recorded Power Platform maker as `--preferred-username` so the native push
+cannot silently reuse another cached account. This scoped push changes only
+the setup redirect and preserves the already verified Workday topic activation
+state. Do not run a separate readiness checkpoint here; the controller
+evaluates the required live coverage after attachment and topic activation.
+
 Then run:
 
 ```powershell
 python scripts/workday_connect.py record-agent-binding --attachment-file ".local\connect\workday-da\agent-flow-attachment.json"
 ```
 
-This command reruns `WD-REST-002` and `WD-CONN-013` with the recorded Workday
-state, signs in to the native components endpoint as the recorded maker,
-derives the complete Workday topic set from `.component-map.json`, and rereads
-every mapped topic. It completes the runtime phase only when every checkpoint
-passes, the target-bound flow attachment is confirmed, and every Workday topic
-is Active. It retains any topic diagnostics for support correlation without
-presenting them as runtime failure evidence. The signed-in employee scenario
-remains the functional confirmation that the Workday runtime works. Do not
-substitute an unscoped "done" response for the structured confirmation.
-Do not run `WD-CONN-013` separately or ask for the flow-connection
-confirmation twice; `record-agent-binding` performs the required live check
-after the single target-bound confirmation above.
+This command runs automatic readiness checks against the recorded Workday
+state, signs in to the native components endpoint as the recorded maker, derives the
+complete Workday topic set from `.component-map.json`, and rereads every
+mapped topic. It completes the runtime phase only when the target-bound flow
+attachment is confirmed, every Workday topic is Active, and the automatic
+configuration checks are accepted. It retains any topic
+diagnostics for support correlation without presenting them as runtime failure
+evidence. The maker's Copilot Studio Test pane scenario remains the functional
+confirmation that the Workday runtime works. Do not substitute an unscoped
+"done" response for the structured confirmation, run separate readiness
+commands, or ask for the flow-connection confirmation twice.
 
 If runtime discovery reports that the selected package has no reviewed flow
 catalog, record a manual handoff. Do not claim that connection references,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 from unittest.mock import Mock
 
 import pytest
@@ -263,6 +264,7 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
         instances = 0
 
         def __init__(self, *args, **kwargs) -> None:
+            assert args == ("51f81489-12ee-4a9e-aaae-a2591f45987d",)
             self.instance = FakeApp.instances
             FakeApp.instances += 1
 
@@ -418,12 +420,177 @@ def test_flow_admin_scope_remains_default() -> None:
     assert FLOW_SCOPE == "https://service.flow.microsoft.com//.default"
 
 
-def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
+@pytest.mark.parametrize("silent", [False, True])
+def test_dataverse_keeps_upstream_client(
+    flow_auth, dataverse_url, fake_tenant_id, monkeypatch, silent
+) -> None:
+    import adk_telemetry
+    import auth
+    from flightcheck import graph_client
+
+    app, cache, create_app, _ = flow_auth
+    app.acquire_token_silent.return_value = (
+        {"access_token": "cached-dataverse"} if silent else None
+    )
+    app.acquire_token_interactive.return_value = {"access_token": "fresh-dataverse"}
+    monkeypatch.setattr(auth, "_dataverse_accepts_token", Mock(return_value=True))
+    monkeypatch.setattr(graph_client, "resolve_tenant_display_name_silent", Mock(return_value=""))
+    monkeypatch.setattr(adk_telemetry, "start_session", Mock())
+
+    assert auth.authenticate(dataverse_url) == (
+        "cached-dataverse" if silent else "fresh-dataverse"
+    )
+
+    assert auth.CLIENT_ID == "51f81489-12ee-4a9e-aaae-a2591f45987d"
+    create_app.assert_called_once_with(
+        "51f81489-12ee-4a9e-aaae-a2591f45987d",
+        authority=f"https://login.microsoftonline.com/{fake_tenant_id}",
+        token_cache=cache,
+    )
+    app.acquire_token_silent.assert_called_once_with(
+        [f"{dataverse_url}/user_impersonation"],
+        account={"home_account_id": "first-account"},
+    )
+    if silent:
+        app.acquire_token_interactive.assert_not_called()
+    else:
+        app.acquire_token_interactive.assert_called_once_with(
+            [f"{dataverse_url}/user_impersonation"], prompt="select_account",
+        )
+
+
+@pytest.mark.parametrize("explicit_account", [False, True])
+def test_clear_token_cache_keeps_dataverse_client(
+    flow_auth, dataverse_url, fake_tenant_id, explicit_account
+) -> None:
+    import auth
+
+    app, cache, create_app, _ = flow_auth
+    account = {"home_account_id": "first-account"}
+    auth.clear_token_cache(
+        dataverse_url, account=account if explicit_account else None,
+    )
+
+    create_app.assert_called_once_with(
+        "51f81489-12ee-4a9e-aaae-a2591f45987d",
+        authority=f"https://login.microsoftonline.com/{fake_tenant_id}",
+        token_cache=cache,
+    )
+    app.remove_account.assert_called_once_with(account)
+
+
+@pytest.mark.parametrize("resource", ["flow", "dataverse"])
+@pytest.mark.parametrize("cached_state", ["valid", "missing", "expired"])
+def test_shared_cache_filters_access_tokens_by_client(
+    tmp_path, monkeypatch, fake_tenant_id, dataverse_url, isolate_token_cache,
+    resource, cached_state,
+) -> None:
+    import adk_telemetry
+    import auth
+    import msal
+    from msal.application import PublicClientApplication
+    from flightcheck import graph_client
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auth, "discover_tenant", Mock(return_value=fake_tenant_id))
+    monkeypatch.setattr(auth, "_dataverse_accepts_token", Mock(return_value=True))
+    monkeypatch.setattr(graph_client, "resolve_tenant_display_name_silent", Mock(return_value=""))
+    monkeypatch.setattr(adk_telemetry, "start_session", Mock())
+    authority = f"https://login.microsoftonline.com/{fake_tenant_id}"
+    client, other_client, scope = (
+        ("417219b4-3a7d-42a2-bdb1-972bd8281a02",
+         "51f81489-12ee-4a9e-aaae-a2591f45987d",
+         "https://service.flow.microsoft.com//Flows.Read.All")
+        if resource == "flow" else
+        ("51f81489-12ee-4a9e-aaae-a2591f45987d",
+         "417219b4-3a7d-42a2-bdb1-972bd8281a02",
+         f"{dataverse_url}/user_impersonation")
+    )
+    account = {
+        "home_account_id": "mock-user.mock-tenant",
+        "environment": "login.microsoftonline.com",
+        "realm": fake_tenant_id,
+        "local_account_id": "mock-user",
+        "username": "maker@example.com",
+        "authority_type": "MSSTS",
+    }
+    cache = msal.SerializableTokenCache()
+    cache.modify(msal.TokenCache.CredentialType.ACCOUNT, account, account)
+    now = int(time.time())
+
+    def add_token(token_client, token, expires):
+        entry = {
+            "credential_type": msal.TokenCache.CredentialType.ACCESS_TOKEN,
+            "home_account_id": account["home_account_id"],
+            "environment": account["environment"],
+            "realm": fake_tenant_id,
+            "client_id": token_client,
+            "target": scope,
+            "secret": token,
+            "token_type": "Bearer",
+            "cached_at": str(now - 3600),
+            "expires_on": str(expires),
+        }
+        cache.modify(msal.TokenCache.CredentialType.ACCESS_TOKEN, entry, entry)
+
+    add_token(other_client, "other-client-token", now + 3600)
+    if cached_state != "missing":
+        add_token(client, "matching-client-token",
+                  now + 3600 if cached_state == "valid" else now - 3600)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / ".token_cache.bin").write_text(cache.serialize(), encoding="utf-8")
+    transport = Mock()
+    transport.get.return_value = Mock(status_code=200, headers={}, text=json.dumps({
+        "authorization_endpoint": f"{authority}/oauth2/v2.0/authorize",
+        "token_endpoint": f"{authority}/oauth2/v2.0/token",
+    }))
+    transport.post.side_effect = AssertionError("No token endpoint call expected")
+    interactive = Mock(return_value={"access_token": "interactive-token"})
+
+    def make_app(client_id, **kwargs):
+        app = PublicClientApplication(
+            client_id, **kwargs, http_client=transport, instance_discovery=False,
+        )
+        monkeypatch.setattr(app, "acquire_token_interactive", interactive)
+        return app
+
+    factory = Mock(side_effect=make_app)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", factory)
+    acquire = auth.get_flow_token if resource == "flow" else auth.authenticate
+
+    assert acquire(dataverse_url) == (
+        "matching-client-token" if cached_state == "valid" else "interactive-token"
+    )
+
+    assert factory.call_count == 1
+    assert factory.call_args.args == (client,)
+    assert factory.call_args.kwargs["authority"] == authority
+    if cached_state == "valid":
+        interactive.assert_not_called()
+    else:
+        interactive.assert_called_once_with([scope], prompt="select_account")
+    transport.post.assert_not_called()
+    persisted = msal.SerializableTokenCache()
+    persisted.deserialize((local / ".token_cache.bin").read_text(encoding="utf-8"))
+    assert {
+        entry["secret"] for entry in persisted.search(msal.TokenCache.CredentialType.ACCESS_TOKEN)
+    } == (
+        {"other-client-token", "matching-client-token"}
+        if cached_state == "valid" else {"other-client-token"}
+    )
+
+
+def test_authenticate_uses_the_preferred_cached_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
     import adk_telemetry
     import auth
     from flightcheck import graph_client
 
     selected_accounts = []
+    monkeypatch.chdir(tmp_path)
 
     class FakeCache:
         has_state_changed = False
@@ -464,12 +631,14 @@ def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
     )
     monkeypatch.setattr(adk_telemetry, "start_session", lambda **_kwargs: None)
 
-    token = auth.authenticate(
+    token, username = auth.authenticate(
         "https://example.crm.dynamics.com",
         preferred_username="maker@example.com",
+        return_account_identity=True,
     )
 
     assert token == "preferred-token"
+    assert username == "Maker@Example.com"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
 
 
