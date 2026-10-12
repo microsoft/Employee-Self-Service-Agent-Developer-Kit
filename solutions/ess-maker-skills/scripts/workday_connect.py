@@ -73,6 +73,12 @@ from workday_connect_telemetry import (
     emit_lifecycle_event,
     flush_lifecycle_telemetry,
 )
+from workday_connect_workbook import (
+    ENTRA_ADMIN_WORKBOOK_PATH,
+    WORKDAY_ADMIN_WORKBOOK_PATH,
+    WorkdayConnectWorkbookError,
+    read_administrator_workbook,
+)
 
 
 RESULT_MARKER = "WORKDAY_CONNECT_RESULT_JSON:"
@@ -113,7 +119,8 @@ def _add_json_input(
             f"--{name}-worksheet-file",
             type=Path,
             help=(
-                "Path to the exact labeled administrator worksheet text."
+                "Path to the completed administrator .xlsx workbook or exact "
+                "labeled worksheet text."
             ),
         )
 
@@ -138,12 +145,19 @@ def _json_input(
             raise WorkdayConnectStoreError(
                 f"{label} does not support worksheet input."
             )
-        try:
-            worksheet = worksheet_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise WorkdayConnectStoreError(
-                f"{label} worksheet could not be read: {worksheet_path}: {exc}"
-            ) from exc
+        if worksheet_path.suffix.casefold() == ".xlsx":
+            try:
+                worksheet = read_administrator_workbook(worksheet_path)
+            except WorkdayConnectWorkbookError as exc:
+                raise WorkdayConnectStoreError(str(exc)) from exc
+        else:
+            try:
+                worksheet = worksheet_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise WorkdayConnectStoreError(
+                    f"{label} worksheet could not be read: "
+                    f"{worksheet_path}: {exc}"
+                ) from exc
         return worksheet_parser(worksheet_state, worksheet)
     file_path = getattr(args, f"{name.replace('-', '_')}_file", None)
     if file_path is not None:
@@ -518,6 +532,14 @@ def _post_skill_next_steps(realm: str) -> list[str]:
     )
 
 
+def _administrator_workbook_path(path: Path) -> str:
+    if not path.is_file():
+        raise WorkdayConnectStoreError(
+            f"Administrator workbook template is missing: {path}"
+        )
+    return str(path)
+
+
 def _entra_handoff(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
@@ -539,6 +561,9 @@ def _entra_handoff(
     ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
     return {
         "packet": packet,
+        "workbookFile": _administrator_workbook_path(
+            ENTRA_ADMIN_WORKBOOK_PATH
+        ),
         "alreadyPresented": already_presented,
         "rediscoveryRequired": packet["requiresRediscovery"],
         "status": store.status(),
@@ -762,6 +787,9 @@ def _workday_admin_packet(
     ) >= ADMINISTRATOR_SUBSTAGES.index("handoff-presented")
     return {
         "packet": packet,
+        "workbookFile": _administrator_workbook_path(
+            WORKDAY_ADMIN_WORKBOOK_PATH
+        ),
         "alreadyPresented": already_presented,
         "status": store.status(),
     }

@@ -21,6 +21,12 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 python scripts/workday_connect.py workday-admin-packet
 ```
 
+After the maker confirms the Workday administrator is engaged, tell the maker:
+
+> I am preparing the Workday configuration steps and workbook. Ask the Workday
+> administrator to follow the applicable steps, fill the workbook in parallel,
+> and return the completed workbook to you.
+
 If `record-entra` reports `tenantFoundationReused: true`, do not show this
 handoff and do not require the Workday administrator again. Continue at
 Connections. Show only the affected Workday remediation step if a later
@@ -65,29 +71,31 @@ If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
 
 Render the selected branch as one standalone section titled **Workday
-administrator handoff - share this whole section**. It must contain the
-administrator role, exact Workday tenant and environment, packet reference
-values, one capture table, and every applicable numbered task. The maker must
-be able to forward that one section without copying values from earlier chat
-messages.
+administrator handoff - share these steps and the workbook**. It must contain
+the administrator role, exact Workday tenant and environment, packet reference
+values, and every applicable numbered task. The maker must be able to forward
+that section without copying values from earlier chat messages.
 
-Before the numbered tasks, render every entry from the packet's
-`captureInstructions` as one table with these exact columns:
+Share `workbookFile` from the command result as the downloadable administrator
+workbook. It must resolve to the checked-in
+`[Workday administrator workbook](assets/workday-admin-handoff.xlsx)`. Tell
+the maker to send a copy to the administrator and not to edit the repository
+template itself. Tell the administrator to fill every cell in the **Your tenant
+values** column while performing the applicable steps and return the same
+`.xlsx` file to the maker. Do not render `packet.captureInstructions` as a chat
+table; the workbook is the single capture worksheet. Keep the numbered tasks
+focused on actions and never render internal `fields` names.
 
-| Information to capture | Where to find it | What to record | Example value | Your tenant values |
-| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
-
-Use each entry's `information`, `portalLocation`, `instruction`, and
-`exampleValue` values for the first four columns. Leave every cell in **Your
-tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
-line break inside a cell. Tell the administrator to complete that final column
-and return the whole table to the maker, who will paste it into the agent chat.
-Never render internal `fields` names. This table is both the capture guide and
-the return worksheet. Do not render the packet's `informationToReturn` list or
-a second worksheet. Keep the numbered tasks focused on actions; do not repeat
-table locations, capture instructions, or return-value lists unless necessary
-to perform the change. Do not ask for a field after completion unless it
-appeared as a row in the shareable table.
+Network connectivity is a conditional infrastructure prerequisite, not a
+required worksheet attestation. Do not add a **Network readiness** row or ask
+for a generic readiness confirmation. Both Workday REST and SOAP endpoints
+must be reachable from the Power Platform managed connector. If the customer
+uses firewall or IP allowlists, or a connection test reports a network
+failure, direct the maker to engage the customer's InfoSec or infrastructure
+owner to allow the applicable Power Platform managed-connector outbound IP
+ranges. If the endpoints are already reachable, do not require a firewall
+change. Use the later connection and runtime tests as the reachability
+evidence.
 
 After rendering the complete handoff, record that it was presented and is
 waiting for the administrator:
@@ -160,7 +168,6 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Employees. Grant **Get** on
    **Worker Data: Public Worker Reports** and **Integration Permissions**.
    Do not treat the functional-area scopes from step 4 as domain permissions.
-   Add another domain only when it is tied to a named supported scenario.
    Do not return employee membership lists.
 6. **Verify the connection endpoints.** Open **View API Client** and confirm
    the OAuth client ID and token endpoint are available. Confirm the REST base
@@ -168,18 +175,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    append the tenant name to the SOAP base. Never return a client secret,
    password, token, cookie, or certificate body.
 7. **Verify employee authentication.** Open **Manage Authentication Policies**
-   for the employee environment. Confirm an active rule allows **SAML** for the
-   intended employees. Do not replace administrator safeguards, existing
-   network restrictions, or route this user-delegated setup through an
-   Integration System User rule. If a policy change is required, review every
-   pending authentication-policy change, then run **Activate All Pending
-   Authentication Policy Changes** before reporting the policy as activated.
-8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
-   to the network administrator when organizational egress filtering applies.
-   Record either that both hosts are allowed or that no customer-managed
-   firewall change is required. Do not wait until final Maker validation to
-   discover a known allowlist requirement.
-
+   for the employee environment. Confirm an active rule is scoped to the ESS
+   OAuth client identity and allows **SAML** for the intended employees. Do not
+   replace administrator safeguards, existing network restrictions, or route
+   this user-delegated setup through an Integration System User rule. If a
+   policy change is required, review every pending authentication-policy
+   change, then run **Activate All Pending Authentication Policy Changes**
+   before reporting the policy as activated.
 ### Existing non-Entra federation coexistence or transition handoff
 
 1. **Protect and inventory the existing federation.** In Workday, run **Edit
@@ -232,17 +234,16 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Otherwise register a new client with those exact settings.
 8. **Configure employee domain security.** Grant the intended employee
    population **Get** on **Worker Data: Public Worker Reports** and
-   **Integration Permissions**. Add another domain only for a named supported
-   scenario. Preserve unrelated groups and permissions.
+   **Integration Permissions**. Preserve unrelated groups and permissions.
 9. **Verify the connection endpoints.** Confirm the OAuth client ID and token
    endpoint, the REST base ending at `/ccx/api`, and the SOAP base ending at
    `/ccx/service` without the tenant name. Never return secrets or tokens.
 10. **Review and activate the target authentication policy.** Confirm an active
-    rule allows **SAML** for the intended target employees. Review and activate
-    pending authentication-policy changes through the customer's approved
-    process without changing routing for out-of-scope users.
-11. **Confirm network readiness and final Entra-row values.** Confirm the REST
-    and SOAP hosts are allowed, then verify the new Microsoft Entra row's
+    rule is scoped to the ESS OAuth client identity and allows **SAML** for the
+    intended target employees. Review and activate pending
+    authentication-policy changes through the customer's approved process
+    without changing routing for out-of-scope users.
+11. **Confirm final Entra-row values.** Verify the new Microsoft Entra row's
     Issuer, Service Provider ID, identity-provider SSO URL, redirect URL,
     selected certificate, and certificate expiration exactly match the packet.
 
@@ -277,35 +278,32 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    the entire-workforce or limited/test rollout, select the intended employee
    security group, and grant **Get** on **Worker Data: Public Worker Reports**
    and **Integration Permissions**. Never default a limited/test rollout to All
-   Employees. Add optional domains only for a named supported scenario.
+   Employees.
 7. **Verify the connection endpoints.** Open **View API Client** and confirm
    the OAuth client ID and token endpoint are available. Confirm the REST base
    ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
    append the tenant name to the SOAP base. Never return a client secret,
    password, token, cookie, or certificate body.
 8. **Verify employee authentication.** Open **Manage Authentication Policies**
-   for the employee environment. Confirm an active rule allows **SAML** for the
-   intended employees. Do not replace administrator safeguards, existing
-   network restrictions, or route this user-delegated setup through an
-   Integration System User rule. If a change is required, review every pending
-   authentication-policy change and run **Activate All Pending Authentication
-   Policy Changes** before reporting the policy as activated.
-9. **Confirm network readiness.** Give the REST and SOAP host names from step 7
-   to the network administrator when organizational egress filtering applies.
-   Record either that both hosts are allowed or that no customer-managed
-   firewall change is required.
-10. Confirm whether the enabled row's Issuer, Service Provider ID,
+   for the employee environment. Confirm an active rule is scoped to the ESS
+   OAuth client identity and allows **SAML** for the intended employees. Do not
+   replace administrator safeguards, existing network restrictions, or route
+   this user-delegated setup through an Integration System User rule. If a
+   change is required, review every pending authentication-policy change and
+   run **Activate All Pending Authentication Policy Changes** before reporting
+   the policy as activated.
+9. Confirm whether the enabled row's Issuer, Service Provider ID,
     identity-provider SSO service URL, and sign-on redirect URL match the
     expected values.
 
-End the shareable handoff after the applicable numbered tasks. The capture
-table already tells the administrator what to return and where to find it, so
-do not repeat an **Information to return to the maker** checklist or a separate
-return worksheet.
+End the shareable handoff after the applicable numbered tasks. The workbook
+already tells the administrator what to return and where to find it, so do not
+repeat an **Information to return to the maker** checklist or a separate return
+worksheet.
 
 After an applicable handoff is shown, ask exactly:
 
-**Has the Workday administrator completed every applicable task in this handoff?**
+**Has the Workday administrator completed their task?**
 
 Present **Yes, the applicable tasks are complete** and **Not yet** as the
 standard choices, initially unset and with custom entry disabled. **Not yet**
@@ -323,9 +321,8 @@ selected above, repeat provider discovery within this Workday phase using the
 same recorded Entra reference values. Do not return to the Entra phase or ask
 the Entra app administrator to participate again.
 
-Collect the Workday administrator's details in one response. Do not ask for
-these values as a sequence of separate chat or form questions. The response
-must contain all required evidence:
+The completed workbook must contain all required evidence below. Do not ask
+for these values as a sequence of separate chat or form questions:
 
 - confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
   Provider ID, identity-provider SSO service URL, and sign-on redirect URL
@@ -338,17 +335,12 @@ must contain all required evidence:
 - REST base URL ending at `/ccx/api`;
 - SOAP base URL;
 - authentication-policy outcome;
-- network-readiness outcome.
-- whether an approved existing API client was verified or a new one was
-  registered;
 - exact client grant type and Include Workday Owned Scope outcome;
 - rollout type: entire workforce or limited/test;
 - API-client access: SAML Bearer, Include Workday Owned Scope, and all four
   required functional-area scopes;
 - required employee access: Get permission for both `Worker Data: Public
-  Worker Reports` and `Integration Permissions`;
-- any additional domain paired with its named supported scenario, only when
-  custom ESS scenarios require one.
+  Worker Reports` and `Integration Permissions`.
 
 Do not ask the Workday administrator to run an agent scenario or report an
 authorization result in this phase. Connections and runtime configuration do
@@ -398,15 +390,6 @@ and verified certificate expiration date when building the table:
     "question": "Enter the non-secret OAuth client ID shown by Workday."
   },
   {
-    "header": "API client",
-    "question": "How was the approved signed-in employee API client established?",
-    "options": [
-      { "label": "An existing approved client was verified" },
-      { "label": "A new client was registered" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
     "header": "OAuth token URL",
     "question": "Enter the OAuth token URL shown by Workday."
   },
@@ -420,20 +403,10 @@ and verified certificate expiration date when building the table:
   },
   {
     "header": "Authentication policy",
-    "question": "What did the administrator verify for the employee authentication policy?",
+    "question": "What did the administrator verify for the ESS OAuth client authentication policy and intended employee population?",
     "options": [
-      { "label": "An existing active policy allows SAML" },
-      { "label": "A reviewed policy was activated" },
-      { "label": "I'm not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Network readiness",
-    "question": "What did the administrator verify for the Workday service hosts?",
-    "options": [
-      { "label": "Both Workday hosts are allowed" },
-      { "label": "No customer-managed firewall change is required" },
+      { "label": "An existing active policy scopes the ESS OAuth client and allows SAML for the intended employees" },
+      { "label": "A reviewed policy scoped to the ESS OAuth client was activated" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
@@ -469,10 +442,6 @@ and verified certificate expiration date when building the table:
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
-  },
-  {
-    "header": "Additional scenario domains",
-    "question": "Optional: only when custom ESS scenarios require extra Workday domains, enter one mapping per line as Domain | supported scenario. Otherwise omit this row or leave it blank."
   }
 ]
 ```
@@ -481,26 +450,16 @@ Leave every worksheet answer blank. Do not add `recommended`, `default`,
 suggested-answer wording, or any equivalent preselection. The expected values
 in the question text are comparison references, not answers.
 
-After the administrator confirms completion, use one
-`vscode_askQuestions` call containing exactly one free-form question:
+After the administrator confirms completion, tell the maker:
 
-```json
-[
-  {
-    "header": "Workday administrator details",
-    "question": "Paste the completed Workday administrator details in one response. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
-  }
-]
-```
+> Upload the completed Workday administrator workbook file in this chat.
 
-Preserve the response unchanged. The controller recognizes the generated table
-and common customer-facing labels and capitalization, rejects missing
-mandatory labels, duplicate labels, or unknown labels, and maps only the
-listed successful choices into the structured response object described
-below. Omission of the optional **Additional scenario domains** row means
-`optionalDomains: []`; do not ask for it again. Do not ask the customer to
-reformat a recognizable response. Never infer a missing mandatory answer or
-treat unlabeled prose as evidence:
+Use the uploaded `.xlsx` file directly. Do not ask the maker to paste the
+worksheet, retype the values, or hand-author JSON. The controller rejects
+missing mandatory labels, duplicate labels, unknown labels, formulas, and
+unsafe workbook content, then maps only the listed successful choices into the
+structured response object described below. Never infer a missing mandatory
+answer or treat unlabeled prose as evidence:
 
 Certificate comparisons are date-only. Do not ask either administrator for a
 timestamp, time, or timezone. Accept the portal's displayed certificate date
@@ -520,9 +479,6 @@ time component.
   `certificateSelectionOutcome: entra-signing-certificate-selected`;
 - matching certificate expiration date ->
   `certificateValidityOutcome: matches-verified-entra-certificate`;
-- approved existing client -> `apiClientOutcome:
-existing-client-verified`;
-- newly registered client -> `apiClientOutcome: new-client-registered`;
 - successful **API client access** confirmation ->
   `clientGrantType: saml-bearer`, `includeWorkdayOwnedScope: yes`, and
   `functionalAreaScopes` populated with `Core Payroll`, `Organizations and
@@ -531,9 +487,6 @@ existing-client-verified`;
   keys;
 - existing active policy -> `existing-active-policy`;
 - reviewed and activated policy -> `reviewed-policy-activated`;
-- both hosts allowed -> `confirmed-hosts-allowed`;
-- no firewall change required ->
-  `no-customer-firewall-change-required`.
 - configured entire workforce -> `rolloutType: entire-workforce`;
 - configured limited/test population -> `rolloutType: limited-or-test`;
 - an unconfigured or uncertain employee population -> stop for administrator
@@ -541,29 +494,24 @@ existing-client-verified`;
 - successful **Required employee access** confirmation ->
   `publicWorkerReportsOutcome: get-permission-verified` and
   `integrationPermissionsGetOutcome: get-permission-verified`;
-- omitted, blank, or **No additional scenario domains are required** ->
-  `optionalDomains: []`;
-- additional scenario-domain lines -> `optionalDomains` objects with one
-  `domain` and one named supported `scenario` per line;
-- a missing or uncertain required functional area, or an uncertain optional
-  domain outcome -> stop for administrator remediation instead of submitting
-  successful evidence.
+- a missing or uncertain required functional area -> stop for administrator
+  remediation instead of submitting successful evidence.
 
 Any unresolved provider identification or routing approval, mismatch, missing
 certificate, date mismatch, or **I'm not sure** answer requires the applicable
 guided step before successful evidence can be submitted. Preserve completed
 evidence and resume the selected handoff rather than restarting the phase.
 
-If the administrator omits a required value or replies only with wording such
-as "done", "all good", "continue", or "proceed", do not move to another field,
-search workspace files, inspect environment variables, or infer the missing
-evidence. Render one mini-worksheet containing only the missing or invalid
-customer-facing labels and repeat the applicable handoff location or
-instruction. Then use one free-form question to collect that completed
-mini-worksheet. Do not reopen a sequence of individual questions. Preserve
-progress and stop until the worksheet is complete.
+If the administrator omits a required value or the maker replies only with
+wording such as "done", "all good", "continue", or "proceed", do not move to
+another field, search workspace files, inspect environment variables, or infer
+the missing evidence. Name the missing or invalid customer-facing labels,
+repeat the applicable handoff location or instruction, and ask the
+administrator to correct those cells in the same workbook. Ask the maker to
+upload the corrected `.xlsx` file. Do not reopen a sequence of individual
+questions. Preserve progress and stop until the workbook is complete.
 
-After each worksheet response, write only the safe valid fields and the field
+After each workbook validation, write only the safe valid fields and the field
 names that must be reopened to
 `.local/connect/workday-da/workday-admin-partial-evidence.json`:
 
@@ -589,13 +537,11 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the exact table response directly to
-`.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
-interpolate administrator-entered values into a generated shell command. Pass
-the worksheet once:
+key. Pass the uploaded workbook path directly; never interpolate
+administrator-entered values into a generated shell command:
 
 ```powershell
-python scripts/workday_connect.py record-workday-admin --response-worksheet-file ".local\connect\workday-da\workday-admin-return-worksheet.txt"
+python scripts/workday_connect.py record-workday-admin --response-worksheet-file "<uploaded-workday-admin-workbook-path>"
 ```
 
 The controller reconciles the administrator evidence with automatic readiness
@@ -614,10 +560,6 @@ Use these exact outcome values:
 
 - `authenticationPolicyOutcome`: `existing-active-policy` or
   `reviewed-policy-activated`;
-- `networkReadinessOutcome`: `confirmed-hosts-allowed` or
-  `no-customer-firewall-change-required`.
-- `apiClientOutcome`: `existing-client-verified` or
-  `new-client-registered`;
 - `clientGrantType`: `saml-bearer`;
 - `includeWorkdayOwnedScope`: `yes`;
 - `rolloutType`: `entire-workforce` or `limited-or-test`;
@@ -633,7 +575,6 @@ For example:
   "certificateSelectionOutcome": "entra-signing-certificate-selected",
   "certificateValidityOutcome": "matches-verified-entra-certificate",
   "oauthClientId": "{non-secret Workday OAuth client ID}",
-  "apiClientOutcome": "existing-client-verified",
   "clientGrantType": "saml-bearer",
   "includeWorkdayOwnedScope": "yes",
   "identityProviderSsoServiceUrl": "{EXPECTED_ENTRA_LOGIN_URL}",
@@ -642,7 +583,6 @@ For example:
   "restBaseUrl": "https://{workday-host}/ccx/api",
   "soapBaseUrl": "https://{workday-host}/ccx/service",
   "authenticationPolicyOutcome": "existing-active-policy",
-  "networkReadinessOutcome": "confirmed-hosts-allowed",
   "rolloutType": "limited-or-test",
   "publicWorkerReportsOutcome": "get-permission-verified",
   "integrationPermissionsGetOutcome": "get-permission-verified",
@@ -651,8 +591,7 @@ For example:
     "Organizations and Roles",
     "Staffing",
     "Time Off and Leave"
-  ],
-  "optionalDomains": []
+  ]
 }
 ```
 

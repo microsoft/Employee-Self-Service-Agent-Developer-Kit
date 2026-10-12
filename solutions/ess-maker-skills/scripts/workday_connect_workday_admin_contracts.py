@@ -63,15 +63,17 @@ WORKDAY_ADMIN_WORKSHEET_LABELS = (
     "Certificate",
     "Certificate expiration",
     "OAuth client ID",
-    "API client",
     "OAuth token URL",
     "REST base URL",
     "SOAP base URL",
     "Authentication policy",
-    "Network readiness",
     "Rollout",
     "API client access",
     "Required employee access",
+)
+_WORKDAY_ADMIN_LEGACY_OPTIONAL_WORKSHEET_LABELS = (
+    "API client",
+    "Network readiness",
     "Additional scenario domains",
 )
 WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES = {
@@ -117,10 +119,15 @@ def parse_workday_admin_return_worksheet(
 ) -> dict[str, Any]:
     values = _parse_labeled_worksheet(
         worksheet,
-        labels=WORKDAY_ADMIN_WORKSHEET_LABELS,
+        labels=(
+            WORKDAY_ADMIN_WORKSHEET_LABELS
+            + _WORKDAY_ADMIN_LEGACY_OPTIONAL_WORKSHEET_LABELS
+        ),
         label="Workday administrator return worksheet",
         multiline_labels=frozenset({"Additional scenario domains"}),
-        optional_labels=frozenset({"Additional scenario domains"}),
+        optional_labels=frozenset(
+            _WORKDAY_ADMIN_LEGACY_OPTIONAL_WORKSHEET_LABELS
+        ),
         label_aliases=WORKDAY_ADMIN_WORKSHEET_LABEL_ALIASES,
     )
     _worksheet_choice(
@@ -163,14 +170,6 @@ def parse_workday_admin_return_worksheet(
             ): "verified",
         },
     )
-    additional_domains = values.get("Additional scenario domains", "").strip()
-    optional_domains = (
-        []
-        if not additional_domains
-        or additional_domains.casefold()
-        == "no additional scenario domains are required"
-        else _optional_domain_mappings(additional_domains)
-    )
     identifiers = state.get("identifiers") or {}
     response: dict[str, Any] = {
         "identityProviderOutcome": "verified-entra-issuer",
@@ -185,16 +184,6 @@ def parse_workday_admin_return_worksheet(
             values["OAuth client ID"],
             "OAuth client ID",
         ),
-        "apiClientOutcome": _worksheet_choice(
-            values,
-            "API client",
-            {
-                "An existing approved client was verified": (
-                    "existing-client-verified"
-                ),
-                "A new client was registered": "new-client-registered",
-            },
-        ),
         "clientGrantType": "saml-bearer",
         "includeWorkdayOwnedScope": "yes",
         "oauthTokenUrl": values["OAuth token URL"],
@@ -204,18 +193,16 @@ def parse_workday_admin_return_worksheet(
             values,
             "Authentication policy",
             {
-                "An existing active policy allows SAML": ("existing-active-policy"),
-                "A reviewed policy was activated": ("reviewed-policy-activated"),
-            },
-        ),
-        "networkReadinessOutcome": _worksheet_choice(
-            values,
-            "Network readiness",
-            {
-                "Both Workday hosts are allowed": "confirmed-hosts-allowed",
-                "No customer-managed firewall change is required": (
-                    "no-customer-firewall-change-required"
-                ),
+                (
+                    "An existing active policy scopes the ESS OAuth client "
+                    "and allows SAML for the intended employees"
+                ): "existing-active-policy",
+                (
+                    "A reviewed policy scoped to the ESS OAuth client was "
+                    "activated"
+                ): "reviewed-policy-activated",
+                "An existing active policy allows SAML": "existing-active-policy",
+                "A reviewed policy was activated": "reviewed-policy-activated",
             },
         ),
         "identityProviderSsoServiceUrl": _required_text(
@@ -262,8 +249,42 @@ def parse_workday_admin_return_worksheet(
             },
         ),
         "functionalAreaScopes": list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES),
-        "optionalDomains": optional_domains,
     }
+    api_client_value = values.get("API client", "").strip()
+    if api_client_value:
+        response["apiClientOutcome"] = _worksheet_choice(
+            values,
+            "API client",
+            {
+                "An existing approved client was verified": (
+                    "existing-client-verified"
+                ),
+                "A new client was registered": "new-client-registered",
+            },
+        )
+    network_value = values.get("Network readiness", "").strip()
+    if network_value:
+        response["networkReadinessOutcome"] = _worksheet_choice(
+            values,
+            "Network readiness",
+            {
+                "Both Workday hosts are allowed": "confirmed-hosts-allowed",
+                "No customer-managed firewall change is required": (
+                    "no-customer-firewall-change-required"
+                ),
+            },
+        )
+    additional_domains = values.get(
+        "Additional scenario domains",
+        "",
+    ).strip()
+    if additional_domains:
+        response["optionalDomains"] = (
+            []
+            if additional_domains.casefold()
+            == "no additional scenario domains are required"
+            else _optional_domain_mappings(additional_domains)
+        )
     return response
 
 
@@ -435,10 +456,9 @@ def build_workday_admin_packet(
             "Grant Get on Worker Data: Public Worker Reports and "
             "Integration Permissions, keeping domain permissions separate "
             "from OAuth functional-area scopes",
-            "Verify an active authentication policy allows SAML for the "
-            "intended employee population",
-            "Confirm the returned Workday REST and SOAP hosts are reachable "
-            "or approved by the organization network policy",
+            "Verify an active authentication policy scopes the ESS OAuth "
+            "client identity and allows SAML for the intended employee "
+            "population",
         ],
         "captureInstructions": [
             {
@@ -492,16 +512,6 @@ def build_workday_admin_packet(
                 "exampleValue": "safe-client-id",
             },
             {
-                "information": "API client",
-                "fields": ["apiClientOutcome"],
-                "portalLocation": "View API Client or Register API Client",
-                "instruction": (
-                    "Record whether an approved client was reused or a new "
-                    "client was registered."
-                ),
-                "exampleValue": "An existing approved client was verified",
-            },
-            {
                 "information": "OAuth token URL",
                 "fields": ["oauthTokenUrl"],
                 "portalLocation": "View API Client -> Token Endpoint",
@@ -531,23 +541,19 @@ def build_workday_admin_packet(
                 "information": "Authentication policy",
                 "fields": ["authenticationPolicyOutcome"],
                 "portalLocation": (
-                    "Manage Authentication Policies -> employee environment"
+                    "Manage Authentication Policies -> employee environment "
+                    "-> ESS OAuth client identity"
                 ),
                 "instruction": (
-                    "Record whether an existing SAML rule is active or a "
+                    "Confirm the policy applies to the ESS OAuth client "
+                    "identity and allows SAML for the intended employees. "
+                    "Record whether that rule was already active or a "
                     "reviewed policy was activated."
                 ),
-                "exampleValue": "An existing active policy allows SAML",
-            },
-            {
-                "information": "Network readiness",
-                "fields": ["networkReadinessOutcome"],
-                "portalLocation": "Customer network policy for the REST and SOAP hosts",
-                "instruction": (
-                    "Record whether both hosts are allowed or no firewall "
-                    "change is required."
+                "exampleValue": (
+                    "An existing active policy scopes the ESS OAuth client "
+                    "and allows SAML for the intended employees"
                 ),
-                "exampleValue": "Both Workday hosts are allowed",
             },
             {
                 "information": "Rollout",
@@ -593,17 +599,6 @@ def build_workday_admin_packet(
                     "Reports and Integration Permissions"
                 ),
             },
-            {
-                "information": "Additional scenario domains",
-                "fields": ["optionalDomains"],
-                "portalLocation": "Additional domain security policy review",
-                "instruction": (
-                    "Optional. When custom scenarios require extra domains, "
-                    "enter one Domain | supported scenario mapping per line. "
-                    "Otherwise omit this row or leave it blank."
-                ),
-                "exampleValue": "No additional scenario domains are required",
-            },
         ],
         "informationToReturn": [
             "Enabled identity provider, exact Issuer, Service Provider ID, "
@@ -611,14 +606,13 @@ def build_workday_admin_packet(
             "Confirmation that the Entra-derived certificate is selected and "
             "its displayed expiration date matches the completed Entra "
             "handoff",
-            "Workday OAuth client ID, token URL, REST base URL, SOAP base URL, "
-            "and tenant name",
+            "Workday OAuth client ID, token URL, REST base URL, and SOAP base "
+            "URL",
             "API-client grant type, required functional areas, and Include "
             "Workday Owned Scope outcome",
             "Configured employee rollout population and Integration "
             "Permissions > Get outcome for Worker Data: Public Worker Reports",
-            "Any additional domain permission and its supported scenario",
-            "Authentication-policy outcome and network-readiness outcome",
+            "Authentication-policy outcome",
         ],
         "responseForm": {
             "required": [
@@ -631,8 +625,6 @@ def build_workday_admin_packet(
                 "restBaseUrl",
                 "soapBaseUrl",
                 "authenticationPolicyOutcome",
-                "networkReadinessOutcome",
-                "apiClientOutcome",
                 "clientGrantType",
                 "includeWorkdayOwnedScope",
                 "identityProviderSsoServiceUrl",
@@ -643,8 +635,9 @@ def build_workday_admin_packet(
                 "functionalAreaScopes",
             ],
             "collection": {
-                "mode": "labeled-worksheet",
+                "mode": "xlsx-workbook",
                 "acceptedFormats": [
+                    "xlsx-workbook",
                     "five-column-markdown-table",
                     "labeled-worksheet",
                 ],
@@ -654,11 +647,11 @@ def build_workday_admin_packet(
                 "validator": "parse_workday_admin_return_worksheet",
             },
             "note": (
-                "Return the administrator details in one response. Do not paste "
+                "Upload the completed administrator workbook. Do not include "
                 "passwords, client secrets, tokens, cookies, certificate "
                 "contents, or private keys. For missing or invalid values, "
-                "show one mini-worksheet with only those fields and their "
-                "capture instructions."
+                "identify only those cells and ask the administrator to "
+                "correct the same workbook."
             ),
         },
     }
@@ -887,8 +880,6 @@ def validate_workday_admin_response(
     required = {
         "oauthClientId",
         "authenticationPolicyOutcome",
-        "networkReadinessOutcome",
-        "apiClientOutcome",
         "clientGrantType",
         "includeWorkdayOwnedScope",
         "identityProviderSsoServiceUrl",
@@ -903,12 +894,21 @@ def validate_workday_admin_response(
             "authenticationPolicyOutcome must confirm either an existing "
             "active employee SAML policy or an activated reviewed change."
         )
-    if values["networkReadinessOutcome"] not in WORKDAY_NETWORK_READINESS_OUTCOMES:
+    network_readiness_outcome = str(
+        response.get("networkReadinessOutcome") or ""
+    ).strip()
+    if (
+        network_readiness_outcome
+        and network_readiness_outcome not in WORKDAY_NETWORK_READINESS_OUTCOMES
+    ):
         raise WorkdayConnectContractError(
             "networkReadinessOutcome must confirm the Workday hosts are "
             "allowed or that no customer firewall change is required."
         )
-    if values["apiClientOutcome"] not in WORKDAY_API_CLIENT_OUTCOMES:
+    api_client_outcome = str(
+        response.get("apiClientOutcome") or ""
+    ).strip()
+    if api_client_outcome and api_client_outcome not in WORKDAY_API_CLIENT_OUTCOMES:
         raise WorkdayConnectContractError(
             "apiClientOutcome must confirm an approved existing API client "
             "or a newly registered API client."
@@ -995,10 +995,10 @@ def validate_workday_admin_response(
             "Organizations and Roles, Staffing, and Time Off and Leave."
         )
     functional_area_scopes = list(WORKDAY_REQUIRED_FUNCTIONAL_AREA_SCOPES)
-    optional_domains = _optional_domains(
-        response.get("optionalDomains")
+    optional_domains = (
+        _optional_domains(response.get("optionalDomains"))
         if response.get("optionalDomains") is not None
-        else []
+        else None
     )
     legacy_authorization = str(response.get("authorizationOutcome") or "").strip()
     legacy_remediation_fields = {
@@ -1056,8 +1056,6 @@ def validate_workday_admin_response(
             "serviceProviderId": expected_entity_id,
             **certificate_evidence,
             "authenticationPolicyOutcome": values["authenticationPolicyOutcome"],
-            "networkReadinessOutcome": values["networkReadinessOutcome"],
-            "apiClientOutcome": values["apiClientOutcome"],
             "clientGrantType": values["clientGrantType"],
             "includeWorkdayOwnedScope": values["includeWorkdayOwnedScope"],
             "identityProviderSsoServiceUrl": values["identityProviderSsoServiceUrl"],
@@ -1068,7 +1066,6 @@ def validate_workday_admin_response(
                 "integrationPermissionsGetOutcome"
             ],
             "functionalAreaScopes": functional_area_scopes,
-            "optionalDomains": optional_domains,
         },
         "partialEvidence": {
             "identityProviderOutcome": identity_provider_outcome,
@@ -1078,8 +1075,6 @@ def validate_workday_admin_response(
             "oauthClientId": values["oauthClientId"],
             **endpoints,
             "authenticationPolicyOutcome": values["authenticationPolicyOutcome"],
-            "networkReadinessOutcome": values["networkReadinessOutcome"],
-            "apiClientOutcome": values["apiClientOutcome"],
             "clientGrantType": values["clientGrantType"],
             "includeWorkdayOwnedScope": values["includeWorkdayOwnedScope"],
             "identityProviderSsoServiceUrl": values["identityProviderSsoServiceUrl"],
@@ -1090,9 +1085,16 @@ def validate_workday_admin_response(
                 "integrationPermissionsGetOutcome"
             ],
             "functionalAreaScopes": functional_area_scopes,
-            "optionalDomains": optional_domains,
         },
     }
+    for field, value in (
+        ("networkReadinessOutcome", network_readiness_outcome),
+        ("apiClientOutcome", api_client_outcome),
+        ("optionalDomains", optional_domains),
+    ):
+        if value not in (None, ""):
+            result["evidence"][field] = value
+            result["partialEvidence"][field] = value
     if employee_security_group:
         result["evidence"]["employeeSecurityGroup"] = employee_security_group
         result["partialEvidence"]["employeeSecurityGroup"] = employee_security_group

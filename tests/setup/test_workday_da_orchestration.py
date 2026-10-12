@@ -85,6 +85,43 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
             "allowFreeformInput": False,
         }
     ] in forms
+    expected_privilege_forms = [
+        (
+            "Connection creation privilege",
+            (
+                "Do you have the Power Platform Environment Maker privilege "
+                "and package installation access to create the Workday "
+                "connections?"
+            ),
+        ),
+        (
+            "Maker validation privilege",
+            (
+                "Do you have the Environment Maker privilege to perform "
+                "maker validation in the Copilot Studio Test pane?"
+            ),
+        ),
+    ]
+    for header, question in expected_privilege_forms:
+        assert [
+            {
+                "header": header,
+                "question": question,
+                "options": [
+                    {
+                        "label": (
+                            "Yes, I have the required privilege and access"
+                        )
+                    },
+                    {
+                        "label": (
+                            "No, I do not have the required privilege or access"
+                        )
+                    },
+                ],
+                "allowFreeformInput": False,
+            }
+        ] in forms
     assert [
         {
             "header": "Required access",
@@ -99,6 +136,7 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
             "allowFreeformInput": False,
         }
     ] in forms
+    assert "When `nextPhaseId` is `preflight` or `runtime`" in skill
     assert "If controller status is `ready`, skip the availability question" in skill
     for phase_id in (
         "preflight",
@@ -113,8 +151,11 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
             skill,
             re.MULTILINE,
         )
-    assert "Leave the selection unset" in skill
-    assert "not proof that the signed-in account has a required role" in skill
+    assert "Leave every selection unset" in skill
+    assert (
+        "None is proof that the signed-in account has the required role"
+        in normalized_skill
+    )
     assert (
         "phase-specific live checks or structured administrator evidence remain"
         in " ".join(skill.split())
@@ -133,9 +174,13 @@ def test_role_availability_is_state_aware_at_phase_boundary() -> None:
     )
     assert "When `nextPhaseId` is `entra`, dispatch" in skill
     assert "presents the guided handoff" in skill
-    assert "stop before dispatching the next\nphase" in skill
-    assert "no phase progress or target configuration was changed" in skill
+    assert "stop before dispatching the next phase" in normalized_skill
+    assert (
+        "no phase progress or target configuration was changed"
+        in normalized_skill
+    )
     assert "do not offer to bypass the role requirement" in " ".join(skill.split())
+    assert "rerun the skill using the authorized maker account" in normalized_skill
     assert (
         "do not repeat the question while `nextPhaseId` remains unchanged"
         in " ".join(skill.split())
@@ -451,8 +496,31 @@ def test_connections_are_proven_before_runtime_apply() -> None:
     assert "**REST base URL**" in text
     assert "**Tenant name \\***" in text
     assert "not the Microsoft Entra application ID" in text
-    assert "ESS Workday Runtime**" in text
-    assert "ESS Workday Runtime REST Execution**" in text
+    maker_connection_steps = text.split(
+        "Connect both maker-visible entries",
+        1,
+    )[1].split(
+        "Internal execution note",
+        1,
+    )[0]
+    assert "displayed as **Workday**" in maker_connection_steps
+    assert "ESS Workday Runtime" not in maker_connection_steps
+    assert "ESS Workday Runtime REST Execution" not in maker_connection_steps
+    assert maker_connection_steps.index("Select **Connect**") < (
+        maker_connection_steps.index(
+            "Select the already-created Workday connection"
+        )
+    )
+    assert maker_connection_steps.index(
+        "Select the already-created Workday connection"
+    ) < maker_connection_steps.index("Select **Manage**")
+    assert maker_connection_steps.index("Select **Manage**") < (
+        maker_connection_steps.index(
+            "Enable **Allow permission to share parameters**"
+        )
+    )
+    assert "both entries displayed as Workday" in text
+    assert "Confirm Workday connection" in text
     assert "Do not ask the maker or administrator to provide them again" in normalized
     assert "Do not request or collect a Workday password" in text
     assert "Reuse a healthy existing connection" in text
@@ -499,19 +567,19 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     non_entra_branch = text.index(
         "For **Okta**, **Ping Identity**, or **Another sign-in provider**"
     )
-    capture_table = text.index("Before the numbered tasks")
+    workbook = text.index("Share `workbookFile`")
     existing_handoff = text.index("### Existing Microsoft Entra federation handoff")
     coexistence_handoff = text.index(
         "### Existing non-Entra federation coexistence or transition handoff"
     )
     greenfield_handoff = text.index("### New Microsoft Entra federation handoff")
     completion = text.index(
-        "Has the Workday administrator completed every applicable task"
+        "Has the Workday administrator completed their task"
     )
     form = text.index('"header": "SAML row settings"')
 
     assert packet < provider_question < non_entra_branch
-    assert non_entra_branch < capture_table < existing_handoff
+    assert non_entra_branch < workbook < existing_handoff
     assert existing_handoff < coexistence_handoff < greenfield_handoff
     assert greenfield_handoff < completion < form
     assert "This question selects a safe handoff branch" in text
@@ -520,10 +588,14 @@ def test_workday_admin_handoff_is_provider_first_and_completion_gated() -> None:
     )
     assert "resume the same handoff after approval" in normalized
     assert "Only after **Yes**\nmay the skill collect evidence" in text
-    assert "share this whole section" in text
-    assert "both the capture guide and\nthe return worksheet" in text
-    assert "Leave every cell in **Your\ntenant values** blank" in text
-    assert "do not repeat an **Information to return to the maker**" in text
+    assert "share these steps and the workbook" in text
+    assert "workbook is the single capture worksheet" in normalized
+    assert "fill every cell in the **Your tenant values** column" in normalized
+    assert "Upload the completed Workday administrator workbook" in text
+    assert (
+        "do not repeat an **Information to return to the maker**"
+        in normalized
+    )
     assert "This phase starts only after Microsoft Entra sign-off is complete" in text
     assert "Do not direct the maker back to the Entra" in text
     assert "already delivered through the approved customer channel" in text
@@ -702,7 +774,7 @@ def test_capability_claims_match_controller_surface() -> None:
     assert "Create x509 Public Key" in tenant
     assert "Client Grant Type" in tenant
     assert "Include Workday Owned Scope" in tenant
-    assert "Confirm network readiness" in tenant
+    assert "Confirm network readiness" not in tenant
     assert (
         "does not create physical connector connections"
         in (normalized["power_platform"])

@@ -784,6 +784,50 @@ def test_controller_parser_accepts_labeled_worksheet_files() -> None:
     assert workday.response_worksheet_file == Path("workday.txt")
 
 
+def test_controller_reads_completed_xlsx_worksheet(
+    tmp_path: Path,
+) -> None:
+    import workday_connect
+    from workday_connect_workbook import write_administrator_workbook
+
+    path = write_administrator_workbook(
+        tmp_path / "entra.xlsx",
+        title="Microsoft Entra administrator handoff",
+        administrator_role="Microsoft Entra administrator",
+        actions=["Complete the required configuration."],
+        capture_instructions=[
+            {
+                "information": "Application ID",
+                "portalLocation": "Microsoft Entra admin center",
+                "instruction": "Record the Application ID.",
+                "exampleValue": "XXXX",
+            }
+        ],
+        answers={"Application ID": "44444444-4444-4444-4444-444444444444"},
+    )
+    args = SimpleNamespace(
+        verification_file=None,
+        verification_json=None,
+        verification_worksheet_file=path,
+    )
+
+    result = workday_connect._json_input(
+        args,
+        "verification",
+        "Entra verification",
+        worksheet_parser=lambda _state, worksheet: {
+            "worksheet": worksheet,
+        },
+        worksheet_state={},
+    )
+
+    assert result == {
+        "worksheet": (
+            "Application ID: 44444444-4444-4444-4444-444444444444\n"
+        )
+    }
+
+
 def test_controller_parser_accepts_guided_entra_handoff() -> None:
     import workday_connect
 
@@ -950,6 +994,8 @@ def test_entra_handoff_rediscovery_and_replay_return_actionable_packet(
     )
     assert guided["packet"]["target"]["mode"] == "administrator-selection"
     assert guided["rediscoveryRequired"] is False
+    assert Path(guided["workbookFile"]).name == "entra-admin-handoff.xlsx"
+    assert Path(guided["workbookFile"]).is_file()
 
     creation = workday_connect._entra_handoff(
         SimpleNamespace(

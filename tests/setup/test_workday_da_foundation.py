@@ -95,22 +95,15 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     )
     assert "captureInstructions" in entra
     assert "python scripts/workday_connect.py entra-handoff" in entra
-    assert "Information to capture" in entra
-    assert "Where to find it" in entra
-    assert "What to record" in entra
-    assert "Example value" in entra
     assert "Your tenant values" in entra
     normalized_entra = " ".join(entra.split())
-    assert "both the capture guide and the return worksheet" in normalized_entra
-    assert (
-        "Before the numbered tasks" in entra
-    )
-    assert "renders an array of questions as a sequential wizard" in entra
-    assert "containing exactly one free-form question" in entra
+    assert "assets/entra-admin-handoff.xlsx" in entra
+    assert "workbook is the single capture worksheet" in normalized_entra
+    assert "Upload the completed Microsoft Entra administrator workbook" in entra
+    assert "Do not ask the maker to paste the\nworksheet" in entra
     assert "Do not replay the full worksheet" in entra
-    assert '"header": "Microsoft Entra app administrator details"' in entra
     assert "Certificate valid from" not in entra
-    assert "Do not\nsay only \"paste a revised worksheet\"" in entra
+    assert "upload the corrected\n`.xlsx` file" in entra
     for removed_header in (
         "Directory tenant ID",
         "Enterprise app Object ID",
@@ -122,7 +115,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         "Scope ID",
     ):
         assert f'"header": "{removed_header}"' not in entra
-    assert "Do not ask for a\nfield after completion unless it appeared" in entra
+    assert "not to edit the repository\ntemplate itself" in entra
 
 
 def test_preflight_explains_silent_auth_and_current_phase() -> None:
@@ -144,11 +137,15 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     normalized = " ".join(tenant.split())
 
     assert "one administrator handoff" in tenant
-    assert "Workday administrator details" in tenant
-    assert "both the capture guide and the return worksheet" in normalized
-    assert "share this whole section" in tenant
-    assert "Your tenant values" in tenant
-    assert "do not repeat an **Information to return to the maker**" in tenant
+    assert "Workday administrator details" not in tenant
+    assert "assets/workday-admin-handoff.xlsx" in tenant
+    assert "workbook is the single capture worksheet" in normalized
+    assert "share these steps and the workbook" in tenant
+    assert "Your tenant values" in normalized
+    assert (
+        "do not repeat an **Information to return to the maker**"
+        in normalized
+    )
     assert "identityProviderQuestion" in tenant
     assert "Microsoft Entra ID" in tenant
     assert "Okta" in tenant
@@ -175,17 +172,20 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert '"header": "Certificate name"' not in tenant
-    assert "containing exactly one free-form question" in tenant
-    assert '"header": "Workday administrator details"' in tenant
+    assert "Upload the completed Workday administrator workbook" in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
-    assert '"header": "Network readiness"' in tenant
+    assert '"header": "Network readiness"' not in tenant
+    assert "scoped to the ESS OAuth client identity" in normalized
+    assert "not a required worksheet attestation" in normalized
+    assert "Power Platform managed-connector outbound IP ranges" in normalized
+    assert "connection and runtime tests as the reachability evidence" in normalized
     assert "Do not add `recommended`" in tenant
-    assert "one mini-worksheet containing only the missing or invalid" in tenant
-    assert "Do not reopen a sequence of individual questions" in tenant
-    assert "reformat a recognizable response" in tenant
+    assert "correct those cells in the same workbook" in tenant
+    assert "Do not reopen a sequence of individual questions" in normalized
     assert (
-        "rejects missing mandatory labels, duplicate labels, or unknown labels"
+        "rejects missing mandatory labels, duplicate labels, unknown labels, "
+        "formulas, and unsafe workbook content"
         in normalized
     )
     assert "--response-worksheet-file" in tenant
@@ -193,9 +193,8 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert 'Enter a JSON array of {' not in tenant
     assert "API client access" in tenant
     assert "Required employee access" in tenant
-    assert "Additional scenario domains" in tenant
-    assert "Domain | supported scenario" in tenant
-    assert "do not ask for it again" in tenant
+    assert "Additional scenario domains" not in tenant
+    assert "Domain | supported scenario" not in tenant
     assert '"header": "Authorization"' not in tenant
     assert '"header": "Authorization retest"' not in tenant
     assert '"all good", "continue", or "proceed"' in tenant
@@ -226,8 +225,8 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
 
     assert "only exception" in normalized_skill
     assert "controller's worksheet parser" in normalized_skill
-    assert "reformat it" in normalized_skill
-    assert "reformat a recognizable response" in " ".join(entra.split())
+    assert "completed `.xlsx` file in one upload" in normalized_skill
+    assert "Upload the completed Microsoft Entra administrator workbook" in entra
     assert "including the header and every row" not in entra
     assert "--verification-worksheet-file" in entra
     assert "entra-verification.json" not in entra
@@ -235,7 +234,7 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
     assert "workday-admin-response.json" not in tenant
     assert "environment and capacity evidence is inherited" not in matrix
     assert "environment and capacity evidence" not in install
-    assert "do not move to another field" in tenant
+    assert "do not move to another field" in " ".join(tenant.split())
     assert "search workspace files" in tenant
     assert "CHECKPOINT_RESULT" not in tenant
     assert "ACK=true" not in tenant
