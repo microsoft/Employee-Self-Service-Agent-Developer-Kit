@@ -10,7 +10,8 @@ python scripts/setup_state.py show --view report
 Build the completion report only from that output. Include:
 
 - locked environment name, type, and endpoint;
-- verified allocated capacity and governance status;
+- recorded capacity disposition and governance status, including any
+  administrator-attested capacity override;
 - preferred solution and publisher prefix, or `Not configured (skipped)`;
 - HR and IT installed/ready matrix;
 - open issues;

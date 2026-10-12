@@ -7,11 +7,31 @@ playbook immediately and return to the foundation router. Do not rerun
 Dataverse MCP, capacity, or governance checks for a completed prerequisite
 step.
 
-Mark the access and Dataverse substep in progress:
+Inspect `active_step` before updating either substep:
 
 ```text
-python scripts/setup_state.py update-step --step SETUP-02.1 --status in-progress
+python scripts/setup_state.py show --view current
 ```
+
+Branch on the persisted substep:
+
+- If `active_step` is `SETUP-02.1`, mark `SETUP-02.1` in progress and begin at
+  **Access and Dataverse**.
+- If `active_step` is `SETUP-02.2`, do not run any `SETUP-02.1` update or
+  access command. If the current view reported the blocked cause `Copilot
+  Studio message capacity is not allocated`, leave `SETUP-02.2` blocked while
+  rerunning the capacity check and skip directly to **Capacity and billing**.
+  Do not issue an `in-progress` update before that recheck. Otherwise set
+  `SETUP-02.2` to `in-progress` and begin at **Dataverse MCP client**.
+
+```text
+python scripts/setup_state.py update-step \
+  --step "{SETUP-02.1|SETUP-02.2}" \
+  --status in-progress
+```
+
+Run that update only for the branches above that require an `in-progress`
+transition.
 
 Read the locked environment without loading unrelated state:
 
@@ -20,6 +40,8 @@ python scripts/setup_state.py show --view environment
 ```
 
 ## Access and Dataverse
+
+Run this section only for `SETUP-02.1`.
 
 Run:
 
@@ -86,16 +108,32 @@ Run:
 ```text
 python scripts/flightcheck/cli.py \
   --checkpoint ENV-CAPACITY-001 \
+  --allow-capacity-override \
   --quiet-auth \
   --environment-url "{ENVIRONMENT_URL}" \
   --environment-id "{ENVIRONMENT_ID}"
 ```
 
-Do not ask the maker to select or confirm a billing model. Continue only when
-the checkpoint reports `Passed` because message capacity is allocated to the
-environment.
+Do not ask the maker to select or confirm a billing model. Inspect the exact
+`ENV-CAPACITY-001` row and branch on its structured status.
 
-Treat every other result and command failure as immediately blocking:
+For `Passed`, record the verified disposition and continue:
+
+```text
+python scripts/setup_state.py set-prerequisite \
+  --name capacity \
+  --status complete \
+  --value "Verified: allocated capacity is greater than zero."
+```
+
+For `Failed`, `Error`, or command failure, show the observed failure and stop.
+These outcomes are not eligible for override because setup does not have
+trustworthy evidence of a successful capacity read. Keep `SETUP-02.2` blocked
+with the observed cause; do not replace the failure with manual attestation.
+
+With the setup-only `--allow-capacity-override` flag, a `Warning` means the
+Licensing API ran successfully and found zero allocated capacity. On the first
+`Warning`:
 
 1. Run:
 
@@ -104,6 +142,10 @@ Treat every other result and command failure as immediately blocking:
      --step SETUP-02.2 \
      --status blocked \
      --cause "Copilot Studio message capacity is not allocated"
+   python scripts/setup_state.py set-prerequisite \
+     --name capacity \
+     --status pending \
+     --value "Verified: zero allocated capacity."
    ```
 
 2. Show this message verbatim once. Do not summarize, rephrase, or replace it
@@ -111,7 +153,7 @@ Treat every other result and command failure as immediately blocking:
 
    ```text
    Copilot Studio message capacity must be allocated to `{ENVIRONMENT_NAME}`
-   before setup can continue.
+   before setup can pass this check automatically.
 
    1. Open [Power Platform admin center](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview).
    2. Select `Licensing` in the left navigation.
@@ -119,7 +161,7 @@ Treat every other result and command failure as immediately blocking:
    4. Open the `Manage capacity` tab.
    5. Find `{ENVIRONMENT_NAME}`.
    6. Allocate Copilot Studio message capacity to the environment.
-   7. Select `Save`, then return here and choose **Check again**.
+   7. Select `Save`, then return here and choose **Check again before overriding**.
    ```
 
    If the visible Power Platform admin center labels differ, use the linked
@@ -130,12 +172,16 @@ Treat every other result and command failure as immediately blocking:
    ```json
    [
      {
-       "header": "Capacity required",
-       "question": "After allocating Copilot Studio message capacity to `{ENVIRONMENT_NAME}`, what would you like to do?",
+       "header": "Capacity unavailable",
+       "question": "The capacity check found zero allocated capacity for `{ENVIRONMENT_NAME}`. What would you like to do?",
        "options": [
          {
-           "label": "Check again",
-           "description": "Rerun the required capacity validation."
+           "label": "Check again before overriding",
+           "description": "Rerun the capacity check before deciding whether to override it."
+         },
+         {
+           "label": "Pause setup",
+           "description": "Pause setup at the capacity check."
          }
        ],
        "allowFreeformInput": false
@@ -143,21 +189,64 @@ Treat every other result and command failure as immediately blocking:
    ]
    ```
 
-4. Rerun the checkpoint only when **Check again** is selected.
+4. For **Check again before overriding**, rerun the checkpoint.
+5. For **Pause setup**, leave capacity pending and `SETUP-02.2` blocked, then
+   stop.
 
 Render the verbatim remediation only once, before the question. After asking
 the question, do not print another blocked-state summary, repeat the portal
 steps, paraphrase them, or add a second capacity message. The question is the
 final rendered content until the maker responds.
 
-**STOP here while capacity remains unverified.** Do not ask governance
-questions, collect any other prerequisite answers, or continue to another setup
-step. There is no skip, continue, defer, or manual-attestation path. If a maker
-nevertheless replies with `skip` or any response other than **Check again**,
-repeat that capacity is mandatory and stop without asking another question.
+If the recheck reports `Passed`, set `SETUP-02.2` back to `in-progress`, record
+the verified capacity disposition above, and continue.
 
-Do not accept Pay-as-you-go, a billing-model selection, or manual attestation in
-place of allocated capacity.
+If the recheck returns `Warning` again, state that the second successful check
+still found zero allocated capacity. Before presenting the next choices, state
+that a Power Platform administrator must be present to override the capacity
+check and that overriding does not allocate capacity, verify capacity, or
+change the observed zero-capacity result. Then ask:
+
+```json
+[
+  {
+    "header": "Capacity still unavailable",
+    "question": "The recheck still found zero allocated capacity for `{ENVIRONMENT_NAME}`. Do you want to continue with an administrator-attested skip?",
+    "options": [
+      {
+        "label": "Continue with administrator-attested skip",
+        "description": "Confirm that a Power Platform administrator is present and accepts that capacity remains unverified."
+      },
+      {
+        "label": "Pause setup",
+        "description": "Leave setup blocked at the capacity check and continue later."
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- For **Continue with administrator-attested skip**, set `SETUP-02.2` back to
+  `in-progress`, then record:
+
+  ```text
+  python scripts/setup_state.py set-prerequisite \
+    --name capacity \
+    --status complete \
+    --value "Administrator-attested skip after repeated zero-allocation checks; capacity was not verified."
+  ```
+
+  Continue to governance without claiming that capacity is allocated or ready.
+- For **Pause setup**, leave capacity pending and `SETUP-02.2` blocked, then
+  stop.
+
+If any recheck returns `Failed`, `Error`, or a command failure, preserve that
+new result and stop. Do not offer or apply an administrator-attested skip.
+
+Do not accept Pay-as-you-go or a billing-model selection in place of allocated
+capacity. Manual attestation is available only after two successful checks
+both report zero allocation.
 
 ## Governance
 
@@ -177,7 +266,8 @@ If any mandatory prerequisite failed or remains unknown:
 1. Set `SETUP-02.2` to `blocked` with one normalized cause per missing item.
 2. Show the missing items and stop.
 
-If all prerequisite checks pass, persist one consolidated step result:
+If all prerequisite checks pass or the capacity prerequisite contains the
+administrator-attested disposition above, persist one consolidated step result:
 
 ```text
 python scripts/setup_state.py record-step-result \
