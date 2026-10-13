@@ -1131,15 +1131,32 @@ def test_pre006_graph_unavailable_with_zero_env_alloc_warns():
     assert "Could not determine" in r.result
 
 
-def test_pre006_unexpected_error_degrades_to_warning():
-    # An UNEXPECTED error (a code defect) degrades to PRE-006's own WARNING row
-    # -- matching PRE-004/005 -- rather than bubbling up and turning the whole
-    # Prerequisites category into a single ERROR. A non-iterable allocations
-    # payload makes _env_mcs_allocation raise past its own guard.
+def test_pre006_malformed_env_allocation_uses_tenant_purchase_signal():
+    # Malformed allocation evidence is unreadable rather than a trustworthy
+    # zero. Graph still confirms that no prepaid capacity was purchased, so
+    # PRE-006 remains a failure instead of masking that independent signal.
     r = _run_pre006(_pre006_runner(
         graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP(5), payg=False))
+    assert r.status == "Failed"
+    assert "No prepaid Copilot Studio message capacity has been purchased" in r.result
+
+
+def test_pre006_unexpected_error_degrades_to_warning(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A genuine code error still degrades to PRE-006's own WARNING row rather
+    # than bubbling up and turning the whole Prerequisites category into one
+    # ERROR.
+    from flightcheck.checks import prerequisites
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(prerequisites, "_env_mcs_allocation", _raise)
+    r = _run_pre006(_pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=False))
     assert r.status == "Warning"
-    assert "Unable to determine" in r.result
+    assert "RuntimeError: unexpected" in r.result
 
 
 def _setup_pre006_pass():
@@ -1216,4 +1233,3 @@ def test_pre006_integration_fails_when_no_billing_or_prepaid():
     assert pre006.status == "Failed"
     assert "No prepaid Copilot Studio message capacity has been purchased" in pre006.result
     assert _CATALOG_DEEP_LINK in pre006.remediation
-

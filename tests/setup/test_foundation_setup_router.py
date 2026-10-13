@@ -109,11 +109,10 @@ def test_foundation_dispatches_all_playbooks() -> None:
     assert ".local/connect/workday/config.json" not in text
 
 
-def test_capacity_is_an_automated_blocking_gate() -> None:
+def test_capacity_override_requires_repeated_confirmed_zero_allocation() -> None:
     text = " ".join(_PREREQUISITES.read_text(encoding="utf-8").split())
 
     assert "Do not ask the maker to select or confirm a billing model" in text
-    assert "Continue only when the checkpoint reports `Passed`" in text
     assert '"allowFreeformInput": false' in text
     assert '--cause "Copilot Studio message capacity is not allocated"' in text
     assert "Show this message verbatim once" in text
@@ -122,10 +121,22 @@ def test_capacity_is_an_automated_blocking_gate() -> None:
     assert "Find `{ENVIRONMENT_NAME}`" in text
     assert "Render the verbatim remediation only once" in text
     assert "do not print another blocked-state summary" in text
-    assert "Do not ask governance questions" in text
-    assert "There is no skip, continue, defer" in text
-    assert "replies with `skip`" in text
-    assert "Do not accept Pay-as-you-go" in text
+    assert "second successful check still found zero allocated capacity" in text
+    assert "**Check again before overriding**" in text
+    assert "**Continue with administrator-attested skip**" in text
+    assert '"label": "Pause setup"' in text
+    assert "Power Platform administrator must be present" in text
+    assert "capacity was not verified" in text
+    assert "Manual attestation is available only after two successful checks" in text
+    assert "For `Failed`, `Error`, or command failure" in text
+    assert "These outcomes are not eligible for override" in text
+    assert "--allow-capacity-override" in text
+    assert "--name capacity" in text
+    assert '--value "Verified: allocated capacity is greater than zero."' in text
+    assert (
+        '--value "Administrator-attested skip after repeated zero-allocation '
+        'checks; capacity was not verified."'
+    ) in text
 
 
 def test_resume_never_replays_completed_prerequisites() -> None:
@@ -136,6 +147,12 @@ def test_resume_never_replays_completed_prerequisites() -> None:
     assert "do not read or execute `foundation-setup/prerequisites.md`" in router
     assert "only when the current persisted `active_step`" in prerequisites
     assert "Do not rerun Dataverse MCP, capacity, or governance" in prerequisites
+    assert "Inspect `active_step` before updating either substep" in prerequisites
+    assert "If `active_step` is `SETUP-02.2`" in prerequisites
+    assert "do not run any `SETUP-02.1` update" in prerequisites
+    assert "leave `SETUP-02.2` blocked while" in prerequisites
+    assert "Do not issue an `in-progress` update before that recheck" in prerequisites
+    assert "skip directly to **Capacity and billing**" in prerequisites
 
 
 def test_alm_step_reuses_env009_as_an_optional_step_checkpoint() -> None:
