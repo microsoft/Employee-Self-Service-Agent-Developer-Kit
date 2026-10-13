@@ -302,12 +302,16 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     ) == "refreshed"
 
 
-def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
+def test_authenticate_uses_the_preferred_cached_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
     import adk_telemetry
     import auth
     from flightcheck import graph_client
 
     selected_accounts = []
+    monkeypatch.chdir(tmp_path)
 
     class FakeCache:
         has_state_changed = False
@@ -348,12 +352,14 @@ def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
     )
     monkeypatch.setattr(adk_telemetry, "start_session", lambda **_kwargs: None)
 
-    token = auth.authenticate(
+    token, username = auth.authenticate(
         "https://example.crm.dynamics.com",
         preferred_username="maker@example.com",
+        return_account_identity=True,
     )
 
     assert token == "preferred-token"
+    assert username == "Maker@Example.com"
     assert selected_accounts == [{"username": "Maker@Example.com"}]
 
 

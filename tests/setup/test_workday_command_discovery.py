@@ -34,12 +34,16 @@ def test_menu_exposes_specific_and_generic_connect_commands() -> None:
     assert "| `/connect` | Choose an available integration |" in menu
 
 
-def test_repo_root_redirect_recognizes_connect_workday() -> None:
-    instructions = (_REPO_ROOT / ".github" / "copilot-instructions.md").read_text(
-        encoding="utf-8"
-    )
+def test_maker_prompt_catalog_exposes_routing_descriptions() -> None:
+    prompt_files = sorted(_PROMPTS.glob("*.prompt.md"))
 
-    assert "- `/connect-workday`" in instructions
+    assert prompt_files
+    for prompt_file in prompt_files:
+        parts = prompt_file.read_text(encoding="utf-8").split("---", 2)
+        assert len(parts) == 3, f"{prompt_file.name} has no YAML frontmatter"
+        assert (
+            "description:" in parts[1]
+        ), f"{prompt_file.name} has no routing description"
 
 
 def test_readme_documents_da_scope_and_target_deployment() -> None:

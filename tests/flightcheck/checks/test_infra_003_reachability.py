@@ -126,11 +126,24 @@ class TestEnumeration:
 
 class TestManualGuidanceWhenNoEgressProbe:
     def test_no_endpoints_is_not_configured(self):
+        from flightcheck.runner import _render_check_card
+
         results = check_external_endpoint_reachability(_runner({}))
 
         assert len(results) == 1
-        assert results[0].status == Status.NOT_CONFIGURED.value
-        assert "Nothing to probe" in results[0].result
+        row = results[0]
+        assert row.status == Status.NOT_CONFIGURED.value
+        assert "Nothing to probe" in row.result
+        assert "- Workday: the /connect skill" in row.remediation
+        servicenow_guidance = row.remediation.split("- ServiceNow:", 1)[1].split(
+            "- SAP SuccessFactors", 1
+        )[0]
+        assert "Guided ServiceNow setup is not yet available in ADK" in servicenow_guidance
+        assert "manually in Copilot Studio or contact admin" in servicenow_guidance
+        assert "/connect" not in servicenow_guidance
+        card = _render_check_card(row)
+        assert "Workday and ServiceNow: the /connect" not in card
+        assert "manually in Copilot Studio" in card
 
     def test_default_run_returns_manual_guidance_not_a_probe(self):
         # No --runtime-reachability: reachability is not tested; the check hands

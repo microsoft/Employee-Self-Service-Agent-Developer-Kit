@@ -1,13 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""List MOS starters, create a Dev agent, and enable ALM when requested.
+"""List MOS starters and create a Dev agent when requested.
 
-This is the DA `/setup` entitled-product installation path. It exposes three
-independently observable operations: read-only ``list``, request-guarded
-``create``, and replacement-safe ``enable-alm``. It has no
-``resolve``/``status`` command and no persona/ISV/product policy, which belongs
-to the maker and
+This is the DA `/setup` agent-template installation path. It exposes two
+independently observable operations: read-only ``list`` and request-guarded
+``create``. Shared ALM enrollment belongs to ``setup_existing_da.py
+ensure-alm``. This script has no ``resolve``/``status`` command and no
+persona/ISV/product policy, which belongs to the maker and
 ``src/skills/foundation-setup/da-mos-starter.md``, not this script.
 
 ``src/reference/mos-starter-package.md`` is the canonical narrative: the
@@ -19,7 +19,6 @@ not here.
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import os
@@ -52,8 +51,6 @@ from setup_existing_da import (
 FUSE_ROOT = Path(".local/setup/mos-starter/create-attempts")
 _CREATE_MARKER = "DA_MOS_STARTER_CREATE"
 _LIST_MARKER = "DA_MOS_STARTER_LIST"
-_ALM_MARKER = "DA_MOS_STARTER_ALM"
-_ALM_VERIFY_MARKER = "DA_MOS_STARTER_ALM_VERIFY"
 # The fuse-disposition matrix for every status bucket lives in
 # src/reference/mos-starter-package.md; only these definitive rejections
 # clear the fuse (the create never happened), everything else keeps it.
@@ -545,7 +542,9 @@ def create_from_starter_package(
         _print_evidence(annotations, body, body_is_json)
         if status == 409:
             raise MosStarterSetupError(
-                "The service reported a starter-package collision (HTTP 409). "
+                "Copilot Studio returned HTTP 409 because an agent using this "
+                "starter package's schema already exists in the target "
+                "environment. The response did not identify the existing agent. "
                 "The attempt fuse was cleared."
             )
         raise MosStarterSetupError(
@@ -562,192 +561,6 @@ def create_from_starter_package(
     )
 
 
-# --- ALM opt-in -----------------------------------------------------------
-def _fetched_bot_and_alm_value(
-    changeset: dict[str, Any],
-    *,
-    agent_id: str,
-) -> tuple[dict[str, Any], Any]:
-    """Validate and copy one exact fetched BotEntity with its ALM value."""
-    bot = changeset.get("bot")
-    if not isinstance(bot, dict):
-        raise MosStarterSetupError(
-            "Component fetch did not return a BotEntity; ALM was not changed."
-        )
-    fetched_agent_id = bot.get("cdsBotId")
-    if (
-        not isinstance(fetched_agent_id, str)
-        or fetched_agent_id.casefold() != agent_id.casefold()
-    ):
-        raise MosStarterSetupError(
-            "The fetched BotEntity identity does not match the requested "
-            "agent; ALM was not changed."
-        )
-    configuration = bot.get("configuration")
-    if not isinstance(configuration, dict):
-        raise MosStarterSetupError(
-            "The fetched BotEntity has no usable configuration; ALM was not changed."
-        )
-    settings = configuration.get("settings")
-    if settings is not None and not isinstance(settings, dict):
-        raise MosStarterSetupError(
-            "The fetched BotEntity settings are not an object; ALM was not changed."
-        )
-    copied_bot = copy.deepcopy(bot)
-    alm_value = settings.get("alm.isAlmEnabled") if settings is not None else None
-    return copied_bot, alm_value
-
-
-def _fetch_alm_components(
-    client: AgentBuilderClient,
-    *,
-    environment_id: str,
-    agent_id: str,
-    verification: bool,
-) -> dict[str, Any]:
-    """Fetch ALM state while preserving service or transport failure evidence."""
-    marker = _ALM_VERIFY_MARKER if verification else _ALM_MARKER
-    phase = "verification" if verification else "precondition"
-    try:
-        return client.fetch_components(agent_id)
-    except AgentBuilderHTTPError as exc:
-        annotations: dict[str, Any] = {
-            "targetEnvironmentId": environment_id,
-            "agentId": agent_id,
-            "outcome": f"{phase}-rejected",
-            "httpStatus": exc.status_code,
-            "requestId": exc.request_id,
-        }
-        if exc.response is None:
-            _emit_annotations(annotations, marker=marker)
-        else:
-            body, body_is_json = _parse_response_body(exc.response)
-            _print_evidence(annotations, body, body_is_json, marker=marker)
-        raise MosStarterSetupError(
-            f"The ALM {phase} fetch was rejected by the service. "
-            + ("Verification did not complete." if verification else "ALM was not changed.")
-        ) from exc
-    except (requests.exceptions.RequestException, OSError) as exc:
-        annotations = {
-            "targetEnvironmentId": environment_id,
-            "agentId": agent_id,
-            "outcome": f"{phase}-transport-failure",
-            "transportErrorType": type(exc).__name__,
-            "transportError": str(exc),
-        }
-        _emit_annotations(annotations, marker=marker)
-        raise MosStarterSetupError(
-            f"The ALM {phase} fetch ended without a response. "
-            + (
-                "Verification did not complete."
-                if verification
-                else "No update was attempted."
-            )
-        ) from exc
-
-
-def enable_alm(
-    client: AgentBuilderClient,
-    *,
-    environment_id: str,
-    agent_id: str,
-) -> dict[str, Any]:
-    """Enable ALM through a full fetched-BotEntity replacement and verify it."""
-    normalized_environment_id = _normalize_environment_id(environment_id)
-    normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
-    before = _fetch_alm_components(
-        client,
-        environment_id=normalized_environment_id,
-        agent_id=normalized_agent_id,
-        verification=False,
-    )
-    update_bot, previous_value = _fetched_bot_and_alm_value(
-        before,
-        agent_id=normalized_agent_id,
-    )
-    before_version = update_bot.get("version")
-    if previous_value is True:
-        return {
-            "environmentId": normalized_environment_id,
-            "agentId": normalized_agent_id,
-            "outcome": "already-enabled",
-            "beforeBotVersion": before_version,
-            "afterBotVersion": before_version,
-            "previousValue": True,
-            "persistedValue": True,
-        }
-
-    update_settings = update_bot["configuration"].get("settings")
-    if update_settings is None:
-        update_settings = {}
-        update_bot["configuration"]["settings"] = update_settings
-    update_settings["alm.isAlmEnabled"] = True
-
-    annotations: dict[str, Any] = {
-        "targetEnvironmentId": normalized_environment_id,
-        "agentId": normalized_agent_id,
-        "beforeBotVersion": before_version,
-        "previousValue": previous_value,
-    }
-    try:
-        response = client.update_bot_entity(normalized_agent_id, update_bot)
-    except (requests.exceptions.RequestException, OSError) as exc:
-        annotations["outcome"] = "uncertain-transport"
-        annotations["transportErrorType"] = type(exc).__name__
-        annotations["transportError"] = str(exc)
-        _emit_annotations(annotations, marker=_ALM_MARKER)
-        raise MosStarterSetupError(
-            "The ALM update ended without a classified response. The setting "
-            "outcome is uncertain."
-        ) from exc
-
-    status = response.status_code
-    annotations["httpStatus"] = status
-    annotations["requestId"] = _extract_request_id(response)
-    body, body_is_json = _parse_response_body(response)
-    if not 200 <= status < 300:
-        annotations["outcome"] = "rejected"
-        _print_evidence(annotations, body, body_is_json, marker=_ALM_MARKER)
-        raise MosStarterSetupError(
-            f"The service rejected the ALM update (HTTP {status}). No component "
-            "changes were requested."
-        )
-
-    annotations["outcome"] = "update-accepted"
-    _print_evidence(annotations, body, body_is_json, marker=_ALM_MARKER)
-    after = _fetch_alm_components(
-        client,
-        environment_id=normalized_environment_id,
-        agent_id=normalized_agent_id,
-        verification=True,
-    )
-    after_bot, persisted_value = _fetched_bot_and_alm_value(
-        after,
-        agent_id=normalized_agent_id,
-    )
-    after_version = after_bot.get("version")
-    persisted = persisted_value is True
-    result = {
-        "environmentId": normalized_environment_id,
-        "agentId": normalized_agent_id,
-        "outcome": "enabled" if persisted else "verification-failed",
-        "beforeBotVersion": before_version,
-        "afterBotVersion": after_version,
-        "previousValue": previous_value,
-        "persistedValue": persisted,
-    }
-    if not persisted:
-        print(
-            f"{_ALM_VERIFY_MARKER}_JSON:"
-            f"{json.dumps(result, ensure_ascii=True)}"
-        )
-        raise MosStarterSetupError(
-            "The ALM update was accepted, but read-back did not show "
-            "`alm.isAlmEnabled: true`. Do not continue to attachment."
-        )
-    return result
-
-
 # --- CLI --------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -755,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = commands.add_parser(
         "list",
-        help="List entitled MOS starter packages. Read-only.",
+        help="List available agent templates. Read-only.",
     )
     _add_agentbuilder_target_arguments(list_command)
 
@@ -788,15 +601,6 @@ def build_parser() -> argparse.ArgumentParser:
             "the same attempted mutation."
         ),
     )
-    enable_alm_command = commands.add_parser(
-        "enable-alm",
-        help="Enable ALM for one exact agent and verify the persisted setting.",
-    )
-    _add_agentbuilder_target_arguments(enable_alm_command)
-    enable_alm_command.add_argument(
-        "--agent-id",
-        help="Exact created Dev agent ID. Optional when present in --target-url.",
-    )
     return parser
 
 
@@ -808,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
             environment_id=args.environment_id,
             agent_id=getattr(args, "agent_id", None),
             ring=args.ring,
-            require_agent=args.command == "enable-alm",
+            require_agent=False,
         )
         client = _client_from_args(args, target["environmentId"], target["ring"])
 
@@ -822,15 +626,6 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"DA_MOS_STARTER_PACKAGES_JSON:{json.dumps(result, ensure_ascii=True)}"
             )
-            return 0
-
-        if args.command == "enable-alm":
-            result = enable_alm(
-                client,
-                environment_id=target["environmentId"],
-                agent_id=target["agentId"],
-            )
-            print(f"DA_MOS_STARTER_ALM_JSON:{json.dumps(result, ensure_ascii=True)}")
             return 0
 
         result = create_from_starter_package(

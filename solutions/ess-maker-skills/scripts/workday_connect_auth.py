@@ -15,13 +15,8 @@ class WorkdayConnectIdentityError(RuntimeError):
 
 
 def authentication_plan() -> list[dict[str, Any]]:
-    """Describe credential stores without pretending one token serves all."""
+    """Describe credential stores used by the current connect lifecycle."""
     return [
-        {
-            "store": "azure-cli-graph",
-            "role": "Microsoft Entra administrator",
-            "purpose": "Discover, configure, and verify the Workday application",
-        },
         {
             "store": "pac",
             "role": "Power Platform Environment Maker",

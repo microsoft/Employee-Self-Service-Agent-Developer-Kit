@@ -6,12 +6,31 @@ or what files you are reading.
 
 ---
 
+## Availability
+
+For ServiceNow guided setup or repair (including SNOW and follow-ups), show the Message and
+STOP before provider state, credentials, telemetry, MCP, or retained steps.
+This includes preselection and saved-state resume.
+
+**Message:**
+
+Guided ServiceNow setup is not yet available in ADK. You can configure the ServiceNow connection manually in Copilot Studio or contact admin.
+
+**End message.**
+
+---
+
 ## Start
 
-If the user specified an integration as an argument (e.g., the user said
-"servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
+If the user specified an integration as an argument (e.g., "workday"),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
+
+Treat an explicit promotion statement such as **I promoted the agent to
+Test**, **the Workday agent moved to Production**, or **configure the promoted
+Workday realm** as Workday already selected. Preserve the stated target realm
+when routing to the native DA Workday lifecycle. Do not ask which integration
+the user means, and do not invent a realm-specific slash command.
 
 Read `src/skills/connect/step1.md` and follow it. That file records anonymous
 usage telemetry after routing knows which integration was chosen, so the
@@ -19,7 +38,7 @@ Connect capability event carries the correct `connector` attribution
 (workday vs servicenow) rather than being a generic "connect" wedge.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files; Workday first by agent architecture, then
+Workday first by agent architecture, then
 DA to its package/Entra/tenant checklist or CEA to either the lightweight
 already-installed lifecycle or the existing unsupported-install boundary.)
 
@@ -27,22 +46,7 @@ already-installed lifecycle or the existing unsupported-install boundary.)
 
 ## Routing
 
-Each integration routes differently — ServiceNow has its own step files;
 Workday routes by architecture before package detection:
-
-- **ServiceNow**: `src/skills/connect/servicenow/`
-  - Steps template: `src/skills/connect/servicenow/steps.md`
-  - State file: `.local/connect/servicenow/steps.md`
-  - Config file: `.local/connect/servicenow/config.json`
-  - Step 1: `step1.md` — instance info, MCP setup, connectivity check
-  - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
-  - Step 2 (Certificate): `step2-certificate.md` — create two Entra apps + OIDC + system user
-  - Step 2 (OAuth2): `step2-oauth2.md` — create OAuth app via MCP
-  - Step 3 (Entra): `step3-entra.md` — install extension pack (Entra fields)
-  - Step 3 (Certificate): `step3-certificate.md` — install extension pack (Certificate fields)
-  - Step 3 (OAuth2): `step3-oauth2.md` — install extension pack (OAuth2 fields)
-  - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
-  - Step 4: `step4.md` — verify connection
 
 - **Workday**:
   - **CEA simplified extension already installed** — use

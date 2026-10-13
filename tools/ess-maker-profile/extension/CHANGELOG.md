@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.4.36 (POC)
+
+- Start the Maker guided experience earlier during VS Code startup and retain
+  first-run state only after the essential rail, walkthrough, and Chat commands
+  succeed.
+
+## 0.4.35 (POC)
+
+- **Topic actions stop at the DA capability gate.** **Create a topic** and
+  **Update a topic** now send explicit topic intent so direct and legacy
+  commands show the applicable "not yet available" message instead of entering
+  retained legacy authoring flows. Their extension labels include **(Coming
+  Soon)** so availability is clear before the maker selects either action.
+
+## 0.4.34 (POC)
+
+- **Customize landing page** opens `/landing-page` and appears immediately after **Push to Copilot Studio** at the bottom of the **Customization** tree. Customization actions are always clickable; the Getting started walkthrough asks users to complete setup first. The detailed tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
+
+## 0.4.33 (POC)
+
+- **Honor the current installer mode on every activation.** The extension now
+  resolves `essMaker.mode` fresh on each activation and dispatches on it, so
+  re-running the installer in another mode (or opening a workspace with a
+  different selected mode) takes effect immediately. Global state is used only
+  for first-run tracking and legacy back-compat, never as the source of truth.
+- **Migrate legacy chat-only installs to the guided layout.** A one-time,
+  versioned migration silently restores the pre-chat-only chrome (menus, status
+  bar, tabs, title bar, etc.) that older Maker installs hid, then lets the
+  minimal guided layout re-snapshot the restored originals. Upgraders no longer
+  retain globally hidden chrome that contradicts the guided-layout contract.
+- **Removed obsolete chat-only commands.** `essMaker.applyMakerLayout` and
+  `essMaker.startChatOnly` are gone; the guided layout is applied via
+  `essMaker.openGuidedLayout`, and `essMaker.restoreStandardLayout` still
+  restores the default VS Code layout.
+- **Docs match the user-driven setup flow.** Installer scripts, `setup/README.md`,
+  the extension description, and this changelog no longer claim `/setup` is
+  requested automatically or describe the old chat-only toggle layout.
+
+## 0.4.32 (POC)
+
+- **Rail + walkthrough UX overhaul.** The **Quick start** panel is now a simple
+  tree (matching Customization and Help) with **Tutorial** then **Start setup**;
+  once setup completes, **Start setup** turns green and shows the connected
+  account. **Customization** lists Customize landing page, Create a topic,
+  Update a topic, Scan for issues, Run a flightcheck, Generate tests, and Push
+  to Copilot Studio — all always clickable, with a one-line "complete setup
+  first" nudge shown above them until setup is done. **Help** is trimmed to
+  **Documentation** only. The three panels open at ~20% / 70% / 10% height. The
+  getting-started walkthrough is reduced to two steps — **What ADK does** and
+  **Getting started** — with clearer onboarding copy and prompt guidance.
+- **Customization onboarding guidance moved to the Getting started walkthrough.**
+  The "complete setup first" guidance now lives in the Getting started step in
+  the editor area, keeping the **Customization** panel a clean list of options.
+- **Developer mode no longer auto-runs `/setup`.** `/setup` is now user-driven
+  in both modes. The installer opens the workspace (no `code chat "/setup"`),
+  and the extension no longer re-injects `/setup` on Developer-mode reopens —
+  it just re-shows the rendered README preview. Run `/setup` yourself in
+  Copilot Chat (or via the guided rail's **Start setup**) when ready.
+- **Reveal the rail → guided welcome (Developer mode).** Clicking the "Agent
+  Developer Kit" activity-bar icon in Developer mode now closes the static
+  README preview and opens the getting-started walkthrough (the welcome
+  panel), transitioning into the guided experience on demand. Fires once per
+  session and only for a genuine user reveal — Maker mode's first-run layout
+  and passive launch-time restores are unaffected.
+- **Guided layout for Maker mode.** Maker mode now opens the "Agent
+  Developer Kit" activity-bar rail — a **Quick start** panel, a
+  **Customization** list of every skill, and a **Help** view — alongside a
+  native VS Code walkthrough (`essMaker.gettingStarted`) and Copilot Chat,
+  instead of the chat-only welcome rail. The terminal installer still owns
+  the Maker/Developer choice and writes `essMaker.mode`; the extension reads
+  the resolved value (canonical `maker`/`developer`, legacy `lite`/`standard`
+  normalized via `normalizeInstallerMode`) and dispatches Maker → guided
+  layout, Developer → default VS Code + README preview. New commands:
+  `essMaker.openGuidedLayout`, `essMaker.openIntroduction`,
+  `essMaker.openDocs`, `essMaker.runUpdate`.
+- **Developer mode README preview.** Developer mode opens the rendered README
+  preview on first launch and re-shows it on every later reopen. `/setup` is
+  user-driven — neither the installer nor the extension runs or re-sends it.
+- **"New to VS Code?" onboarding** added to the root README with screenshots
+  pointing to the rocket icon and the guided view.
+
 ## 0.4.28 (POC)
 
 - **Mode prompt lives in the installer CLI.** The consolidated installer

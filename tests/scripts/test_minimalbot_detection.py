@@ -16,6 +16,7 @@ which ``tests/AGENTS.md`` exempts from the cassette rule.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -339,10 +340,11 @@ def _write_eval_set(root, name, *, kind="EvaluationData", cases=("case1",)):
     folder = root / "evaluations" / name
     folder.mkdir(parents=True)
     (folder / f"{name}.mcs.yml").write_text(
-        f"kind: EvaluationSet\ndisplayName: {name}\n", encoding="utf-8")
+        f"kind: EvaluationSet\ndisplayName: {name}\n"
+        "graders:\n  - kind: CompareMeaningGrader\n", encoding="utf-8")
     for case in cases:
         (folder / f"{case}.mcs.yml").write_text(
-            f"kind: {kind}\nrows:\n  - question: q\n    expectedResponse: a\n",
+            f"kind: {kind}\nrows:\n  - input: q\n    expectedOutput: a\n",
             encoding="utf-8",
         )
     return folder
@@ -387,8 +389,8 @@ def test_minimalbot_push_rejects_multiturn_case(tmp_path):
     with pytest.raises(mbe.MinimalBotEvaluationError) as exc:
         _mb_client().push_agent_evaluations(str(tmp_path), dry_run=True)
     msg = str(exc.value)
-    assert "MultiTurnEvaluationCase" in msg
-    assert "does not support" in msg
+    assert "multi-turn" in msg
+    assert "only single-response EvaluationData" in msg
 
 
 class _RecordingClient:
@@ -404,15 +406,18 @@ class _RecordingClient:
         self.authenticated = True
         self.preferred_username = preferred_username
 
-    def push_agent_evaluations(self, agent_dir, *, dry_run=False, only_globs=None):
+    def push_agent_evaluations(
+        self, agent_dir, *, dry_run=False, only_globs=None, plan=None,
+    ):
         if dry_run:
             return {"dryRun": True, "sets": [
                 {"folder": "compensation", "displayName": "compensation",
                  "testSetId": "plan-id", "cases": "1"}], "componentCount": 2}
         self.real_push = True
-        return {"dryRun": False, "sets": [
+        assert plan["sets"][0]["testSetId"] == "plan-id"
+        return {"dryRun": False, "status": "pushed", "sets": [
             {"folder": "compensation", "displayName": "compensation",
-             "testSetId": "real-id", "cases": "1"}],
+             "testSetId": "plan-id", "cases": "1"}],
             "componentCount": 2, "verifiedComponents": 2}
 
     def update_dialog_components(self, updates):
@@ -652,10 +657,14 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
     _write_workday_topics(tmp_path)
     component_map_path = tmp_path / ".component-map.json"
     component_map = json.loads(component_map_path.read_text(encoding="utf-8"))
-    for entry in component_map.values():
-        entry["schemaName"] = entry["schemaName"].replace(
-            "contoso",
-            "gptagent_copilotforemployeeselfservicehr",
+    reviewed = (
+        "EmployeeUpdatePhoneNumber",
+        "GetReferenceData",
+    )
+    for entry, suffix in zip(component_map.values(), reviewed, strict=True):
+        entry["schemaName"] = (
+            "gptagent_copilotforemployeeselfservicehr.topic."
+            + suffix
         )
     component_map_path.write_text(
         json.dumps(component_map),
@@ -664,12 +673,66 @@ def test_workday_topic_resolution_enforces_reviewed_ess_hr_count(tmp_path):
 
     with pytest.raises(
         mbe.MinimalBotEvaluationError,
-        match="expected 21",
+        match="reviewed 23-topic",
     ):
         mbe.resolve_workday_dialogs(
             tmp_path,
             "gptagent_copilotforemployeeselfservicehr",
         )
+
+
+def test_workday_topic_resolution_uses_exact_reviewed_hr_inventory(tmp_path):
+    schema = "gptagent_copilotforemployeeselfservicehr"
+    expected_topics = frozenset(
+        json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "fixtures"
+                / "workday_hr_reviewed_topics.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+    assert mbe._REVIEWED_WORKDAY_TOPIC_SUFFIXES[schema] == expected_topics
+    component_map = {}
+    for index, suffix in enumerate(
+        sorted(expected_topics),
+        start=1,
+    ):
+        path = f"topics/workday-{index}.mcs.yml"
+        tmp_path.joinpath(path).parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.joinpath(path).write_text(
+            "kind: AdaptiveDialog\n",
+            encoding="utf-8",
+        )
+        component_map[path] = {
+            "componentKind": "DialogComponent",
+            "componentId": f"workday-{index}",
+            "schemaName": f"{schema}.topic.{suffix}",
+            "displayName": f"Workday {suffix}",
+        }
+    handoff_path = "topics/employee-handoff.mcs.yml"
+    tmp_path.joinpath(handoff_path).write_text(
+        "kind: AdaptiveDialog\n",
+        encoding="utf-8",
+    )
+    component_map[handoff_path] = {
+        "componentKind": "DialogComponent",
+        "componentId": "employee-handoff",
+        "schemaName": f"{schema}.topic.WorkdayEmployeeScenariosHandoff",
+        "displayName": "Workday Employee Scenarios Handoff",
+    }
+    tmp_path.joinpath(".component-map.json").write_text(
+        json.dumps(component_map),
+        encoding="utf-8",
+    )
+
+    resolved = mbe.resolve_workday_dialogs(tmp_path, schema)
+
+    assert len(resolved) == 23
+    schemas = {entry["schemaName"] for entry in resolved}
+    assert f"{schema}.topic.EmployeeUpdatePhoneNumber" in schemas
+    assert f"{schema}.topic.GetReferenceData" in schemas
+    assert f"{schema}.topic.WorkdayEmployeeScenariosHandoff" not in schemas
 
 
 def test_minimalbot_activation_rejects_local_topic_content_changes(
@@ -777,6 +840,471 @@ def test_minimalbot_dialog_update_uses_update_envelope_and_verifies(
     assert captured["body"]["botComponentChanges"][0]["$kind"] == (
         "BotComponentUpdate"
     )
+
+
+def test_minimalbot_dialog_update_preserves_unrelated_remote_actions(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    runtime_action = {
+        "$kind": "BeginDialog",
+        "id": "workdayRuntimeTemplateConfiguration",
+        "dialog": "contoso.topic.WorkdayRuntime",
+    }
+    validation_action = {
+        "$kind": "BeginDialog",
+        "id": "validateUserContext",
+        "dialog": "contoso.topic.ValidateUserContext",
+    }
+    expected_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [validation_action],
+        },
+    }
+    desired_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [runtime_action, validation_action],
+        },
+    }
+    customer_action = {
+        "$kind": "SendActivity",
+        "id": "customerWelcome",
+        "activity": "Welcome",
+    }
+    remote_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [customer_action, validation_action],
+        },
+    }
+    reconciled_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [customer_action, runtime_action, validation_action],
+        },
+    }
+    before_component = {
+        "$kind": "DialogComponent",
+        "id": "conversation-start",
+        "schemaName": "contoso.topic.ConversationStart",
+        "dialog": remote_dialog,
+    }
+    after_component = {
+        **before_component,
+        "dialog": reconciled_dialog,
+    }
+    reads = iter(
+        (
+            {
+                "changeToken": "token-1",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": before_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-2",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+        )
+    )
+    monkeypatch.setattr(client, "read_components", lambda: next(reads))
+    captured = {}
+
+    def request(_method, _url, *, body, operation):
+        captured["body"] = body
+        captured["operation"] = operation
+        return SimpleNamespace(status_code=200), {}
+
+    monkeypatch.setattr(client, "_request", request)
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "conversation-start",
+                "schemaName": "contoso.topic.ConversationStart",
+                "expectedDialog": expected_dialog,
+                "dialog": desired_dialog,
+            }
+        ]
+    )
+
+    updated = captured["body"]["botComponentChanges"][0]["component"]
+    assert updated["dialog"] == reconciled_dialog
+    assert result["reconciledComponents"] == 1
+    assert result["verifiedComponents"] == 1
+
+
+@pytest.mark.parametrize("local_change", ["move", "edit"])
+def test_dialog_merge_rejects_remote_deletion_of_locally_changed_action(
+    local_change,
+):
+    expected = [
+        {"id": "first", "value": "before"},
+        {"id": "second", "value": "unchanged"},
+    ]
+    if local_change == "move":
+        desired = [expected[1], expected[0]]
+    else:
+        desired = [
+            {"id": "first", "value": "after"},
+            expected[1],
+        ]
+    remote = [expected[1]]
+
+    with pytest.raises(
+        mbe._DialogMergeConflict,
+        match="deleted remotely",
+    ):
+        mbe._merge_keyed_lists(
+            expected,
+            desired,
+            remote,
+            path="dialog.actions",
+        )
+
+
+def test_minimalbot_dialog_retry_accepts_already_applied_remote_wiring(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    runtime_action = {
+        "$kind": "BeginDialog",
+        "id": "workdayRuntimeTemplateConfiguration",
+        "dialog": "contoso.topic.WorkdayRuntime",
+    }
+    validation_action = {
+        "$kind": "BeginDialog",
+        "id": "validateUserContext",
+        "dialog": "contoso.topic.ValidateUserContext",
+    }
+    customer_action = {
+        "$kind": "SendActivity",
+        "id": "customerWelcome",
+        "activity": "Welcome",
+    }
+    expected_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [validation_action],
+        },
+    }
+    desired_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [runtime_action, validation_action],
+        },
+    }
+    remote_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnConversationStart",
+            "actions": [
+                customer_action,
+                runtime_action,
+                validation_action,
+            ],
+        },
+    }
+    component = {
+        "$kind": "DialogComponent",
+        "id": "conversation-start",
+        "schemaName": "contoso.topic.ConversationStart",
+        "dialog": remote_dialog,
+    }
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *_args, **_kwargs: pytest.fail(
+            "An already-applied retry must not issue a PUT."
+        ),
+    )
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "conversation-start",
+                "schemaName": "contoso.topic.ConversationStart",
+                "expectedDialog": expected_dialog,
+                "dialog": desired_dialog,
+            }
+        ]
+    )
+
+    assert result["updatedComponents"] == 0
+    assert result["reconciledComponents"] == 1
+    assert result["verifiedComponents"] == 1
+
+
+def test_minimalbot_dialog_update_rereads_after_change_token_conflict(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    expected_dialog = {
+        "$kind": "AdaptiveDialog",
+        "state": "before",
+    }
+    desired_dialog = {
+        "$kind": "AdaptiveDialog",
+        "state": "after",
+    }
+    before_component = {
+        "$kind": "DialogComponent",
+        "id": "setup-topic",
+        "schemaName": "contoso.topic.Setusercontext",
+        "dialog": expected_dialog,
+    }
+    after_component = {
+        **before_component,
+        "dialog": desired_dialog,
+    }
+    reads = iter(
+        (
+            {
+                "changeToken": "token-1",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": before_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-2",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-3",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+        )
+    )
+    monkeypatch.setattr(client, "read_components", lambda: next(reads))
+    requests = []
+
+    def request(_method, _url, *, body, operation):
+        requests.append((body, operation))
+        return SimpleNamespace(status_code=409), {}
+
+    monkeypatch.setattr(client, "_request", request)
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "setup-topic",
+                "schemaName": "contoso.topic.Setusercontext",
+                "expectedDialog": expected_dialog,
+                "dialog": desired_dialog,
+            }
+        ]
+    )
+
+    assert len(requests) == 1
+    assert result["updatedComponents"] == 0
+    assert result["verifiedComponents"] == 1
+
+
+def test_minimalbot_dialog_update_rejects_customized_empty_scaffold(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    expected_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnRedirect",
+            "id": "main",
+            "actions": [],
+        },
+    }
+    desired_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnRedirect",
+            "id": "main",
+            "actions": [
+                {
+                    "$kind": "BeginDialog",
+                    "id": "bfT9Kx",
+                    "dialog": "contoso.topic.WorkdayUserContext",
+                }
+            ],
+        },
+    }
+    remote_dialog = {
+        "$kind": "AdaptiveDialog",
+        "beginDialog": {
+            "$kind": "OnRedirect",
+            "id": "main",
+            "actions": [
+                {
+                    "$kind": "SendActivity",
+                    "id": "customerRedirect",
+                    "activity": "Custom redirect",
+                }
+            ],
+        },
+    }
+    component = {
+        "$kind": "DialogComponent",
+        "id": "setup-topic",
+        "schemaName": "contoso.topic.Setusercontext",
+        "dialog": remote_dialog,
+    }
+    monkeypatch.setattr(
+        client,
+        "read_components",
+        lambda: {
+            "changeToken": "token-1",
+            "botComponentChanges": [
+                {
+                    "$kind": "BotComponentInsert",
+                    "component": component,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(
+        mbe.MinimalBotEvaluationError,
+        match="No remote content was overwritten",
+    ):
+        client.update_dialog_components(
+            [
+                {
+                    "componentId": "setup-topic",
+                    "schemaName": "contoso.topic.Setusercontext",
+                    "expectedDialog": expected_dialog,
+                    "dialog": desired_dialog,
+                }
+            ]
+        )
+
+
+def test_minimalbot_dialog_update_ignores_derived_structured_conditions(
+    monkeypatch,
+):
+    client = _mb_client()
+    client._token = "token"
+    expected_condition = {
+        "$kind": "BoolExpression",
+        "expressionText": "Topic.Enabled = true",
+    }
+    remote_condition = {
+        **expected_condition,
+        "structuredCondition": {
+            "$kind": "BooleanCondition",
+            "variable": "Topic.Enabled",
+        },
+    }
+    before_component = {
+        "$kind": "DialogComponent",
+        "id": "setup-topic",
+        "schemaName": "contoso.topic.Setusercontext",
+        "dialog": {
+            "$kind": "AdaptiveDialog",
+            "condition": remote_condition,
+            "state": "before",
+        },
+    }
+    desired_dialog = {
+        "$kind": "AdaptiveDialog",
+        "condition": expected_condition,
+        "state": "after",
+    }
+    after_component = {
+        **before_component,
+        "dialog": {
+            **desired_dialog,
+            "condition": remote_condition,
+        },
+    }
+    reads = iter(
+        (
+            {
+                "changeToken": "token-1",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": before_component,
+                    }
+                ],
+            },
+            {
+                "changeToken": "token-2",
+                "botComponentChanges": [
+                    {
+                        "$kind": "BotComponentInsert",
+                        "component": after_component,
+                    }
+                ],
+            },
+        )
+    )
+    monkeypatch.setattr(client, "read_components", lambda: next(reads))
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: (SimpleNamespace(status_code=200), {}),
+    )
+
+    result = client.update_dialog_components(
+        [
+            {
+                "componentId": "setup-topic",
+                "schemaName": "contoso.topic.Setusercontext",
+                "expectedDialog": {
+                    "$kind": "AdaptiveDialog",
+                    "condition": expected_condition,
+                    "state": "before",
+                },
+                "dialog": desired_dialog,
+            }
+        ]
+    )
+
+    assert result["verifiedComponents"] == 1
 
 
 def test_minimalbot_dialog_activation_preserves_content(monkeypatch):

@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import subprocess
-import sys
-import tempfile
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
+import yaml
+
+from agentbuilder_object_model import (
+    ObjectModelConverterError,
+    yaml_to_object_models,
+)
 from minimalbot_evaluation import (
     MinimalBotEvaluationClient,
     MinimalBotEvaluationError,
@@ -99,112 +102,312 @@ def _agent_folder(
     return candidate
 
 
-def run_flightcheck_checkpoint(
+def _mapped_dialog(
+    agent_folder: Path,
+    display_name: str,
+    expected_schema_name: str,
+) -> dict[str, str]:
+    component_map = _read_json(agent_folder / ".component-map.json")
+    matches = []
+    for raw_path, raw_entry in component_map.items():
+        if (
+            isinstance(raw_path, str)
+            and isinstance(raw_entry, Mapping)
+            and raw_entry.get("componentKind") == "DialogComponent"
+            and str(raw_entry.get("displayName") or "") == display_name
+        ):
+            normalized_path = raw_path.replace("\\", "/")
+            relative_path = PurePosixPath(normalized_path)
+            if (
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or not relative_path.parts
+                or relative_path.parts[0] != "topics"
+                or not normalized_path.endswith(".mcs.yml")
+            ):
+                raise WorkdayConnectAgentError(
+                    f"Unsafe mapped topic path for {display_name}: {raw_path}"
+                )
+            local_path = agent_folder.joinpath(
+                *relative_path.parts
+            ).resolve()
+            try:
+                local_path.relative_to(agent_folder)
+            except ValueError as exc:
+                raise WorkdayConnectAgentError(
+                    f"Mapped topic is outside the active agent: {raw_path}"
+                ) from exc
+            if not local_path.is_file():
+                raise WorkdayConnectAgentError(
+                    f"Mapped topic file is missing: {raw_path}"
+                )
+            matches.append(
+                {
+                    "path": normalized_path,
+                    "localPath": str(local_path),
+                    "componentId": _required_text(
+                        raw_entry,
+                        "componentId",
+                        f"{display_name} component ID",
+                    ),
+                    "schemaName": _required_text(
+                        raw_entry,
+                        "schemaName",
+                        f"{display_name} schema name",
+                    ),
+                }
+            )
+    if len(matches) != 1:
+        raise WorkdayConnectAgentError(
+            f"Expected exactly one mapped {display_name} topic; found "
+            f"{len(matches)}."
+        )
+    match = matches[0]
+    if match["schemaName"].casefold() != expected_schema_name.casefold():
+        raise WorkdayConnectAgentError(
+            f"Mapped {display_name} schema name does not match the reviewed "
+            f"agent contract: {match['schemaName']}."
+        )
+    return match
+
+
+def _topic_document(topic: Mapping[str, str]) -> dict[str, Any]:
+    path = Path(topic["localPath"])
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise WorkdayConnectAgentError(
+            f"Mapped topic could not be read: {path}: {exc}"
+        ) from exc
+    if not isinstance(document, dict):
+        raise WorkdayConnectAgentError(
+            f"Mapped topic must contain an object: {path}"
+        )
+    return document
+
+
+def _begin_dialog_targets(
+    value: Any,
+    *,
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[str]:
+    if _depth > 100:
+        raise WorkdayConnectAgentError(
+            "Mapped topic nesting exceeds the supported verification depth."
+        )
+    seen = _seen if _seen is not None else set()
+    targets = []
+    if isinstance(value, (Mapping, list)):
+        identity = id(value)
+        if identity in seen:
+            raise WorkdayConnectAgentError(
+                "Mapped topic contains a recursive YAML alias."
+            )
+        seen.add(identity)
+    if isinstance(value, Mapping):
+        if value.get("kind") == "BeginDialog":
+            target = str(value.get("dialog") or "").strip()
+            if target:
+                targets.append(target)
+        for child in value.values():
+            targets.extend(
+                _begin_dialog_targets(
+                    child,
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+    elif isinstance(value, list):
+        for child in value:
+            targets.extend(
+                _begin_dialog_targets(
+                    child,
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+    if isinstance(value, (Mapping, list)):
+        seen.remove(id(value))
+    return targets
+
+
+def verify_runtime_template_wiring(
     workspace_root: Path,
     state: Mapping[str, Any],
-    checkpoint_id: str,
     *,
-    preferred_username: str,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> str:
-    """Run one checkpoint and require an explicit Passed result row."""
-    scope = state.get("scope") or {}
-    agent = scope.get("agent") or {}
-    command = [
-        sys.executable,
-        str(workspace_root / "scripts" / "flightcheck" / "cli.py"),
-        "--checkpoint",
-        checkpoint_id,
-        "--connect-config",
-        str(workspace_root / ".local" / "connect" / "workday-da" / "config.json"),
-        "--agent-slug",
-        _required_text(agent, "slug", "Active agent slug"),
-        "--environment-id",
-        _required_text(scope, "environmentId", "Environment ID"),
-        "--environment-url",
-        _required_text(scope, "dataverseUrl", "Dataverse URL"),
-        "--preferred-username",
-        preferred_username,
-        "--quiet-auth",
-        "--no-open",
-        "--no-telemetry",
+    client_factory: Callable[
+        [dict[str, Any]], MinimalBotEvaluationClient
+    ] = MinimalBotEvaluationClient.from_config,
+    converter: Callable[
+        [list[dict[str, Any]]], list[dict[str, Any]]
+    ] = yaml_to_object_models,
+) -> dict[str, Any]:
+    """Verify Conversation Start initializes Workday templates exactly once."""
+    context = _agent_verification_context(workspace_root, state)
+    agent_folder = Path(context["agentFolder"])
+    agent_schema = str(context["agentSchema"])
+    conversation_start = _mapped_dialog(
+        agent_folder,
+        "Conversation Start",
+        f"{agent_schema}.topic.ConversationStart",
+    )
+    runtime_template = _mapped_dialog(
+        agent_folder,
+        "Workday [System] - 1: Set Runtime Template Configurations",
+        (
+            f"{agent_schema}.topic."
+            "WorkdaySystemSetRuntimeTemplateConfigurations"
+        ),
+    )
+    user_context = _mapped_dialog(
+        agent_folder,
+        "Workday [System] - 1: Set User Context V2",
+        f"{agent_schema}.topic.WorkdaySystemGetUserContextV2",
+    )
+    target_schema = runtime_template["schemaName"]
+    validation_schema = (
+        f"{agent_schema}.topic.System-UserContext-Validate"
+    )
+    conversation_document = _topic_document(conversation_start)
+    begin_dialog = conversation_document.get("beginDialog")
+    actions = (
+        begin_dialog.get("actions")
+        if isinstance(begin_dialog, Mapping)
+        else None
+    )
+    if not isinstance(actions, list) or not actions:
+        raise WorkdayConnectAgentError(
+            "Conversation Start has no actions to initialize Workday runtime "
+            "templates."
+        )
+    all_targets = _begin_dialog_targets(conversation_document)
+    top_level_targets = [
+        str(action.get("dialog") or "").strip()
+        if (
+            isinstance(action, Mapping)
+            and action.get("kind") == "BeginDialog"
+        )
+        else ""
+        for action in actions
     ]
-    with tempfile.TemporaryDirectory(prefix="workday-checkpoint-") as output:
-        command.extend(["--output", output])
-        try:
-            completed = runner(
-                command,
-                cwd=workspace_root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=300,
-                check=False,
+    validation_positions = [
+        index
+        for index, target in enumerate(top_level_targets)
+        if target == validation_schema
+    ]
+    runtime_precedes_validation = (
+        len(validation_positions) == 1
+        and validation_positions[0] > 0
+        and top_level_targets[validation_positions[0] - 1] == target_schema
+    )
+    if (
+        all_targets.count(target_schema) != 1
+        or not runtime_precedes_validation
+    ):
+        raise WorkdayConnectAgentError(
+            "Conversation Start must call the Workday runtime template "
+            "configuration topic exactly once immediately before User "
+            "Context Validate."
+        )
+    user_context_document = _topic_document(user_context)
+    if target_schema in _begin_dialog_targets(user_context_document):
+        raise WorkdayConnectAgentError(
+            "The obsolete nested Workday runtime template initialization "
+            "still exists in User Context V2."
+        )
+    conversion_items = [
+        {
+            "key": topic["path"],
+            "yaml": Path(topic["localPath"]).read_text(encoding="utf-8"),
+        }
+        for topic in (
+            conversation_start,
+            runtime_template,
+            user_context,
+        )
+    ]
+    try:
+        converted = converter(conversion_items)
+    except ObjectModelConverterError as exc:
+        raise WorkdayConnectAgentError(
+            f"Workday topic conversion failed: {exc}"
+        ) from exc
+    converted_by_key = {
+        str(item.get("key") or ""): item
+        for item in converted
+        if isinstance(item, Mapping)
+    }
+    expectations = []
+    for topic in (
+        conversation_start,
+        runtime_template,
+        user_context,
+    ):
+        converted_topic = converted_by_key.get(topic["path"])
+        if (
+            not isinstance(converted_topic, Mapping)
+            or converted_topic.get("success") is not True
+            or not isinstance(converted_topic.get("objectModel"), dict)
+        ):
+            raise WorkdayConnectAgentError(
+                f"Workday topic conversion failed for {topic['path']}."
             )
-        except subprocess.TimeoutExpired as exc:
-            raise WorkdayConnectAgentError(
-                f"FlightCheck {checkpoint_id} did not finish within five minutes."
-            ) from exc
-        results_path = Path(output) / "results.json"
-        try:
-            report = json.loads(results_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            detail = (completed.stderr or completed.stdout or "").strip()[:500]
-            raise WorkdayConnectAgentError(
-                f"FlightCheck {checkpoint_id} produced no readable result"
-                + (f": {detail}" if detail else ".")
-            ) from exc
-    results = report.get("results")
-    if not isinstance(results, list):
+        expectation = {
+            "componentId": topic["componentId"],
+            "schemaName": topic["schemaName"],
+            "dialog": converted_topic["objectModel"],
+            "requireCleanDiagnostics": topic is conversation_start,
+        }
+        if topic is conversation_start:
+            expectation.update(
+                {
+                    "state": "Active",
+                    "status": "Active",
+                }
+            )
+        expectations.append(expectation)
+    try:
+        client = client_factory(dict(context["foundation"]))
+        client.authenticate(
+            preferred_username=str(context["makerUsername"]),
+        )
+        verification = client.verify_dialog_components(expectations)
+    except MinimalBotEvaluationError as exc:
         raise WorkdayConnectAgentError(
-            f"FlightCheck {checkpoint_id} returned an invalid result document."
-        )
-    matching = [
-        result
-        for result in results
-        if isinstance(result, dict) and result.get("checkpoint_id") == checkpoint_id
-    ]
-    statuses = {str(result.get("status") or "") for result in matching}
-    if completed.returncode != 0 or not matching or statuses != {"Passed"}:
-        details = "; ".join(
-            str(result.get("result") or result.get("status") or "")
-            for result in matching
-        )
-        raise WorkdayConnectAgentError(
-            f"FlightCheck {checkpoint_id} did not pass"
-            + (f": {details}" if details else ".")
-        )
-    return "Passed"
+            "Copilot Studio did not retain the reviewed Workday runtime "
+            f"template wiring: {exc}"
+        ) from exc
+    return {
+        "environmentId": context["environmentId"],
+        "botId": context["botId"],
+        "makerUsername": str(
+            client.signed_in_username or context["makerUsername"]
+        ),
+        "conversationStart": conversation_start["schemaName"],
+        "runtimeTemplate": target_schema,
+        "userContextValidate": validation_schema,
+        "userContext": user_context["schemaName"],
+        "verifiedComponents": verification["verifiedComponents"],
+        "blockingDiagnostics": verification["blockingDiagnostics"],
+    }
 
 
 def verify_agent_binding(
     workspace_root: Path,
     state: Mapping[str, Any],
     *,
-    checkpoint_verifier: Callable[..., str] = run_flightcheck_checkpoint,
     client_factory: Callable[
         [dict[str, Any]], MinimalBotEvaluationClient
     ] = MinimalBotEvaluationClient.from_config,
 ) -> dict[str, Any]:
     """Verify Workday binding without using topic diagnostics as runtime proof."""
     context = _agent_verification_context(workspace_root, state)
-    checkpoints = {
-        checkpoint_id: checkpoint_verifier(
-            workspace_root,
-            state,
-            checkpoint_id,
-            preferred_username=context["makerUsername"],
-        )
-        for checkpoint_id in ("WD-REST-002", "WD-CONN-013")
-    }
-    evidence = _verify_workday_topics(
+    return _verify_workday_topics(
         context,
         client_factory=client_factory,
         require_clean_diagnostics=False,
     )
-    evidence["checkpoints"] = checkpoints
-    return evidence
 
 
 def _agent_verification_context(
@@ -318,7 +521,6 @@ def _verify_workday_topics(
         "environmentId": context["environmentId"],
         "botId": context["botId"],
         "makerUsername": str(client.signed_in_username or context["makerUsername"]),
-        "checkpoints": {},
         "workdayTopics": {
             "expected": len(topics),
             "verified": verification["verifiedComponents"],

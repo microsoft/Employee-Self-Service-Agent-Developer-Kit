@@ -64,7 +64,7 @@ beginDialog:
     - kind: BeginDialog
       id: bfT9Kx
       displayName: Redirect to Workday System Get User Context
-      dialog: {USER_CONTEXT_DIALOG}
+      dialog: "{USER_CONTEXT_DIALOG}"
 ```
 
 ---
@@ -86,36 +86,22 @@ the redirect but deliberately does not activate Workday topics; activation
 runs only after flow connection and parameter sharing are complete. If any
 other file appears, stop and report it instead of publishing unrelated work.
 
-Use the `vscode_askQuestions` tool:
-
-```json
-[
-  {
-    "header": "Publish Workday wiring",
-    "question": "Publish this scoped User Context topic change to the active agent?",
-    "options": [
-      { "label": "Publish" },
-      { "label": "Not now" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Leave the selection unset. Publishing is an explicit mutation approval, not a
-recommended answer.
-
-If the user selects **Not now**, set `ACTION_RESULT = "cancelled"`, return to
-the lifecycle runner without pushing, and leave the phase `in-progress`. If
-the user selects **Publish**, run:
+When the preview contains only the expected setup topic, continue without
+asking for a separate publish confirmation. This scoped redirect is part of
+the already approved Workday Connect operation. Run:
 
 ```
 python scripts/push.py --only "{USER_CONTEXT_TOPIC_PATH}" --yes --preferred-username "{POWER_PLATFORM_MAKER}"
 ```
 
-The explicit question above is the approval for this concrete scoped change;
-`--yes` prevents the script from attempting a second terminal-only prompt.
-Only when that command exits successfully, set `ACTION_RESULT = "applied"`.
+The scoped push re-reads the current live topic before mutation. If the exact
+redirect is already live, treat the action as successful and continue. If the
+live topic is still the compatible empty scaffold, apply the redirect. If it
+contains any other actions or custom redirect content, stop with the precise
+conflict reported by the push. Do not ask the maker to choose an overwrite
+strategy, and never replace newer live content with the older workspace copy.
+
+Only when the command exits successfully, set `ACTION_RESULT = "applied"`.
 If it fails, stop and report the failure; do not return an applied result.
 
 ---

@@ -22,6 +22,7 @@
         "ESS Workday Runtime"
       ],
       "agentConnectionFlowNames": [
+        "ESS Workday Runtime",
         "ESS Workday Runtime REST Execution"
       ]
     },
