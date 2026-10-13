@@ -115,6 +115,11 @@ That's it. The script handles everything automatically:
 4. Shows the agents in that environment — pick one (or skip)
 5. Runs the full FlightCheck validation and displays results
 
+If fetching the selected agent's solution fails, the installer prints a warning
+and the fetch diagnostics, then continues to FlightCheck. Local file checks may
+be skipped; this is not proof that the selected agent is ready. Resolve any
+reported access or connectivity error and rerun the installer to retry the fetch.
+
 ### Changing your environment or agent
 
 Re-run the same command — it will ask if you want to reconfigure:

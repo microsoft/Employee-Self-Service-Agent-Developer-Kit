@@ -1506,9 +1506,13 @@ if ($FlightCheckOnly) {
                 if ($isManaged) { $fetchArgs += '--managed' }
 
                 Start-Spinner "fetching agent solution"
-                $fetchOutput = & $pyCmd @fetchArgs 2>&1
-                $fetchExit = $LASTEXITCODE
-                Stop-Spinner "fetching agent solution"
+                try {
+                    # PS 5.1 must capture stderr without aborting before exit handling.
+                    $fetchOutput = Invoke-Native { & $pyCmd @fetchArgs }
+                    $fetchExit = $LASTEXITCODE
+                } finally {
+                    Stop-Spinner
+                }
 
                 if ($fetchExit -eq 0) {
                     Write-Ok 'Agent solution fetched and extracted'
