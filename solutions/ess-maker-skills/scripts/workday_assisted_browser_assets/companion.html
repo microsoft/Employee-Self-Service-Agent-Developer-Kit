@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connect Workday guide</title>
+    <link rel="stylesheet" href="/companion.css" />
+  </head>
+  <body>
+    <main class="companion-layout">
+      <aside
+        id="target-rail"
+        class="target-rail"
+        aria-label="Application target"
+      >
+        <div id="target-pointers"></div>
+      </aside>
+      <div class="companion-content">
+        <header>
+          <p class="eyebrow">Connect Workday</p>
+          <p id="connection" class="connection">Connecting to guidance...</p>
+        </header>
+        <section id="guidance" aria-live="polite">
+          <h1>Preparing the next step</h1>
+          <p>Keep this pane open beside the application.</p>
+        </section>
+        <section id="evidence" aria-live="polite" hidden></section>
+        <section id="collection" aria-live="polite" hidden></section>
+        <section id="entry" aria-live="polite" hidden></section>
+        <section id="confirmation" aria-live="polite" hidden></section>
+      </div>
+    </main>
+    <script src="/companion.js"></script>
+  </body>
+</html>

@@ -15,6 +15,9 @@ mcp>=1.29.0,<2.0.0
 # YAML parse for pre-push schema validation
 PyYAML>=6.0.2,<7.0
 
+# Browser guidance and topic testing attach to the installed Edge browser by CDP.
+playwright>=1.54.0,<2.0
+
 # Safe XML parsing for Workday SOAP responses (XXE / billion-laughs hardened).
 defusedxml>=0.7.1,<0.8
 

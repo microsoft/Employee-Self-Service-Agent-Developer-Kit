@@ -70,6 +70,20 @@ def test_build_launch_args_can_disable_inprivate():
     assert "--inprivate" not in args
 
 
+def test_build_launch_args_can_open_companion_in_same_launch():
+    from cdp_driver import build_launch_args
+    args = build_launch_args(
+        debug_port=9222,
+        user_data_dir="d",
+        start_url="https://example/app",
+        additional_urls=("http://127.0.0.1:43127/#token=redacted",),
+    )
+    assert args[-2:] == [
+        "https://example/app",
+        "http://127.0.0.1:43127/#token=redacted",
+    ]
+
+
 class _FakePage:
     def __init__(self, url):
         self.url = url

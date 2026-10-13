@@ -101,7 +101,8 @@ def _classify_article(raw_text: str) -> tuple[str, bool, str]:
 # --------------------------------------------------------------------------- #
 
 def build_launch_args(*, debug_port: int, user_data_dir: str, start_url: str,
-                      inprivate: bool = True) -> list[str]:
+                      inprivate: bool = True,
+                      additional_urls: tuple[str, ...] = ()) -> list[str]:
     """Build the Edge argument list for a CDP-attachable browser (pure).
 
     InPrivate + a DEDICATED user-data-dir + the debug port are all mandatory
@@ -119,7 +120,7 @@ def build_launch_args(*, debug_port: int, user_data_dir: str, start_url: str,
     ]
     if inprivate:
         args.append("--inprivate")
-    args.append(start_url)
+    args.extend((start_url, *additional_urls))
     return args
 
 
@@ -142,7 +143,8 @@ def is_cdp_up(cdp_endpoint: str = CDP_ENDPOINT) -> bool:
 
 
 def launch_browser(*, start_url: str, debug_port: int = _DEFAULT_DEBUG_PORT,
-                   user_data_dir: str | None = None, wait_ready_s: float = 10.0):
+                   user_data_dir: str | None = None, wait_ready_s: float = 10.0,
+                   additional_urls: tuple[str, ...] = ()):
     """Launch Edge InPrivate with a fresh profile + the CDP debug port, pointed at
     ``start_url``. Returns the Popen. The operator signs in ONCE in that window;
     the driver then attaches. A fresh temp user-data-dir is created if none given.
@@ -155,7 +157,8 @@ def launch_browser(*, start_url: str, debug_port: int = _DEFAULT_DEBUG_PORT,
     if user_data_dir is None:
         user_data_dir = tempfile.mkdtemp(prefix="adk-drive-edge-")
     args = build_launch_args(debug_port=debug_port, user_data_dir=user_data_dir,
-                             start_url=start_url)
+                             start_url=start_url,
+                             additional_urls=additional_urls)
     proc = subprocess.Popen([exe, *args])  # noqa: S603 — trusted exe + fixed flags
     endpoint = f"http://localhost:{debug_port}"
     deadline = time.monotonic() + wait_ready_s

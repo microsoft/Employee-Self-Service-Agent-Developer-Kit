@@ -10,11 +10,20 @@ are next steps outside this skill lifecycle.
 The skill cannot perform the Test pane interaction on the maker's behalf. The
 skill cannot publish or deploy the agent; those are post-skill next steps.
 
+Read and follow `shared/assisted-browser.md`. Open the `maker-validation`
+surface and present the smoke-test steps beside the exact recorded agent. The
+helper may navigate to the agent, verify the two pages are paired and visible,
+and report companion render evidence. It must not open the Test pane, send the
+scenario, select a connection, complete sign-in, or classify the reply on the
+maker's behalf. If Split Screen cannot be prepared, continue with the chat
+steps below.
+
 ## Run the maker smoke test
 
 Ask the maker to:
 
-1. open **Employee Self-Service (HR)** in Classic Copilot Studio;
+1. use the application pane to open **Employee Self-Service (HR)** in Classic
+   Copilot Studio;
 2. open a new Test pane conversation without publishing the agent;
 3. use the maker's configured Workday connection to run one enabled read-only
    scenario, such as checking a vacation balance; and
@@ -94,6 +103,10 @@ python scripts/workday_connect.py record-validation --evidence-file ".local\conn
 The controller marks the guided lifecycle complete immediately. Do not wait
 for Power Automate run-history evidence, run a separate runtime-correlation
 step, or ask the maker or employee to repeat a successful scenario.
+Stop the assisted-browser companion after the controller records the successful
+maker validation or when the maker chooses to defer the test. This also closes
+an isolated Edge window launched by the helper; an explicitly attached
+user-owned browser remains open.
 
 ## Finish with post-skill next steps
 
