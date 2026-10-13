@@ -99,17 +99,14 @@ def test_validation_context_normalizes_nullable_identifiers() -> None:
     }
 
 
-def test_post_runtime_profile_uses_dataverse_and_run_history() -> None:
+def test_post_runtime_profile_uses_dataverse_without_run_history() -> None:
     requirements = registry.profile_requirements(
         "workday-da:post-runtime"
     )
 
     assert requirements.requires_dataverse_endpoint is True
-    assert requirements.clients == frozenset({
-        registry.DATAVERSE,
-        registry.PP_ADMIN,
-    })
-    assert requirements.pp_admin_flow_required is True
+    assert requirements.clients == frozenset({registry.DATAVERSE})
+    assert requirements.pp_admin_flow_required is False
 
 
 def test_setup_readiness_requires_only_agentbuilder_audience() -> None:
@@ -332,7 +329,6 @@ def test_post_connection_profile_runs_real_workday_category() -> None:
 @pytest.mark.parametrize("target", [
     "WD-DA-FLOW-001",
     "WD-DA-AUTH-001",
-    "WD-DA-RUN-001",
 ])
 def test_runtime_checkpoint_plan_uses_dataverse_inventory(target: str) -> None:
     plan = registry.transitive_requirements(target)
@@ -341,6 +337,10 @@ def test_runtime_checkpoint_plan_uses_dataverse_inventory(target: str) -> None:
     assert registry.DATAVERSE in plan.clients
     assert "External Systems" not in labels
     assert "Workday DA" in labels
+
+
+def test_retired_runtime_evidence_checkpoint_is_not_registered() -> None:
+    assert registry.resolve("WD-DA-RUN-001") is None
 
 
 def test_profile_requirements_rejects_empty_profile(monkeypatch) -> None:

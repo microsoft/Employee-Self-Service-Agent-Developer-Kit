@@ -19,11 +19,18 @@ def test_default_state_has_six_primary_phases() -> None:
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 9
+    assert state["schemaVersion"] == 12
+    assert state["activeTargetRealm"] == "dev"
+    assert list(state["targets"]) == ["dev", "test", "prod"]
+    assert state["targets"]["dev"]["deploymentStatus"] == (
+        "needs-configuration"
+    )
+    assert state["targets"]["test"] is None
+    assert state["targets"]["prod"] is None
     assert state["lifecycle"]["correlationId"]
     assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
@@ -37,6 +44,21 @@ def test_default_state_has_six_primary_phases() -> None:
         state["phases"]["entra"]["administrator"]
     )
     assert "administrator" not in state["phases"]["runtime"]
+
+
+def test_active_target_projection_cannot_diverge() -> None:
+    import pytest
+
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["scope"]["environmentId"] = "different"
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="active target projection is inconsistent",
+    ):
+        model.validate_state(state)
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:
@@ -140,18 +162,18 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "|---:|---|---|\n"
         "| 1 | Preflight | Complete |\n"
         "| 2 | Microsoft Entra | Current |\n"
-        "| 3 | Workday administrator | Next |\n"
+        "| 3 | Workday administrator | Pending |\n"
         "| 4 | Connections | Pending |\n"
         "| 5 | Runtime configuration | Pending |\n"
-        "| 6 | Employee validation | Pending |"
+        "| 6 | Maker validation | Pending |"
     )
     assert model.next_phase_summary(state) == {
         "id": "entra",
         "title": "Microsoft Entra",
         "whatHappens": [
-            "Give the Microsoft Entra administrator one complete guided handoff.",
+            "Give the Microsoft Entra app administrator one complete guided handoff.",
             (
-                "Guide an Entra administrator through the required SAML, "
+                "Guide that app administrator through the required SAML, "
                 "permission, consent, assignment, and employee sign-in settings."
             ),
             (
@@ -162,14 +184,49 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
     }
 
 
-def test_pending_current_phase_and_following_phase_are_distinct() -> None:
+def test_maker_validation_summary_preserves_test_then_publish_order() -> None:
+    import workday_connect_model as model
+
+    state = model.default_state()
+    for phase_id in (
+        "preflight",
+        "entra",
+        "workday-admin",
+        "connections",
+        "runtime",
+    ):
+        state["phases"][phase_id]["status"] = "complete"
+
+    assert model.next_phase_summary(state) == {
+        "id": "maker-validation",
+        "title": "Maker validation",
+        "whatHappens": [
+            (
+                "Smoke-test an enabled read-only Workday scenario in the "
+                "Copilot Studio Test pane without publishing the agent."
+            ),
+            (
+                "Complete the guided Workday connection lifecycle when the "
+                "maker scenario returns the expected employee context and "
+                "Workday data."
+            ),
+            (
+                "Show publishing, deployment, employee-owned connections, and "
+                "non-maker Microsoft 365 Chat validation as post-skill next "
+                "steps."
+            ),
+        ],
+    }
+
+
+def test_pending_current_phase_and_following_phases_are_pending() -> None:
     import workday_connect_model as model
 
     state = model.default_state()
 
     progress = model.progress_text(state)
     assert "| 1 | Preflight | Current |" in progress
-    assert "| 2 | Microsoft Entra | Next |" in progress
+    assert "| 2 | Microsoft Entra | Pending |" in progress
 
 
 def test_blocked_current_phase_is_marked_as_needing_attention() -> None:
@@ -186,7 +243,7 @@ def test_blocked_current_phase_is_marked_as_needing_attention() -> None:
 
     progress = model.progress_text(state)
     assert "| 1 | Preflight | Current - needs attention |" in progress
-    assert "| 2 | Microsoft Entra | Next |" in progress
+    assert "| 2 | Microsoft Entra | Pending |" in progress
 
 
 def test_blocked_phase_requires_complete_blocker_evidence() -> None:

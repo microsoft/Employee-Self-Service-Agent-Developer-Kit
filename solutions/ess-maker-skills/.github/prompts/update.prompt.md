@@ -1,21 +1,41 @@
 ---
 mode: agent
-description: "Update a simple topic with evals, or modify a workflow or evaluation test set"
+description: "Modify a workflow or evaluation test set"
 ---
 
 # Update
 
-You are helping a customer modify an existing component in their ESS agent.
-This edits the local working copy, pushes the change to Copilot Studio, and
-then helps the maker **validate the change's runtime behaviour**.
+You are helping a customer modify a workflow or evaluation test set. Topic
+updates are not yet available in this release.
 
-**Setup-state note.** Topic and workflow updates require a completed setup.
-Workspace-level evaluation updates and review-tag workflows do not. Apply the
-setup gate only after the user chooses a topic or workflow, or when an
-evaluation operation needs a configured agent for push.
+For every explicit or implicit request to update, modify, rename, or otherwise
+change a topic, show this message and STOP before reading a topic-authoring
+skill, creating a checkpoint, or writing any file:
 
-For **topic and workflow updates only**, continue with local authoring but skip
-every instruction to push, publish, or
+> Topic updates are not yet available in this release. No local or remote files have been changed.
+
+Render only that message. Do not offer workflow updates, evaluation test sets,
+or other alternatives; do not add product-specific capability claims or a
+follow-up question.
+
+The topic-authoring tooling that remains visible in this repository is legacy
+implementation retained for reference and future migration. It has not been
+cleared for use with DA. Its presence does not indicate that topic creation or
+updates are available, and it must not be invoked for direct user requests.
+
+Do not route around this gate through
+`src/skills/topics/update-eval-driven/SKILL.md`,
+`src/skills/topics/update/SKILL.md`, workflow updates, or direct file edits.
+
+**Setup-state note.** Workflow updates require a completed setup. Workspace-level
+evaluation updates and review-tag workflows do not. Apply the setup gate only
+after the user chooses a workflow, or when an evaluation operation needs a
+configured agent for push. Read `.local/setup/config.json` and
+`.local/config.json`; completed setup requires `schema_version: 4` and an
+`agents` entry matching the active workspace slug with `connect_ready: true`.
+
+For **workflow updates only**, continue with local authoring but skip every
+instruction to push, publish, or
 run server-backed validation. Finish by stating that the local files were
 saved and DA-GA deployment is not yet available in this release. Do not offer
 `/test` as validation of the local change because `/test` can exercise only
@@ -37,37 +57,22 @@ NOT silently route anywhere. Ask the user what they want to update first.**
 
 ## Routing additional text
 
-When `/update` includes additional text, explicit component intent always wins:
+When `/update` includes additional text, topic intent, whether explicit or
+implicit, always wins:
 
-1. If the user explicitly asks to update an **evaluation**, **test set**, or
+1. If the user explicitly or implicitly asks to update any **topic**, including
+   its evals, use the not-yet-available message above and STOP.
+2. If the user explicitly asks to update an **evaluation**, **test set**, or
    **add test cases**,
    route to `src/skills/evaluations/update/SKILL.md`.
-2. If the user explicitly asks to update a **workflow**, route to
+3. If the user explicitly asks to update a **workflow**, route to
    `src/skills/workflows/update/SKILL.md`.
-3. If the user explicitly asks to update a Workday, ServiceNow, SAP,
-   connector-backed, flow-backed, or other integration **topic**, route to
-   `src/skills/topics/update/SKILL.md` to preserve existing integration
-   behavior.
-4. If the user asks to update a simple informational, clarification, routing,
-   or handoff **topic**, route to
-   `src/skills/topics/update-eval-driven/SKILL.md`.
-5. If the topic type cannot be known until the existing topic is inspected,
-   route to the eval-driven update skill. It will delegate integration topics
-   to the existing update skill without changing them.
 
 ## Flow
 
-1. Ask the user: "What would you like to update - a **topic**, a **workflow**, or an **evaluation** test set?"
+1. Ask the user: "What would you like to update - a **workflow** or an **evaluation** test set?"
 2. Wait for the user to answer.
 3. Route based on their answer:
-   - **topic**
-     -> Read `.local/setup/config.json` and `.local/config.json`. If canonical
-     state does not have `schema_version: 4` and an `agents` entry matching the
-     active workspace slug with `connect_ready: true`, show the setup message below
-     and STOP. Otherwise read
-     `src/skills/topics/update-eval-driven/SKILL.md` and follow its
-     instructions. It handles simple topics with evals and delegates
-     integration topics to the existing topic-update skill.
    - **workflow**
      -> Apply the same setup check, then read
      `src/skills/workflows/update/SKILL.md` and follow its instructions.
@@ -82,23 +87,18 @@ When `/update` includes additional text, explicit component intent always wins:
      invoke quality validation before listing `review_requested` sets and
      obtaining a selection.
 
-> Welcome to the ESS Maker Kit. Before updating topics or workflows, type `/setup` to set up your environment.
+> Welcome to the ESS Maker Kit. Before updating workflows, type `/setup` to set up your environment.
 
 Do NOT proceed without reading the appropriate skill file first.
 
-## Topic/workflow completion gate
+## Workflow completion gate
 
 This gate does not apply in this DA-only release. State that runtime testing
 is deferred until a supported deployment path can make the local change live.
 
-This gate applies only to topic and workflow updates. Evaluation updates and
+This gate applies only to workflow updates. Evaluation updates and
 evaluation review workflows follow their evaluation skill's completion steps.
 
-For a topic or workflow, a scan, a push, `validate.py` (flow
-**registration** check), or a publish is a deploy step, **not** a behavioural
-test. Before the final response, ask whether to run **`/test`** against the
-changed component now. Wait for the answer; if yes, run the `topics/test` or
-`workflows/test` skill.
-
-For topic/workflow updates, the final response must state whether **`/test`**
-was offered and whether it was run, declined, or deferred.
+Do not offer `/test` for a locally updated workflow because the unchanged
+deployed agent does not contain that update and DA-GA workflow run-history
+inspection is not yet available.

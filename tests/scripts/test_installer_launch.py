@@ -96,6 +96,25 @@ def bash_launch_section(bash_text: str) -> str:
 
 
 class TestPowerShellInstallerAutoLaunch:
+    def test_flightcheck_only_config_persists_selected_ring(
+        self, ps1_text: str
+    ) -> None:
+        config_match = re.search(
+            r"\$config\s*=\s*@\{.*?^\s*ring\s*=\s*\$Ring\s*$",
+            ps1_text,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        assert config_match, (
+            "FlightCheck-only config must persist the selected Power Platform "
+            "ring for later /flightcheck runs"
+        )
+        assert re.search(
+            r"\$configState\s*\|\s*Add-Member\s+"
+            r"-NotePropertyName\s+ring\s+"
+            r"-NotePropertyValue\s+\$Ring\s+-Force",
+            ps1_text,
+        ), "retained FlightCheck-only configs must be migrated with a ring"
+
     def test_launch_section_invokes_code_chat_with_setup_prompt(
         self, ps1_launch_section: str
     ) -> None:
@@ -228,6 +247,19 @@ class TestPowerShellInstallerAutoLaunch:
 
 
 class TestBashInstallerAutoLaunch:
+    def test_flightcheck_only_config_persists_selected_ring(
+        self, bash_text: str
+    ) -> None:
+        assert "'ring': sys.argv[6]" in bash_text
+        assert re.search(
+            r'"\$IS_MANAGED"\s+"\$RING"\s+"\$CONFIG_PATH"',
+            bash_text,
+        ), (
+            "macOS FlightCheck-only config must receive and persist the "
+            "selected Power Platform ring"
+        )
+        assert "config['ring'] = ring" in bash_text
+
     def test_launch_section_invokes_code_chat_with_setup_prompt(
         self, bash_launch_section: str
     ) -> None:

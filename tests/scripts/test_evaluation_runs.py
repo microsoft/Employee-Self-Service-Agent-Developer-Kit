@@ -181,12 +181,24 @@ def test_runtime_uses_active_environment_with_configured_dataverse_endpoint(
 ):
     client = FakeClient()
     client.authenticate = lambda: "fake-token"
-    monkeypatch.setattr(evaluation_runs, "PowerPlatformClient", lambda tenant: client)
+    observed = {}
+
+    def make_client(tenant, *, ring):
+        observed["tenant"] = tenant
+        observed["ring"] = ring
+        return client
+
+    monkeypatch.setattr(evaluation_runs, "PowerPlatformClient", make_client)
     monkeypatch.setattr(
         evaluation_runs, "discover_tenant", lambda url: "configured-endpoint-tenant",
     )
     runtime = evaluation_runs._runtime({
         "dataverseEndpoint": "https://contoso.crm.dynamics.com",
+        "ring": "preprod",
+        "powerPlatformApiEndpoint": (
+            "https://0000000000004000800000000000111.1."
+            "environment.api.preprod.powerplatform.com"
+        ),
         "environmentId": "stale-global-environment",
         "agent": {
             "environmentId": "active-environment",
@@ -195,6 +207,25 @@ def test_runtime_uses_active_environment_with_configured_dataverse_endpoint(
         },
     })
     assert runtime == (client, "active-environment", "active-bot", tmp_path)
+    assert observed == {
+        "tenant": "configured-endpoint-tenant",
+        "ring": "preprod",
+    }
+
+
+def test_runtime_rejects_unsupported_configured_ring(tmp_path):
+    with pytest.raises(
+        evaluation_runs.EvaluationRunError,
+        match="Configured ring is not supported",
+    ):
+        evaluation_runs._runtime({
+            "dataverseEndpoint": "https://contoso.crm.dynamics.com",
+            "ring": "bogus",
+            "agent": {
+                "botId": "active-bot",
+                "folder": str(tmp_path),
+            },
+        })
 
 
 def test_list_agent_test_sets_uses_local_parent_ids_and_remote_active_state(

@@ -397,20 +397,29 @@ show the shared pre-generation explanation before generating new cases.
 Keep selection and editing as separate questions:
 
 These existing-row selection steps do not apply to adding cases. For an add
-request, collect only the new prompt and meaningful expected response.
+request, collect only the new prompt and the intended agent behavior. Convert
+that behavior into the reasoned assertion required by **Expected-response
+authoring** in the shared experience contract before writing any file.
 
 1. Ask which case or cases the user wants to change.
 2. After selection, ask whether to change the prompt, expected response, or
    both.
 3. Ask for each new value separately, always repeating the current value in the
-   question:
+   question. For an expected-response change, ask for the desired behavior, not
+   replacement text:
 
    ```text
    Current expected response:
    "{existing expectedOutput}"
 
-   What should the new expected response be for "{case label}"?
+   What should the agent do for "{case label}"?
    ```
+
+   Treat the answer as requirements. Never copy it verbatim into
+   `expectedOutput`, even when it is already phrased as an answer. Reason over
+   it and save a specific, observable assertion, normally beginning **"The agent
+   should ..."**. Preserve the user's intended facts and constraints without
+   inventing details. `"The agent should respond"` alone is too vague.
 
    For prompt edits, use the equivalent form:
 
@@ -465,10 +474,12 @@ For a new case, use the append helper rather than constructing a possibly
 colliding filename:
 
 ```text
-python scripts/evaluation_authoring.py add --evaluation-folder "{set-folder}" --input "{new prompt}" --expected-output "{new expected response}"
+python scripts/evaluation_authoring.py add --evaluation-folder "{set-folder}" --input "{new prompt}" --expected-output "{reasoned behavioral assertion}"
 ```
 
 Pass user values as literal subprocess arguments, never executable shell text.
+The `--expected-output` argument must be the reasoned assertion, not the user's
+verbatim description.
 The helper checks all cases/capacity before writes, chooses a unique filename,
 and appends a stable display order. It returns the actual case file and CSV.
 If it reports the case saved but CSV synchronization failed, fix that error and

@@ -178,7 +178,7 @@ class TestBadState:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Failed"
-        assert "All 1 most recent Workday flow run(s) FAILED" in r.result
+        assert "The most recent Workday flow run FAILED and no fresh run succeeded" in r.result
         assert "flow run Failed" in r.result
 
 
@@ -194,14 +194,21 @@ class TestEdgeCases:
         r = _only(_check_workday_run_health(runner))
         assert r.status == "NotConfigured"
         assert "No recent Workday flow runs found" in r.result
-        # Must steer the operator to connection status for the no-run case.
+        # Must carry the guided user-assisted E2E remediation (sign in, run a
+        # safe read-only scenario, re-run within the freshness window)...
+        assert "sign in to ESS Copilot" in r.remediation
+        assert "read-only" in r.remediation
+        assert "60 minutes" in r.remediation
+        # ...and still steer the operator to connection status for the no-run case.
         assert "broken connection produces NO runs" in r.remediation
         assert "WD-CONN-001" in r.remediation
 
     @responses.activate
     def test_running_state_is_ignored(self, runner: _MinimalRunner) -> None:
         """An in-flight run (status=Running) is not scored as success or
-        failure — only terminal runs count."""
+        failure — only terminal runs count. With no terminal run to grade, the
+        check reports the run as in-progress (steer the operator to wait and
+        re-run) rather than claiming no runtime traffic."""
         from flightcheck.checks.workday import _check_workday_run_health
 
         responses.add(**pp.list_flow_runs(
@@ -211,7 +218,30 @@ class TestEdgeCases:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "NotConfigured"
-        assert "No recent Workday flow runs found" in r.result
+        assert r.status != "Passed" and r.status != "Failed"
+        assert "No completed Workday flow runs yet to evaluate" in r.result
+        assert "currently in progress" in r.result
+        assert "Re-run /flightcheck once the in-progress run completes" in r.remediation
+
+    @responses.activate
+    def test_running_run_alongside_fresh_success_still_passes(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """An in-flight (Running) run must not suppress a genuine fresh success:
+        the terminal success is graded and PASSES; the Running run is ignored."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="live", flow_id=_FLOW_ID, status="Running"),
+                pp.flow_run(run_id="ok", flow_id=_FLOW_ID, status="Succeeded"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+        assert "1 most recent Workday flow run(s) succeeded" in r.result
 
     @responses.activate
     def test_cancelled_only_window_is_not_a_misleading_pass(
@@ -266,7 +296,7 @@ class TestEdgeCases:
 
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Failed"
-        assert "All 1 most recent Workday flow run(s) FAILED" in r.result
+        assert "The most recent Workday flow run FAILED and no fresh run succeeded" in r.result
 
     @responses.activate
     def test_403_is_skipped_with_permission_note(self, runner: _MinimalRunner) -> None:
@@ -288,6 +318,7 @@ class TestEdgeCases:
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Skipped"
         assert "No Workday flows discovered" in r.result
+        assert "WD-CONN-001" in r.remediation
 
     def test_no_pp_admin_is_skipped(self) -> None:
         from flightcheck.checks.workday import _check_workday_run_health
@@ -296,6 +327,132 @@ class TestEdgeCases:
         r = _only(_check_workday_run_health(runner))
         assert r.status == "Skipped"
         assert "Power Platform Admin API not available" in r.result
+
+
+class TestFreshness:
+    """WD-RUN-001 user-assisted E2E freshness gate: only a run started within
+    the last 60 minutes counts toward a PASS. A stale-only history yields a
+    guided NOT_CONFIGURED (not a FAIL — stale history is not evidence of
+    breakage)."""
+
+    @staticmethod
+    def _ts(minutes_ago: int) -> str:
+        from datetime import datetime, timedelta, timezone
+        dt = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
+    @responses.activate
+    def test_stale_only_successes_is_guided_not_configured(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """All runs succeeded but all are older than the freshness window →
+        NOT_CONFIGURED with guided sign-in remediation (an old success cannot
+        prove the live path still works)."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="old1", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(180)),
+                pp.flow_run(run_id="old2", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(240)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert "last 60 minutes" in r.result
+        assert "Older successes are not counted as a PASS" in r.result
+        assert "sign in to ESS Copilot" in r.remediation.lower() or \
+            "sign in to ess copilot" in r.remediation.lower()
+        assert "read-only" in r.remediation
+
+    @responses.activate
+    def test_fresh_success_passes(self, runner: _MinimalRunner) -> None:
+        """An explicit fresh success (inside the window) PASSES."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="fresh", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(5)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+        assert "succeeded" in r.result.lower()
+
+    @responses.activate
+    def test_fresh_all_failed_is_failure(self, runner: _MinimalRunner) -> None:
+        """A fresh run that failed (no fresh success) is a deterministic break
+        → FAIL, not the guided NOT_CONFIGURED."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="f1", flow_id=_FLOW_ID, status="Failed",
+                            response_name="Respond_to_Copilot_with_XmlTemplate_To_Json_Failed",
+                            error={"code": "ActionFailed", "message": "An action failed."},
+                            start_time=self._ts(3)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Failed"
+        assert "FAILED" in r.result
+
+    @responses.activate
+    def test_fresh_failure_with_stale_success_is_failure(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """A stale success does NOT rescue a fresh failure: only the fresh run
+        is in the window, so the verdict is FAIL."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="freshfail", flow_id=_FLOW_ID, status="Failed",
+                            response_name="Respond_to_Copilot_with_XmlTemplate_To_Json_Failed",
+                            error={"code": "ActionFailed", "message": "An action failed."},
+                            start_time=self._ts(2)),
+                pp.flow_run(run_id="staleok", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time=self._ts(500)),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Failed"
+
+    @responses.activate
+    def test_unparseable_timestamps_is_guided_not_configured(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """If terminal runs exist but NONE has a parseable startTime, freshness
+        cannot be proven. PASS requires a proven-fresh success, so the check
+        refuses to grade (guided NOT_CONFIGURED) rather than fall back to a
+        stale-tolerant window that could PASS on an unproven-fresh run."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="g1", flow_id=_FLOW_ID, status="Succeeded",
+                            start_time="not-a-timestamp"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert r.status != "Passed"
+        assert "could not read a usable timestamp" in r.result
+        assert "freshness cannot be verified" in r.result
+        assert "sign in to ESS Copilot" in r.remediation.lower() or \
+            "sign in to ess copilot" in r.remediation.lower()
 
 
 class TestManualConnSecSuppression:
@@ -521,3 +678,135 @@ class TestErrorAwareManualSuppression:
             "auth_proven": True, "workday_fault": True, "hard_failure": False,
         })
         assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"}.isdisjoint(ids)
+
+
+class TestPrereqGate:
+    """Ordering gate: when an env/connection/flow prerequisite already FAILED
+    earlier in the run, the guided NOT_CONFIGURED remediation steers the
+    operator at that specific rung first, because a live Copilot → Workday run
+    cannot succeed until the broken rung is fixed."""
+
+    @staticmethod
+    def _failed(checkpoint_id):
+        from flightcheck.runner import CheckResult, Priority, Status
+        return CheckResult(
+            checkpoint_id=checkpoint_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description="x", result="x", roles=["Workday Admin"],
+        )
+
+    @staticmethod
+    def _passed(checkpoint_id):
+        from flightcheck.runner import CheckResult, Priority, Status
+        return CheckResult(
+            checkpoint_id=checkpoint_id, category="Workday",
+            priority=Priority.PASSED.value if hasattr(Priority, "PASSED") else Priority.HIGH.value,
+            status=Status.PASSED.value,
+            description="x", result="x", roles=["Workday Admin"],
+        )
+
+    @responses.activate
+    def test_no_runs_with_failed_connection_redirects_to_that_rung(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID, runs=[],
+        ))
+
+        prior = [self._passed("WD-ENV-001"), self._failed("WD-CONN-101")]
+        r = _only(_check_workday_run_health(runner, prior))
+        assert r.status == "NotConfigured"
+        # Steer at the failed rung first...
+        assert "prerequisite check failed" in r.remediation.lower()
+        assert "WD-CONN-101" in r.remediation
+        # ...but still carry the guided user-assisted E2E steps after it.
+        assert "sign in to ESS Copilot" in r.remediation
+
+    @responses.activate
+    def test_stale_run_with_failed_env_redirects_to_that_rung(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        def _ts(minutes_ago: int) -> str:
+            dt = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+            return dt.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[pp.flow_run(run_id="old", flow_id=_FLOW_ID,
+                              status="Succeeded", start_time=_ts(180))],
+        ))
+
+        prior = [self._failed("WD-ENV-101")]
+        r = _only(_check_workday_run_health(runner, prior))
+        assert r.status == "NotConfigured"
+        assert "WD-ENV-101" in r.remediation
+
+    @responses.activate
+    def test_no_failed_prereq_keeps_generic_guided_text(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID, runs=[],
+        ))
+
+        # All prerequisites green → no redirect, generic guided remediation.
+        prior = [self._passed("WD-ENV-001"), self._passed("WD-CONN-101")]
+        r = _only(_check_workday_run_health(runner, prior))
+        assert r.status == "NotConfigured"
+        assert "prerequisite check failed" not in r.remediation.lower()
+        assert "sign in to ESS Copilot" in r.remediation
+
+    @responses.activate
+    def test_non_prereq_failure_does_not_trigger_redirect(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID, runs=[],
+        ))
+
+        # A failed non-prerequisite check (e.g. a workflow SOAP test) must NOT
+        # redirect — only env/connection/flow rungs gate the live run.
+        prior = [self._failed("WD-WF-001")]
+        r = _only(_check_workday_run_health(runner, prior))
+        assert r.status == "NotConfigured"
+        assert "prerequisite check failed" not in r.remediation.lower()
+
+
+class TestNegativeSkewClamp:
+    """Minor clock skew between this host and Power Automate must never render a
+    negative age (e.g. "-1 minute(s) ago"); the age is clamped at 0."""
+
+    @staticmethod
+    def _future_ts(minutes_ahead: int) -> str:
+        from datetime import datetime, timedelta, timezone
+        dt = datetime.now(timezone.utc) + timedelta(minutes=minutes_ahead)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
+
+    @responses.activate
+    def test_inflight_future_timestamp_clamps_age_to_zero(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[pp.flow_run(run_id="skewed", flow_id=_FLOW_ID,
+                              status="Running", start_time=self._future_ts(3))],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert "started about 0 minute(s) ago" in r.result
+        assert "minute(s) ago" in r.result
+        assert "-" not in r.result.split("minute(s) ago")[0].split("about ")[-1]
+

@@ -104,6 +104,12 @@ def main():
         "--preferred-username",
         help="Account to reuse for environment resolution when available",
     )
+    parser.add_argument(
+        "--ring",
+        choices=("prod", "preprod", "test"),
+        default="prod",
+        help="Power Platform service ring for environment resolution.",
+    )
     parser.add_argument("--select", type=int, default=None,
                         help="Select environment by number and output JSON")
     args = parser.parse_args()
@@ -114,6 +120,7 @@ def main():
         selected = resolve_environment_for_user(
             args.resolve_environment_url,
             preferred_username=args.preferred_username,
+            ring=args.ring,
         )
         if selected is None:
             print(

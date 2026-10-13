@@ -367,18 +367,6 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.ESS_MAKER.value,),
     ),
     CheckpointSpec(
-        key="WD-DA-RUN-001",
-        category_fn=run_workday_da_checks,
-        category_label="Workday DA",
-        clients=frozenset({PP_ADMIN}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=("WD-DA-FLOW-001",),
-        pp_admin_flow_required=True,
-        priority=Priority.CRITICAL.value,
-        roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
-    ),
-    CheckpointSpec(
         key="WD-SEC-003",
         category_fn=run_workday_checks,
         category_label="Workday",
@@ -439,15 +427,17 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value),
     ),
-    # ---- Workday: active connector runtime health (WD-RUN-001) ----
+    # ---- Workday: end-to-end runtime health (WD-RUN-001) ----
     # Emitted by run_workday_checks (_check_workday_run_health ->
-    # _check_workday_active_run_health). The active, consent-gated probe reads
-    # BAP connections + creates a transient Dataverse probe flow, and the
-    # passive run-history fallback reads flow runs via pp_admin over the flows
-    # WD-001 hydrates onto runner._workday_flows — so the plan needs both
-    # PP_ADMIN and DATAVERSE and pulls WD-001 as a prereq. Fixed ID (not a
-    # family): registering it makes `--checkpoint WD-RUN-001` resolve instead
-    # of raising RegistryError.
+    # _check_workday_run_health_passive). Passive-only, user-assisted: it reads
+    # recent Workday flow runs via pp_admin over the flows WD-001 hydrates onto
+    # runner._workday_flows and grades the freshest terminal run (started within
+    # the last 60 min), so the plan needs both PP_ADMIN and DATAVERSE and pulls
+    # WD-001 as a prereq. Direct/headless invocation was ruled out (invoker-
+    # scoped connector carries no user token; only tests Flow->Workday). No
+    # fresh run -> NOT_CONFIGURED with guided sign-in remediation (SKILL.md 3d).
+    # Fixed ID (not a family): registering it makes `--checkpoint WD-RUN-001`
+    # resolve instead of raising RegistryError.
     CheckpointSpec(
         key="WD-RUN-001",
         category_fn=run_workday_checks,
@@ -812,10 +802,9 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
     ),
     ProfileSpec(
         name="workday-da:post-runtime",
-        description="Post-runtime Workday read-path validation.",
+        description="Post-runtime Workday flow validation.",
         checkpoint_ids=(
             "WD-DA-FLOW-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(
@@ -868,7 +857,6 @@ _PROFILE_DEFINITIONS: tuple[ProfileSpec, ...] = (
             "WD-DA-TOPIC-001",
             "WD-DA-WIRING-001",
             "WD-DA-ATTACH-001",
-            "WD-DA-RUN-001",
         ),
     ),
     ProfileSpec(

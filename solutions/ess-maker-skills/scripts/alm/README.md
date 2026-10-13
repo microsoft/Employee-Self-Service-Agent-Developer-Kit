@@ -1,12 +1,20 @@
-# Authorize Workday flows after deployment
+# Workday flow authorization after deployment
 
-Use this procedure after deploying the **ESS DA HR agent** and the Workday
-extension package to a Test or Production environment. It gives the agent
-permission to use the Workday cloud flows in that environment.
+The supported customer path is **Connect Workday** in the ESS Maker Kit. After
+the maker promotes the **ESS DA HR agent** to Test or Production, they return
+to `/connect-workday` or `/connect` and say which realm was promoted. The kit
+discovers the promoted sibling and target environment, reuses the verified
+tenant foundation, previews the exact runtime plan, and runs this script once
+with every reviewed Workday flow for that realm.
 
-This is a post-deployment task for a Power Platform administrator. Complete it
-separately in every target environment. Do not reuse IDs from Development,
-Test, or another environment.
+Do not ask a maker to collect or paste environment IDs, BotIds, workflow IDs,
+or team names. The controller resolves and verifies those values. Use the
+manual procedure in this document only for operator diagnostics or a governed
+manual deployment that is outside the guided skill.
+
+Authorization remains environment-specific. The guided lifecycle executes it
+once in Development, once after promotion to Test, and once after promotion to
+Production. Never reuse IDs from another realm.
 
 > This procedure supports the ESS DA HR agent only. Do not use it for the
 > ESS DA IT agent.
@@ -28,7 +36,8 @@ certificate contents, or private keys.
 
 ## Gather the environment details
 
-Collect all values from the same target environment:
+The guided skill gathers these details automatically. For a manual or
+diagnostic run, collect all values from the same target environment:
 
 | Information | What to use |
 | --- | --- |
@@ -158,14 +167,23 @@ Do not copy the Test or Development IDs into Production.
 
 ## Complete the deployment check
 
+For the guided skill, return to Connect Workday after authorization and finish
+the active realm's remaining Runtime steps and maker validation. The lifecycle
+completes only after the maker successfully tests an enabled Workday scenario
+in that realm's Copilot Studio Test pane without publishing.
+
 Before release sign-off, also confirm that:
 
 - Workday and Dataverse connection references use the target environment's
   connections;
 - required connection settings are populated;
 - the Workday cloud flows are turned on; and
-- a signed-in test user can complete a Workday scenario through the ESS DA HR
-  agent.
+- each non-maker test user establishes their own Workday connection and can
+  complete a Workday scenario through the published ESS DA HR agent.
+
+Publishing, employee-owned connections, and non-maker validation occur after
+the guided Connect Workday lifecycle. Do not feed employee run history back
+into the skill as completion evidence.
 
 Keep the approved preview, apply results, source of the environment values, and
 final runtime result with the deployment evidence for that environment.

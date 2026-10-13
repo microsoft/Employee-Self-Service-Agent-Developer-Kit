@@ -14,9 +14,22 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, the installer asks in the terminal which experience you want — **Maker** (guided rail layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, follow the **Getting started** walkthrough — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts.
+Once complete, the installer asks in the terminal which experience you want — **Maker** (guided rail layout — recommended) or **Developer** (default VS Code view with the rendered README). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/`. When you're ready, run `/setup` in Copilot Chat — in Maker mode, follow the **Getting started** walkthrough — to connect the workspace to an existing editable DA Dev agent. `/setup` is not run automatically in either mode. Review the workspace trust prompt before accepting it, then follow the purpose-specific sign-in guidance below.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
+
+## Authentication prompts
+
+The full Maker and Developer experiences use two independent authentication stages:
+
+1. **GitHub Copilot sign-in** activates Copilot Chat, the interface where you run `/setup` and the other ESS maker commands. Sign in with a GitHub account that has an active GitHub Copilot entitlement. This sign-in does not grant access to Power Platform.
+2. **Power Platform sign-in** authorizes the kit to discover environments and agents and to call the required Microsoft services. When `/setup` opens a browser, sign in with the Microsoft work account that can access the target Power Platform environment and agent.
+
+You may see more than one Microsoft account-selection or consent window because setup and FlightCheck call multiple Microsoft services. These prompts are separate from GitHub Copilot authentication.
+
+Cloning the public repository and installing VS Code do not normally require GitHub authentication. A private fork or branch may require GitHub or GitHub CLI authentication, and Codespaces requires a GitHub account because it is a GitHub-hosted service.
+
+**FlightCheck-only mode does not require VS Code, GitHub, or GitHub Copilot.** It still opens the Microsoft sign-in required to inspect the selected Power Platform environment and its services.
 
 ## Maker Mode (Guided Rail Layout) and Developer Mode
 

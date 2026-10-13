@@ -20,6 +20,7 @@ import setup_existing_da
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
+ENVIRONMENT_DISPLAY_NAME = "Contoso ESS Development"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 OTHER_AGENT_ID = "00000000-0000-4000-8000-000000006666"
 TENANT_ID = "00000000-0000-4000-8000-000000009999"
@@ -312,6 +313,7 @@ def _attach(
     return setup_existing_da.attach_existing_dev(
         client,
         environment_id=ENVIRONMENT_ID,
+        environment_display_name=ENVIRONMENT_DISPLAY_NAME,
         agent_id=agent_id,
         kit_root=root,
         refresh=refresh,
@@ -423,6 +425,31 @@ def test_target_url_resolves_ids_and_ring() -> None:
     assert target["environmentId"] == ENVIRONMENT_ID
     assert target["agentId"] == AGENT_ID
     assert target["ring"] == "test"
+    assert target["agentSelection"] == "copilot-studio-url"
+
+
+@pytest.mark.parametrize(
+    "host",
+    (
+        "copilotstudio.microsoft.com",
+        "copilotstudio.preview.microsoft.com",
+    ),
+)
+def test_production_and_preview_hosts_resolve_to_prod_ring(host: str) -> None:
+    target = setup_existing_da.resolve_da_target(
+        target_url=(
+            f"https://{host}/environments/{ENVIRONMENT_ID}/"
+            f"bots/{AGENT_ID}/overview"
+        ),
+        environment_id=None,
+        agent_id=None,
+        ring=None,
+        require_agent=True,
+    )
+
+    assert target["environmentId"] == ENVIRONMENT_ID
+    assert target["agentId"] == AGENT_ID
+    assert target["ring"] == "prod"
     assert target["agentSelection"] == "copilot-studio-url"
 
 
@@ -621,11 +648,17 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert config["setup"] == "complete"
     assert config["ring"] == "test"
     assert config["agent"]["botId"] == AGENT_ID
+    assert "environmentName" not in config
+    assert "environmentDisplayName" not in config
 
     canonical_state = _setup_state(tmp_path)
     setup_state = _agent_setup_state(tmp_path)
     assert canonical_state["schema_version"] == 4
     assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert (
+        canonical_state["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
     assert setup_state["connect_ready"] is False
     assert setup_state["active_step"] == "SETUP-02.1"
     assert set(setup_state["steps"]) == set(
@@ -649,6 +682,49 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["workspace"]["unprojected_component_kinds"] == {
         "CloudFlowDefinitionComponent": 1
     }
+
+
+def test_attach_enriches_canonical_environment_display_name(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+    assert "display_name" not in _setup_state(tmp_path)["environment"]
+
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        environment_display_name=ENVIRONMENT_DISPLAY_NAME,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert (
+        _setup_state(tmp_path)["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
+
+
+def test_attach_preserves_canonical_environment_display_name(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert (
+        _setup_state(tmp_path)["environment"]["display_name"]
+        == ENVIRONMENT_DISPLAY_NAME
+    )
 
 
 def test_unregistered_product_preserves_registry_uncertainty(

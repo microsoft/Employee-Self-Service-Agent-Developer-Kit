@@ -1440,6 +1440,7 @@ if ($FlightCheckOnly) {
             configVersion      = 1
             setup              = 'flightcheck-only'
             dataverseEndpoint  = $envUrl
+            ring               = $Ring
             flightCheckOnly    = $true
             agent              = $agentEntry
             agents             = $agentsList
@@ -1450,6 +1451,33 @@ if ($FlightCheckOnly) {
         [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
     }
+
+    # Reuse the retained config's ring when it has one, infer it from a saved
+    # environment API endpoint when possible, and migrate legacy configs that
+    # had neither. This keeps the explicit --ring argument consistent with the
+    # durable config instead of letting the installer's default prod conflict
+    # with a retained preprod/test workspace.
+    $configState = Get-Content $configPath -Raw | ConvertFrom-Json
+    $effectiveRing = [string]$configState.ring
+    if (-not $effectiveRing) {
+        $endpoint = ([string]$configState.powerPlatformApiEndpoint).ToLowerInvariant()
+        if ($endpoint -match 'api[.]test[.]powerplatform[.]com') {
+            $effectiveRing = 'test'
+        } elseif ($endpoint -match 'api[.]preprod[.]powerplatform[.]com') {
+            $effectiveRing = 'preprod'
+        } elseif ($endpoint -match 'api[.]powerplatform[.]com') {
+            $effectiveRing = 'prod'
+        }
+    }
+    if (-not $effectiveRing) { $effectiveRing = $Ring }
+    $effectiveRing = $effectiveRing.Trim().ToLowerInvariant()
+    if ($effectiveRing -notin @('prod', 'preprod', 'test')) {
+        throw "Existing config has unsupported Power Platform ring '$effectiveRing'. Reconfigure and choose prod, preprod, or test."
+    }
+    $Ring = $effectiveRing
+    $configState | Add-Member -NotePropertyName ring -NotePropertyValue $Ring -Force
+    $json = $configState | ConvertTo-Json -Depth 20 -Compress:$false
+    [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
 
     # --- Read config values if they came from an existing file ---
     if (-not $botId -and (Test-Path $configPath)) {
@@ -1511,10 +1539,8 @@ if ($FlightCheckOnly) {
             # environments via BAP prod (api.bap.microsoft.com) by default,
             # so we target the prod service ring unless the caller (typically
             # a PM validating a preprod/test environment) overrode -Ring.
-            # Without this flag FlightCheck's --scope full aborts with
-            # "The Power Platform environment ring is unavailable" because
-            # the installer-authored config.json only carries dataverseEndpoint
-            # (no powerPlatformApiEndpoint from which FC could infer the ring).
+            # Persisting the ring supports later /flightcheck runs; forwarding
+            # it explicitly also covers this first run and older configs.
             if ($pythonExe -eq 'py -3.12') {
                 & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring $Ring
             } elseif ($pythonExe -eq 'py -3') {
@@ -1557,6 +1583,11 @@ if (-not $FlightCheckOnly -and -not $SkipLaunch) {
 # ---------------------------------------------------------------------------
 # 7. Launch
 # ---------------------------------------------------------------------------
+function Write-AuthenticationGuidance {
+    Write-Host "When VS Code asks you to sign in to GitHub Copilot, use the GitHub account that has your Copilot access. This enables Copilot Chat, where you run /setup." -ForegroundColor Yellow
+    Write-Host "When /setup connects your agent, a separate browser window may ask you to sign in with the Microsoft work account that can access the target Power Platform environment and agent. GitHub sign-in does not grant Power Platform access." -ForegroundColor Yellow
+}
+
 if (-not $SkipLaunch) {
     $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
@@ -1578,14 +1609,14 @@ if (-not $SkipLaunch) {
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "Developer mode opens the rendered README. When you're ready, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
             } else {
                 # Maker mode - extension opens the guided view; /setup is user-driven
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "The ESS Maker Profile opens the guided Agent Developer Kit view. Click 'Start set up' in the Quick start panel (or the Tutorial) to run /setup in Copilot Chat." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
+                Write-Host "Review the VS Code workspace trust prompt before accepting it." -ForegroundColor Yellow
             }
         } finally { Pop-Location }
     } else {
@@ -1596,6 +1627,8 @@ if (-not $SkipLaunch) {
     Write-Warn2 'Skipping launch per -SkipLaunch'
     Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent." -ForegroundColor Green
 }
+
+Write-AuthenticationGuidance
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
 

@@ -7,6 +7,13 @@ the administrator's non-secret response, derives deterministic endpoints, and
 records evidence. All Workday tenant changes are performed by the Workday
 administrator.
 
+This phase starts only after Microsoft Entra sign-off is complete. Treat the
+recorded Entra identifiers, certificate metadata, and already transferred
+Base64 certificate as fixed inputs. Do not direct the maker back to the Entra
+administrator, ask that administrator to repeat a task, or require access to
+the Entra portal from this phase. A Workday-side mismatch remains a Workday
+phase blocker unless the controller independently reports Entra target drift.
+
 Generate one administrator handoff:
 
 ```powershell
@@ -37,18 +44,22 @@ administrator finished configuration.
   Issuer exactly matches the verified Entra issuer.
 - For **No enabled SAML row**, render **Workday Administrator Steps - New
   Microsoft Entra federation** and the greenfield handoff below.
-- For **Okta**, **Ping Identity**, or **Another sign-in provider**, stop before
-  showing certificate, tenant-security, or API-client changes. Explain that the
-  enabled row belongs to an existing federation and must not be replaced. Ask
-  the Workday and identity administrators to decide whether a separate
-  Microsoft Entra row can be added safely. Do not show the completion question
-  or response form. Preserve the current phase.
+- For **Okta**, **Ping Identity**, or **Another sign-in provider**, render
+  **Workday Administrator Steps - Existing non-Entra federation** and the
+  coexistence or controlled-transition handoff below. Preserve the existing
+  provider and guide the Workday administrator to either add a separate
+  Microsoft Entra row for the approved target environment or perform a
+  customer-approved transition of only that target environment. Do not return
+  to Entra or re-engage the Entra app administrator. If the routing decision still
+  needs customer governance approval, show the exact approval and inventory
+  steps, preserve this phase, and resume the same handoff after approval
+  instead of terminating the workflow.
 - For **I'm not sure**, explain that Microsoft Entra issuers commonly contain
   `login.microsoftonline.com` or `sts.windows.net`, Okta issuers commonly
   contain `okta.com`, and Ping issuers commonly contain `pingone.com`,
   `pingidentity.com`, or an organization-specific Ping host. Stop and ask the
-  identity administrator to identify the enabled row; do not render either
-  mutation handoff, the completion question, or the evidence form.
+  Workday administrator to identify the enabled row in Workday; do not render
+  either mutation handoff, the completion question, or the evidence form.
 
 If the administrator becomes unavailable after a handoff is shown, pause
 before the completion question and preserve the current phase.
@@ -56,9 +67,27 @@ before the completion question and preserve the current phase.
 Render the selected branch as one standalone section titled **Workday
 administrator handoff - share this whole section**. It must contain the
 administrator role, exact Workday tenant and environment, packet reference
-values, every applicable numbered task, and the packet's
-`informationToReturn` checklist. The maker must be able to forward that one
-section without copying values from earlier chat messages.
+values, one capture table, and every applicable numbered task. The maker must
+be able to forward that one section without copying values from earlier chat
+messages.
+
+Before the numbered tasks, render every entry from the packet's
+`captureInstructions` as one table with these exact columns:
+
+| Information to capture | Where to find it | What to record | Example value | Your tenant values |
+| ---------------------- | ---------------- | -------------- | ------------- | ------------------ |
+
+Use each entry's `information`, `portalLocation`, `instruction`, and
+`exampleValue` values for the first four columns. Leave every cell in **Your
+tenant values** blank. Escape literal table pipes as `\|` and use `<br>` for a
+line break inside a cell. Tell the administrator to complete that final column
+and return the whole table to the maker, who will paste it into the agent chat.
+Never render internal `fields` names. This table is both the capture guide and
+the return worksheet. Do not render the packet's `informationToReturn` list or
+a second worksheet. Keep the numbered tasks focused on actions; do not repeat
+table locations, capture instructions, or return-value lists unless necessary
+to perform the change. Do not ask for a field after completion unless it
+appeared as a row in the shareable table.
 
 After rendering the complete handoff, record that it was presented and is
 waiting for the administrator:
@@ -75,12 +104,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Providers** row whose **Used for Environments** value matches the employee
    environment being connected. Confirm that it is the intended Microsoft
    Entra row. Do not replace another provider's row.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
-   **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Return to the enabled
-   Microsoft Entra row and select that key in its **X509 Certificate** field.
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered through the approved customer channel during the
+   completed Entra handoff. In Workday, run **Create x509 Public Key**, paste
+   that public certificate, give it a customer-chosen recognizable name, and
+   save it. Return to the enabled Microsoft Entra row and select that key in
+   its **X509 Certificate** field. Do not open Entra or request another
+   certificate transfer.
 
    Use `certificateSelectionQuestion` and `certificateValidityQuestion` from
    the packet to populate the corresponding fields in the consolidated form.
@@ -89,16 +119,17 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Certificate.”
 
    Handle the answer as follows:
-   - **The new certificate created from the Entra Base64 file** - record
+   - **The certificate transferred from the completed Entra handoff** - record
      `certificateSelectionOutcome` as
      `entra-signing-certificate-selected`. If the displayed expiration date
      exactly matches the verified Entra expiration date shown in the form,
      record
      `certificateValidityOutcome` as
      `matches-verified-entra-certificate`.
-   - **A different existing Workday certificate** - stop. Do not replace or
-     reuse it until the Workday and identity administrators confirm it is the
-     same active Entra signing certificate.
+   - **A different existing Workday certificate** - stop. Do not reuse it.
+     Select the Workday public key created from the transferred certificate,
+     or keep the Workday phase blocked while the Workday administrator resolves
+     the mismatch.
    - **No certificate is selected** - ask the administrator to select the new
      Workday public key created from the Entra Base64 certificate, then return
      to this question.
@@ -131,12 +162,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    Do not treat the functional-area scopes from step 4 as domain permissions.
    Add another domain only when it is tied to a named supported scenario.
    Do not return employee membership lists.
-6. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the tenant’s
-   REST base URL ending exactly at `/ccx/api` and its SOAP service base URL
-   ending exactly at `/ccx/service`. The tenant name is collected separately;
-   do not append it to the SOAP base URL.
-   Do not return a client secret, password, token, cookie, or certificate body.
+6. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 7. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -147,8 +177,74 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 8. **Confirm network readiness.** Give the REST and SOAP host names from step 6
    to the network administrator when organizational egress filtering applies.
    Record either that both hosts are allowed or that no customer-managed
-   firewall change is required. Do not wait until final employee validation to
+   firewall change is required. Do not wait until final Maker validation to
    discover a known allowlist requirement.
+
+### Existing non-Entra federation coexistence or transition handoff
+
+1. **Protect and inventory the existing federation.** In Workday, run **Edit
+   Tenant Setup - Security**, open **SAML Setup**, and record the existing
+   provider type, Issuer, **Used for Environments** assignment, selected X.509
+   public key name, and applicable employee authentication-policy routing. Do
+   not collect certificate contents, disable the row, overwrite its Issuer, or
+   replace its certificate.
+2. **Choose the customer-approved routing path.** The Workday administrator
+   must select one of these safe paths:
+   - where the tenant's supported Workday routing design permits it, add a
+     separate Microsoft Entra SAML row for the approved target employee
+     environment and scope its authentication-policy routing to the intended
+     population; or
+   - perform a controlled transition of only the target employee environment
+     from the existing provider to Microsoft Entra during the customer's
+     reviewed change window.
+
+   Preserve every environment and population that is not in scope on the
+   existing provider. Record the existing assignment needed for rollback. If
+   the Workday administrator cannot approve either path yet, provide this
+   inventory and routing decision as the next action, preserve the Workday
+   phase, and resume here after approval. Do not restart the Entra handoff.
+3. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. Run **Create x509
+   Public Key**, paste that public certificate, give it a customer-chosen
+   recognizable name, and save it. Do not modify the key selected by the
+   existing non-Entra row.
+4. **Create the separate Microsoft Entra row.** Add a SAML identity-provider
+   row with the packet's exact expected Microsoft Entra Issuer, select the new
+   Entra-derived public key, set the exact Workday Service Provider ID, set the
+   identity-provider SSO service URL to the packet's **Login URL**, and set the
+   sign-on redirect URL to the packet's **Reply URL**. Do not copy the existing
+   provider's Issuer, endpoints, or certificate.
+5. **Apply only the approved routing change.** For coexistence, assign the new
+   Microsoft Entra row only to the approved target employee environment and
+   apply the approved authentication-policy routing for the intended
+   population. For a controlled transition, move only that approved target
+   environment from the existing row to the new Entra row during the reviewed
+   change window. Verify all out-of-scope assignments remain unchanged and
+   keep the recorded rollback assignment until validation completes.
+6. **Configure tenant security without weakening existing safeguards.** Enable
+   **OAuth 2.0 Clients Enabled** and **SAML** when required. Preserve unrelated
+   authentication policies, administrator safeguards, network restrictions,
+   and non-Entra federation settings.
+7. **Reuse or register the employee API client.** Reuse an approved client only
+   when its **Client Grant Type** is **SAML Bearer**, its functional areas are
+   exactly **Core Payroll**, **Organizations and Roles**, **Staffing**, and
+   **Time Off and Leave**, and **Include Workday Owned Scope** is **Yes**.
+   Otherwise register a new client with those exact settings.
+8. **Configure employee domain security.** Grant the intended employee
+   population **Get** on **Worker Data: Public Worker Reports** and
+   **Integration Permissions**. Add another domain only for a named supported
+   scenario. Preserve unrelated groups and permissions.
+9. **Verify the connection endpoints.** Confirm the OAuth client ID and token
+   endpoint, the REST base ending at `/ccx/api`, and the SOAP base ending at
+   `/ccx/service` without the tenant name. Never return secrets or tokens.
+10. **Review and activate the target authentication policy.** Confirm an active
+    rule allows **SAML** for the intended target employees. Review and activate
+    pending authentication-policy changes through the customer's approved
+    process without changing routing for out-of-scope users.
+11. **Confirm network readiness and final Entra-row values.** Confirm the REST
+    and SOAP hosts are allowed, then verify the new Microsoft Entra row's
+    Issuer, Service Provider ID, identity-provider SSO URL, redirect URL,
+    selected certificate, and certificate expiration exactly match the packet.
 
 ### New Microsoft Entra federation handoff
 
@@ -157,12 +253,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    confirm there is no enabled SAML identity-provider row for the employee
    environment being connected. Do not modify a row owned by another
    federation.
-2. **Install the Entra signing certificate.** In Entra, open **Enterprise
-   applications -> the exact Workday application -> Single sign-on -> SAML
-   Signing Certificate** and download **Certificate (Base64)**. In Workday, run
+2. **Install the transferred signing certificate.** Use the Base64 certificate
+   file already delivered during the completed Entra handoff. In Workday, run
    **Create x509 Public Key**, paste that public certificate, give it a
-   customer-chosen recognizable name, and save it. Never collect the
-   certificate body in chat.
+   customer-chosen recognizable name, and save it. Do not open Entra, request
+   another certificate transfer, or collect the certificate body in chat.
 3. **Create the Microsoft Entra row.** Add a SAML identity-provider row for the
    employee environment. Set its Issuer to the packet's exact expected
    Microsoft Entra issuer, select the newly created public key in **X509
@@ -183,12 +278,11 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
    security group, and grant **Get** on **Worker Data: Public Worker Reports**
    and **Integration Permissions**. Never default a limited/test rollout to All
    Employees. Add optional domains only for a named supported scenario.
-7. **Capture non-secret connection values.** Open **View API Client** for that
-   client and record the OAuth client ID and token endpoint. Record the REST
-   base URL ending exactly at `/ccx/api` and the SOAP service base URL ending
-   exactly at `/ccx/service`. Record the tenant name separately; do not append
-   it to the SOAP base URL. Do not return a client secret, password, token,
-   cookie, or certificate body.
+7. **Verify the connection endpoints.** Open **View API Client** and confirm
+   the OAuth client ID and token endpoint are available. Confirm the REST base
+   ends at `/ccx/api` and the SOAP service base ends at `/ccx/service`; do not
+   append the tenant name to the SOAP base. Never return a client secret,
+   password, token, cookie, or certificate body.
 8. **Verify employee authentication.** Open **Manage Authentication Policies**
    for the employee environment. Confirm an active rule allows **SAML** for the
    intended employees. Do not replace administrator safeguards, existing
@@ -204,17 +298,10 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
     identity-provider SSO service URL, and sign-on redirect URL match the
     expected values.
 
-End the shareable handoff with **Information to return to the maker** and show
-every item from the packet's `informationToReturn` list. Do not defer this
-checklist until after completion; the administrator must know what to return
-before starting the tasks.
-
-Then render a section titled **Workday administrator return worksheet**. Use
-the customer-facing headers, questions, and choices from the worksheet
-definition below. Render them as one copyable worksheet that the administrator
-can complete and return through the customer's approved collaboration channel.
-Do not submit the definition as a multi-question `vscode_askQuestions` call;
-VS Code renders that array as a sequential wizard.
+End the shareable handoff after the applicable numbered tasks. The capture
+table already tells the administrator what to return and where to find it, so
+do not repeat an **Information to return to the maker** checklist or a separate
+return worksheet.
 
 After an applicable handoff is shown, ask exactly:
 
@@ -232,12 +319,13 @@ python scripts/workday_connect.py administrator-stage --phase workday-admin --su
 ```
 
 If the administrator reports that the provider state changed from the branch
-selected above, return to provider discovery instead of forcing the current
-form.
+selected above, repeat provider discovery within this Workday phase using the
+same recorded Entra reference values. Do not return to the Entra phase or ask
+the Entra app administrator to participate again.
 
-Collect the completed worksheet in one response. Do not ask for these values
-as a sequence of separate chat or form questions. The worksheet retains all
-required evidence:
+Collect the Workday administrator's details in one response. Do not ask for
+these values as a sequence of separate chat or form questions. The response
+must contain all required evidence:
 
 - confirmation that the enabled Microsoft Entra SAML row's Issuer, Service
   Provider ID, identity-provider SSO service URL, and sign-on redirect URL
@@ -255,17 +343,22 @@ required evidence:
   registered;
 - exact client grant type and Include Workday Owned Scope outcome;
 - rollout type: entire workforce or limited/test;
-- `Worker Data: Public Worker Reports` Get-permission outcome;
-- `Integration Permissions > Get` outcome;
-- confirmation that all four required API functional-area scopes are present;
+- API-client access: SAML Bearer, Include Workday Owned Scope, and all four
+  required functional-area scopes;
+- required employee access: Get permission for both `Worker Data: Public
+  Worker Reports` and `Integration Permissions`;
 - any additional domain paired with its named supported scenario, only when
-  custom ESS scenarios require one;
-- authorization outcome, including whether a bounded `Task not authorized`
-  remediation was required; when it was, the affected domain, named scenario,
-  and successful retest outcome.
+  custom ESS scenarios require one.
 
-Use this exact worksheet definition, substituting the packet's expected
-issuer, Service Provider ID, and verified certificate expiration date:
+Do not ask the Workday administrator to run an agent scenario or report an
+authorization result in this phase. Connections and runtime configuration do
+not exist yet. A maker-observed `Task not authorized` result is handled only
+during Phase 6 after the same named scenario can be retested.
+
+The worksheet definition below is an internal mapping reference for the exact
+successful values accepted by the controller. Do not render it after the
+handoff table. Substitute the packet's expected issuer, Service Provider ID,
+and verified certificate expiration date when building the table:
 
 ```json
 [
@@ -283,7 +376,7 @@ issuer, Service Provider ID, and verified certificate expiration date:
     "header": "Certificate",
     "question": "Which certificate is selected on the enabled Microsoft Entra SAML row in Workday?",
     "options": [
-      { "label": "The new certificate created from the Entra Base64 file" },
+      { "label": "The certificate transferred from the completed Entra handoff" },
       { "label": "A different existing Workday certificate" },
       { "label": "No certificate is selected" },
       { "label": "I'm not sure" }
@@ -311,21 +404,6 @@ issuer, Service Provider ID, and verified certificate expiration date:
       { "label": "An existing approved client was verified" },
       { "label": "A new client was registered" }
     ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Client grant type",
-    "question": "What client grant type is configured?",
-    "options": [
-      { "label": "SAML Bearer" },
-      { "label": "Another grant type or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Workday owned scope",
-    "question": "Is Include Workday Owned Scope set to Yes?",
-    "options": [{ "label": "Yes" }, { "label": "No or not sure" }],
     "allowFreeformInput": false
   },
   {
@@ -373,73 +451,28 @@ issuer, Service Provider ID, and verified certificate expiration date:
     "allowFreeformInput": false
   },
   {
-    "header": "Public worker reports",
-    "question": "Was Get permission verified for Worker Data: Public Worker Reports?",
+    "header": "API client access",
+    "question": "Did the administrator verify SAML Bearer, Include Workday Owned Scope, and all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
     "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Integration permissions",
-    "question": "Was Get permission verified under Integration Permissions?",
-    "options": [
-      { "label": "Yes, Get permission is verified" },
-      { "label": "No or not sure" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Functional-area scopes",
-    "question": "Did the administrator verify that the API client includes all four required functional areas: Core Payroll, Organizations and Roles, Staffing, and Time Off and Leave?",
-    "options": [
-      { "label": "Yes, all four required functional areas are present" },
-      { "label": "No, one or more required functional areas are missing" },
+      { "label": "Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured" },
+      { "label": "No, one or more API client access settings are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Optional domains",
-    "question": "Are additional Workday domains required for named custom ESS scenarios beyond the standard setup?",
+    "header": "Required employee access",
+    "question": "Did the administrator verify Get permission for both Worker Data: Public Worker Reports and Integration Permissions?",
     "options": [
-      { "label": "No additional domains are required" },
-      { "label": "Yes, additional supported scenarios require domains" },
+      { "label": "Yes, Get permission is verified for Public Worker Reports and Integration Permissions" },
+      { "label": "No, one or both required permissions are missing" },
       { "label": "I'm not sure" }
     ],
     "allowFreeformInput": false
   },
   {
-    "header": "Additional domain mappings",
-    "question": "Only when additional domains are required: enter one per line as Domain | supported scenario. Otherwise leave this blank."
-  },
-  {
-    "header": "Authorization",
-    "question": "What was the final authorization result after the employee security changes?",
-    "options": [
-      { "label": "Verified without an authorization error" },
-      { "label": "Task not authorized was remediated and retested" },
-      { "label": "Task not authorized is unresolved" }
-    ],
-    "allowFreeformInput": false
-  },
-  {
-    "header": "Remediated domain",
-    "question": "Only when Task not authorized was remediated: enter the affected domain. Otherwise leave blank."
-  },
-  {
-    "header": "Remediation scenario",
-    "question": "Only when Task not authorized was remediated: enter the named supported scenario. Otherwise leave blank."
-  },
-  {
-    "header": "Authorization retest",
-    "question": "Only when Task not authorized was remediated: was the same scenario retested successfully?",
-    "options": [
-      { "label": "Verified after remediation" },
-      { "label": "Not retested or still failing" }
-    ],
-    "allowFreeformInput": false
+    "header": "Additional scenario domains",
+    "question": "Optional: only when custom ESS scenarios require extra Workday domains, enter one mapping per line as Domain | supported scenario. Otherwise omit this row or leave it blank."
   }
 ]
 ```
@@ -454,17 +487,25 @@ After the administrator confirms completion, use one
 ```json
 [
   {
-    "header": "Workday administrator return worksheet",
-    "question": "Paste the completed Workday administrator return worksheet in one response. Keep every field label with its answer. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
+    "header": "Workday administrator details",
+    "question": "Paste the completed Workday administrator details in one response. Do not include passwords, client secrets, tokens, certificate contents, cookies, or private keys."
   }
 ]
 ```
 
-The response is a strict labeled worksheet, not free-form evidence. Preserve
-the exact labels and answers unchanged. The controller rejects missing,
-duplicate, or unknown labels and maps only the listed successful choices into
-the structured response object described below. Never parse, rename, infer,
-or normalize an answer in the skill:
+Preserve the response unchanged. The controller recognizes the generated table
+and common customer-facing labels and capitalization, rejects missing
+mandatory labels, duplicate labels, or unknown labels, and maps only the
+listed successful choices into the structured response object described
+below. Omission of the optional **Additional scenario domains** row means
+`optionalDomains: []`; do not ask for it again. Do not ask the customer to
+reformat a recognizable response. Never infer a missing mandatory answer or
+treat unlabeled prose as evidence:
+
+Certificate comparisons are date-only. Do not ask either administrator for a
+timestamp, time, or timezone. Accept the portal's displayed certificate date
+in a common numeric or month-name format; the controller ignores any supplied
+time component.
 
 - an applicable Microsoft Entra branch plus
   **Yes, all four values match exactly** ->
@@ -475,15 +516,17 @@ or normalize an answer in the skill:
 - a different or uncertain Issuer, Service Provider ID, SSO service URL, or
   sign-on redirect URL -> stop for administrator remediation instead of
   submitting successful evidence;
-- **The new certificate created from the Entra Base64 file** ->
+- **The certificate transferred from the completed Entra handoff** ->
   `certificateSelectionOutcome: entra-signing-certificate-selected`;
 - matching certificate expiration date ->
   `certificateValidityOutcome: matches-verified-entra-certificate`;
 - approved existing client -> `apiClientOutcome:
 existing-client-verified`;
 - newly registered client -> `apiClientOutcome: new-client-registered`;
-- **SAML Bearer** -> `clientGrantType: saml-bearer`;
-- **Yes** for Workday owned scope -> `includeWorkdayOwnedScope: yes`;
+- successful **API client access** confirmation ->
+  `clientGrantType: saml-bearer`, `includeWorkdayOwnedScope: yes`, and
+  `functionalAreaScopes` populated with `Core Payroll`, `Organizations and
+  Roles`, `Staffing`, and `Time Off and Leave`;
 - the entered connection/policy fields -> their corresponding controller
   keys;
 - existing active policy -> `existing-active-policy`;
@@ -495,29 +538,21 @@ existing-client-verified`;
 - configured limited/test population -> `rolloutType: limited-or-test`;
 - an unconfigured or uncertain employee population -> stop for administrator
   remediation instead of submitting successful evidence;
-- each verified domain permission ->
-  `get-permission-verified`;
-- **Yes, all four required functional areas are present** ->
-  `functionalAreaScopes` populated with `Core Payroll`,
-  `Organizations and Roles`, `Staffing`, and `Time Off and Leave`;
-- **No additional domains are required** -> `optionalDomains: []`;
-- additional domain lines -> `optionalDomains` objects with one `domain` and
-  one named supported `scenario` per line;
+- successful **Required employee access** confirmation ->
+  `publicWorkerReportsOutcome: get-permission-verified` and
+  `integrationPermissionsGetOutcome: get-permission-verified`;
+- omitted, blank, or **No additional scenario domains are required** ->
+  `optionalDomains: []`;
+- additional scenario-domain lines -> `optionalDomains` objects with one
+  `domain` and one named supported `scenario` per line;
 - a missing or uncertain required functional area, or an uncertain optional
   domain outcome -> stop for administrator remediation instead of submitting
-  successful evidence;
-- verified authorization -> `authorizationOutcome: verified`;
-- remediated and retested authorization ->
-  `authorizationOutcome: task-not-authorized-remediated`, plus
-  `authorizationRemediationDomain`, `authorizationRemediationScenario`, and
-  `authorizationRetestOutcome: verified-after-remediation`.
+  successful evidence.
 
-Any unsupported provider, mismatch, missing certificate, date mismatch, or
-**I'm not sure** answer is a remediation outcome, not successful evidence. An
-unresolved `Task not authorized` result reopens only the affected domain and
-employee-security evidence; it must not discard valid endpoints, certificate,
-or federation evidence.
-Show the affected remediation step and keep the phase waiting.
+Any unresolved provider identification or routing approval, mismatch, missing
+certificate, date mismatch, or **I'm not sure** answer requires the applicable
+guided step before successful evidence can be submitted. Preserve completed
+evidence and resume the selected handoff rather than restarting the phase.
 
 If the administrator omits a required value or replies only with wording such
 as "done", "all good", "continue", or "proceed", do not move to another field,
@@ -554,7 +589,7 @@ redisplay a completed handoff. Reopen only `invalidFields` and
 non-secret packet.
 
 Never collect a secret, password, token, cookie, certificate body, or private
-key. Write the exact labeled response directly to
+key. Write the exact table response directly to
 `.local/connect/workday-da/workday-admin-return-worksheet.txt`; never
 interpolate administrator-entered values into a generated shell command. Pass
 the worksheet once:
@@ -587,9 +622,7 @@ Use these exact outcome values:
 - `includeWorkdayOwnedScope`: `yes`;
 - `rolloutType`: `entire-workforce` or `limited-or-test`;
 - `publicWorkerReportsOutcome` and `integrationPermissionsGetOutcome`:
-  `get-permission-verified`;
-- `authorizationOutcome`: `verified` or
-  `task-not-authorized-remediated`.
+  `get-permission-verified`.
 
 For example:
 
@@ -619,8 +652,7 @@ For example:
     "Staffing",
     "Time Off and Leave"
   ],
-  "optionalDomains": [],
-  "authorizationOutcome": "verified"
+  "optionalDomains": []
 }
 ```
 

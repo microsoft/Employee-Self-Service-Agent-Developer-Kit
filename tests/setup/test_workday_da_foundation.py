@@ -27,9 +27,9 @@ def test_lifecycle_has_one_json_state_authority() -> None:
     assert "scripts/workday_connect.py" in skill
     assert ".local/connect/workday-da/config.json" in skill
     assert "must not edit this file directly" in schema
-    assert '"schemaVersion": 9' in schema
+    assert '"schemaVersion": 12' in schema
     assert '"substage": "not-started"' in schema
-    assert "config.pre-v9.json" in schema
+    assert "config.pre-v12.json" in schema
     assert '"tenantFoundation": null' in schema
     assert "Markdown state mirror" in schema
     assert not (_WORKDAY_DA / "tasks.md").exists()
@@ -46,7 +46,7 @@ def test_orchestrator_exposes_exactly_six_customer_phases() -> None:
         "Workday administrator",
         "Connections",
         "Runtime configuration",
-        "Employee validation",
+        "Maker validation",
     ):
         assert phase in skill
     assert "21" not in skill
@@ -82,7 +82,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
     assert "--discovery-json" not in entra
     assert "--verification-json" not in entra
     assert "does not authenticate the maker" in " ".join(entra.split())
-    assert "guided handoff to the Entra administrator" in " ".join(
+    assert "guided handoff to the Entra app administrator" in " ".join(
         entra.split()
     )
     assert "Enter the Workday tenant name, or paste a Workday" in entra
@@ -94,17 +94,21 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         '"all good", "continue", or "proceed"' in " ".join(entra.split())
     )
     assert "captureInstructions" in entra
-    assert "Microsoft Entra administrator return\nworksheet" in entra
+    assert "python scripts/workday_connect.py entra-handoff" in entra
+    assert "Information to capture" in entra
+    assert "Where to find it" in entra
+    assert "What to record" in entra
+    assert "Example value" in entra
+    assert "Your tenant values" in entra
+    normalized_entra = " ".join(entra.split())
+    assert "both the capture guide and the return worksheet" in normalized_entra
     assert (
-        "before the administrator starts the numbered tasks"
-        in " ".join(entra.split())
+        "Before the numbered tasks" in entra
     )
     assert "renders an array of questions as a sequential wizard" in entra
     assert "containing exactly one free-form question" in entra
     assert "Do not replay the full worksheet" in entra
-    assert '"header": "Entra return worksheet"' in entra
-    assert "every line is required" in entra
-    assert "Certificate expiration date (active certificate row):" in entra
+    assert '"header": "Microsoft Entra app administrator details"' in entra
     assert "Certificate valid from" not in entra
     assert "Do not\nsay only \"paste a revised worksheet\"" in entra
     for removed_header in (
@@ -118,10 +122,7 @@ def test_entra_and_workday_identifiers_remain_distinct() -> None:
         "Scope ID",
     ):
         assert f'"header": "{removed_header}"' not in entra
-    assert (
-        "Do not ask for a field after completion unless the shareable"
-        in entra
-    )
+    assert "Do not ask for a\nfield after completion unless it appeared" in entra
 
 
 def test_preflight_explains_silent_auth_and_current_phase() -> None:
@@ -143,10 +144,11 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     normalized = " ".join(tenant.split())
 
     assert "one administrator handoff" in tenant
-    assert "Workday administrator return worksheet" in tenant
-    assert "one copyable worksheet" in tenant
+    assert "Workday administrator details" in tenant
+    assert "both the capture guide and the return worksheet" in normalized
     assert "share this whole section" in tenant
-    assert "Information to return to the maker" in tenant
+    assert "Your tenant values" in tenant
+    assert "do not repeat an **Information to return to the maker**" in tenant
     assert "identityProviderQuestion" in tenant
     assert "Microsoft Entra ID" in tenant
     assert "Okta" in tenant
@@ -154,28 +156,48 @@ def test_manual_handoff_is_one_packet_not_row_attestations() -> None:
     assert "Another sign-in provider" in tenant
     assert "No enabled SAML row" in tenant
     assert "I'm not sure" in tenant
+    assert "Existing non-Entra federation coexistence or transition" in tenant
+    assert "add a separate Microsoft Entra SAML row" in normalized
+    assert (
+        "controlled transition of only the target employee environment"
+        in tenant
+    )
+    assert "Do not restart the Entra handoff" in tenant
+    assert "resume here after approval" in tenant
+    assert "stop before\n  showing certificate" not in tenant
     assert "Do not infer a match from the provider choice alone" in normalized
     assert "certificateSelectionQuestion" in tenant
-    assert "The new certificate created from the Entra Base64 file" in tenant
+    assert (
+        "The certificate transferred from the completed Entra handoff"
+        in tenant
+    )
     assert "A different existing Workday certificate" in tenant
     assert "No certificate is selected" in tenant
     assert "Never suggest, prefill, or ask the administrator to confirm" in tenant
     assert '"header": "Certificate name"' not in tenant
     assert "containing exactly one free-form question" in tenant
-    assert '"header": "Workday administrator return worksheet"' in tenant
+    assert '"header": "Workday administrator details"' in tenant
     assert '"header": "Identity provider"' not in tenant
     assert '"header": "Authentication policy"' in tenant
     assert '"header": "Network readiness"' in tenant
     assert "Do not add `recommended`" in tenant
     assert "one mini-worksheet containing only the missing or invalid" in tenant
     assert "Do not reopen a sequence of individual questions" in tenant
-    assert "strict labeled worksheet" in tenant
-    assert "rejects missing, duplicate, or unknown labels" in normalized
+    assert "reformat a recognizable response" in tenant
+    assert (
+        "rejects missing mandatory labels, duplicate labels, or unknown labels"
+        in normalized
+    )
     assert "--response-worksheet-file" in tenant
     assert "Enter a JSON string array" not in tenant
     assert 'Enter a JSON array of {' not in tenant
-    assert "Yes, all four required functional areas are present" in tenant
+    assert "API client access" in tenant
+    assert "Required employee access" in tenant
+    assert "Additional scenario domains" in tenant
     assert "Domain | supported scenario" in tenant
+    assert "do not ask for it again" in tenant
+    assert '"header": "Authorization"' not in tenant
+    assert '"header": "Authorization retest"' not in tenant
     assert '"all good", "continue", or "proceed"' in tenant
 
 
@@ -204,6 +226,9 @@ def test_administrator_worksheets_use_controller_parsing_contract() -> None:
 
     assert "only exception" in normalized_skill
     assert "controller's worksheet parser" in normalized_skill
+    assert "reformat it" in normalized_skill
+    assert "reformat a recognizable response" in " ".join(entra.split())
+    assert "including the header and every row" not in entra
     assert "--verification-worksheet-file" in entra
     assert "entra-verification.json" not in entra
     assert "--response-worksheet-file" in tenant

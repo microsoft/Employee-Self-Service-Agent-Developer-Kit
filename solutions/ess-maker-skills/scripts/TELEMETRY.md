@@ -79,8 +79,9 @@ Time column on every table: `EventInfo_Time` (UTC).
 For Workday investigations, filter `connector == "workday"` and stitch one
 run using `correlation_id`. Its bounded dimensions include `lifecycle_event`,
 `phase`, `outcome`, `duration_ms`, `retry_count`, `resume_count`, and
-`blocker_category`. Employee-validation blockers can also carry the bounded
-`remediation_id` (`WD-E2E-NNN`). `agent_id` is emitted only when it is a
+`blocker_category`. Maker-validation blockers can also carry the bounded
+`remediation_id` (`WD-E2E-006`). Legacy `employee_validation` phase input is
+normalized to `maker_validation`. `agent_id` is emitted only when it is a
 canonical GUID. It does not contain free-form errors, URLs, connection
 identifiers, or employee data.
 

@@ -571,7 +571,31 @@ def _runtime(config: dict[str, Any]) -> tuple[
             ".local/config.json. Run /setup first."
         )
 
-    client = PowerPlatformClient(discover_tenant(env_url))
+    configured_ring = str(config.get("ring") or "").strip().casefold()
+    if configured_ring and configured_ring not in {"prod", "preprod", "test"}:
+        raise EvaluationRunError(
+            "Configured ring is not supported. Run /setup again."
+        )
+    endpoint = str(config.get("powerPlatformApiEndpoint") or "").strip()
+    try:
+        inferred_ring = ring_from_environment_host(endpoint) if endpoint else ""
+    except ValueError as exc:
+        raise EvaluationRunError(
+            "Configured Power Platform endpoint does not identify a supported "
+            "service ring. Run /setup again."
+        ) from exc
+    rings = {value for value in (configured_ring, inferred_ring) if value}
+    if not rings:
+        ring = "prod"
+    elif len(rings) == 1:
+        ring = rings.pop()
+    else:
+        raise EvaluationRunError(
+            "Configured ring and Power Platform endpoint identify different "
+            "service rings. Run /setup again."
+        )
+
+    client = PowerPlatformClient(discover_tenant(env_url), ring=ring)
     client.authenticate()
     environment_id = resolve_environment_id(config, client)
     agent_folder = Path(agent_folder_value)

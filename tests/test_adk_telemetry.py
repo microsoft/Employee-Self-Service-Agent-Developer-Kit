@@ -650,7 +650,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     adk.emit_connect_lifecycle(
         "phase-completed",
         connector="workday",
-        phase="employee-validation",
+        phase="maker-validation",
         outcome="success",
         duration_ms=1250,
         retry_count=2,
@@ -666,7 +666,7 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     assert envelope["name"] == "adk.connect.lifecycle"
     assert envelope["data"]["connector"] == "workday"
     assert envelope["data"]["lifecycle_event"] == "phase_completed"
-    assert envelope["data"]["phase"] == "employee_validation"
+    assert envelope["data"]["phase"] == "maker_validation"
     assert envelope["data"]["outcome"] == "success"
     assert envelope["data"]["duration_ms"] == 1250
     assert envelope["data"]["retry_count"] == 2
@@ -675,6 +675,26 @@ def test_connect_lifecycle_event_uses_bounded_privacy_safe_dimensions(
     assert envelope["data"]["remediation_id"] == "WD-E2E-006"
     assert envelope["data"]["correlation_id"] == correlation_id
     assert envelope["data"]["agent_id"] == agent_id
+
+
+@pytest.mark.parametrize(
+    "legacy_phase",
+    ("employee-validation", "employee_validation"),
+)
+def test_connect_lifecycle_normalizes_legacy_validation_phase(
+    captured_post,
+    legacy_phase,
+):
+    adk.emit_connect_lifecycle(
+        "phase-completed",
+        connector="workday",
+        phase=legacy_phase,
+        outcome="success",
+        block=True,
+    )
+
+    data = captured_post[0][1][0]["data"]
+    assert data["phase"] == "maker_validation"
 
 
 def test_connect_lifecycle_event_normalizes_unbounded_values(captured_post):

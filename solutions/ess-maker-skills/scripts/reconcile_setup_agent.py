@@ -163,8 +163,9 @@ def _probe_native_agent(
 def _resolve_dataverse_url(
     environment_id: str,
     account: str | None,
+    ring: str = "prod",
 ) -> str | None:
-    client = PowerPlatformClient("organizations")
+    client = PowerPlatformClient("organizations", ring=ring or "prod")
     client.authenticate(preferred_username=account)
     raw_environments = client.list_environments_for_user()
     if isinstance(raw_environments, dict) and "_error" in raw_environments:
@@ -478,6 +479,7 @@ def probe_dataverse_identity(
     *,
     environment_id: str,
     agent_id: str,
+    ring: str = "prod",
     account: str | None = None,
     dataverse_url: str | None = None,
 ) -> dict[str, Any]:
@@ -489,6 +491,7 @@ def probe_dataverse_identity(
             resolved_url = _resolve_dataverse_url(
                 normalized_environment,
                 account,
+                ring,
             )
         except (
             APIError,
@@ -567,6 +570,7 @@ def reconcile_selected_agent(
         return probe_dataverse_identity(
             environment_id=environment_id,
             agent_id=agent_id,
+            ring=ring,
             account=account,
             dataverse_url=dataverse_url,
         )

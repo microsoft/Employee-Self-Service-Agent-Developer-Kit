@@ -26,20 +26,21 @@ from workday_connect_model import (
     workday_saml_entity_id,
 )
 from workday_connect_contracts import (
-    WorkdayConnectContractError,
     build_entra_handoff,
     build_workday_admin_packet,
     parse_entra_return_worksheet,
     parse_workday_admin_return_worksheet,
-    validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
-    validate_employee_evidence,
-    validate_employee_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
+from workday_connect_evidence_contracts import (
+    WorkdayConnectContractError,
+    validate_agent_binding_evidence,
+    validate_maker_evidence,
+    validate_maker_failure_evidence,
+)
 from workday_connect_flightcheck import (
-    PROFILE_POLICIES,
     WorkdayConnectFlightCheckError,
     run_profile,
 )
@@ -47,6 +48,16 @@ from workday_connect_preflight import (
     WorkdayConnectPreflightError,
     prepare_connections_package,
     run_preflight,
+)
+from workday_connect_readiness import (
+    ensure_migration_baseline,
+    run_final_readiness,
+    run_profile_gate,
+)
+from workday_connect_realms import (
+    WorkdayConnectRealmError,
+    discover_and_record_realm_target,
+    revalidate_active_realm_target,
 )
 from workday_connect_runtime import (
     WorkdayConnectRuntimeError,
@@ -84,8 +95,9 @@ def _add_json_input(
     *,
     allow_legacy_inline: bool = True,
     allow_worksheet: bool = False,
+    required: bool = True,
 ) -> None:
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=required)
     group.add_argument(
         f"--{name}-file",
         type=Path,
@@ -175,12 +187,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status")
+    discover_target = subparsers.add_parser("discover-realm-target")
+    discover_target.add_argument(
+        "--realm",
+        choices=("test", "prod"),
+        required=True,
+    )
+    discover_target.add_argument("--environment")
+    discover_target.add_argument("--environment-id")
+    discover_target.add_argument("--dataverse-url")
+    discover_target.add_argument("--maker-username")
 
     tenant = subparsers.add_parser("set-workday-tenant")
     tenant.add_argument("--tenant", required=True)
 
     entra_handoff = subparsers.add_parser("entra-handoff")
-    _add_json_input(entra_handoff, "discovery")
+    _add_json_input(entra_handoff, "discovery", required=False)
     record_entra = subparsers.add_parser("record-entra")
     _add_json_input(
         record_entra,
@@ -250,8 +272,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record_validation = subparsers.add_parser("record-validation")
     _add_json_input(record_validation, "evidence")
-    subparsers.add_parser("begin-employee-test")
-    subparsers.add_parser("abandon-employee-test")
     record_validation_failure = subparsers.add_parser(
         "record-validation-failure"
     )
@@ -285,191 +305,43 @@ def _status(
     return store.status()
 
 
+def _discover_realm_target(
+    args: argparse.Namespace,
+    store: WorkdayConnectStore,
+) -> dict[str, Any]:
+    return discover_and_record_realm_target(
+        Path(args.root),
+        store,
+        realm=args.realm,
+        environment_id=args.environment_id,
+        environment_url=args.dataverse_url,
+        environment_selector=getattr(args, "environment", None),
+        account_hint=args.maker_username,
+    )
+
+
 def _run_profile_gate(
     store: WorkdayConnectStore,
     profile_name: str,
 ) -> dict[str, Any]:
-    policy = PROFILE_POLICIES[profile_name]
-    try:
-        summary = run_profile(
-            store.workspace_root,
-            store.load(),
-            profile_name,
-        )
-    except WorkdayConnectFlightCheckError as exc:
-        try:
-            store.block_validation_profile(
-                exc.phase_id or policy.phase_id,
-                profile_name,
-                error_type=exc.error_type,
-                message=str(exc),
-                customer_remediation=exc.customer_remediation,
-                input_fingerprint=exc.input_fingerprint,
-                source_profile=profile_name,
-            )
-        except WorkdayConnectStoreError as stale:
-            stale.profile_blocker_persisted = True
-            raise
-        wrapped = WorkdayConnectStoreError(
-            exc.customer_remediation
-            or "Readiness checks need attention before setup can continue."
-        )
-        wrapped.profile_blocker_persisted = True
-        wrapped.customer_remediation = exc.customer_remediation
-        raise wrapped from exc
-    try:
-        updated_state = store.record_validation_profile(
-            policy.phase_id,
-            summary,
-        )
-    except WorkdayConnectStoreError as stale:
-        stale.profile_blocker_persisted = True
-        raise
-    return updated_state["phases"][policy.phase_id]["validationProfiles"][
-        profile_name
-    ]
+    return run_profile_gate(
+        store,
+        profile_name,
+        profile_runner=run_profile,
+    )
 
 
-def _derived_profile_summary(
-    source: Mapping[str, Any],
-    profile_name: str,
-    *,
-    migration_baseline: bool,
+def _run_final_readiness(
+    store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    policy = PROFILE_POLICIES[profile_name]
-
-    def belongs(checkpoint_id: str) -> bool:
-        return checkpoint_id in policy.checkpoints or any(
-            checkpoint_id.startswith(family + "-")
-            for family in policy.families
-        )
-
-    return {
-        **dict(source),
-        "profile": profile_name,
-        "sourceProfile": source["profile"],
-        "checkpointStatuses": {
-            checkpoint_id: status
-            for checkpoint_id, status in source[
-                "checkpointStatuses"
-            ].items()
-            if belongs(checkpoint_id)
-        },
-        "acceptedSuppressions": [
-            suppression
-            for suppression in source["acceptedSuppressions"]
-            if belongs(suppression["checkpointId"])
-        ],
-        "migrationBaseline": migration_baseline,
-    }
-
-
-def _run_final_readiness(store: WorkdayConnectStore) -> dict[str, Any]:
-    final_summary = _run_profile_gate(store, "workday-da:final")
-    for profile_name, policy in PROFILE_POLICIES.items():
-        if profile_name == "workday-da:final":
-            continue
-        store.record_validation_profile(
-            policy.phase_id,
-            _derived_profile_summary(
-                final_summary,
-                profile_name,
-                migration_baseline=False,
-            ),
-        )
-    migration = store.load().get("migration") or {}
-    if (
-        migration.get("source") == "workday-connect-state-v7"
-        and migration.get("flightcheckBaselineOutcome")
-        == "remediation-required"
-    ):
-        store.complete_flightcheck_migration()
-    return final_summary
+    return run_final_readiness(
+        store,
+        profile_runner=run_profile,
+    )
 
 
 def _ensure_migration_baseline(store: WorkdayConnectStore) -> None:
-    try:
-        with store.migration_guard():
-            state = store.load()
-            migration = state.get("migration") or {}
-            if not migration.get("flightcheckBaselineRequired"):
-                return
-            ready = migration.get("legacyReady") is True
-            if ready and not store.prepare_migration_employee_test_attempt():
-                return
-            state = store.load()
-            if ready:
-                profile_names = ("workday-da:final",)
-            else:
-                profile_names = tuple(
-                    profile_name
-                    for profile_name, phase_id in (
-                        ("workday-da:setup-readiness", "preflight"),
-                        (
-                            "workday-da:external-prerequisites",
-                            "workday-admin",
-                        ),
-                        ("workday-da:package-ready", "connections"),
-                        ("workday-da:dataverse-ready", "runtime"),
-                        ("workday-da:post-connection", "runtime"),
-                        ("workday-da:post-agent-wiring", "runtime"),
-                    )
-                    if state["phases"][phase_id]["status"] == "complete"
-                )
-            if not profile_names:
-                store.complete_flightcheck_migration()
-                return
-            active_profile = profile_names[0]
-            try:
-                for active_profile in profile_names:
-                    summary = run_profile(
-                        store.workspace_root,
-                        state,
-                        active_profile,
-                        source_profile=active_profile,
-                        migration_baseline=True,
-                    )
-                    if not ready:
-                        store.record_validation_profile(
-                            PROFILE_POLICIES[active_profile].phase_id,
-                            summary,
-                        )
-            except WorkdayConnectFlightCheckError as exc:
-                store.block_flightcheck_migration(
-                    exc.phase_id
-                    or PROFILE_POLICIES[active_profile].phase_id,
-                    error_type=exc.error_type,
-                    message=str(exc),
-                    customer_remediation=exc.customer_remediation,
-                    input_fingerprint=exc.input_fingerprint,
-                    source_profile=active_profile,
-                )
-                wrapped = WorkdayConnectStoreError(
-                    exc.customer_remediation
-                    or (
-                        "Readiness checks need attention before setup can "
-                        "continue."
-                    )
-                )
-                wrapped.profile_blocker_persisted = True
-                wrapped.customer_remediation = exc.customer_remediation
-                raise wrapped from exc
-            if ready:
-                final_summary = summary
-                for profile_name, policy in PROFILE_POLICIES.items():
-                    summary = _derived_profile_summary(
-                        final_summary,
-                        profile_name,
-                        migration_baseline=True,
-                    )
-                    store.record_validation_profile(
-                        policy.phase_id,
-                        summary,
-                    )
-            store.complete_flightcheck_migration()
-    except WorkdayConnectStoreError as exc:
-        exc.profile_blocker_persisted = True
-        raise
+    ensure_migration_baseline(store, profile_runner=run_profile)
 
 
 def _set_workday_tenant(
@@ -612,15 +484,55 @@ def _action_evidence(
     return None
 
 
+def _post_skill_next_steps(realm: str) -> list[str]:
+    if realm == "dev":
+        return [
+            "Promote the agent from Development to Test when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Test."
+            ),
+        ]
+    if realm == "test":
+        return [
+            "Promote the agent from Test to Production when ready.",
+            (
+                "Return to Connect Workday and say that the agent was "
+                "promoted to Production."
+            ),
+        ]
+    if realm == "prod":
+        return [
+            "Publish and deploy the Production agent when ready.",
+            (
+                "Have each non-maker employee establish their own Workday "
+                "connections in Microsoft 365 Chat."
+            ),
+            (
+                "Validate an enabled Workday scenario with the published "
+                "Production agent."
+            ),
+        ]
+    raise WorkdayConnectStoreError(
+        f"Unsupported Workday target realm: {realm}"
+    )
+
+
 def _entra_handoff(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
     administrator = state["phases"]["entra"]["administrator"]
+    discovery = None
+    if (
+        getattr(args, "discovery_file", None) is not None
+        or getattr(args, "discovery_json", None) is not None
+    ):
+        discovery = _json_input(args, "discovery", "Entra discovery")
     packet = build_entra_handoff(
         state,
-        _json_input(args, "discovery", "Entra discovery"),
+        discovery,
     )
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
         administrator["substage"]
@@ -838,6 +750,11 @@ def _workday_admin_packet(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra app administrator sign-off before "
+            "starting the Workday administrator handoff."
+        )
     administrator = state["phases"]["workday-admin"]["administrator"]
     packet = build_workday_admin_packet(state)
     already_presented = ADMINISTRATOR_SUBSTAGES.index(
@@ -855,6 +772,11 @@ def _record_workday_admin(
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
     state = store.load()
+    if state["phases"]["entra"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete the Microsoft Entra app administrator sign-off before "
+            "recording Workday administrator evidence."
+        )
     _require_administrator_completion(state, "workday-admin")
     response = {
         **dict(
@@ -900,6 +822,8 @@ def _record_workday_admin(
                 store,
                 "workday-da:external-prerequisites",
             )
+            if state.get("tenantFoundation") is None:
+                store.capture_tenant_foundation()
             return {
                 "verified": True,
                 "replayed": True,
@@ -930,15 +854,6 @@ def _record_workday_admin(
             "workday-admin",
             "collecting-evidence",
             valid_fields=result["partialEvidence"],
-            invalid_fields=(
-                [
-                    "authorizationRemediationDomain",
-                    "authorizationRemediationScenario",
-                    "authorizationRetestOutcome",
-                ]
-                if result["evidence"]["authorizationOutcome"] == "verified"
-                else []
-            ),
         )
     store.complete_action(
         "workday-admin",
@@ -978,6 +893,7 @@ def _runtime_apply(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    revalidate_active_realm_target(args.root, store)
     result = run_runtime_operation(
         store.load(),
         apply=True,
@@ -1180,9 +1096,17 @@ def _record_runtime_template_wiring(
     _args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
+    state = store.load()
+    if "workday-topics-activated" not in state["phases"]["runtime"][
+        "completedActions"
+    ]:
+        raise WorkdayConnectStoreError(
+            "Enable and verify all Workday topics before wiring the runtime "
+            "template into Conversation Start."
+        )
     evidence = verify_runtime_template_wiring(
         store.workspace_root,
-        store.load(),
+        state,
     )
     store.complete_action(
         "runtime",
@@ -1203,114 +1127,110 @@ def _record_validation(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    with store.employee_validation_guard():
-        evidence = validate_employee_evidence(
-            _json_input(args, "evidence", "employee validation evidence")
+    with store.maker_validation_guard():
+        evidence = validate_maker_evidence(
+            _json_input(args, "evidence", "maker validation evidence")
         )
-        phase = store.load()["phases"]["employee-validation"]
-        attempt = phase.get("employeeTestAttempt")
+        phase = store.load()["phases"]["maker-validation"]
+        maker_evidence = {
+            "testUserCategory": "maker",
+            "timestamp": evidence["timestamp"],
+            "outcome": evidence["outcome"],
+        }
+        blocker = phase.get("blocker")
         if (
-            isinstance(attempt, Mapping)
-            and attempt.get("status") == "succeeded"
-            and phase["status"] == "complete"
+            isinstance(blocker, Mapping)
+            and blocker.get("remediationId") == "WD-E2E-006"
         ):
-            return {"verified": True, "replayed": True, "status": store.status()}
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "success."
+            scenario_name = str(evidence.get("scenarioName") or "").strip()
+            if scenario_name != blocker.get("scenarioName"):
+                raise WorkdayConnectContractError(
+                    "Retest the same named scenario that observed "
+                    "'Task not authorized'."
+                )
+            maker_evidence.update(
+                {
+                    "scenarioName": scenario_name,
+                    "authorizationOutcome": (
+                        "task-not-authorized-remediated"
+                    ),
+                    "authorizationRemediationDomain": blocker[
+                        "affectedDomain"
+                    ],
+                    "authorizationRetestOutcome": (
+                        "verified-after-remediation"
+                    ),
+                }
             )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
+        elif evidence.get("scenarioName"):
+            maker_evidence["scenarioName"] = evidence["scenarioName"]
+        replayed = (
+            phase["status"] == "complete"
+            and _action_evidence(
+                {"phases": {"maker-validation": phase}},
+                "maker-validation",
+                "maker-smoke-test",
+            )
+            == maker_evidence
         )
-        store.complete_action(
-            "employee-validation",
-            "signed-in-scenario",
-            evidence=evidence,
-        )
+        if not replayed:
+            store.complete_action(
+                "maker-validation",
+                "maker-smoke-test",
+                evidence=maker_evidence,
+            )
         _run_final_readiness(store)
-        store.finalize_employee_validation_success()
-        return {"verified": True, "status": store.status()}
-
-
-def _begin_employee_test(
-    _args: argparse.Namespace,
-    store: WorkdayConnectStore,
-) -> dict[str, Any]:
-    state = store.begin_employee_test_attempt()
-    attempt = state["phases"]["employee-validation"][
-        "employeeTestAttempt"
-    ]
-    return {
-        "attempt": {
-            "scenarioId": attempt["scenarioId"],
-            "status": attempt["status"],
-            "startedAt": attempt["startedAt"],
-        },
-        "status": store.status(),
-    }
-
-
-def _abandon_employee_test(
-    _args: argparse.Namespace,
-    store: WorkdayConnectStore,
-) -> dict[str, Any]:
-    with store.employee_validation_guard():
-        state = store.load()
-        attempt = state["phases"]["employee-validation"].get(
-            "employeeTestAttempt"
-        )
-        abandoned = (
-            isinstance(attempt, dict)
-            and attempt.get("status") in {"active", "validating"}
-        )
-        store.abandon_employee_test_attempt()
-    return {"abandoned": abandoned, "status": store.status()}
+        final_state = store.finalize_maker_validation_success()
+        active_realm = final_state["activeTargetRealm"]
+        status = store.status()
+        if replayed:
+            return {
+                "verified": True,
+                "replayed": True,
+                "lifecycleComplete": True,
+                "activeTargetRealm": active_realm,
+                "postSkillNextSteps": _post_skill_next_steps(active_realm),
+                "status": status,
+            }
+        return {
+            "verified": True,
+            "lifecycleComplete": True,
+            "activeTargetRealm": active_realm,
+            "postSkillNextSteps": _post_skill_next_steps(active_realm),
+            "status": status,
+        }
 
 
 def _record_validation_failure(
     args: argparse.Namespace,
     store: WorkdayConnectStore,
 ) -> dict[str, Any]:
-    evidence = validate_employee_failure_evidence(
-        _json_input(
-            args,
-            "evidence",
-            "employee validation failure evidence",
-        )
+    evidence = validate_maker_failure_evidence(
+        _json_input(args, "evidence", "maker validation failure")
     )
-    with store.employee_validation_guard():
-        attempt = store.load()["phases"]["employee-validation"].get(
-            "employeeTestAttempt"
+    state = store.load()
+    if state["phases"]["runtime"]["status"] != "complete":
+        raise WorkdayConnectStoreError(
+            "Complete runtime configuration before recording Maker "
+            "validation remediation."
         )
-        if (
-            not isinstance(attempt, Mapping)
-            or attempt.get("status") not in {"active", "validating"}
-        ):
-            raise WorkdayConnectStoreError(
-                "Start a bounded employee test attempt before recording "
-                "failure."
-            )
-        store.freeze_employee_test_attempt(
-            evidence_timestamp=evidence["timestamp"],
-        )
-        store.finalize_employee_validation_failure(
-            blocker={
-                "operation": "record-validation-failure",
-                "remediationId": evidence["remediationId"],
-                "errorType": evidence["failureCategory"],
-                "failureSurface": evidence["failureSurface"],
-                "message": evidence["remediation"],
-                "remediation": evidence["remediation"],
-                "capturedAt": evidence["timestamp"],
-            }
-        )
+    store.set_phase_status(
+        "maker-validation",
+        "blocked",
+        blocker={
+            "operation": "record-validation",
+            "errorType": "WorkdayAuthorizationRemediationRequired",
+            "message": (
+                "The maker observed 'Task not authorized'. Correct the "
+                "recorded Workday domain and retest the same scenario."
+            ),
+            **evidence,
+        },
+    )
     return {
         "recorded": True,
         "remediationId": evidence["remediationId"],
+        "scenarioName": evidence["scenarioName"],
         "status": store.status(),
     }
 
@@ -1376,6 +1296,7 @@ _COMMAND_HANDLERS: dict[
     Callable[[argparse.Namespace, WorkdayConnectStore], dict[str, Any]],
 ] = {
     "status": _status,
+    "discover-realm-target": _discover_realm_target,
     "set-workday-tenant": _set_workday_tenant,
     "entra-handoff": _entra_handoff,
     "record-entra": _record_entra,
@@ -1390,8 +1311,6 @@ _COMMAND_HANDLERS: dict[
     "record-topic-activation": _record_topic_activation,
     "record-runtime-template-wiring": _record_runtime_template_wiring,
     "record-agent-binding": _record_agent_binding,
-    "begin-employee-test": _begin_employee_test,
-    "abandon-employee-test": _abandon_employee_test,
     "record-validation": _record_validation,
     "record-validation-failure": _record_validation_failure,
     "preflight": _preflight,
@@ -1400,6 +1319,7 @@ _COMMAND_HANDLERS: dict[
 }
 
 _COMMAND_PHASES = {
+    "discover-realm-target": None,
     "preflight": "preflight",
     "set-workday-tenant": "entra",
     "entra-handoff": "entra",
@@ -1415,10 +1335,8 @@ _COMMAND_PHASES = {
     "record-topic-activation": "runtime",
     "record-runtime-template-wiring": "runtime",
     "record-agent-binding": "runtime",
-    "begin-employee-test": "employee-validation",
-    "abandon-employee-test": "employee-validation",
-    "record-validation": "employee-validation",
-    "record-validation-failure": "employee-validation",
+    "record-validation": "maker-validation",
+    "record-validation-failure": "maker-validation",
     "prepare-connections": "connections",
     "prepare-connections-approve": "connections",
 }
@@ -1454,16 +1372,17 @@ def main() -> None:
         WorkdayConnectContractError,
         WorkdayConnectPlanChangedError,
         WorkdayConnectPreflightError,
+        WorkdayConnectRealmError,
         WorkdayConnectRuntimeError,
         WorkdayConnectStoreError,
         WorkdayConnectFlightCheckError,
     ) as exc:
         phase_id = _COMMAND_PHASES.get(args.command)
         blocker_persistence_error = None
-        if phase_id and not getattr(
-            exc,
-            "profile_blocker_persisted",
-            False,
+        if (
+            phase_id
+            and not getattr(exc, "profile_blocker_persisted", False)
+            and not getattr(exc, "suppress_blocker_persistence", False)
         ):
             try:
                 blocker = {
@@ -1471,14 +1390,19 @@ def main() -> None:
                     "errorType": type(exc).__name__,
                     "message": str(exc),
                 }
-                if phase_id == "employee-validation":
+                if phase_id == "maker-validation":
                     existing_phase = (
                         store.load().get("phases", {}).get(phase_id, {})
                     )
                     existing_blocker = existing_phase.get("blocker") or {}
                     for key in (
                         "remediationId",
+                        "failureCategory",
                         "failureSurface",
+                        "timestamp",
+                        "remediation",
+                        "scenarioName",
+                        "affectedDomain",
                         "capturedAt",
                     ):
                         if key in existing_blocker:

@@ -30,6 +30,9 @@ class WorkdayConnectPreflightError(RuntimeError):
     """Raised when the Workday target cannot be proven safely."""
 
 
+SUPPORTED_POWER_PLATFORM_RINGS = frozenset({"prod", "preprod", "test"})
+
+
 @dataclass(frozen=True)
 class PreflightTarget:
     agent: dict[str, Any]
@@ -38,7 +41,6 @@ class PreflightTarget:
     package_flavor: str
     dataverse_url: str
     foundation_ring: str
-    pac_ring: str
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -123,17 +125,6 @@ def _require_materialized_workspace(
             "Finish the selected agent's workspace setup before connecting "
             "Workday."
         )
-
-
-def _pac_ring(foundation_ring: str) -> str:
-    normalized = str(foundation_ring or "prod").casefold()
-    if normalized in {"test", "preprod"}:
-        return "preprod"
-    if normalized == "prod":
-        return "prod"
-    raise WorkdayConnectPreflightError(
-        f"Unsupported Power Platform ring: {foundation_ring!r}."
-    )
 
 
 def _cached_dataverse_url(
@@ -269,6 +260,10 @@ def resolve_target(
     _require_materialized_workspace(setup_state, agent)
 
     foundation_ring = str(foundation.get("ring") or "prod").casefold()
+    if foundation_ring not in SUPPORTED_POWER_PLATFORM_RINGS:
+        raise WorkdayConnectPreflightError(
+            f"Unsupported Power Platform ring: {foundation.get('ring')!r}."
+        )
     foundation_environment_id = str(
         foundation.get("environmentId") or ""
     ).strip()
@@ -370,7 +365,6 @@ def resolve_target(
         package_flavor=supported["packageFlavor"],
         dataverse_url=exact_url,
         foundation_ring=foundation_ring,
-        pac_ring=_pac_ring(foundation_ring),
     )
 
 

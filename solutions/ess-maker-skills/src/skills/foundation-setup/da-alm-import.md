@@ -95,6 +95,7 @@ Run:
 ```text
 python scripts/setup_existing_da.py attach \
   --environment-id "{ENVIRONMENT_ID}" \
+  --environment-display-name "{ENVIRONMENT_DISPLAY_NAME}" \
   --tenant-id "{TENANT_ID}" \
   --host "{VALIDATED_HOST}" \
   --ring "{RING}" \

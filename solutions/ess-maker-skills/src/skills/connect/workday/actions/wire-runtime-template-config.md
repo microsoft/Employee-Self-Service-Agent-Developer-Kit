@@ -2,15 +2,21 @@
 
 # Action: Initialize Workday runtime templates at conversation start
 
-Run this action before wiring the Admin User Context redirect. It initializes
-the Workday runtime template configuration on every new conversation, rather
-than depending on the separately cached employee user context.
+Run this action only after all reviewed Workday topics are enabled and
+`record-topic-activation` has verified them. Run it before wiring the Admin
+User Context redirect. It initializes the Workday runtime template
+configuration on every new conversation, rather than depending on the
+separately cached employee user context.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 
 ---
 
 ## A.1 - Explain the scoped change
+
+Do not edit Conversation Start unless the Runtime phase already contains
+`workday-topics-activated`. The controller rejects
+`record-runtime-template-wiring` until that live activation evidence exists.
 
 **Message:**
 
