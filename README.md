@@ -8,6 +8,25 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
 
+### Which build to clone (releases, not `main`)
+
+This kit ships **two agent flavors**, each with its own **release line**. Clone the latest **release tag** for your flavor rather than cloning a trunk branch directly — releases are reviewed, known-good snapshots, while the trunk branches (`main`, `main-ca`) are active development and can change at any time.
+
+| Agent flavor | Clone the latest… | Cut from trunk |
+|---|---|---|
+| **Declarative Agent (DA)** — [`samples/WorkdayDeclarativeAgent/`](samples/WorkdayDeclarativeAgent/) | **`da-v*`** release tag | `main` |
+| **Custom Engine Agent (CEA)** — [`samples/WorkdayCustomEngineAgent/`](samples/WorkdayCustomEngineAgent/) | **`cea-v*`** release tag | `main-ca` |
+
+```bash
+# Declarative Agent (DA) — clone the latest DA release
+git clone --branch da-v1.0.0-rc.1 https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git
+
+# Custom Engine Agent (CEA) — clone the latest CEA release
+git clone --branch cea-v1.0.0-rc.1 https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git
+```
+
+Check the [**Releases**](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/releases) page for the newest `da-v*` / `cea-v*` tag and substitute it above. Clone `main` (DA) or `main-ca` (CEA) directly only if you specifically want the latest in-development changes. See [Branches and releases](#branches-and-releases) for what each branch is.
+
 ### Pick your setup path
 
 There are several ways to set up your environment depending on your needs:
@@ -30,8 +49,14 @@ The kit's slash-commands (`/setup`, `/flightcheck`, etc.) **only appear when you
 
 ### How to open `ess-maker-skills` as a workspace (no terminal needed)
 
-1. **Get the code.**
-   On the GitHub page, click the green **`< > Code`** button → **`Download ZIP`**. Unzip the file somewhere on your computer (for example, `Documents\Employee-Self-Service-Agent-Developer-Kit`). *(Or, if you already use Git, clone the repo with your tool of choice — GitHub Desktop, Visual Studio, etc.)*
+1. **Get the code — from a release, not a trunk branch.**
+   The recommended way is to **clone the latest release tag** for your agent flavor (see [Which build to clone](#which-build-to-clone-releases-not-main) above):
+
+   ```bash
+   git clone --branch da-v1.0.0-rc.1 https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git
+   ```
+
+   Substitute the newest `da-v*` (Declarative Agent) or `cea-v*` (Custom Engine Agent) tag from the [Releases](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/releases) page. **No terminal?** On that same Releases page, open the newest release for your flavor and download **Source code (zip)**, then unzip it somewhere on your computer (for example, `Documents\Employee-Self-Service-Agent-Developer-Kit`). *(Avoid the green `< > Code` → `Download ZIP` button — it gives you the in-development `main` branch, not a release.)*
 
 2. **Open VS Code.**
 
@@ -98,6 +123,23 @@ CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
 CONTRIBUTING.md         Contribution guide, maintenance, privacy posture, validation
 SUPPORT.md              Support model
 ```
+
+## Branches and releases
+
+The repo keeps **one trunk per agent flavor**, and each trunk has its own **release line**:
+
+| Branch | Trunk for | Release line |
+|---|---|---|
+| [`main`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main) | **Declarative Agent (DA)** | `da-v*` (e.g. `da-v1.0.0-rc.1`) |
+| [`main-ca`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main-ca) | **Custom Engine Agent (CEA)** | `cea-v*` (e.g. `cea-v1.0.0-rc.1`) |
+
+Releases are cut from these trunks (`da-v*` from `main`, `cea-v*` from `main-ca`). **Consume the kit from a release tag, not from a trunk** — see [Which build to clone](#which-build-to-clone-releases-not-main).
+
+**Where to send a contribution:**
+
+- **DA-only** change (e.g. `samples/WorkdayDeclarativeAgent/`) → PR into **`main`**.
+- **CEA-only** change (e.g. `samples/WorkdayCustomEngineAgent/`) → PR into **`main-ca`**.
+- **Shared** change (`solutions/`, `setup/`, `docs/`, common samples, tooling) → open a PR into **both `main` and `main-ca`** so the two release lines stay in sync.
 
 ## Telemetry
 
