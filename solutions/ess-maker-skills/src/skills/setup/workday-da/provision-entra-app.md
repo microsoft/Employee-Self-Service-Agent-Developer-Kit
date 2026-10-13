@@ -207,12 +207,37 @@ rule is established. Replace the authorization action with a confirmation for
 the same operation, then run assisted-browser `wait` with interaction
 `confirmation` and that confirmation's revision. Confirm or reject each
 candidate in the companion; do not repeat those questions in chat. After the
-wait result reports confirmation status `confirmed`, pass only that row's
-controller field through
-`record-administrator-evidence`. If the administrator selects **Search again**,
+wait result reports confirmation status `confirmed`, write that row's
+controller fields to the partial-evidence input and run
+`record-administrator-evidence`. The controller merges individual
+`entraChecks` entries with checks recorded for earlier rows. Verify that the
+row is absent from `invalidFields` and `outstandingFields`, then immediately
+present the next outstanding worksheet row and start its collection wait. Do
+not return to chat between confirmed rows. If the administrator selects
+**Search again**,
 keep the row authorization active, inspect again, and present a new candidate.
 Do not claim a worksheet row is complete from a selector hit or companion
 confirmation alone; controller acceptance remains required.
+
+After the Existing configuration row is controller-accepted and
+`outstandingFields` is empty, build
+`.local/connect/workday-da/entra-return-worksheet.txt` from the complete
+accumulated evidence, but do not submit it yet. Present a final companion view
+titled **Review final Microsoft Entra worksheet**. Show every labeled value
+from that exact return worksheet as companion fields, including the six
+scalar values, safe certificate metadata, and all confirmation outcomes. Use
+the dedicated `entra-final-worksheet` confirmation operation with:
+
+- prompt: **Do these final worksheet values accurately reflect the completed Microsoft Entra setup?**
+- confirm label: **Confirm and submit worksheet**
+- reject label: **Review worksheet rows**
+
+Run assisted-browser `wait` for interaction `confirmation`, operation
+`entra-final-worksheet`, and the final review revision. Submit the exact
+displayed worksheet through `record-entra` only when the result is
+`confirmed`. A rejected final review blocks forwarding. Reopen the affected
+worksheet rows, update the accumulated evidence and return worksheet, then
+present a new final review revision.
 
 Do not put an application Object ID, scope GUID, certificate body, token, or
 credential in the companion. Outside the one authorized operation, the helper
@@ -459,6 +484,11 @@ continue from the stale tenant foundation.
 
 After `record-entra` succeeds, stop the assisted-browser session if this phase
 started it. A forwarded handoff does not start or stop a browser session.
+For the split-screen path, run `record-entra` immediately after the final
+worksheet review is confirmed. The Existing configuration row must already be
+accepted and all Entra `outstandingFields` must be empty. Submit the same
+return worksheet that was displayed in the final companion review. Do not
+leave the confirmed companion values only in ephemeral browser state.
 
 The JSON must contain the administrator-confirmed directory display name,
 Workday application display name and Application ID, selected Reply URL, safe

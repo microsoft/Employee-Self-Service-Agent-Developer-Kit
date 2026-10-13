@@ -76,6 +76,21 @@ Both modes may perform bounded visible-page reads for the active worksheet row. 
 
 After publishing an action, confirmation, or manual-entry view, immediately run `workday_assisted_browser.py wait` for that operation, interaction type, and published revision. Keep the session turn active until the administrator responds or the bounded wait times out. Continue from the returned interaction result without requiring the administrator to send a separate chat message. The wait operation observes companion state only; it does not select an action, decide a confirmation, or submit a value.
 
+After a row confirmation is accepted by its controller operation, immediately present the next outstanding worksheet row and start its bounded wait. Do not return to chat between rows merely to announce completion.
+
+After the final row is controller-accepted and no Entra fields remain outstanding, build the final return worksheet and a companion review view from the same accumulated safe values. The review view must show every labeled worksheet value that will be submitted, including the confirmation outcomes, and use the dedicated `entra-final-worksheet` confirmation operation. Do not include object IDs, scope GUIDs, tenant IDs, certificate contents, tokens, credentials, or values that are not part of the return worksheet.
+
+Use the title **Review final Microsoft Entra worksheet**, the confirmation prompt **Do these final worksheet values accurately reflect the completed Microsoft Entra setup?**, the confirm label **Confirm and submit worksheet**, and the reject label **Review worksheet rows**. Immediately wait for the final confirmation revision:
+
+```powershell
+python scripts/workday_assisted_browser.py wait `
+  --operation entra-final-worksheet `
+  --interaction confirmation `
+  --revision {revision}
+```
+
+Only after the result is `confirmed` may the session submit that exact worksheet through `record-entra`. A rejected final review blocks forwarding. Reopen the affected worksheet rows, update both the accumulated evidence and final worksheet, and present a new final review revision. The final confirmation is a submission review, not lifecycle completion; verify controller acceptance before reporting that the handoff is complete.
+
 After navigation, try bounded live inspection before asking the administrator to transcribe anything. Only when the value cannot be collected or disambiguated reliably may the next revision contain a manual `entry` for the same already-authorized operation:
 
 ```json
@@ -122,6 +137,8 @@ operations:
   "SAML configuration": "entra-saml-configuration"
 }
 ```
+
+The final worksheet review uses `entra-final-worksheet` only as a confirmation operation. It cannot authorize navigation, inspection, capture, search filling, pointing, reveal actions, or manual entry.
 
 For Directory name, the button authorizes navigation to Microsoft Entra ID Overview. For Enterprise application, it authorizes navigation to the Enterprise applications list. Application ID reuses the exact application pane reached during the preceding collaboration and authorizes continued reads without changing the page. Selected Reply URL, NameID source, and SAML signing continue from that exact application into its SAML surfaces. Read `status` and require `collection.status: authorized` with the expected `worksheetField` before inspecting.
 

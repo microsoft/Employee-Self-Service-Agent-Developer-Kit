@@ -104,6 +104,14 @@ def test_entra_companion_preserves_administrator_ownership() -> None:
     assert "certificate body" in normalized
     assert "entra-directory-display-name" in normalized
     assert "Confirm or reject each candidate in the companion" in normalized
+    assert "Do not return to chat between confirmed rows" in normalized
+    assert "Review final Microsoft Entra worksheet" in normalized
+    assert "`entra-final-worksheet` confirmation operation" in normalized
+    assert "A rejected final review blocks forwarding" in normalized
+    assert (
+        "Do not leave the confirmed companion values only in ephemeral "
+        "browser state"
+    ) in normalized
 
 
 def test_companion_renderer_never_uses_html_injection() -> None:
@@ -135,6 +143,10 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert 'tooltip.className = "target-tooltip"' in script
     assert 'pointer.textContent = "←"' in script
     assert "navigation-disclaimer" in script
+    assert '"Navigation complete"' not in script
+    assert '"Navigation authorized"' not in script
+    assert '"Capture authorization active"' not in script
+    assert '"Navigation assistance active"' not in script
     assert "innerHTML" not in script
     assert "eval(" not in script
 
@@ -164,3 +176,9 @@ def test_navigate_only_reads_are_not_limited_to_navigation_controls() -> None:
     assert "row's manual instructions determine the Edit control" in contract
     assert "companion disclaimer name that exact control" in contract
     assert "Arbitrary Edit controls are still prohibited" in contract
+    assert "immediately present the next outstanding worksheet row" in contract
+    assert (
+        "Confirm and submit worksheet"
+        in contract
+    )
+    assert "Only after the result is `confirmed`" in contract

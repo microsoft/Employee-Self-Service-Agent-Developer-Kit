@@ -1464,11 +1464,21 @@ class WorkdayConnectStore:
                     "Complete the administrator phase before marking its "
                     "evidence validated."
                 )
-            administrator["partialEvidence"].update(
-                copy.deepcopy(safe_fields)
-            )
+            partial_evidence = administrator["partialEvidence"]
+            for field, value in safe_fields.items():
+                if (
+                    phase_id == "entra"
+                    and field == "entraChecks"
+                    and isinstance(partial_evidence.get(field), Mapping)
+                    and isinstance(value, Mapping)
+                ):
+                    merged_checks = dict(partial_evidence[field])
+                    merged_checks.update(copy.deepcopy(value))
+                    partial_evidence[field] = merged_checks
+                else:
+                    partial_evidence[field] = copy.deepcopy(value)
             for field in requested_invalid:
-                administrator["partialEvidence"].pop(field, None)
+                partial_evidence.pop(field, None)
             administrator["invalidFields"] = list(
                 dict.fromkeys(requested_invalid)
             )

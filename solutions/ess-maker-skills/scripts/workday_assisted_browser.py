@@ -43,6 +43,7 @@ SESSION_PATH = Path(".local/connect/workday-da/assisted-browser.json")
 ASSET_ROOT = Path(__file__).with_name("workday_assisted_browser_assets")
 _TOKEN_ENV = "ESS_WORKDAY_ASSIST_TOKEN"
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_VIEW_FIELDS = 16
 _CONNECTED_WINDOW_SECONDS = 6.0
 _ENTRA_OVERVIEW_URL = (
     "https://entra.microsoft.com/"
@@ -186,6 +187,11 @@ _COLLECTION_OPERATION_DEFINITIONS = {
     },
 }
 _COLLECTION_OPERATIONS = set(_COLLECTION_OPERATION_DEFINITIONS)
+_FINAL_WORKSHEET_CONFIRMATION_OPERATION = "entra-final-worksheet"
+_CONFIRMATION_OPERATIONS = _COLLECTION_OPERATIONS | {
+    _FINAL_WORKSHEET_CONFIRMATION_OPERATION
+}
+_WAIT_OPERATIONS = _CONFIRMATION_OPERATIONS
 _EMAIL_PATTERN = re.compile(
     r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
     re.IGNORECASE,
@@ -300,8 +306,10 @@ def validate_view(raw: Any) -> dict[str, Any]:
     ]
 
     fields_raw = raw.get("fields", [])
-    if not isinstance(fields_raw, list) or len(fields_raw) > 12:
-        raise AssistedBrowserError("fields must be an array with at most 12 items.")
+    if not isinstance(fields_raw, list) or len(fields_raw) > _MAX_VIEW_FIELDS:
+        raise AssistedBrowserError(
+            f"fields must be an array with at most {_MAX_VIEW_FIELDS} items."
+        )
     fields = []
     for index, value in enumerate(fields_raw):
         if not isinstance(value, Mapping):
@@ -439,9 +447,9 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "confirmation.operation",
             maximum=80,
         )
-        if operation not in _COLLECTION_OPERATIONS:
+        if operation not in _CONFIRMATION_OPERATIONS:
             raise AssistedBrowserError(
-                "confirmation.operation is not a supported collection operation."
+                "confirmation.operation is not a supported confirmation operation."
             )
         normalized["confirmation"] = {
             "operation": operation,
@@ -3469,7 +3477,7 @@ def build_parser() -> argparse.ArgumentParser:
     wait = commands.add_parser("wait")
     wait.add_argument(
         "--operation",
-        choices=sorted(_COLLECTION_OPERATIONS),
+        choices=sorted(_WAIT_OPERATIONS),
         required=True,
     )
     wait.add_argument(

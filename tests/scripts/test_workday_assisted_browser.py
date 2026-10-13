@@ -121,6 +121,56 @@ def test_view_contract_accepts_row_confirmation_without_collection_action() -> N
         )
 
 
+def test_view_contract_accepts_final_worksheet_confirmation_only() -> None:
+    confirmation = {
+        "operation": "entra-final-worksheet",
+        "prompt": (
+            "Do these final worksheet values accurately reflect the completed "
+            "Microsoft Entra setup?"
+        ),
+        "confirmLabel": "Confirm and submit worksheet",
+        "rejectLabel": "Review worksheet rows",
+    }
+    view = _view() | {
+        "title": "Review final Microsoft Entra worksheet",
+        "fields": [
+            {"label": f"Worksheet row {index}", "value": f"Value {index}"}
+            for index in range(14)
+        ],
+        "confirmation": confirmation,
+    }
+
+    assert validate_view(view) == view
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="fields must be an array with at most 16 items",
+    ):
+        validate_view(
+            view
+            | {
+                "fields": [
+                    {"label": f"Worksheet row {index}", "value": f"Value {index}"}
+                    for index in range(17)
+                ]
+            }
+        )
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="not a supported collection operation",
+    ):
+        validate_view(
+            _view()
+            | {
+                "action": {
+                    "label": "Navigate only",
+                    "operation": "entra-final-worksheet",
+                }
+            }
+        )
+
+
 def test_view_contract_accepts_navigation_and_capture_choices_together() -> None:
     view = _view() | {
         "actions": [

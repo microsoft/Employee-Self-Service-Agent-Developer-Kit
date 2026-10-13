@@ -76,10 +76,6 @@ function render(payload) {
         ["authorized", "navigated"].includes(payload.collection?.status);
       if (active) {
         button.disabled = true;
-        button.textContent =
-          action.mode === "navigate-only"
-            ? "Navigation assistance active"
-            : "Capture authorization active";
       } else {
         button.addEventListener("click", async () => {
           for (const candidate of actionGroup.querySelectorAll("button")) {
@@ -104,10 +100,7 @@ function render(payload) {
               }),
             });
             renderCollection(response.collection);
-            button.textContent =
-              response.collection.status === "navigated"
-                ? "Navigation complete"
-                : "Capture authorization active";
+            button.textContent = action.label;
           } catch (error) {
             renderCollection({
               status: "failed",
@@ -150,24 +143,10 @@ function renderCollection(result) {
       ),
     );
     collection.dataset.status = "checking";
-  } else if (result.status === "authorized") {
-    nodes.push(
-      textElement("h2", "Navigation authorized"),
-      textElement(
-        "p",
-        "ADK may now inspect visible Playwright evidence for this worksheet row. A missed read does not revoke this authorization.",
-      ),
-    );
-    collection.dataset.status = "checking";
-  } else if (result.status === "navigated") {
-    nodes.push(
-      textElement("h2", "Navigation complete"),
-      textElement(
-        "p",
-        "The target surface is open. Manual worksheet entry may be offered next if needed.",
-      ),
-    );
-    collection.dataset.status = "success";
+  } else if (["authorized", "navigated"].includes(result.status)) {
+    collection.hidden = true;
+    collection.replaceChildren();
+    return;
   } else if (result.status === "collected") {
     const values = document.createElement("dl");
     values.className = "fields";
