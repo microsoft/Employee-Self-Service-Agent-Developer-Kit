@@ -127,8 +127,8 @@ def reviewed_workday_topic_schemas(agent_schema: str) -> frozenset[str]:
 # Shared session with bounded retry-with-backoff, mirroring auth.py /
 # powerplatform_client.py. Unlike those read-only clients this path also issues
 # mutating PUT (component insert) and POST (run) verbs, so retry safety matters:
-#   * status retries (429/5xx) are safe for every verb — the server returned a
-#     definitive "did not act" response, so replaying can't duplicate work.
+#   * status retries are limited to read-only requests: a 5xx response does not
+#     guarantee a mutation failed before committing.
 #   * connect retries are safe — the request never reached the server.
 #   * read retries are DISABLED (read=0): once a request is on the wire we must
 #     not replay it, because a lost response after a successful insert/run would
@@ -141,8 +141,9 @@ _RETRY = Retry(
     status=3,
     backoff_factor=1,
     status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=None,  # apply the above to every verb, incl. POST/PUT
+    allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
     respect_retry_after_header=True,
+    raise_on_status=False,
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
@@ -1950,10 +1951,14 @@ class MinimalBotEvaluationClient:
             response.headers.get("x-ms-service-request-id")
             or response.headers.get("x-ms-request-id")
         )
+        correlation_id = response.headers.get("x-ms-correlation-id")
         if response.status_code != 202:
             raise MinimalBotEvaluationError(
                 f"MinimalBot evaluation run failed (HTTP {response.status_code}): "
-                f"{result}"
+                f"{result}. Service request ID: {service_request_id or 'unavailable'}; "
+                f"correlation ID: {correlation_id or 'unavailable'}. "
+                "Check run history before retrying; the request may have reached "
+                "the service. Do not repeat the run blindly."
             )
         run_id = ""
         if isinstance(result, dict):
@@ -1973,7 +1978,7 @@ class MinimalBotEvaluationClient:
             "runName": body["evaluationRunName"],
             "status": response.status_code,
             "serviceRequestId": service_request_id,
-            "correlationId": response.headers.get("x-ms-correlation-id"),
+            "correlationId": correlation_id,
             "startedAt": now.isoformat(),
             "response": result,
         }

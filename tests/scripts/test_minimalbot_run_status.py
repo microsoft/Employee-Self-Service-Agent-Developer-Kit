@@ -244,6 +244,66 @@ def test_module_session_has_bounded_retries():
     assert retry.total == 3
     assert 429 in retry.status_forcelist
     assert 503 in retry.status_forcelist
+    assert retry.raise_on_status is False
+    assert retry.read == 0
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_mutations_are_not_replayed_on_http_errors(method, status):
+    retry = mbe._SESSION.get_adapter("https://example.com").max_retries
+    assert not retry.is_retry(method, status, has_retry_after=True)
+
+
+def test_reads_still_retry_transient_statuses():
+    retry = mbe._SESSION.get_adapter("https://example.com").max_retries
+    assert retry.is_retry("GET", 503)
+    assert retry.is_retry("GET", 429, has_retry_after=True)
+
+
+@pytest.mark.parametrize("request_header", [
+    "x-ms-service-request-id", "x-ms-request-id",
+])
+def test_published_run_preserves_service_error_and_diagnostic_ids(
+    monkeypatch, request_header,
+):
+    client = mbe.MinimalBotEvaluationClient(ENV_ID, BOT_ID, "tenant-1")
+    client._token = "fake-token"
+    calls = []
+    message = (
+        "Version must be provided when requesting the published version "
+        "of the bot. (Parameter 'version')"
+    )
+
+    def request(method, url, **kwargs):
+        is_run = "/api/makerevaluation/testsets/test-set-1/run" in url
+        calls.append((is_run, kwargs.get("json")))
+        response = requests.Response()
+        response.status_code = 500 if is_run else 200
+        payload = {
+            "ErrorCode": 500, "ErrorMessage": message,
+        } if is_run else _run_components("test-set-1")
+        response._content = json.dumps(payload).encode()
+        response.headers[request_header] = "service-request-id"
+        response.headers["x-ms-correlation-id"] = "correlation-id"
+        return response
+
+    monkeypatch.setattr(mbe._SESSION, "request", request)
+    with pytest.raises(mbe.MinimalBotEvaluationError) as exc:
+        client.run_test_set(
+            "test-set-1", mcs_connection_id="mcs-conn",
+            run_on_published_bot=True,
+        )
+    error = str(exc.value)
+    assert "HTTP 500" in error
+    assert message in error
+    assert "Service request ID: service-request-id" in error
+    assert "correlation ID: correlation-id" in error
+    assert "Check run history before retrying" in error
+    assert "transport error" not in error
+    posts = [body for is_run, body in calls if is_run]
+    assert len(posts) == 1
+    assert posts[0]["runOnPublishedBot"] is True
 
 
 def _fake_config() -> dict[str, Any]:

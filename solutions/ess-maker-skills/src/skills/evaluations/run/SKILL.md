@@ -18,6 +18,14 @@ never require a separate typed push command or push the same set twice.
 
 ## Flow A: Start an evaluation run
 
+### Draft-only execution
+
+This skill runs evaluations against the draft agent only. Never add
+`--published` to a command or submit `runOnPublishedBot: true`.
+If the user requests a published-agent evaluation, explain that this skill
+supports draft evaluations only and stop. Do not silently substitute a draft
+run; obtain explicit approval to test the draft before continuing.
+
 ### Mandatory user-selection gate
 
 A request such as "run a test set", "run evaluations", or `/run` authorizes
@@ -173,6 +181,10 @@ Always include:
 > I've started running your test set in Copilot Studio. This may take 10-15
 > minutes. Return here to view the results when the run is complete; you don't
 > need to open Copilot Studio.
+
+Also include:
+
+> This evaluation tests the current draft agent, which may differ from the published version users see.
 
 The successful start command returns this exact text in `userGuidance`. Copy
 `userGuidance` verbatim into the successful start response. This is a hard
