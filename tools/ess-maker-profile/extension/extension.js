@@ -8,6 +8,7 @@ const vscode = require('vscode');
 const _fs = require('fs');
 const _path = require('path');
 const _cp = require('child_process');
+const _http = require('http');
 const _execFile = require('util').promisify(_cp.execFile);
 
 // Debug log file for troubleshooting activation/wizard detection
@@ -121,6 +122,22 @@ const STATE_KEY = 'essMaker.completedActions.v3';
 let _tutorialPanel = null;
 let _prereqWatcher = null;
 let _extensionContext = null;
+let _assistedBrowserPanel = null;
+let _assistedBrowserWatcher = null;
+let _assistedBrowserSession = null;
+
+const ASSISTED_BROWSER_SESSION_PATH = [
+    '.local', 'connect', 'workday-da', 'assisted-browser.json',
+];
+const ASSISTED_BROWSER_API_PATHS = new Set([
+    '/api/view',
+    '/api/status',
+    '/api/evidence-image',
+    '/api/event',
+    '/api/action',
+    '/api/confirmation',
+    '/api/entry',
+]);
 
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
@@ -444,6 +461,245 @@ function toggleTutorialPanel() {
     } else {
         openTutorialPanel(vscode.ViewColumn.Beside);
     }
+}
+
+function _workspaceRootUri() {
+    return vscode.workspace.workspaceFolders?.[0]?.uri || null;
+}
+
+async function _readAssistedBrowserSession() {
+    const root = _workspaceRootUri();
+    if (!root) return null;
+    const sessionUri = vscode.Uri.joinPath(root, ...ASSISTED_BROWSER_SESSION_PATH);
+    try {
+        const content = await vscode.workspace.fs.readFile(sessionUri);
+        const session = JSON.parse(Buffer.from(content).toString('utf8'));
+        if (
+            session?.browserMode !== 'vscode'
+            || !Number.isInteger(session.port)
+            || session.port < 1
+            || session.port > 65535
+            || typeof session.token !== 'string'
+            || !session.token
+        ) {
+            return null;
+        }
+        return session;
+    } catch (_) {
+        return null;
+    }
+}
+
+function _assistedBrowserAssetRoot(root) {
+    return vscode.Uri.joinPath(
+        root,
+        'solutions',
+        'ess-maker-skills',
+        'scripts',
+        'workday_assisted_browser_assets',
+    );
+}
+
+function _assistedBrowserHtml(webview, assetRoot) {
+    const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(assetRoot, 'companion.css'));
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(assetRoot, 'companion.js'));
+    const csp = [
+        "default-src 'none'",
+        `style-src ${webview.cspSource}`,
+        `script-src ${webview.cspSource}`,
+        "img-src data: blob:",
+    ].join('; ');
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+    <title>Connect Workday guide</title>
+    <link rel="stylesheet" href="${cssUri}" />
+  </head>
+  <body>
+    <main class="companion-layout">
+      <aside id="target-rail" class="target-rail" aria-label="Application target">
+        <div id="target-pointers"></div>
+      </aside>
+      <div class="companion-content">
+        <header>
+          <p class="eyebrow">Connect Workday</p>
+          <p id="connection" class="connection">Connecting to guidance...</p>
+        </header>
+        <section id="guidance" aria-live="polite">
+          <h1>Preparing the next step</h1>
+          <p>Keep this pane open beside the application.</p>
+        </section>
+        <section id="evidence" aria-live="polite" hidden></section>
+        <section id="collection" aria-live="polite" hidden></section>
+        <section id="entry" aria-live="polite" hidden></section>
+        <section id="confirmation" aria-live="polite" hidden></section>
+      </div>
+    </main>
+    <script src="${scriptUri}"></script>
+  </body>
+</html>`;
+}
+
+function _proxyAssistedBrowserRequest(session, message) {
+    return new Promise((resolve, reject) => {
+        if (!ASSISTED_BROWSER_API_PATHS.has(message.path)) {
+            reject(new Error('Companion API path is not allowed.'));
+            return;
+        }
+        if (message.responseType === 'binary' && message.path !== '/api/evidence-image') {
+            reject(new Error('Binary companion responses are not allowed for this path.'));
+            return;
+        }
+        const method = message.method === 'POST' ? 'POST' : 'GET';
+        const body = typeof message.body === 'string' ? message.body : '';
+        if (Buffer.byteLength(body, 'utf8') > 64 * 1024) {
+            reject(new Error('Companion request body is too large.'));
+            return;
+        }
+        const request = _http.request({
+            hostname: '127.0.0.1',
+            port: session.port,
+            path: message.path,
+            method,
+            headers: {
+                Authorization: `Bearer ${session.token}`,
+                ...(method === 'POST'
+                    ? {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(body, 'utf8'),
+                    }
+                    : {}),
+            },
+        }, (response) => {
+            const chunks = [];
+            let size = 0;
+            response.on('data', (chunk) => {
+                size += chunk.length;
+                if (size > 2 * 1024 * 1024) {
+                    request.destroy(new Error('Companion response is too large.'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            response.on('end', () => {
+                const content = Buffer.concat(chunks);
+                if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
+                    let detail = 'Guidance request failed.';
+                    try {
+                        detail = JSON.parse(content.toString('utf8')).error || detail;
+                    } catch (_) {}
+                    reject(new Error(detail));
+                    return;
+                }
+                if (message.responseType === 'binary') {
+                    resolve({
+                        base64: content.toString('base64'),
+                        contentType: response.headers['content-type'] || 'application/octet-stream',
+                    });
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(content.toString('utf8')));
+                } catch (_) {
+                    reject(new Error('Companion returned invalid JSON.'));
+                }
+            });
+        });
+        request.setTimeout(30000, () => {
+            request.destroy(new Error('Guidance request timed out.'));
+        });
+        request.on('error', reject);
+        if (body) request.write(body);
+        request.end();
+    });
+}
+
+async function openAssistedBrowserCompanion({ reveal = true } = {}) {
+    const session = await _readAssistedBrowserSession();
+    if (!session) {
+        if (reveal) {
+            vscode.window.showWarningMessage(
+                'No VS Code assisted-browser session is running.'
+            );
+        }
+        _assistedBrowserPanel?.dispose();
+        return;
+    }
+    _assistedBrowserSession = session;
+    if (_assistedBrowserPanel) {
+        if (reveal) _assistedBrowserPanel.reveal(vscode.ViewColumn.Beside);
+        return;
+    }
+    const root = _workspaceRootUri();
+    if (!root) return;
+    const assetRoot = _assistedBrowserAssetRoot(root);
+    _assistedBrowserPanel = vscode.window.createWebviewPanel(
+        'essMaker.assistedBrowser',
+        'Workday setup companion',
+        vscode.ViewColumn.Beside,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true,
+            localResourceRoots: [assetRoot],
+        },
+    );
+    _assistedBrowserPanel.webview.html = _assistedBrowserHtml(
+        _assistedBrowserPanel.webview,
+        assetRoot,
+    );
+    _assistedBrowserPanel.webview.onDidReceiveMessage(async (message) => {
+        if (
+            message?.type !== 'apiRequest'
+            || typeof message.id !== 'string'
+            || !_assistedBrowserSession
+        ) {
+            return;
+        }
+        try {
+            const body = await _proxyAssistedBrowserRequest(
+                _assistedBrowserSession,
+                message,
+            );
+            await _assistedBrowserPanel?.webview.postMessage({
+                type: 'apiResponse',
+                id: message.id,
+                ok: true,
+                body,
+            });
+        } catch (error) {
+            await _assistedBrowserPanel?.webview.postMessage({
+                type: 'apiResponse',
+                id: message.id,
+                ok: false,
+                error: error?.message || 'Guidance request failed.',
+            });
+        }
+    });
+    _assistedBrowserPanel.onDidDispose(() => {
+        _assistedBrowserPanel = null;
+        _assistedBrowserSession = null;
+    });
+}
+
+function startAssistedBrowserWatcher(context) {
+    if (_assistedBrowserWatcher) return;
+    const root = _workspaceRootUri();
+    if (!root) return;
+    const pattern = new vscode.RelativePattern(
+        root,
+        ASSISTED_BROWSER_SESSION_PATH.join('/'),
+    );
+    const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    const refresh = () => openAssistedBrowserCompanion({ reveal: false });
+    watcher.onDidCreate(refresh);
+    watcher.onDidChange(refresh);
+    watcher.onDidDelete(() => _assistedBrowserPanel?.dispose());
+    _assistedBrowserWatcher = watcher;
+    context.subscriptions.push(watcher);
+    refresh();
 }
 
 // Notify the Quick Actions webview about tutorial open/close state.
@@ -1632,6 +1888,10 @@ async function activate(context) {
         vscode.commands.registerCommand('essMaker.openDocs', () =>
             vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
         ),
+        vscode.commands.registerCommand(
+            'essMaker.openAssistedBrowserCompanion',
+            () => openAssistedBrowserCompanion(),
+        ),
         vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
 
@@ -1657,6 +1917,7 @@ async function activate(context) {
     // This enables/disables buttons based on actual file existence
     // (e.g. .local/setup/config.json for setup, workspace/flightcheck/results.json).
     startPrereqWatcher(context);
+    startAssistedBrowserWatcher(context);
 
     // Dispatch on the CURRENT essMaker.mode every activation (see below):
     // - Maker mode: apply the guided layout (rail + walkthrough + chat) on

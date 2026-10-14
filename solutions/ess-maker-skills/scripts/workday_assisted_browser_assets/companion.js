@@ -9,6 +9,10 @@ const confirmation = document.getElementById("confirmation");
 const targetRail = document.getElementById("target-rail");
 const targetPointers = document.getElementById("target-pointers");
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
+const vscodeApi =
+  typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+const pendingBridgeRequests = new Map();
+let bridgeRequestSequence = 0;
 let renderedRevision = 0;
 let acknowledgedRevision = 0;
 let renderedEvidenceImageId = null;
@@ -16,6 +20,48 @@ let evidenceImageUrl = null;
 let renderedEntryKey = null;
 let renderedConfirmationKey = null;
 let renderedTargetPointerKey = null;
+
+window.addEventListener("message", (event) => {
+  const message = event.data;
+  if (
+    !message ||
+    message.type !== "apiResponse" ||
+    typeof message.id !== "string"
+  ) {
+    return;
+  }
+  const pending = pendingBridgeRequests.get(message.id);
+  if (!pending) {
+    return;
+  }
+  pendingBridgeRequests.delete(message.id);
+  clearTimeout(pending.timeout);
+  if (message.ok) {
+    pending.resolve(message.body);
+  } else {
+    pending.reject(new Error(message.error || "Guidance request failed."));
+  }
+});
+
+/** Route webview requests through the extension host so the session token stays outside the DOM. */
+function bridgeRequest(path, options = {}, responseType = "json") {
+  const id = `request-${Date.now()}-${++bridgeRequestSequence}`;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingBridgeRequests.delete(id);
+      reject(new Error("Guidance request timed out."));
+    }, 30000);
+    pendingBridgeRequests.set(id, { resolve, reject, timeout });
+    vscodeApi.postMessage({
+      type: "apiRequest",
+      id,
+      path,
+      method: options.method || "GET",
+      body: options.body || "",
+      responseType,
+    });
+  });
+}
 
 /** Create text-only DOM nodes so companion data never becomes executable markup. */
 function textElement(tag, text, className) {
@@ -84,8 +130,9 @@ function render(payload) {
           for (const candidate of actionGroup.querySelectorAll("button")) {
             candidate.disabled = true;
           }
-          button.textContent =
-            action.mode === "navigate-only"
+          button.textContent = vscodeApi
+            ? "Authorizing..."
+            : action.mode === "navigate-only"
               ? "Navigating..."
               : "Navigating and authorizing capture...";
           renderCollection({
@@ -144,7 +191,7 @@ function renderCollection(result) {
       textElement("h2", "Collection in progress"),
       textElement(
         "p",
-        "Playwright is navigating the authorized Entra pane and reading the requested row.",
+        "The authorized application pane is being prepared for this worksheet row.",
       ),
     );
     collection.dataset.status = "checking";
@@ -205,16 +252,30 @@ async function renderEvidenceImage(metadata) {
     button.disabled = true;
     button.textContent = "Loading screenshot...";
     try {
-      const response = await fetch("/api/evidence-image", {
-        cache: "no-store",
-        headers: {
-          Authorization: "Bearer " + token,
-        },
-      });
-      if (!response.ok) {
-        throw new Error("Context screenshot could not be loaded.");
+      let imageBlob;
+      if (vscodeApi) {
+        const response = await bridgeRequest(
+          "/api/evidence-image",
+          {},
+          "binary",
+        );
+        const bytes = Uint8Array.from(atob(response.base64), (character) =>
+          character.charCodeAt(0),
+        );
+        imageBlob = new Blob([bytes], { type: response.contentType });
+      } else {
+        const response = await fetch("/api/evidence-image", {
+          cache: "no-store",
+          headers: {
+            Authorization: "Bearer " + token,
+          },
+        });
+        if (!response.ok) {
+          throw new Error("Context screenshot could not be loaded.");
+        }
+        imageBlob = await response.blob();
       }
-      evidenceImageUrl = URL.createObjectURL(await response.blob());
+      evidenceImageUrl = URL.createObjectURL(imageBlob);
       const image = document.createElement("img");
       image.src = evidenceImageUrl;
       image.alt = "Portal context for " + metadata.label;
@@ -453,6 +514,9 @@ document.addEventListener("click", () => {
 
 /** Send authenticated, no-cache requests to the session-owned loopback server. */
 async function request(path, options = {}) {
+  if (vscodeApi) {
+    return bridgeRequest(path, options);
+  }
   if (!token) {
     throw new Error("The guidance link is missing its session token.");
   }

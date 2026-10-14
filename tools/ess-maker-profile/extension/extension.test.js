@@ -288,6 +288,19 @@ test('topic command titles are marked coming soon', () => {
     );
 });
 
+test('registers the Workday assisted-browser companion command', () => {
+    const commands = new Map(pkg.contributes.commands.map(command => [
+        command.command, command.title,
+    ]));
+    assert.strictEqual(
+        commands.get('essMaker.openAssistedBrowserCompanion'),
+        'Agent Developer Kit: Open Workday setup companion',
+    );
+    assert.ok(/function startAssistedBrowserWatcher/.test(src));
+    assert.ok(/function _proxyAssistedBrowserRequest/.test(src));
+    assert.ok(/ASSISTED_BROWSER_API_PATHS/.test(src));
+});
+
 test('quick start view is a tree (no webview type)', () => {
     const view = pkg.contributes.views.essMakerActions[0];
     assert.strictEqual(view.type, undefined);
@@ -310,9 +323,9 @@ test('activates during startup so the guided layout is ready before startup sett
 });
 
 test('package version matches the current Maker artifact release', () => {
-    assert.strictEqual(pkg.version, '0.4.36');
+    assert.strictEqual(pkg.version, '0.4.37');
     assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
-    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.35.vsix')));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.36.vsix')));
 });
 
 test('updates layout settings concurrently during startup', () => {
