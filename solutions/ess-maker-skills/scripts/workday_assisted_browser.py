@@ -1,12 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Run the ephemeral split-screen companion for native DA Workday setup.
+"""Run the ephemeral VS Code companion for native DA Workday setup.
 
-The helper owns browser preparation, a constrained local guidance page, and
-read-only layout evidence. The maker owns every portal mutation, sign-in,
-consent, and Test-pane interaction. Workday lifecycle state remains exclusively
-owned by workday_connect.py.
+The helper owns a constrained local guidance service. In VS Code mode, the
+maker opens and shares the Integrated Browser page while the agent uses its
+built-in browser tools only after row-scoped authorization. The maker owns every
+portal mutation, sign-in, consent, and Test-pane interaction. Workday lifecycle
+state remains exclusively owned by workday_connect.py.
 """
 
 from __future__ import annotations
@@ -42,6 +43,9 @@ DEFAULT_CDP = "http://localhost:9237"
 SESSION_PATH = Path(".local/connect/workday-da/assisted-browser.json")
 ASSET_ROOT = Path(__file__).with_name("workday_assisted_browser_assets")
 _TOKEN_ENV = "ESS_WORKDAY_ASSIST_TOKEN"
+_BROWSER_MODE_ENV = "ESS_WORKDAY_ASSIST_BROWSER_MODE"
+_EDGE_BROWSER_MODE = "edge"
+_VSCODE_BROWSER_MODE = "vscode"
 _MAX_BODY_BYTES = 64 * 1024
 _MAX_VIEW_FIELDS = 16
 _CONNECTED_WINDOW_SECONDS = 6.0
@@ -692,6 +696,48 @@ class CompanionState:
             self._collection = dict(result)
             return dict(self._collection)
 
+    def complete_shared_browser_operation(
+        self,
+        *,
+        operation: str,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Record the result of an authorized operation performed through the shared Integrated Browser."""
+        if status not in {"navigated", "failed"}:
+            raise AssistedBrowserError(
+                "Shared browser status must be navigated or failed."
+            )
+        with self._lock:
+            if (
+                self._collection is None
+                or self._collection.get("operation") != operation
+                or self._collection.get("status") != "authorized"
+            ):
+                raise AssistedBrowserError(
+                    "The shared browser result does not match an authorized "
+                    "worksheet operation."
+                )
+            if status == "failed":
+                normalized_error = _required_text(
+                    error,
+                    "error",
+                    maximum=400,
+                )
+                self._collection = {
+                    **self._collection,
+                    "status": "failed",
+                    "error": normalized_error,
+                    "failedAt": _now_iso(),
+                }
+            else:
+                self._collection = {
+                    **self._collection,
+                    "status": "navigated",
+                    "navigatedAt": _now_iso(),
+                }
+            return dict(self._collection)
+
     def require_authorized_collection(
         self,
         operation: str,
@@ -1014,10 +1060,12 @@ class CompanionState:
 
 class _Server(ThreadingHTTPServer):
     """Carry authenticated companion state and browser-session context on the loopback HTTP server."""
+
     token: str
     companion_state: CompanionState
     root: Path
     cdp_endpoint: str
+    browser_mode: str
 
 
 class CompanionHandler(BaseHTTPRequestHandler):
@@ -1287,6 +1335,44 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     value=value,
                 )
                 self._send_json(200, {"entry": result})
+                return
+            if self.path == "/api/shared-browser-result":
+                if self.server.browser_mode != _VSCODE_BROWSER_MODE:
+                    raise AssistedBrowserError(
+                        "Shared browser results apply only to VS Code sessions."
+                    )
+                raw = self._read_json()
+                if not isinstance(raw, Mapping):
+                    raise AssistedBrowserError(
+                        "Shared browser result must be a JSON object."
+                    )
+                if set(raw) - {"error", "operation", "status"}:
+                    raise AssistedBrowserError(
+                        "Shared browser result fields are invalid."
+                    )
+                operation = _required_text(
+                    raw.get("operation"),
+                    "operation",
+                    maximum=80,
+                )
+                if operation not in _COLLECTION_OPERATIONS:
+                    raise AssistedBrowserError(
+                        "Unsupported collection operation."
+                    )
+                status = _required_text(
+                    raw.get("status"),
+                    "status",
+                    maximum=20,
+                )
+                result = (
+                    self.server.companion_state
+                    .complete_shared_browser_operation(
+                        operation=operation,
+                        status=status,
+                        error=raw.get("error"),
+                    )
+                )
+                self._send_json(200, {"collection": result})
                 return
             if self.path == "/api/inspect":
                 raw = self._read_json()
@@ -1741,11 +1827,21 @@ def _load_session(root: Path) -> dict[str, Any]:
         raise AssistedBrowserError(
             "Assisted-browser session metadata is invalid."
         )
-    for key in ("port", "token", "pid", "cdpEndpoint"):
+    for key in ("port", "token", "pid"):
         if not raw.get(key):
             raise AssistedBrowserError(
                 "Assisted-browser session metadata is incomplete."
             )
+    browser_mode = raw.get("browserMode", _EDGE_BROWSER_MODE)
+    if browser_mode not in {_EDGE_BROWSER_MODE, _VSCODE_BROWSER_MODE}:
+        raise AssistedBrowserError(
+            "Assisted-browser session metadata has an invalid browser mode."
+        )
+    raw["browserMode"] = browser_mode
+    if browser_mode == _EDGE_BROWSER_MODE and not raw.get("cdpEndpoint"):
+        raise AssistedBrowserError(
+            "Assisted-browser session metadata is incomplete."
+        )
     return raw
 
 
@@ -1810,21 +1906,28 @@ def _serve(root: Path) -> None:
     server.token = token
     server.companion_state = CompanionState()
     server.root = root
+    server.browser_mode = os.environ.get(
+        _BROWSER_MODE_ENV,
+        _EDGE_BROWSER_MODE,
+    )
     server.cdp_endpoint = os.environ.get(
         "ESS_WORKDAY_ASSIST_CDP",
-        DEFAULT_CDP,
+        "",
     )
     session_path = _session_path(root)
+    session = {
+        "schemaVersion": 1,
+        "port": server.server_port,
+        "token": token,
+        "pid": os.getpid(),
+        "startedAt": _now_iso(),
+        "browserMode": server.browser_mode,
+    }
+    if server.browser_mode == _EDGE_BROWSER_MODE:
+        session["cdpEndpoint"] = server.cdp_endpoint or DEFAULT_CDP
     _write_json(
         session_path,
-        {
-            "schemaVersion": 1,
-            "port": server.server_port,
-            "token": token,
-            "pid": os.getpid(),
-            "startedAt": _now_iso(),
-            "cdpEndpoint": os.environ.get("ESS_WORKDAY_ASSIST_CDP", DEFAULT_CDP),
-        },
+        session,
     )
     try:
         server.serve_forever(poll_interval=0.25)
@@ -1832,7 +1935,11 @@ def _serve(root: Path) -> None:
         server.server_close()
 
 
-def _start_server(root: Path, cdp_endpoint: str) -> tuple[dict[str, Any], bool]:
+def _start_server(
+    root: Path,
+    cdp_endpoint: str | None,
+    browser_mode: str,
+) -> tuple[dict[str, Any], bool]:
     """Reuse a live session-owned server or launch a new detached loopback server."""
     path = _session_path(root)
     if path.exists():
@@ -1841,7 +1948,15 @@ def _start_server(root: Path, cdp_endpoint: str) -> tuple[dict[str, Any], bool]:
         except AssistedBrowserError:
             existing = {}
         if existing and _session_is_alive(existing):
-            if existing.get("cdpEndpoint") != cdp_endpoint:
+            if existing.get("browserMode") != browser_mode:
+                raise AssistedBrowserError(
+                    "The active assisted-browser session uses a different "
+                    "browser mode. Stop it before starting another."
+                )
+            if (
+                browser_mode == _EDGE_BROWSER_MODE
+                and existing.get("cdpEndpoint") != cdp_endpoint
+            ):
                 raise AssistedBrowserError(
                     "The active assisted-browser session uses a different "
                     "CDP endpoint. Stop it before starting another."
@@ -1852,7 +1967,11 @@ def _start_server(root: Path, cdp_endpoint: str) -> tuple[dict[str, Any], bool]:
     token = secrets.token_urlsafe(32)
     environment = os.environ.copy()
     environment[_TOKEN_ENV] = token
-    environment["ESS_WORKDAY_ASSIST_CDP"] = cdp_endpoint
+    environment[_BROWSER_MODE_ENV] = browser_mode
+    if cdp_endpoint is not None:
+        environment["ESS_WORKDAY_ASSIST_CDP"] = cdp_endpoint
+    else:
+        environment.pop("ESS_WORKDAY_ASSIST_CDP", None)
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -1900,6 +2019,21 @@ def _parse_cdp_endpoint(value: str) -> tuple[str, int]:
             "CDP endpoint must be an HTTP localhost URL with an explicit port."
         )
     return parsed.hostname, parsed.port
+
+
+def _require_edge_browser(session: Mapping[str, Any]) -> str:
+    """Return the CDP endpoint only for sessions that own or attach to Edge."""
+    if session.get("browserMode", _EDGE_BROWSER_MODE) != _EDGE_BROWSER_MODE:
+        raise AssistedBrowserError(
+            "This session uses the VS Code Integrated Browser. Use the "
+            "shared browser tools for page inspection and navigation."
+        )
+    endpoint = session.get("cdpEndpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise AssistedBrowserError(
+            "The assisted Edge session is missing its CDP endpoint."
+        )
+    return endpoint
 
 
 def _active_scope(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2121,7 +2255,9 @@ def _open_initial_pages(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         if not browser.contexts:
             raise AssistedBrowserError(
                 "The CDP browser has no attachable browser context."
@@ -2200,7 +2336,9 @@ def _navigate_application(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2237,6 +2375,17 @@ def _authorize_collection_operation(
         raise AssistedBrowserError("Unsupported collection operation.") from exc
     session = _load_session(root)
     target_url = definition["url"]
+    if session.get("browserMode") == _VSCODE_BROWSER_MODE:
+        return {
+            "operation": operation,
+            "mode": mode,
+            "status": "authorized",
+            "worksheetRow": definition["worksheetRow"],
+            "worksheetField": definition["worksheetField"],
+            "targetUrl": target_url,
+            "sharedBrowserRequired": True,
+            "authorizedAt": _now_iso(),
+        }
     if target_url is not None:
         target = _navigate_application(session, str(target_url))
     else:
@@ -2244,7 +2393,7 @@ def _authorize_collection_operation(
         playwright = sync_playwright().start()
         try:
             browser = playwright.chromium.connect_over_cdp(
-                session["cdpEndpoint"]
+                _require_edge_browser(session)
             )
             targets = _find_targets(browser, session)
             if targets.application is None or not str(
@@ -2301,7 +2450,9 @@ def _inspect_authorized_selector(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2419,7 +2570,9 @@ def _follow_authorized_link(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2502,7 +2655,9 @@ def _capture_authorized_element(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2605,7 +2760,9 @@ def _fill_navigation_search(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2725,7 +2882,9 @@ def _inspect_reveal_control(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2790,7 +2949,9 @@ def _reveal_authorized_values(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2853,7 +3014,9 @@ def _position_authorized_target(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -2950,7 +3113,9 @@ def _position_authorized_targets(
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(
+            _require_edge_browser(session)
+        )
         targets = _find_targets(browser, session)
         if targets.application is None:
             raise AssistedBrowserError(
@@ -3090,9 +3255,43 @@ def _stop_server_after_failed_start(
 
 def _start(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Establish or reuse the session-owned server and isolated browser pages for a named surface."""
-    _parse_cdp_endpoint(args.cdp)
     application_url = surface_url(root, args.surface)
-    session, server_started = _start_server(root, args.cdp)
+    if args.vscode:
+        if args.launch or args.attach_existing:
+            raise AssistedBrowserError(
+                "--vscode cannot be combined with --launch or "
+                "--attach-existing."
+            )
+        session, server_started = _start_server(
+            root,
+            None,
+            _VSCODE_BROWSER_MODE,
+        )
+        session.update(
+            {
+                "surface": args.surface,
+                "applicationUrl": application_url,
+                "browserMode": _VSCODE_BROWSER_MODE,
+            }
+        )
+        _write_json(_session_path(root), session)
+        return {
+            "started": True,
+            "serverStarted": server_started,
+            "browserLaunched": False,
+            "surface": args.surface,
+            "browserMode": _VSCODE_BROWSER_MODE,
+            "applicationUrl": application_url,
+            "manualBrowserRequired": True,
+            "shareWithAgentRequired": True,
+        }
+
+    _parse_cdp_endpoint(args.cdp)
+    session, server_started = _start_server(
+        root,
+        args.cdp,
+        _EDGE_BROWSER_MODE,
+    )
     browser_launched = False
     try:
         if not is_cdp_up(args.cdp):
@@ -3160,6 +3359,7 @@ def _start(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             "surface": args.surface,
             "applicationUrl": application_url,
             "cdpEndpoint": args.cdp,
+            "browserMode": _EDGE_BROWSER_MODE,
         }
     )
     _write_json(_session_path(root), session)
@@ -3168,6 +3368,7 @@ def _start(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         "serverStarted": server_started,
         "browserLaunched": browser_launched,
         "surface": args.surface,
+        "browserMode": _EDGE_BROWSER_MODE,
         "cdpEndpoint": args.cdp,
         "manualPairingRequired": True,
     }
@@ -3181,6 +3382,21 @@ def _open(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             "The assisted-browser companion is no longer running."
         )
     application_url = surface_url(root, args.surface)
+    if session.get("browserMode") == _VSCODE_BROWSER_MODE:
+        session.update(
+            {
+                "surface": args.surface,
+                "applicationUrl": application_url,
+            }
+        )
+        _write_json(_session_path(root), session)
+        return {
+            "opened": True,
+            "surface": args.surface,
+            "applicationUrl": application_url,
+            "manualBrowserRequired": True,
+            "shareWithAgentRequired": True,
+        }
     target = _navigate_application(session, application_url)
     session.update(
         {
@@ -3218,7 +3434,12 @@ def _status(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
     return {
         "running": True,
         "surface": session.get("surface"),
-        "cdpEndpoint": session["cdpEndpoint"],
+        "browserMode": session.get("browserMode", _EDGE_BROWSER_MODE),
+        **(
+            {"cdpEndpoint": session["cdpEndpoint"]}
+            if session.get("cdpEndpoint")
+            else {}
+        ),
         **result,
     }
 
@@ -3433,13 +3654,33 @@ def _reveal(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     )
 
 
+def _shared_browser_result(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Record whether the authorized shared-browser operation reached its intended page state."""
+    session = _load_session(root)
+    value = {
+        "operation": args.operation,
+        "status": args.status,
+    }
+    if args.error:
+        value["error"] = args.error
+    return _api_request(
+        session,
+        "/api/shared-browser-result",
+        value=value,
+    )
+
+
 def _inspect_layout(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Report whether session-owned pages are visibly arranged for side-by-side assistance."""
     session = _load_session(root)
+    cdp_endpoint = _require_edge_browser(session)
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
-        browser = playwright.chromium.connect_over_cdp(session["cdpEndpoint"])
+        browser = playwright.chromium.connect_over_cdp(cdp_endpoint)
         targets = _find_targets(browser, session)
         classification = classify_layout(
             targets.application,
@@ -3518,7 +3759,7 @@ def _redact_error_text(value: str, root: Path) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """Define the fixed command and argument surface for assisted-browser capabilities."""
     parser = argparse.ArgumentParser(
-        description="Guide native DA Workday browser handoffs in split screen."
+        description="Guide native DA Workday browser handoffs in VS Code."
     )
     parser.add_argument(
         "--root",
@@ -3533,6 +3774,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--cdp", default=DEFAULT_CDP)
     start.add_argument("--launch", action="store_true")
     start.add_argument("--attach-existing", action="store_true")
+    start.add_argument("--vscode", action="store_true")
 
     open_surface = commands.add_parser("open")
     open_surface.add_argument("--surface", choices=_SURFACES, required=True)
@@ -3616,6 +3858,18 @@ def build_parser() -> argparse.ArgumentParser:
     reveal.add_argument("--selector", required=True)
     reveal.add_argument("--frame-index", type=int, required=True)
     reveal.add_argument("--match-index", type=int, required=True)
+    shared_result = commands.add_parser("shared-browser-result")
+    shared_result.add_argument(
+        "--operation",
+        choices=sorted(_COLLECTION_OPERATIONS),
+        required=True,
+    )
+    shared_result.add_argument(
+        "--status",
+        choices=("navigated", "failed"),
+        required=True,
+    )
+    shared_result.add_argument("--error")
     commands.add_parser("inspect-layout")
     commands.add_parser("stop")
     commands.add_parser("_serve", help=argparse.SUPPRESS)
@@ -3635,6 +3889,7 @@ _HANDLERS = {
     "point": _point,
     "point-targets": _point_targets,
     "reveal": _reveal,
+    "shared-browser-result": _shared_browser_result,
     "inspect-layout": _inspect_layout,
     "stop": _stop,
 }

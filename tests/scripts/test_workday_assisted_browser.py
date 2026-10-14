@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -407,6 +408,175 @@ def test_entra_surface_requires_authoritative_tenant_state(
         match="Recorded Microsoft Entra tenant ID must be text",
     ):
         surface_url(Path("unused"), "entra-configuration")
+
+
+def test_vscode_session_metadata_does_not_require_cdp(
+    tmp_path: Path,
+) -> None:
+    session_path = workday_assisted_browser._session_path(tmp_path)
+    workday_assisted_browser._write_json(
+        session_path,
+        {
+            "schemaVersion": 1,
+            "port": 54321,
+            "token": "test-token",
+            "pid": 1234,
+            "browserMode": "vscode",
+        },
+    )
+
+    session = workday_assisted_browser._load_session(tmp_path)
+
+    assert session["browserMode"] == "vscode"
+    assert "cdpEndpoint" not in session
+
+
+def test_vscode_start_returns_manual_shared_browser_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    written = []
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "surface_url",
+        lambda _root, _surface: "https://entra.microsoft.com/",
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_start_server",
+        lambda _root, endpoint, mode: (
+            {
+                "schemaVersion": 1,
+                "port": 54321,
+                "token": "test-token",
+                "pid": 1234,
+                "browserMode": mode,
+            },
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_write_json",
+        lambda path, value: written.append((path, dict(value))),
+    )
+    args = argparse.Namespace(
+        surface="entra-configuration",
+        vscode=True,
+        launch=False,
+        attach_existing=False,
+        cdp=workday_assisted_browser.DEFAULT_CDP,
+    )
+
+    result = workday_assisted_browser._start(args, tmp_path)
+
+    assert result == {
+        "started": True,
+        "serverStarted": True,
+        "browserLaunched": False,
+        "surface": "entra-configuration",
+        "browserMode": "vscode",
+        "applicationUrl": "https://entra.microsoft.com/",
+        "manualBrowserRequired": True,
+        "shareWithAgentRequired": True,
+    }
+    assert written[-1][1]["browserMode"] == "vscode"
+    assert written[-1][1]["applicationUrl"] == "https://entra.microsoft.com/"
+    assert "cdpEndpoint" not in written[-1][1]
+
+
+def test_vscode_collection_authorizes_shared_browser_without_cdp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {"browserMode": "vscode"},
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_navigate_application",
+        lambda *_args, **_kwargs: pytest.fail(
+            "VS Code mode must not navigate through CDP"
+        ),
+    )
+
+    result = workday_assisted_browser._authorize_collection_operation(
+        Path("unused"),
+        "entra-directory-display-name",
+        mode="navigate-and-capture",
+    )
+
+    assert result["status"] == "authorized"
+    assert result["sharedBrowserRequired"] is True
+    assert result["targetUrl"].startswith("https://entra.microsoft.com/")
+
+
+def test_shared_browser_completion_unlocks_manual_entry() -> None:
+    state = CompanionState()
+    action_view = _view() | {
+        "action": {
+            "label": "Navigate",
+            "operation": "entra-application-id",
+            "mode": "navigate-only",
+        }
+    }
+    published = state.publish(action_view)
+    state.begin_collection(
+        revision=published["revision"],
+        operation="entra-application-id",
+        mode="navigate-only",
+    )
+    state.complete_collection(
+        {
+            "operation": "entra-application-id",
+            "mode": "navigate-only",
+            "status": "authorized",
+            "authorizedAt": workday_assisted_browser._now_iso(),
+        }
+    )
+
+    completed = state.complete_shared_browser_operation(
+        operation="entra-application-id",
+        status="navigated",
+    )
+    entry = state.publish(
+        _view()
+        | {
+            "entry": {
+                "operation": "entra-application-id",
+                "label": "Application ID",
+                "placeholder": "00000000-0000-0000-0000-000000000000",
+                "submitLabel": "Use this value",
+            }
+        }
+    )
+
+    assert completed["status"] == "navigated"
+    assert entry["revision"] == published["revision"] + 1
+
+
+def test_shared_browser_completion_rejects_unmatched_operation() -> None:
+    state = CompanionState()
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="does not match an authorized worksheet operation",
+    ):
+        state.complete_shared_browser_operation(
+            operation="entra-application-id",
+            status="navigated",
+        )
+
+
+def test_vscode_session_rejects_cdp_only_operations() -> None:
+    with pytest.raises(
+        AssistedBrowserError,
+        match="VS Code Integrated Browser",
+    ):
+        workday_assisted_browser._require_edge_browser(
+            {"browserMode": "vscode"}
+        )
 
 
 def test_close_owned_browser_terminates_exact_pid_and_verifies_cdp(
