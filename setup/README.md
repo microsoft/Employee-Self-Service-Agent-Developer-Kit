@@ -126,8 +126,8 @@ and the fetch diagnostics, then continues to FlightCheck. Local file checks may
 be skipped; this is not proof that the selected agent is ready. Resolve any
 reported access or connectivity error and rerun the installer to retry the fetch.
 Snapshot fetching uses refresh mode so reruns can update an existing agent
-folder. Setup attempts a local checkpoint before replacing existing files;
-this does not publish changes to the agent.
+folder. Setup creates a local checkpoint before replacing existing files and
+stops if the checkpoint fails; this does not publish changes to the agent.
 
 ### Changing your environment or agent
 
