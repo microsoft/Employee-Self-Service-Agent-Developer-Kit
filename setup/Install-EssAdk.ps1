@@ -1374,7 +1374,7 @@ if ($FlightCheckOnly) {
             }
             $envJsonLines = @($output | Where-Object { $_ -match '^ENVIRONMENT_LIST_JSON:' })
             if ($envJsonLines.Count -ne 1) { throw 'Could not parse environment list output.' }
-            $environments = @(($envJsonLines[0] -replace '^ENVIRONMENT_LIST_JSON:', '') | ConvertFrom-Json)
+            $environments = ConvertFrom-Json -InputObject ($envJsonLines[0] -replace '^ENVIRONMENT_LIST_JSON:', '')
 
             Write-Host ''
             $envChoice = Read-Host '    Select environment number from the list above'
@@ -1425,7 +1425,7 @@ if ($FlightCheckOnly) {
                 if ($agentChoice) {
                     $agentJsonLines = @($output | Where-Object { $_ -match '^AGENT_DISCOVERY_JSON:' })
                     if ($agentJsonLines.Count -ne 1) { throw 'Could not parse agent list output.' }
-                    $discoveredAgents = @(($agentJsonLines[0] -replace '^AGENT_DISCOVERY_JSON:', '') | ConvertFrom-Json)
+                    $discoveredAgents = ConvertFrom-Json -InputObject ($agentJsonLines[0] -replace '^AGENT_DISCOVERY_JSON:', '')
                     $agentIndex = 0
                     if (-not [int]::TryParse($agentChoice, [ref]$agentIndex) -or $agentIndex -lt 1 -or $agentIndex -gt $discoveredAgents.Count) {
                         throw 'Invalid agent selection. Please re-run and pick a number from the list.'

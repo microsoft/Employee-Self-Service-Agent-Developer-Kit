@@ -63,14 +63,18 @@ def _configure(shell, tmp_path, *, saved=None, ring=None, answers=(), fail=False
         "if '--list-environments' in args:\n"
         "    ring = args[args.index('--ring') + 1] if '--ring' in args else 'prod'\n"
         "    envs = [{'id': 'env-' + ring, 'displayName': ring + ' target',\n"
-        "             'instanceUrl': 'https://' + ring + '.crm.dynamics.com'}]\n"
+        "             'instanceUrl': 'https://' + ring + '.crm.dynamics.com'},\n"
+        "            {'id': 'other-env', 'displayName': 'Other environment',\n"
+        "             'instanceUrl': 'https://other.crm.dynamics.com'}]\n"
         "    print('ENVIRONMENT_LIST_JSON:' + json.dumps(envs))\n"
         "    if '--select' in args:\n"
         "        envs[0]['id'] = 'different-environment'\n"
         "        print('SELECTED_ENV_JSON:' + json.dumps(envs[0]))\n"
         "else:\n"
         "    agents = [{'botid': 'selected-bot', 'name': 'Selected agent',\n"
-        "               'schemaname': 'selected', 'ismanaged': True}]\n"
+        "               'schemaname': 'selected', 'ismanaged': True},\n"
+        "              {'botid': 'other-bot', 'name': 'Other agent',\n"
+        "               'schemaname': 'other', 'ismanaged': False}]\n"
         "    print('AGENT_DISCOVERY_JSON:' + json.dumps(agents))\n"
         "    if '--select' in args:\n"
         "        agents[0]['botid'] = 'different-bot'\n"
@@ -183,6 +187,7 @@ def test_fresh_setup_uses_requested_ring_and_exact_displayed_subject(shell, tmp_
     assert state["caught"] is None
     assert config["ring"] == ring
     assert config["environmentId"] == f"env-{ring}"
+    assert config["dataverseEndpoint"] == f"https://{ring}.crm.dynamics.com"
     assert config["agent"]["botId"] == "selected-bot"
     assert len(calls) == 2
     assert calls[0] == ["--list-environments", "--ring", ring]
@@ -223,7 +228,7 @@ def test_failed_reconfiguration_preserves_previous_config(shell, tmp_path):
     assert unchanged
 
 
-@pytest.mark.parametrize("selection", ["abc", "0", "2", "999999999999999999999"])
+@pytest.mark.parametrize("selection", ["abc", "0", "3", "999999999999999999999"])
 def test_invalid_agent_selection_fails_without_replacing_target(shell, tmp_path, selection):
     state, _, _, unchanged = _configure(
         shell, tmp_path, saved=_saved("prod"), answers=["y", "1", selection],
@@ -239,6 +244,17 @@ def test_empty_agent_choice_explicitly_selects_environment_only(shell, tmp_path)
     assert state["caught"] is None
     assert config["agent"]["botId"] == ""
     assert config["agents"] == []
+    assert len(calls) == 2
+
+
+def test_selection_after_first_row_uses_exact_displayed_subject(shell, tmp_path):
+    state, config, calls, _ = _configure(shell, tmp_path, answers=["2", "2"])
+
+    assert state["caught"] is None
+    assert config["environmentId"] == "other-env"
+    assert config["dataverseEndpoint"] == "https://other.crm.dynamics.com"
+    assert config["agent"]["botId"] == "other-bot"
+    assert config["agent"]["isManaged"] is False
     assert len(calls) == 2
 
 
