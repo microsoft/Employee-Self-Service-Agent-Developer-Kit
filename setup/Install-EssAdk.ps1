@@ -1516,7 +1516,8 @@ if ($FlightCheckOnly) {
                     '--url', $envUrl,
                     '--bot-id', $botId,
                     '--name', $agentName,
-                    '--schema', $schemaName
+                    '--schema', $schemaName,
+                    '--refresh'
                 )
                 if ($isManaged) { $fetchArgs += '--managed' }
 

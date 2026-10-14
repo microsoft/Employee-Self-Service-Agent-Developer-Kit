@@ -45,7 +45,9 @@ def _run_fetch(
     scripts.mkdir(parents=True)
     if script_exists:
         (scripts / "fetch_and_setup.py").write_text(
-            "import sys\n"
+            "import sys, json\n"
+            "from pathlib import Path\n"
+            "Path('fetch-args.json').write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n"
             "print('synthetic fetch stdout')\n"
             + (
                 "sys.stderr.write('synthetic fetch diagnostic\\n"
@@ -114,7 +116,10 @@ Write-Output ("`nSTATE:" + ($state | ConvertTo-Json -Compress))
     )
     assert result.returncode == 0, result.stdout + result.stderr
     state_line = next(line for line in result.stdout.splitlines() if line.startswith("STATE:"))
-    return result.stdout, json.loads(state_line.removeprefix("STATE:"))
+    state = json.loads(state_line.removeprefix("STATE:"))
+    args_path = workspace / "fetch-args.json"
+    state["fetchArgs"] = json.loads(args_path.read_text(encoding="utf-8")) if args_path.exists() else []
+    return result.stdout, state
 
 
 @pytest.mark.parametrize("exit_code", [0, 7], ids=["success", "failure"])
@@ -130,6 +135,9 @@ def test_fetch_uses_exit_status_and_continues_to_flightcheck(
     assert state["preference"] == "Stop"
     assert state["spinnerStopped"] is True
     assert state["locationRestored"] is True
+    assert "--refresh" in state["fetchArgs"]
+    assert state["fetchArgs"][state["fetchArgs"].index("--bot-id") + 1] == "mock-agent"
+    assert state["fetchArgs"][state["fetchArgs"].index("--url") + 1] == "https://orgmocktenant.crm.dynamics.com"
     if exit_code == 0:
         assert "Agent solution fetched and extracted" in output
         assert "Local file checks may be skipped" not in output
