@@ -84,6 +84,7 @@ _VIEW_KEYS = {
     "actions",
     "confirmation",
     "entry",
+    "visualHelp",
 }
 _FIELD_KEYS = {"label", "value"}
 _ACTION_KEYS = {"label", "operation", "mode", "disclaimer"}
@@ -100,6 +101,7 @@ _ENTRY_KEYS = {
     "placeholder",
     "submitLabel",
 }
+_VISUAL_HELP_KEYS = {"operation", "label"}
 _COLLECTION_OPERATION_DEFINITIONS = {
     "entra-directory-display-name": {
         "url": _ENTRA_OVERVIEW_URL,
@@ -581,6 +583,41 @@ def validate_view(raw: Any) -> dict[str, Any]:
                 maximum=80,
             ),
         }
+    visual_help_raw = raw.get("visualHelp")
+    if visual_help_raw is not None:
+        if confirmation_raw is None:
+            raise AssistedBrowserError(
+                "visualHelp requires a detected-value confirmation."
+            )
+        if not isinstance(visual_help_raw, Mapping):
+            raise AssistedBrowserError("visualHelp must be an object.")
+        unknown_visual_help_keys = set(visual_help_raw) - _VISUAL_HELP_KEYS
+        if unknown_visual_help_keys:
+            raise AssistedBrowserError(
+                "visualHelp contains unsupported fields: "
+                + ", ".join(sorted(unknown_visual_help_keys))
+            )
+        operation = _required_text(
+            visual_help_raw.get("operation"),
+            "visualHelp.operation",
+            maximum=80,
+        )
+        if operation not in _COLLECTION_OPERATIONS:
+            raise AssistedBrowserError(
+                "visualHelp.operation is not a supported collection operation."
+            )
+        if normalized["confirmation"]["operation"] != operation:
+            raise AssistedBrowserError(
+                "visualHelp and confirmation must target the same worksheet row."
+            )
+        normalized["visualHelp"] = {
+            "operation": operation,
+            "label": _required_text(
+                visual_help_raw.get("label"),
+                "visualHelp.label",
+                maximum=120,
+            ),
+        }
     return normalized
 
 
@@ -602,6 +639,7 @@ class CompanionState:
         self._collection: dict[str, Any] | None = None
         self._confirmation: dict[str, Any] | None = None
         self._entry: dict[str, Any] | None = None
+        self._visual_help: dict[str, Any] | None = None
         self._evidence_image: bytes | None = None
         self._evidence_image_metadata: dict[str, Any] | None = None
         self._target_pointers: list[dict[str, Any]] = []
@@ -615,6 +653,7 @@ class CompanionState:
             previous_image_metadata = self._evidence_image_metadata
             previous_target_pointers = self._target_pointers
             entry = normalized.get("entry")
+            visual_help = normalized.get("visualHelp")
             if isinstance(entry, Mapping) and (
                 previous_collection is None
                 or previous_collection.get("status") != "navigated"
@@ -624,6 +663,26 @@ class CompanionState:
                     "Manual entry is available only after Navigate only "
                     "completes for the same worksheet row."
                 )
+            if isinstance(visual_help, Mapping):
+                if (
+                    previous_collection is None
+                    or previous_collection.get("status")
+                    not in {"authorized", "navigated"}
+                    or previous_collection.get("operation")
+                    != visual_help["operation"]
+                ):
+                    raise AssistedBrowserError(
+                        "Visual help is available only after the same worksheet "
+                        "row is authorized."
+                    )
+                if not previous_target_pointers or not all(
+                    pointer.get("operation") == visual_help["operation"]
+                    for pointer in previous_target_pointers
+                ):
+                    raise AssistedBrowserError(
+                        "Visual help requires current point-targets guidance "
+                        "for the same worksheet row."
+                    )
             self._revision += 1
             self._view = normalized
             self._published_at = _now_iso()
@@ -636,6 +695,7 @@ class CompanionState:
                 )
                 or normalized.get("confirmation")
                 or normalized.get("entry")
+                or visual_help
             )
             operation = (
                 interaction.get("operation")
@@ -692,6 +752,16 @@ class CompanionState:
                 }
             else:
                 self._entry = None
+            if isinstance(visual_help, Mapping):
+                self._visual_help = {
+                    "operation": visual_help["operation"],
+                    "label": visual_help["label"],
+                    "status": "waiting",
+                    "revision": self._revision,
+                    "availableAt": self._published_at,
+                }
+            else:
+                self._visual_help = None
             return {
                 "revision": self._revision,
                 "publishedAt": self._published_at,
@@ -710,6 +780,7 @@ class CompanionState:
                 "collection": self._collection,
                 "confirmation": self._confirmation,
                 "entry": self._entry,
+                "visualHelp": self._visual_help,
                 "evidenceImage": self._evidence_image_metadata,
                 "targetPointer": (
                     self._target_pointers[-1]
@@ -930,6 +1001,83 @@ class CompanionState:
             }
             return dict(self._confirmation)
 
+    def request_visual_help(
+        self,
+        *,
+        revision: int,
+        operation: str,
+    ) -> dict[str, Any]:
+        """Record one human screenshot request without changing row authorization."""
+        with self._lock:
+            requested = (self._view or {}).get("visualHelp")
+            if (
+                revision != self._revision
+                or not isinstance(requested, Mapping)
+                or requested.get("operation") != operation
+            ):
+                raise AssistedBrowserError(
+                    "The visual-help request does not match the current guidance."
+                )
+            if (
+                self._collection is None
+                or self._collection.get("operation") != operation
+                or self._collection.get("status")
+                not in {"authorized", "navigated"}
+            ):
+                raise AssistedBrowserError(
+                    "The screenshot target is not authorized by the current row."
+                )
+            if self._visual_help is None:
+                raise AssistedBrowserError(
+                    "The current guidance is not offering visual help."
+                )
+            current_status = self._visual_help.get("status")
+            if current_status in {"requested", "succeeded"}:
+                return dict(self._visual_help)
+            if current_status not in {"waiting", "failed"}:
+                raise AssistedBrowserError(
+                    "The visual-help request is not available."
+                )
+            self._visual_help = {
+                "operation": operation,
+                "label": requested["label"],
+                "status": "requested",
+                "revision": revision,
+                "requestedAt": _now_iso(),
+            }
+            self._evidence_image = None
+            self._evidence_image_metadata = None
+            return dict(self._visual_help)
+
+    def fail_visual_help(
+        self,
+        *,
+        operation: str,
+        error: str,
+    ) -> dict[str, Any]:
+        """Report a safe screenshot failure while keeping visual help retriable."""
+        normalized_error = _required_text(
+            error,
+            "error",
+            maximum=400,
+        )
+        with self._lock:
+            if (
+                self._visual_help is None
+                or self._visual_help.get("operation") != operation
+                or self._visual_help.get("status") != "requested"
+            ):
+                raise AssistedBrowserError(
+                    "The screenshot failure does not match a requested visual-help operation."
+                )
+            self._visual_help = {
+                **self._visual_help,
+                "status": "failed",
+                "error": normalized_error,
+                "failedAt": _now_iso(),
+            }
+            return dict(self._visual_help)
+
     def set_evidence_image(
         self,
         *,
@@ -948,11 +1096,24 @@ class CompanionState:
                 raise AssistedBrowserError(
                     "The screenshot target is not authorized by the current row."
                 )
+            if (
+                self._visual_help is None
+                or self._visual_help.get("operation") != operation
+                or self._visual_help.get("status") != "requested"
+            ):
+                raise AssistedBrowserError(
+                    "A screenshot may be captured only after the human requests visual help."
+                )
             self._evidence_image = content
             self._evidence_image_metadata = {
                 "id": secrets.token_urlsafe(12),
                 "operation": operation,
                 **metadata,
+            }
+            self._visual_help = {
+                **self._visual_help,
+                "status": "succeeded",
+                "completedAt": _now_iso(),
             }
             return dict(self._evidence_image_metadata)
 
@@ -1119,6 +1280,7 @@ class CompanionState:
                 "collection": self._collection,
                 "confirmation": self._confirmation,
                 "entry": self._entry,
+                "visualHelp": self._visual_help,
                 "evidenceImage": self._evidence_image_metadata,
                 "targetPointer": (
                     self._target_pointers[-1]
@@ -1406,6 +1568,64 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     value=value,
                 )
                 self._send_json(200, {"entry": result})
+                return
+            if self.path == "/api/visual-help":
+                raw = self._read_json()
+                if not isinstance(raw, Mapping):
+                    raise AssistedBrowserError(
+                        "Visual-help request must be a JSON object."
+                    )
+                if set(raw) != {"operation", "revision"}:
+                    raise AssistedBrowserError(
+                        "Visual-help request fields are invalid."
+                    )
+                revision = raw.get("revision")
+                if not isinstance(revision, int) or revision < 1:
+                    raise AssistedBrowserError(
+                        "Visual-help revision must be a positive integer."
+                    )
+                result = self.server.companion_state.request_visual_help(
+                    revision=revision,
+                    operation=_required_text(
+                        raw.get("operation"),
+                        "operation",
+                        maximum=80,
+                    ),
+                )
+                self._send_json(200, {"visualHelp": result})
+                return
+            if self.path == "/api/visual-help-result":
+                raw = self._read_json()
+                if not isinstance(raw, Mapping):
+                    raise AssistedBrowserError(
+                        "Visual-help result must be a JSON object."
+                    )
+                if set(raw) != {"error", "operation", "status"}:
+                    raise AssistedBrowserError(
+                        "Visual-help result fields are invalid."
+                    )
+                status = _required_text(
+                    raw.get("status"),
+                    "status",
+                    maximum=20,
+                )
+                if status != "failed":
+                    raise AssistedBrowserError(
+                        "Visual-help result status must be failed."
+                    )
+                result = self.server.companion_state.fail_visual_help(
+                    operation=_required_text(
+                        raw.get("operation"),
+                        "operation",
+                        maximum=80,
+                    ),
+                    error=_required_text(
+                        raw.get("error"),
+                        "error",
+                        maximum=400,
+                    ),
+                )
+                self._send_json(200, {"visualHelp": result})
                 return
             if self.path == "/api/shared-browser-result":
                 if self.server.browser_mode != _VSCODE_BROWSER_MODE:
@@ -3564,7 +3784,8 @@ def _interaction_completed_after_publication(
     """Recognize only terminal interaction results for the requested operation and revision."""
     if status.get("revision") != revision:
         return None
-    current = status.get(interaction)
+    status_key = "visualHelp" if interaction == "visual-help" else interaction
+    current = status.get(status_key)
     if not isinstance(current, Mapping) or current.get("operation") != operation:
         return None
     current_status = current.get("status")
@@ -3598,6 +3819,12 @@ def _interaction_completed_after_publication(
             or current_status != "submitted"
         ):
             return None
+    elif interaction == "visual-help":
+        if (
+            current.get("revision") != revision
+            or current_status != "requested"
+        ):
+            return None
     else:
         raise AssistedBrowserError("Unsupported companion interaction.")
     return dict(current)
@@ -3620,21 +3847,27 @@ def _wait(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 "Companion guidance changed while waiting for the "
                 "administrator response."
             )
-        completed = _interaction_completed_after_publication(
-            latest,
-            operation=args.operation,
-            interaction=args.interaction,
-            revision=args.revision,
+        interactions = (
+            ("visual-help", "confirmation", "entry", "collection")
+            if args.interaction == "any"
+            else (args.interaction,)
         )
-        if completed is not None:
-            return {
-                "completed": True,
-                "interaction": args.interaction,
-                "operation": args.operation,
-                "result": completed,
-                "revision": args.revision,
-                "waitedSeconds": round(time.monotonic() - started, 3),
-            }
+        for interaction in interactions:
+            completed = _interaction_completed_after_publication(
+                latest,
+                operation=args.operation,
+                interaction=interaction,
+                revision=args.revision,
+            )
+            if completed is not None:
+                return {
+                    "completed": True,
+                    "interaction": interaction,
+                    "operation": args.operation,
+                    "result": completed,
+                    "revision": args.revision,
+                    "waitedSeconds": round(time.monotonic() - started, 3),
+                }
         if time.monotonic() >= deadline:
             return {
                 "completed": False,
@@ -3731,6 +3964,24 @@ def _capture(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             "frameIndex": args.frame_index,
             "matchIndex": args.match_index,
             "append": args.append,
+        },
+        timeout=30.0,
+    )
+
+
+def _screenshot_result(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Report a safe screenshot failure for a requested visual-help operation."""
+    session = _load_session(root)
+    return _api_request(
+        session,
+        "/api/visual-help-result",
+        value={
+            "operation": args.operation,
+            "status": args.status,
+            "error": args.error,
         },
         timeout=30.0,
     )
@@ -3942,7 +4193,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wait.add_argument(
         "--interaction",
-        choices=("collection", "confirmation", "entry"),
+        choices=("any", "collection", "confirmation", "entry", "visual-help"),
         required=True,
     )
     wait.add_argument("--revision", type=int, required=True)
@@ -3964,17 +4215,27 @@ def build_parser() -> argparse.ArgumentParser:
     follow.add_argument("--selector", required=True)
     follow.add_argument("--frame-index", type=int, required=True)
     follow.add_argument("--match-index", type=int, required=True)
-    capture = commands.add_parser("capture")
-    capture.add_argument(
+    for command in ("capture", "screenshot"):
+        capture = commands.add_parser(command)
+        capture.add_argument(
+            "--operation",
+            choices=sorted(_COLLECTION_OPERATIONS),
+            required=True,
+        )
+        capture.add_argument("--selector")
+        capture.add_argument("--frame-index", type=int)
+        capture.add_argument("--match-index", type=int)
+        capture.add_argument("--image-file", type=Path)
+        capture.add_argument("--label")
+        capture.add_argument("--append", action="store_true")
+    screenshot_result = commands.add_parser("screenshot-result")
+    screenshot_result.add_argument(
         "--operation",
         choices=sorted(_COLLECTION_OPERATIONS),
         required=True,
     )
-    capture.add_argument("--selector")
-    capture.add_argument("--frame-index", type=int)
-    capture.add_argument("--match-index", type=int)
-    capture.add_argument("--image-file", type=Path)
-    capture.add_argument("--label")
+    screenshot_result.add_argument("--status", choices=("failed",), required=True)
+    screenshot_result.add_argument("--error", required=True)
     fill_search = commands.add_parser("fill-search")
     fill_search.add_argument(
         "--operation",
@@ -4038,6 +4299,8 @@ _HANDLERS = {
     "inspect": _inspect,
     "follow": _follow,
     "capture": _capture,
+    "screenshot": _capture,
+    "screenshot-result": _screenshot_result,
     "fill-search": _fill_search,
     "point": _point,
     "point-targets": _point_targets,

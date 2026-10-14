@@ -15,7 +15,7 @@ const pendingBridgeRequests = new Map();
 let bridgeRequestSequence = 0;
 let renderedRevision = 0;
 let acknowledgedRevision = 0;
-let renderedEvidenceImageId = null;
+let renderedVisualHelpKey = null;
 let evidenceImageUrl = null;
 let renderedEntryKey = null;
 let renderedConfirmationKey = null;
@@ -221,59 +221,58 @@ function renderCollection(result) {
   collection.replaceChildren(...nodes);
 }
 
-/** Offer a contextual screenshot only after the human explicitly requests visual help. */
-async function renderEvidenceImage(metadata) {
-  if (!metadata) {
+/** Load one authorized screenshot through the active browser host. */
+async function loadEvidenceImage() {
+  if (vscodeApi) {
+    const response = await bridgeRequest("/api/evidence-image", {}, "binary");
+    const bytes = Uint8Array.from(atob(response.base64), (character) =>
+      character.charCodeAt(0),
+    );
+    return new Blob([bytes], { type: response.contentType });
+  }
+  const response = await fetch("/api/evidence-image", {
+    cache: "no-store",
+    headers: {
+      Authorization: "Bearer " + token,
+    },
+  });
+  if (!response.ok) {
+    throw new Error("Context screenshot could not be loaded.");
+  }
+  return response.blob();
+}
+
+/** Request and render contextual visual help independently of candidate confirmation. */
+async function renderVisualHelp(view, visualHelp, metadata, revision) {
+  if (!view?.visualHelp || !visualHelp) {
     evidence.hidden = true;
     evidence.replaceChildren();
-    renderedEvidenceImageId = null;
+    renderedVisualHelpKey = null;
     if (evidenceImageUrl) {
       URL.revokeObjectURL(evidenceImageUrl);
       evidenceImageUrl = null;
     }
     return;
   }
-  if (metadata.id === renderedEvidenceImageId) {
+  const key = [
+    revision,
+    visualHelp.status,
+    visualHelp.requestedAt || "",
+    visualHelp.failedAt || "",
+    visualHelp.completedAt || "",
+    metadata?.id || "",
+  ].join(":");
+  if (key === renderedVisualHelpKey) {
     return;
   }
+  renderedVisualHelpKey = key;
   if (evidenceImageUrl) {
     URL.revokeObjectURL(evidenceImageUrl);
     evidenceImageUrl = null;
   }
-  const button = textElement(
-    "button",
-    "Show me what to click",
-    "secondary-action",
-  );
-  button.type = "button";
-  // Fetch and reveal the authorized screenshot only after the visual-help click.
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "Loading screenshot...";
+  if (visualHelp.status === "succeeded" && metadata) {
     try {
-      let imageBlob;
-      if (vscodeApi) {
-        const response = await bridgeRequest(
-          "/api/evidence-image",
-          {},
-          "binary",
-        );
-        const bytes = Uint8Array.from(atob(response.base64), (character) =>
-          character.charCodeAt(0),
-        );
-        imageBlob = new Blob([bytes], { type: response.contentType });
-      } else {
-        const response = await fetch("/api/evidence-image", {
-          cache: "no-store",
-          headers: {
-            Authorization: "Bearer " + token,
-          },
-        });
-        if (!response.ok) {
-          throw new Error("Context screenshot could not be loaded.");
-        }
-        imageBlob = await response.blob();
-      }
+      const imageBlob = await loadEvidenceImage();
       evidenceImageUrl = URL.createObjectURL(imageBlob);
       const image = document.createElement("img");
       image.src = evidenceImageUrl;
@@ -287,15 +286,58 @@ async function renderEvidenceImage(metadata) {
           "evidence-caption",
         ),
       );
+      evidence.hidden = false;
+      return;
     } catch (error) {
-      button.disabled = false;
-      button.textContent = "Show me what to click";
-      evidence.append(textElement("p", error.message, "decision-error"));
+      evidence.replaceChildren(
+        textElement("h2", "Screenshot unavailable"),
+        textElement("p", error.message, "decision-error"),
+      );
+      evidence.hidden = false;
+      return;
     }
-  });
-  evidence.replaceChildren(textElement("h2", "Need visual help?"), button);
+  }
+  const button = textElement("button", "", "secondary-action");
+  button.type = "button";
+  if (visualHelp.status === "requested") {
+    button.textContent = "Preparing screenshot...";
+    button.disabled = true;
+  } else {
+    button.textContent =
+      visualHelp.status === "failed"
+        ? "Screenshot unsuccessful"
+        : "Show me what to click";
+    // The click requests a fresh screenshot; the session performs it afterward.
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Preparing screenshot...";
+      try {
+        await request("/api/visual-help", {
+          method: "POST",
+          body: JSON.stringify({
+            operation: view.visualHelp.operation,
+            revision,
+          }),
+        });
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Show me what to click";
+        evidence.append(textElement("p", error.message, "decision-error"));
+      }
+    });
+  }
+  const nodes = [textElement("h2", "Need visual help?"), button];
+  if (visualHelp.status === "failed") {
+    nodes.push(
+      textElement(
+        "p",
+        visualHelp.error || "The screenshot could not be prepared.",
+        "decision-error",
+      ),
+    );
+  }
+  evidence.replaceChildren(...nodes);
   evidence.hidden = false;
-  renderedEvidenceImageId = metadata.id;
 }
 
 /** Render one revision-bound confirmation and prevent duplicate decisions. */
@@ -560,7 +602,12 @@ async function poll() {
   try {
     const payload = await request("/api/view");
     render(payload);
-    await renderEvidenceImage(payload.evidenceImage);
+    await renderVisualHelp(
+      payload.view,
+      payload.visualHelp,
+      payload.evidenceImage,
+      payload.revision,
+    );
     renderCollection(payload.collection);
     renderEntry(payload.view, payload.entry, payload.revision);
     renderConfirmation(payload.view, payload.confirmation, payload.revision);

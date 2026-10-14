@@ -137,6 +137,7 @@ const ASSISTED_BROWSER_API_PATHS = new Set([
     '/api/action',
     '/api/confirmation',
     '/api/entry',
+    '/api/visual-help',
 ]);
 
 function getCompleted(context) {

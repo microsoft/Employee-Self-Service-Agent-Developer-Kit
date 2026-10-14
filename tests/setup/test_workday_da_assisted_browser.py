@@ -80,6 +80,9 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert '"/api/evidence-image"' in script
     assert "URL.createObjectURL" in script
     assert "Show me what to click" in script
+    assert 'request("/api/visual-help"' in script
+    assert "Preparing screenshot..." in script
+    assert "Screenshot unsuccessful" in script
     assert 'request("/api/entry"' in script
     assert "renderedEntryKey" in script
     assert "renderedConfirmationKey" in script
@@ -112,6 +115,9 @@ def test_companion_uses_user_opened_shared_integrated_browser() -> None:
     assert "shared-browser-result" in protocol
     assert "point-targets" in protocol
     assert "--image-file" in protocol
+    assert "--interaction any" in protocol
+    assert "screenshot-result" in protocol
+    assert "only in the active companion session" in protocol
     assert "A search with no matching candidate is not a browser failure" in protocol
     assert "start --surface \"{SURFACE}\" --launch" not in protocol
 
@@ -128,7 +134,7 @@ def test_vscode_companion_retains_edge_search_and_retry_behavior() -> None:
         "inspect bounded visible-page evidence",
         "follow an already-inspected visible Entra link",
         "fill an already-inspected visible search or filter input",
-        "capture one bounded contextual screenshot",
+        "attempt one bounded contextual screenshot",
         "show its approximate position in the companion rail",
     ):
         assert capability in protocol
@@ -136,3 +142,31 @@ def test_vscode_companion_retains_edge_search_and_retry_behavior() -> None:
     assert "A missing first result is not a completed search" in entra
     assert "Do not stop or return to chat" in entra
     assert "every visible result and available result page" in entra
+
+
+def test_entra_companion_has_explicit_capture_and_visual_help_contract() -> None:
+    protocol = (_WORKDAY_DA / "shared" / "assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+    entra = (_WORKDAY_DA / "shared" / "entra-assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "| Sensitive |" in entra
+    assert entra.count("| No        |") == 14
+    assert '"label": "Navigate only"' in entra
+    assert '"label": "Navigate and capture"' in entra
+    assert '"mode": "navigate-only"' in entra
+    assert '"mode": "navigate-and-capture"' in entra
+    assert '"label": "Detected {WORKSHEET_ROW}"' in entra
+    assert (
+        '"prompt": "This is the value detected for {WORKSHEET_ROW}. '
+        'Record it in the worksheet?"'
+    ) in entra
+    assert '"label": "{VISIBLE_TARGET_LABEL}"' in entra
+    assert "attempt vertical centering" in entra
+    assert "re-inspect its post-scroll position" in entra
+    assert "before a screenshot exists" in entra
+    assert "only after the human selects **Show me what to click**" in entra
+    assert "Build `positionRatio` from the post-scroll geometry" in protocol
+    assert "Set `centered` to `true` only" in protocol

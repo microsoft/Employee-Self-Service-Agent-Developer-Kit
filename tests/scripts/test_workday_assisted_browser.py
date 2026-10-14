@@ -48,6 +48,28 @@ def _view() -> dict:
     }
 
 
+def _detected_value_view(
+    operation: str,
+    label: str,
+) -> dict:
+    return _view() | {
+        "fields": [{"label": f"Detected {label}", "value": "example"}],
+        "confirmation": {
+            "operation": operation,
+            "prompt": (
+                f"This is the value detected for {label}. "
+                "Record it in the worksheet?"
+            ),
+            "confirmLabel": "Record worksheet value",
+            "rejectLabel": "Search again",
+        },
+        "visualHelp": {
+            "operation": operation,
+            "label": label,
+        },
+    }
+
+
 def test_view_contract_accepts_only_constrained_content() -> None:
     assert validate_view(_view()) == _view()
 
@@ -192,6 +214,40 @@ def test_view_contract_accepts_navigation_and_capture_choices_together() -> None
     }
 
     assert validate_view(view) == view
+
+
+def test_view_contract_accepts_visual_help_with_same_row_confirmation() -> None:
+    view = _detected_value_view(
+        "entra-directory-display-name",
+        "Directory name",
+    )
+
+    assert validate_view(view) == view
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="requires a detected-value confirmation",
+    ):
+        validate_view(
+            _view()
+            | {
+                "visualHelp": {
+                    "operation": "entra-directory-display-name",
+                    "label": "Directory name",
+                }
+            }
+        )
+
+    mismatched = _detected_value_view(
+        "entra-directory-display-name",
+        "Directory name",
+    )
+    mismatched["visualHelp"]["operation"] = "entra-application-id"
+    with pytest.raises(
+        AssistedBrowserError,
+        match="must target the same worksheet row",
+    ):
+        validate_view(mismatched)
 
 
 @pytest.mark.parametrize(
@@ -839,11 +895,6 @@ def test_search_navigation_is_available_in_either_assistance_mode() -> None:
             )
             == result
         )
-        state.set_evidence_image(
-            operation="entra-certificate-thumbprint",
-            content=b"png",
-            metadata={"label": "Search box"},
-        )
         pointer = state.set_target_pointer(
             operation="entra-certificate-thumbprint",
             metadata={
@@ -1133,6 +1184,24 @@ def test_context_screenshot_is_row_scoped_and_preserved_for_same_operation() -> 
             "status": "authorized",
         }
     )
+    state.set_target_pointer(
+        operation="entra-saml-signing-option",
+        metadata={
+            "label": "Edit SAML signing certificate",
+            "positionRatio": 0.5,
+            "centered": True,
+        },
+    )
+    visual_help_revision = state.publish(
+        _detected_value_view(
+            "entra-saml-signing-option",
+            "SAML signing",
+        )
+    )["revision"]
+    state.request_visual_help(
+        revision=visual_help_revision,
+        operation="entra-saml-signing-option",
+    )
 
     metadata = state.set_evidence_image(
         operation="entra-saml-signing-option",
@@ -1142,7 +1211,13 @@ def test_context_screenshot_is_row_scoped_and_preserved_for_same_operation() -> 
             "capturedAt": "2026-01-01T00:00:00Z",
         },
     )
-    state.publish(action_view | {"title": "Open the certificate settings"})
+    state.publish(
+        _detected_value_view(
+            "entra-saml-signing-option",
+            "SAML signing",
+        )
+        | {"title": "Open the certificate settings"}
+    )
 
     assert metadata["operation"] == "entra-saml-signing-option"
     assert state.fetch()["evidenceImage"] == metadata
@@ -1159,6 +1234,115 @@ def test_context_screenshot_is_row_scoped_and_preserved_for_same_operation() -> 
     )
     with pytest.raises(AssistedBrowserError, match="No contextual screenshot"):
         state.evidence_image()
+
+
+def test_visual_help_requires_authorization_and_current_pointers() -> None:
+    state = CompanionState()
+    view = _detected_value_view(
+        "entra-directory-display-name",
+        "Directory name",
+    )
+
+    with pytest.raises(AssistedBrowserError, match="same worksheet row"):
+        state.publish(view)
+
+    action_view = _view() | {
+        "action": {
+            "label": "Navigate and capture",
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+        }
+    }
+    revision = state.publish(action_view)["revision"]
+    state.begin_collection(
+        revision=revision,
+        operation="entra-directory-display-name",
+        mode="navigate-and-capture",
+    )
+    state.complete_collection(
+        {
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+            "status": "authorized",
+        }
+    )
+
+    with pytest.raises(AssistedBrowserError, match="point-targets"):
+        state.publish(view)
+
+
+def test_visual_help_is_click_triggered_retriable_and_keeps_confirmation() -> None:
+    state = CompanionState()
+    action_view = _view() | {
+        "action": {
+            "label": "Navigate and capture",
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+        }
+    }
+    revision = state.publish(action_view)["revision"]
+    state.begin_collection(
+        revision=revision,
+        operation="entra-directory-display-name",
+        mode="navigate-and-capture",
+    )
+    state.complete_collection(
+        {
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+            "status": "authorized",
+        }
+    )
+    state.set_target_pointer(
+        operation="entra-directory-display-name",
+        metadata={
+            "label": "Directory name",
+            "positionRatio": 0.5,
+            "centered": True,
+        },
+    )
+    candidate_revision = state.publish(
+        _detected_value_view(
+            "entra-directory-display-name",
+            "Directory name",
+        )
+    )["revision"]
+
+    with pytest.raises(AssistedBrowserError, match="only after the human requests"):
+        state.set_evidence_image(
+            operation="entra-directory-display-name",
+            content=b"png",
+            metadata={"label": "Directory name"},
+        )
+
+    requested = state.request_visual_help(
+        revision=candidate_revision,
+        operation="entra-directory-display-name",
+    )
+    assert requested["status"] == "requested"
+
+    failed = state.fail_visual_help(
+        operation="entra-directory-display-name",
+        error="The browser screenshot tool did not return an image.",
+    )
+    assert failed["status"] == "failed"
+    assert state.status()["confirmation"]["status"] == "waiting"
+
+    retried = state.request_visual_help(
+        revision=candidate_revision,
+        operation="entra-directory-display-name",
+    )
+    assert retried["status"] == "requested"
+
+    metadata = state.set_evidence_image(
+        operation="entra-directory-display-name",
+        content=b"png",
+        metadata={"label": "Directory name"},
+    )
+    status = state.status()
+    assert metadata["label"] == "Directory name"
+    assert status["visualHelp"]["status"] == "succeeded"
+    assert status["confirmation"]["status"] == "waiting"
 
 
 def test_manual_entry_requires_prior_navigation_authorization() -> None:
@@ -1368,6 +1552,45 @@ def test_vscode_loopback_accepts_shared_target_and_capture_evidence(
             pointers = json.loads(response.read())["targetPointers"]
         assert pointers[0]["label"] == "EmployeeHub"
 
+        candidate_revision = server.companion_state.publish(
+            _detected_value_view(
+                "entra-directory-display-name",
+                "Directory name",
+            )
+        )["revision"]
+        visual_help_request = Request(
+            f"{origin}/api/visual-help",
+            data=json.dumps(
+                {
+                    "operation": "entra-directory-display-name",
+                    "revision": candidate_revision,
+                }
+            ).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(visual_help_request, timeout=2) as response:
+            visual_help = json.loads(response.read())["visualHelp"]
+        assert visual_help["status"] == "requested"
+        failed_request = Request(
+            f"{origin}/api/visual-help-result",
+            data=json.dumps(
+                {
+                    "operation": "entra-directory-display-name",
+                    "status": "failed",
+                    "error": "The browser screenshot tool did not return an image.",
+                }
+            ).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(failed_request, timeout=2) as response:
+            failed = json.loads(response.read())["visualHelp"]
+        assert failed["status"] == "failed"
+        with urlopen(visual_help_request, timeout=2) as response:
+            retried = json.loads(response.read())["visualHelp"]
+        assert retried["status"] == "requested"
+
         content = b"\x89PNG\r\n\x1a\nbounded"
         capture_request = Request(
             f"{origin}/api/capture",
@@ -1390,6 +1613,7 @@ def test_vscode_loopback_accepts_shared_target_and_capture_evidence(
             status = json.loads(response.read())
         assert status["targetPointers"][0]["label"] == "EmployeeHub"
         assert status["evidenceImage"]["label"] == "EmployeeHub"
+        assert status["visualHelp"]["status"] == "succeeded"
     finally:
         server.shutdown()
         thread.join(timeout=2)
@@ -1454,6 +1678,50 @@ def test_wait_matches_terminal_confirmation_for_revision() -> None:
         )
         is None
     )
+
+
+def test_wait_any_returns_visual_help_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    status = {
+        "revision": 8,
+        "publishedAt": "2026-10-13T18:00:00+00:00",
+        "visualHelp": {
+            "operation": "entra-directory-display-name",
+            "status": "requested",
+            "revision": 8,
+        },
+        "confirmation": {
+            "operation": "entra-directory-display-name",
+            "status": "waiting",
+            "revision": 8,
+        },
+    }
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {"origin": "http://127.0.0.1:1234"},
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        lambda _session, _path: status,
+    )
+
+    result = workday_assisted_browser._wait(
+        argparse.Namespace(
+            operation="entra-directory-display-name",
+            interaction="any",
+            revision=8,
+            timeout=1,
+        ),
+        tmp_path,
+    )
+
+    assert result["completed"] is True
+    assert result["interaction"] == "visual-help"
+    assert result["result"] == status["visualHelp"]
 
 
 def test_layout_requires_same_visible_window_and_split_sizing() -> None:

@@ -17,22 +17,45 @@ Store the in-progress draft only under `.local/connect/workday-da/`.
 
 ## Worksheet operations
 
-| Worksheet row               | Companion operation                         |
-| --------------------------- | ------------------------------------------- |
-| Directory name              | `entra-directory-display-name`              |
-| Enterprise application      | `entra-enterprise-application-display-name` |
-| Application ID              | `entra-application-id`                      |
-| Selected Reply URL          | `entra-reply-url`                           |
-| NameID source               | `entra-name-id-source`                      |
-| SAML signing                | `entra-saml-signing-option`                 |
-| Certificate thumbprint      | `entra-certificate-thumbprint`              |
-| Certificate expiration date | `entra-certificate-expiration`              |
-| SAML configuration          | `entra-saml-configuration`                  |
-| Signing certificate         | `entra-signing-certificate-check`           |
-| Authorized connector        | `entra-authorized-connector`                |
-| Permissions and consent     | `entra-permissions-consent`                 |
-| Employee assignment         | `entra-employee-assignment`                 |
-| Existing configuration      | `entra-existing-configuration`              |
+| Worksheet row               | Companion operation                         | Sensitive |
+| --------------------------- | ------------------------------------------- | --------- |
+| Directory name              | `entra-directory-display-name`              | No        |
+| Enterprise application      | `entra-enterprise-application-display-name` | No        |
+| Application ID              | `entra-application-id`                      | No        |
+| Selected Reply URL          | `entra-reply-url`                           | No        |
+| NameID source               | `entra-name-id-source`                      | No        |
+| SAML signing                | `entra-saml-signing-option`                 | No        |
+| Certificate thumbprint      | `entra-certificate-thumbprint`              | No        |
+| Certificate expiration date | `entra-certificate-expiration`              | No        |
+| SAML configuration          | `entra-saml-configuration`                  | No        |
+| Signing certificate         | `entra-signing-certificate-check`           | No        |
+| Authorized connector        | `entra-authorized-connector`                | No        |
+| Permissions and consent     | `entra-permissions-consent`                 | No        |
+| Employee assignment         | `entra-employee-assignment`                 | No        |
+| Existing configuration      | `entra-existing-configuration`              | No        |
+
+The `Sensitive` column is authoritative. Never infer sensitivity from the row label, the visible value, or browser capabilities. For `No`, offer both actions with these literal labels:
+
+```json
+{
+  "actions": [
+    {
+      "label": "Navigate only",
+      "operation": "{OPERATION}",
+      "mode": "navigate-only",
+      "disclaimer": "{ROW_SPECIFIC_NAVIGATION_DISCLAIMER}"
+    },
+    {
+      "label": "Navigate and capture",
+      "operation": "{OPERATION}",
+      "mode": "navigate-and-capture",
+      "disclaimer": "{ROW_SPECIFIC_CAPTURE_DISCLAIMER}"
+    }
+  ]
+}
+```
+
+For any future row marked `Yes`, offer only **Navigate only**. Do not copy the application value, present a detected-value confirmation, call `point-targets`, or offer a screenshot for that row.
 
 ## Run the worksheet session
 
@@ -40,12 +63,15 @@ Store the in-progress draft only under `.local/connect/workday-da/`.
 2. Initialize the ephemeral draft from safe values already supplied in the manual worksheet response, if any.
 3. Process the unresolved worksheet rows in their original order:
    - present the row's existing manual location and instruction;
-   - request **Navigate only** unless the row explicitly supports candidate capture;
+   - for every current `Sensitive: No` row, present both **Navigate only** and **Navigate and capture** using the canonical actions template;
    - continue when the human selects the row action;
    - use bounded inspection and navigation to assist the human;
-   - publish the inspected target through the companion rail before asking the human to confirm it;
-   - publish the bounded contextual screenshot when the shared-browser tool surface provides one;
-   - present one candidate or required attestation for human confirmation;
+   - after **Navigate only**, record navigation completion and present the existing manual-entry fallback;
+   - after **Navigate and capture**, copy only the visible non-sensitive application value;
+   - scroll the application target into view, attempt vertical centering, re-inspect its post-scroll position, and publish it with `point-targets` before asking the human to confirm it;
+   - present one candidate or required attestation for human confirmation using the detected-value template below;
+   - include `visualHelp` so **Show me what to click** is visible before a screenshot exists;
+   - attempt the screenshot only after the human selects **Show me what to click**; on failure report **Screenshot unsuccessful** and allow retry without revoking row authorization;
    - after local confirmation, update only the ephemeral draft;
    - continue to the next unresolved row.
 4. If the human rejects a row candidate, retain the row authorization and inspect again. Do not invalidate unrelated draft values.
@@ -55,6 +81,29 @@ Store the in-progress draft only under `.local/connect/workday-da/`.
 8. Open a row-specific **Edit** control only when the current companion view names that exact control and explains that it will reveal existing values. Do not change or save anything in the revealed panel.
 9. For a worksheet setting that requires administrator attestation, present the worksheet's attestation and continue only after the human selects **Attest**.
 10. Return `blocked` only when the authorized portal surface remains unreachable, every bounded search and manual fallback for the row has been exhausted, or continuing would require an ambiguous selection or prohibited mutation. Return to the existing combined worksheet interaction with a concise reason.
+
+Use this canonical detected-value view shape for every current row after **Navigate and capture**:
+
+```json
+{
+  "fields": [
+    {
+      "label": "Detected {WORKSHEET_ROW}",
+      "value": "{DETECTED_VALUE}"
+    }
+  ],
+  "confirmation": {
+    "operation": "{OPERATION}",
+    "prompt": "This is the value detected for {WORKSHEET_ROW}. Record it in the worksheet?",
+    "confirmLabel": "Record worksheet value",
+    "rejectLabel": "Search again"
+  },
+  "visualHelp": {
+    "operation": "{OPERATION}",
+    "label": "{VISIBLE_TARGET_LABEL}"
+  }
+}
+```
 
 ## Protect the worksheet
 
