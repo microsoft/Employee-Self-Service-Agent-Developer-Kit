@@ -62,10 +62,15 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     markup = (
         _SCRIPTS / "workday_assisted_browser_assets" / "companion.html"
     ).read_text(encoding="utf-8")
+    styles = (
+        _SCRIPTS / "workday_assisted_browser_assets" / "companion.css"
+    ).read_text(encoding="utf-8")
     script = (_SCRIPTS / "workday_assisted_browser_assets" / "companion.js").read_text(
         encoding="utf-8"
     )
 
+    body_rule = styles.split("body {", 1)[1].split("}", 1)[0]
+    assert "color: #000;" in body_rule
     assert "textContent" in script
     assert "replaceChildren" in script
     assert "acknowledgedRevision" in script
