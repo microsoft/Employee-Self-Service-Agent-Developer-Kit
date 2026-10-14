@@ -2,12 +2,6 @@
 
 # Phases 4 and 5 - Connections and runtime
 
-For each maker-owned browser action in these phases, read and follow
-`shared/assisted-browser.md`. Use the companion for the physical Dataverse and
-Workday connection pages, the agent's Connection Settings page, and the
-Workday-topic visibility confirmation. Keep the existing chat guidance
-available when Split Screen cannot be prepared.
-
 ## Connections
 
 Begin by preparing the selected Power Platform environment. Do not ask the
@@ -110,17 +104,14 @@ to Workday only when Microsoft Dataverse resolves exactly.
 
 If the Microsoft Dataverse connection is missing or disconnected:
 
-1. Open the `dataverse-connection` assisted-browser surface and present the
-   steps below beside it. The maker owns the connection creation and any
-   Microsoft sign-in.
-2. Show a **Create Microsoft Dataverse connection** link using the
-   environment-scoped Microsoft Dataverse URL above as the chat fallback.
-3. If the direct link does not open, use the Connections list fallback or open
+1. Show a **Create Microsoft Dataverse connection** link using the
+   environment-scoped Microsoft Dataverse URL above.
+2. If the direct link does not open, use the Connections list fallback or open
    the Power Apps maker portal, select the exact environment, open
    **Connections**, select **New connection**, and choose **Microsoft
    Dataverse**.
-4. Create or repair the connection using the selected maker account.
-5. Confirm that it shows **Connected**.
+3. Create or repair the connection using the selected maker account.
+4. Confirm that it shows **Connected**.
 
 After Microsoft Dataverse is connected, rerun `record-connections`.
 
@@ -145,22 +136,19 @@ return to the affected Workday administrator step rather than guessing.
 
 Then give the maker this creation process:
 
-1. Open the `workday-connection` assisted-browser surface and present the
-   complete value card and steps below beside it. The maker owns all field
-   entry, **Create**, and Workday sign-in actions.
-2. Show a **Create Workday connection** link using the environment-scoped
-   Workday URL above as the chat fallback. It opens the correct connector in
-   the already selected environment.
-3. If the direct link does not open, use the Connections list fallback or open
+1. Show a **Create Workday connection** link using the environment-scoped
+   Workday URL above. It opens the correct connector in the already selected
+   environment.
+2. If the direct link does not open, use the Connections list fallback or open
    the Power Apps maker portal, select the exact environment, open
    **Connections**, select **New connection**, and choose **Workday**.
-4. Select **Microsoft Entra ID Integrated** authentication.
-5. Enter the displayed values in the matching connection fields, preserving
+3. Select **Microsoft Entra ID Integrated** authentication.
+4. Enter the displayed values in the matching connection fields, preserving
    their order and keeping the tenant separate from the SOAP base URL.
-6. Select **Create** and complete the Workday sign-in window. This connector
+5. Select **Create** and complete the Workday sign-in window. This connector
    uses a separate credential store, so an additional sign-in prompt is
    expected even when Microsoft or PAC authentication already succeeded.
-7. Return to **Connections** and confirm that the Workday connection shows
+6. Return to **Connections** and confirm that the Workday connection shows
    **Connected**.
 
 Do not request or collect a Workday password, client secret, access token,
@@ -340,11 +328,8 @@ Continue with the supported live checkpoints, topic-state verification, and
 employee scenario. Do not recreate, clone, reselect, or rewrite packaged flows
 in response to topic metadata alone.
 
-Only now direct the maker to the selected agent's **Settings** > **Connection
-Settings** page. Open the `agent-connections` assisted-browser surface and use
-the application pane for that page. Present the two reviewed entries and
-parameter-sharing steps in the companion; never select a connection, enable
-parameter sharing, or save on the maker's behalf. Before they continue, show the exact recorded
+Only now direct the maker to the selected agent's **Settings** >
+**Connection Settings** page. Before they continue, show the exact recorded
 Power Platform maker account and tell them to verify that Copilot Studio's
 browser profile is signed in as that account. The CLI credential cache and the
 Copilot Studio browser session are separate. If the browser shows another
@@ -410,12 +395,8 @@ derives the complete Workday dialog list from the selected agent's
 `.component-map.json`, previews the exact scope, and uses the native components
 endpoint to set both `state` and `status` to `Active` for every Workday topic.
 Do not activate only the two User Context setup topics. After the live update
-verifies, open the `workday-topics` assisted-browser surface and present the
-refresh-and-confirm guidance beside Copilot Studio. The action must ask the
-maker to refresh Copilot Studio and confirm that every Workday topic visibly
-shows as **On** before recording activation. The helper may observe that the
-application and guide remain visible, but it must not treat page visibility as
-topic-state confirmation.
+verifies, the action must ask the maker to refresh Copilot Studio and confirm
+that every Workday topic visibly shows as **On** before recording activation.
 This refreshed-page confirmation is a UX gate, not a substitute for the
 controller's live reread.
 
