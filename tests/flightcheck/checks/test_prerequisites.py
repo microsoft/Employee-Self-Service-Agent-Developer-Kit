@@ -326,8 +326,8 @@ def test_pre005_prepaid_only_passes():
 
     graph = _graph_with_skus(PREPAID_SKU)
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(allocations=[
-        pp.currency_allocation(currency_type="MCSMessages", allocated=25000),
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(allocated=25000, available=25000),
     ]))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
@@ -349,8 +349,8 @@ def test_pre005_env_zero_allocation_with_tenant_capacity_warns():
 
     graph = _graph_with_skus(PREPAID_SKU)  # tenant has capacity
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(allocations=[
-        pp.currency_allocation(currency_type="MCSMessages", allocated=0),
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
     ]))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
@@ -370,31 +370,117 @@ def test_pre005_env_zero_allocation_no_tenant_capacity_fails():
 
     graph = _graph_with_skus()  # prepaid absent
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(allocations=[]))
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
+    ]))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
     r = _by_id(run_prerequisites_checks(runner), "PRE-005")
-
     assert r.status == "Failed"
     assert "Neither" in r.result
     assert runner._payg_configured is False
 
 
 @responses.activate
-def test_pre005_allocation_unreadable_falls_back_to_tenant_prepaid():
-    # Per-env allocation read denied -> fall back to the tenant-wide prepaid
-    # signal: tenant has capacity -> soft PASS with a verify-allocation caveat.
+def test_pre005_zero_entitlement_preserves_request_evidence():
+    from flightcheck.checks.prerequisites import run_prerequisites_checks
+
+    graph = _graph_with_skus()
+    responses.add(**pp.list_billing_policies(policies=[]))
+    responses.add(
+        **pp.get_environment_entitlements(
+            entitlements=[pp.environment_entitlement()]
+        )
+    )
+
+    runner = _payg_runner(
+        powerplatform=_pp_client(),
+        azure_arm=_arm_client(),
+        graph=graph,
+    )
+    results = run_prerequisites_checks(runner)
+
+    r = _by_id(results, "PRE-005")
+    assert r.status == "Failed"
+    assert "Neither" in r.result
+    for checkpoint_id in ("PRE-005", "PRE-006"):
+        entitlement = _by_id(results, checkpoint_id).evidence["entitlement"]
+        assert entitlement["outcome"] == "verified"
+        assert entitlement["allocatedCredits"] == 0
+        assert entitlement["requestId"] == "entitlement-request-200"
+    assert runner._payg_configured is False
+
+
+@responses.activate
+def test_pre005_and_pre006_use_positive_entitlement_value():
+    from flightcheck.checks.prerequisites import run_prerequisites_checks
+
+    graph = _graph_with_skus()
+    responses.add(**pp.list_billing_policies(policies=[]))
+    responses.add(
+        **pp.get_environment_entitlements(
+            entitlements=[
+                pp.environment_entitlement(
+                    allocated=500,
+                    auto_allocated=0,
+                    available=500,
+                )
+            ]
+        )
+    )
+    responses.add(
+        **pp.get_environment_entitlements(
+            entitlements=[
+                pp.environment_entitlement(
+                    allocated=500,
+                    auto_allocated=0,
+                    available=500,
+                )
+            ]
+        )
+    )
+    responses.add(
+        **pp.get_environment_entitlements(
+            entitlements=[
+                pp.environment_entitlement(
+                    allocated=500,
+                    auto_allocated=0,
+                    available=500,
+                )
+            ]
+        )
+    )
+
+    runner = _payg_runner(
+        powerplatform=_pp_client(),
+        azure_arm=_arm_client(),
+        graph=graph,
+    )
+    results = run_prerequisites_checks(runner)
+    for checkpoint_id in ("PRE-005", "PRE-006"):
+        result = _by_id(results, checkpoint_id)
+        assert result.status == "Passed"
+        entitlement = result.evidence["entitlement"]
+        assert entitlement["outcome"] == "verified"
+        assert entitlement["allocatedCredits"] == 500
+        assert entitlement["requestId"] == "entitlement-request-200"
+
+
+@responses.activate
+def test_pre005_entitlement_unreadable_falls_back_to_tenant_prepaid():
+    # Per-env entitlement read denied -> fall back to the tenant-wide prepaid
+    # signal: tenant has capacity -> soft PASS with a verify-entitlement caveat.
     from flightcheck.checks.prerequisites import run_prerequisites_checks
 
     graph = _graph_with_skus(PREPAID_SKU)
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(status=403))
+    responses.add(**pp.get_environment_entitlements(status=403))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
     r = _by_id(run_prerequisites_checks(runner), "PRE-005")
 
     assert r.status == "Passed"
-    assert "could not read this environment's allocation" in r.result
+    assert "could not read this environment's entitlement" in r.result
     assert runner._payg_configured is False
 
 
@@ -405,7 +491,9 @@ def test_pre005_neither_fails():
 
     graph = _graph_with_skus()  # prepaid absent
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(status=404))
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
+    ]))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
     r = _by_id(run_prerequisites_checks(runner), "PRE-005")
@@ -425,7 +513,9 @@ def test_pre005_disabled_policy_is_ignored_then_neither_fails():
     responses.add(**pp.list_billing_policies(policies=[
         pp.billing_policy(status="Disabled", subscription_id=pp.MOCK_SUBSCRIPTION_ID),
     ]))
-    responses.add(**pp.get_currency_allocations(status=404))
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
+    ]))
 
     runner = _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
     r = _by_id(run_prerequisites_checks(runner), "PRE-005")
@@ -549,7 +639,7 @@ def test_pre005_no_payg_prepaid_unknown_is_warning():
     r = _by_id(run_prerequisites_checks(runner), "PRE-005")
 
     assert r.status == "Warning"
-    assert "could not be determined" in r.result
+    assert "entitlement could not be read" in r.result
 
 
 @responses.activate
@@ -591,8 +681,8 @@ def _setup_pre005_pass():
 def _setup_pre005_warn():
     graph = _graph_with_skus(PREPAID_SKU)  # tenant has capacity
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(allocations=[
-        pp.currency_allocation(currency_type="MCSMessages", allocated=0),
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
     ]))
     return _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
 
@@ -600,7 +690,9 @@ def _setup_pre005_warn():
 def _setup_pre005_fail():
     graph = _graph_with_skus()  # prepaid absent
     responses.add(**pp.list_billing_policies(policies=[]))
-    responses.add(**pp.get_currency_allocations(allocations=[]))
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
+    ]))
     return _payg_runner(powerplatform=_pp_client(), azure_arm=_arm_client(), graph=graph)
 
 
@@ -642,7 +734,7 @@ def test_pre005_result_schema_and_owning_role(setup, expected_status):
 # runner._payg_configured. Floor: >= 1 credit per shared user.
 #
 # Most tests drive _check_copilot_studio_capacity(runner) directly with a fake
-# Power Platform client (get_currency_allocations) + monkeypatched Dataverse
+# Power Platform client (get_environment_entitlements) + monkeypatched Dataverse
 # sharing; the final integration test runs the full run_prerequisites_checks to
 # prove PRE-005's _payg_configured flag flows into PRE-004 within one run.
 # ---------------------------------------------------------------------------
@@ -677,20 +769,29 @@ class _FakeGraphSharing:
 
 
 class _FakePP:
-    """Power Platform stub: PRE-004 only reads get_currency_allocations."""
+    """Power Platform stub: capacity checks read environment entitlements."""
 
-    def __init__(self, allocations):
-        self._alloc = allocations       # list | {"_error": ...} | Exception
+    def __init__(self, entitlements):
+        self._entitlements = entitlements
 
-    def get_currency_allocations(self, env_id):
-        if isinstance(self._alloc, Exception):
-            raise self._alloc
-        return self._alloc
+    def get_environment_entitlements(self, env_id):
+        if isinstance(self._entitlements, Exception):
+            raise self._entitlements
+        return self._entitlements
 
 
-def _mcs(allocated: int) -> list[dict]:
-    """One MCSMessages allocation row at the given credit count."""
-    return [pp.currency_allocation(currency_type="MCSMessages", allocated=allocated)]
+def _mcs(allocated: int) -> dict:
+    """One MCSMessages entitlement envelope at the given credit count."""
+    return {
+        "items": [
+            pp.environment_entitlement(
+                allocated=allocated,
+                available=allocated,
+            )
+        ],
+        "_status": 200,
+        "_request_id": "entitlement-request-200",
+    }
 
 
 def _install_sharing(monkeypatch, *, shares, systemusers=None, teams=None, teammemberships=None):
@@ -785,6 +886,28 @@ def test_pre004_passed_capacity_covers_population(monkeypatch):
     assert r.priority == "Critical"
 
 
+def test_pre004_zero_entitlement_preserves_request_evidence(monkeypatch):
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={
+            "u1": _sysuser("u1", "aad-1", "alice@contoso.com"),
+        },
+    )
+    powerplatform = _FakePP(_mcs(0))
+    r = _pre004(_cap_runner(
+        graph=_FakeGraphSharing(),
+        powerplatform=powerplatform,
+        payg=False,
+    ))
+
+    assert r.status == "Failed"
+    entitlement = r.evidence["entitlement"]
+    assert entitlement["outcome"] == "verified"
+    assert entitlement["allocatedCredits"] == 0
+    assert entitlement["requestId"] == "entitlement-request-200"
+
+
 def test_pre004_at_minimum_boundary(monkeypatch):
     # Exactly one credit per shared user (A == M) -> PASSED at the floor boundary.
     _install_sharing(
@@ -824,7 +947,11 @@ def test_pre004_warns_zero_capacity_with_payg(monkeypatch):
         shares={"bot-1": [_principal("systemuser", "u1")]},
         systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
     )
-    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]), payg=True)
+    runner = _cap_runner(
+        graph=_FakeGraphSharing(),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=True,
+    )
     r = _pre004(runner)
     assert r.status == "Warning"
     assert "Pay-as-you-go billing is configured" in r.result
@@ -838,7 +965,11 @@ def test_pre004_fails_zero_capacity_no_payg(monkeypatch):
         shares={"bot-1": [_principal("systemuser", "u1")]},
         systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
     )
-    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]), payg=False)
+    runner = _cap_runner(
+        graph=_FakeGraphSharing(),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=False,
+    )
     r = _pre004(runner)
     assert r.status == "Failed"
     assert "no message capacity" in r.result.lower()
@@ -858,20 +989,27 @@ def test_pre004_fail_notes_tenant_pool_overage(monkeypatch):
         systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
     )
     graph = _FakeGraphSharing(skus=[{"skuPartNumber": PREPAID_SKU}])
-    runner = _cap_runner(graph=graph, powerplatform=_FakePP([]), payg=False)
+    runner = _cap_runner(
+        graph=graph,
+        powerplatform=_FakePP(_mcs(0)),
+        payg=False,
+    )
     r = _pre004(runner)
     assert r.status == "Failed"
     assert "Draw from the available capacity in my tenant" in r.result
 
 
-def test_pre004_warns_when_allocation_unreadable(monkeypatch):
-    # Allocation read denied (permission sentinel) -> WARNING, not FAIL.
+def test_pre004_warns_when_entitlement_unreadable(monkeypatch):
+    # Entitlement read denied (permission sentinel) -> WARNING, not FAIL.
     _install_sharing(
         monkeypatch,
         shares={"bot-1": [_principal("systemuser", "u1")]},
         systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
     )
-    pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
+    pp_denied = _FakePP({
+        "_error": "insufficient_permissions",
+        "_status": 403,
+    })
     runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=pp_denied, payg=False)
     r = _pre004(runner)
     assert r.status == "Warning"
@@ -948,7 +1086,10 @@ def test_pre004_zero_capacity_unknown_payg_warns(monkeypatch):
         shares={"bot-1": [_principal("systemuser", "u1")]},
         systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
     )
-    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]))  # payg unset
+    runner = _cap_runner(
+        graph=_FakeGraphSharing(),
+        powerplatform=_FakePP(_mcs(0)),
+    )  # payg unset
     assert not hasattr(runner, "_payg_configured")
     r = _pre004(runner)
     assert r.status == "Warning"
@@ -980,8 +1121,8 @@ def test_pre004_reads_payg_flag_from_pre005(monkeypatch):
         policy_id=pp.MOCK_POLICY_ID, environments=[pp.billing_policy_environment()]))
     responses.add(**arm.get_subscription(state="Enabled"))
     responses.add(**arm.list_budgets(budgets=[arm.budget()]))
-    responses.add(**pp.get_currency_allocations(allocations=[
-        pp.currency_allocation(currency_type="MCSMessages", allocated=0),
+    responses.add(**pp.get_environment_entitlements(entitlements=[
+        pp.environment_entitlement(),
     ]))
     _install_sharing(
         monkeypatch,
@@ -1065,7 +1206,7 @@ def test_pre006_tenant_purchased_but_env_zero_passes():
     # Env allocation is 0 but the tenant has purchased prepaid capacity ->
     # PASS (purchase confirmed; PRE-004 judges allocation sufficiency).
     r = _run_pre006(_pre006_runner(
-        graph=_purchased_graph(), powerplatform=_FakePP([]), payg=False))
+        graph=_purchased_graph(), powerplatform=_FakePP(_mcs(0)), payg=False))
     assert r.status == "Passed"
     assert "tenant has purchased" in r.result
     assert "PRE-004" in r.result
@@ -1076,7 +1217,9 @@ def test_pre006_nothing_purchased_fails():
     # Prepaid-only (no PayG) AND capacity == 0 -> the heritage FAIL. The
     # admin-focused remediation deep-links the M365 admin center catalog.
     r = _run_pre006(_pre006_runner(
-        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=False))
+        graph=_FakeGraphSharing(skus=[]),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=False))
     assert r.status == "Failed"
     assert "No prepaid Copilot Studio message capacity has been purchased" in r.result
     assert _CATALOG_DEEP_LINK in r.remediation
@@ -1093,7 +1236,7 @@ def test_pre006_m365_copilot_bundle_alone_is_not_prepaid_capacity():
                           consumed_units=5, enabled_units=10),
     ])
     r = _run_pre006(_pre006_runner(
-        graph=graph, powerplatform=_FakePP([]), payg=False))
+        graph=graph, powerplatform=_FakePP(_mcs(0)), payg=False))
     assert r.status == "Failed"
     assert "No prepaid Copilot Studio message capacity has been purchased" in r.result
 
@@ -1102,14 +1245,16 @@ def test_pre006_payg_configured_skips():
     # PayG covers billing -> prepaid capacity is optional -> SKIPPED (PRE-005
     # owns the PayG path). Short-circuits before reading any capacity signal.
     r = _run_pre006(_pre006_runner(
-        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=True))
+        graph=_FakeGraphSharing(skus=[]),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=True))
     assert r.status == "Skipped"
     assert "Pay-as-you-go billing is configured" in r.result
     assert r.remediation == ""
 
 
 def test_pre006_permission_denied_warns():
-    # Per-env allocation read denied (_error sentinel -> None) AND Graph
+    # Per-env entitlement read denied (_error sentinel -> None) AND Graph
     # unavailable (purchased None) -> cannot determine -> WARNING (surface it),
     # never a false FAIL/PASS. Mirrors PRE-005's could-not-determine handling.
     r = _run_pre006(_pre006_runner(
@@ -1126,20 +1271,18 @@ def test_pre006_graph_unavailable_with_zero_env_alloc_warns():
     # confirmed (Graph None) -> WARNING, not FAIL (incomplete info must not
     # produce a false hard failure).
     r = _run_pre006(_pre006_runner(
-        graph=None, powerplatform=_FakePP([]), payg=False))
+        graph=None, powerplatform=_FakePP(_mcs(0)), payg=False))
     assert r.status == "Warning"
     assert "Could not determine" in r.result
 
 
-def test_pre006_unexpected_error_degrades_to_warning():
-    # An UNEXPECTED error (a code defect) degrades to PRE-006's own WARNING row
-    # -- matching PRE-004/005 -- rather than bubbling up and turning the whole
-    # Prerequisites category into a single ERROR. A non-iterable allocations
-    # payload makes _env_mcs_allocation raise past its own guard.
+def test_pre006_malformed_entitlement_degrades_to_warning():
+    # A malformed entitlement response degrades to PRE-006's own WARNING row
+    # rather than becoming a false PASS or FAIL.
     r = _run_pre006(_pre006_runner(
         graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP(5), payg=False))
     assert r.status == "Warning"
-    assert "Unable to determine" in r.result
+    assert "Could not determine" in r.result
 
 
 def _setup_pre006_pass():
@@ -1149,16 +1292,24 @@ def _setup_pre006_pass():
 
 def _setup_pre006_fail():
     return _pre006_runner(
-        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=False)
+        graph=_FakeGraphSharing(skus=[]),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=False)
 
 
 def _setup_pre006_could_not_determine():
-    return _pre006_runner(graph=None, powerplatform=_FakePP([]), payg=False)
+    return _pre006_runner(
+        graph=None,
+        powerplatform=_FakePP(_mcs(0)),
+        payg=False,
+    )
 
 
 def _setup_pre006_skipped():
     return _pre006_runner(
-        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=True)
+        graph=_FakeGraphSharing(skus=[]),
+        powerplatform=_FakePP(_mcs(0)),
+        payg=True)
 
 
 @pytest.mark.parametrize("setup, expected_status", [
@@ -1216,4 +1367,3 @@ def test_pre006_integration_fails_when_no_billing_or_prepaid():
     assert pre006.status == "Failed"
     assert "No prepaid Copilot Studio message capacity has been purchased" in pre006.result
     assert _CATALOG_DEEP_LINK in pre006.remediation
-

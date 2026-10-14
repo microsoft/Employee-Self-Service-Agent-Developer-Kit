@@ -2,10 +2,9 @@
 
 Generate Copilot Studio evaluation test sets for the scenario/goal(s) a user
 names, grounded in the **scenario catalogue bundled with this skill** — no
-configured agent required. This is the portable, self-contained generator: it
-depends only on files inside its own folder, so it can be reused elsewhere (for
-example, dropped into a declarative agent) by swapping its catalogue for a
-different domain.
+configured agent required. Generation is catalogue-grounded; this kit's host
+provides shared presentation, method validation, export, and action handling.
+Other hosts must supply equivalent contracts when reusing the generator.
 
 It produces two artifacts per set from the same cases:
 - **`.mcs.yml`** — the Copilot Studio-native EvaluationSet/EvaluationData format
@@ -15,10 +14,16 @@ It produces two artifacts per set from the same cases:
 
 > **Scope of this skill.** It only *generates* test-set artifacts. Whether/where
 > they are pushed or deployed is the **host's** concern, not this skill's — this
-> skill never pushes and has no dependency on any other skill.
+> skill never pushes. Run and Request Review delegate to the host's selected-set
+> deployment flow after the user chooses an action.
 
 ## Rules
 
+- Read `src/skills/evaluations/experience-contract.md` for shared coverage copy,
+  Compare Meaning admission, complete case presentation, and four maker actions.
+- This feature generates single-response `EvaluationData` only. Explain an
+  explicit multi-turn request is unsupported before writing files; offer an
+  explicit single-response alternative, never silently flatten or omit turns.
 - The **scenario catalogue** bundled with this skill is **data only** — read it
   before you classify, expand, or write any case, and never introduce a category,
   scenario, connector, persona, or field it does not define. In this kit the
@@ -61,6 +66,22 @@ generate one positive per named sub-scenario).
 
 ## Step 2: Determine scope (which goals/scenarios)
 
+Before generating a new set, discover existing workspace/current-agent sets
+with `python scripts/evaluation_review.py --list-all` (use `--query "{user text}"`
+for an explicitly named set). Discover actual EvaluationSet parents, including
+arbitrary slugs and overflow sets, not a fixed category-folder list.
+Show matching sets with source and case count. For a returning maker offer:
+
+- **Edit this existing set**
+- **Add test cases to this set**
+- **Create a new set**
+- **Keep it unchanged**
+
+Wait for an explicit selection. Edit/add carries the exact folder/source and
+action to `src/skills/evaluations/update/SKILL.md` and stops this generator.
+Never choose a fuzzy/same-name match or regenerate the set to enable editing.
+Keep/cancel does not mutate, export, or deploy anything.
+
 Generate evals **only** for the scenario/goal(s) the user specifies.
 
 - If the user **named one or more goals/scenarios/categories** (for example
@@ -96,6 +117,14 @@ folder/file slug is the confirmed name reduced to `[a-z0-9-]` (fallback
 
 Wait for the user's confirmation before generating files.
 
+Check the confirmed destination against the discovered sets before reusing a
+slug. On collision, offer the same edit/add/keep choices or a distinct new name.
+Explicit replacement requires showing affected cases and obtaining approval;
+preserve existing deletion restrictions. It is never the default.
+
+After scope/name confirmation, render **Before generating cases** from
+`src/skills/evaluations/experience-contract.md` once, before Step 4.
+
 ## Step 4: Generate cases per confirmed set
 
 For each confirmed set, expand its family into sub-scenarios (from Step 1) and
@@ -110,9 +139,22 @@ folder with its own 2 boundary + 2 negative) rather than trimming.
 **Exactly 2 boundary + 2 negative per set** (distinct, not paraphrases):
 - **Boundary** — near-scope, typo'd, abbreviated, or very short input the agent
   should still handle (e.g. "empolyee ID", "comp ratio", "pto bal", "tkts").
-- **Negative** — a request the agent should refuse or deflect: out-of-scope
-  ("book a flight to New York"), privacy boundary ("show me John's salary"),
-  write-on-read-only ("change my employee ID"), or cross-domain mixing.
+- **Negative** — use two distinct behaviors:
+  - **Outside this scenario, valid ESS:** ground the prompt in a different
+    catalogue scenario. The expected response should route to or support that
+    capability, not refuse it merely because it is outside this evaluation goal.
+  - **Outside the ESS catalogue:** choose a genuinely unrelated domain, varying
+    examples across sets (for example entertainment trivia, consumer shopping,
+    recipe planning, personal investing, or schoolwork), and expect an
+    appropriate limitation or redirection.
+  Privacy boundaries ("show me John's salary"), write-on-read-only requests
+  ("change my employee ID"), and cross-domain mixing remain separate negative
+  behaviors and must not be relabeled as out of scope.
+
+Do not use travel booking as the default unsupported example: travel can be a
+valid employee-service scenario when configured. The two negatives must use
+different behavior classes and different domains; never repeat one canned
+off-domain prompt across generated sets.
 
 **Utterance-type mix (apply across all case types):** each set needs both
 natural-language utterances (full sentences a real employee would type) and
@@ -145,8 +187,6 @@ Parent EvaluationSet (one per set):
 kind: EvaluationSet
 displayName: "{Confirmed set name}"
 graders:
-  - kind: GeneralQualityGrader
-
   - kind: CompareMeaningGrader
     threshold: 0.7
 ```
@@ -168,7 +208,8 @@ extensionData:
 - Child files: `{output}/{slug}/{short-case-slug}.mcs.yml`
 - `displayOrder` is epoch-milliseconds; increment by 1 per case to preserve order.
 - Copilot Studio caps a set at **100 cases** — if a set exceeds it, split into
-  `{slug}-2/`, `{slug}-3/`, each with its own parent using the same graders.
+  `{slug}-2/`, `{slug}-3/`, each with exactly one CompareMeaningGrader and the
+  same threshold. The stricter 21-positive family split in Step 4 still applies.
 
 **`.csv` — shareable / importable copy.** Write one CSV per set under
 `workspace/evaluations/exports/` with these exact columns (the format Copilot
@@ -183,40 +224,40 @@ Prompt,Expected response,Test Method Type,Passing Score
 - File name: `{YYYYMMDD}_{Confirmed_Set_Name}.csv`, with spaces and
   punctuation in the confirmed display name replaced by underscores (for
   example, `20260724_Workday_ProfileUpdates.csv`).
-- Write it with a real RFC-4180 writer (Python `csv`, `quoting=csv.QUOTE_MINIMAL`).
-  Prefix any cell starting with `=`, `+`, `-`, or `@` with an apostrophe
-  (formula-injection guard). Keep every cell ASCII-only unless a target language
-  was explicitly requested.
+- Use `evaluation_csv.generate_set_csv`, also invoked by the presentation
+  helper, for RFC-4180 export, formula-injection protection, actual filename
+  collision handling, and method admission before old-export cleanup.
+  Do not construct a second CSV writer.
+- For CSV-only synchronization, use the `evaluation_csv.py --evaluation-folder`
+  command from the shared **CSV synchronization** contract and the returned
+  `csv` path. Never bypass strict feature admission.
 
-Generate BOTH artifacts for every set from the same cases in one pass.
+Validate proposed parent/case documents with `validate_evaluation_documents`
+from `evaluation_method_policy` before writing. Every row needs a meaningful
+input and expected response; a refusal/clarification is a valid expectation,
+not an excuse for a blank assertion. Generate BOTH artifacts for every set
+from the same cases. Then run admission for each written folder:
+
+```text
+python scripts/evaluation_method_policy.py --evaluation-folder "{set-folder}"
+```
+
+Stop on failure without replacing a previous valid export or claiming readiness.
 
 ## Step 6: Present the generated preview before validation
 
-Before invoking quality validation, show the generated golden prompts grouped
-under clear scenario headings. This preview is mandatory for catalogue-grounded
-generation and must appear before any validator progress or quality report.
+Before invoking quality validation, follow **Generated-case preview** in
+`src/skills/evaluations/experience-contract.md`. Use
+`evaluation_presentation.py --evaluation-folder "{set-folder}" --list-rows`,
+classify actual rows with source context, and render the complete two-column
+Prompt / Expected Response tables through the helper. Preserve row identities,
+including duplicate inputs with different assertions, and the real CSV link.
+The CSV is provided for preview and sharing.
 
-Use this shape:
-
-> Based on your goals, here's the generated golden set. Tell me if you want to
-> edit, remove, or add prompts.
->
-> **{SCENARIO GROUP}**
->
-> - "{Prompt 1}"
-> - "{Prompt 2}"
->
-> Generated - **{YYYYMMDD}_{Confirmed_Set_Name}.csv** ({N} prompts)
->
-> The CSV is provided for preview and sharing. Quality validation will now
-> check the source evaluation set.
->
-> [{YYYYMMDD}_{Confirmed_Set_Name}.csv](workspace/evaluations/exports/{YYYYMMDD}_{Confirmed_Set_Name}.csv)
-
-Group every generated prompt exactly once. Use user-facing goal/scenario names,
-not internal catalogue or connector terminology. Do not wait for quality
-validation before showing this preview. After showing it, continue directly to
-Step 7 unless the user has explicitly requested an edit.
+This preview is mandatory before any validator progress or quality report.
+Catalogue scenarios must not be described as verified configured capabilities.
+Do not wait for quality validation before showing it. Continue to Step 7 unless
+the user explicitly requests an edit; do not show a competing action menu yet.
 
 ## Step 7: Quality validation
 
@@ -231,10 +272,17 @@ python scripts/evaluate_evals.py --evaluation-folder "{set-folder}"
 Wait for the validation report before continuing. Do not score the set in the
 parent conversation and do not skip validation because this set was routed
 through catalogue-grounded generation rather than topic-grounded generation.
+Do not show a separate validation progress message or preamble after the
+generated-case preview.
 
-After the subagent returns, display its complete quality report directly to the
-user, including the dimension table, scores, and flagged-case callouts. Do not
-summarize or omit findings.
+After the subagent returns, display its **Post-generation quality report**
+scorecard verbatim. Preserve the exact opening paragraph, overall line,
+case-count line, eight score rows, optional improvements, local-only warning,
+next-steps heading, and four closing questions. Do not add a table, filename
+callout, summary, or second preamble.
+The generated-case tables from Step 6 appear once only; never repeat them during
+or after quality validation unless a fix changed specific rows, in which case
+show only those changed rows.
 
 Follow the quality gate and fix flow in
 `src/skills/evaluations/quality-fix-flow.md`. For this skill, the "review step"
@@ -246,50 +294,19 @@ the final YAML case list so both representations remain synchronized.
 
 ## Step 8: Present validated results
 
-Show the user a summary and the downloadable link(s). Example:
-
-> Here's your evaluation set{s}:
->
-> | Set | Positive | Boundary | Negative | Total |
-> |-----|----------|----------|----------|-------|
-> | {Set name} | {n} | 2 | 2 | {n} |
->
-> - Download / share: [{YYYYMMDD}_{Confirmed_Set_Name}.csv](workspace/evaluations/exports/{YYYYMMDD}_{Confirmed_Set_Name}.csv)
-> - Copilot Studio-native copy: `{output}/{slug}/`
->
-> Import the CSV from the Evaluate tab, reuse it in another agent, or ask your
-> host to push the `.mcs.yml` copy once an agent is connected.
-
-### Mandatory reviewer handoff reminder
-
-Every final response from this workspace-only generation flow must include the
-following reminder. Do not omit it because CSV generation or quality validation
-completed:
-
-> ⚠️ To make this test set available to an authorized judge or SME, it must be
-> promoted to the configured agent and successfully pushed to Copilot Studio.
-> The CSV and workspace files are currently local only. Say
-> **"push {set name}"** when you are ready.
-
-Continue showing this reminder in later generation/update summaries until a
-successful push is confirmed. Copying the set into the configured agent's local
-`evaluations/` folder is not sufficient; the Dataverse push is what makes it
-retrievable by another user.
+Re-read final YAML when fixes changed content; synchronize CSV and show only the
+rows whose prompt or expected response changed, plus the current CSV link. Never
+repeat an unchanged generated-case table. Keep the complete compact quality
+report separate.
+Use the shared local-only reminder: quality approval or a copied staging folder
+does not make the set available to another authorized reviewer.
 
 ## Step 9: Offer next steps
 
-Use a structured choice question:
-
-> What would you like to do next?
-
-Offer:
-
-- **Edit the test set myself**
-- **Prepare it to send to a judge or SME for feedback**
-- **Add another scenario**
-- **Generate a different scenario**
-- **Keep it local and finish**
-
-If the maker chooses judge or SME feedback, explain that the workspace set must
-first be promoted and pushed to Copilot Studio. This closing question is
-mandatory and must not be omitted.
+Follow **Four maker actions** in
+`src/skills/evaluations/experience-contract.md`. This closing question is
+mandatory. Carry exact selected context to update Flow R1 for Request Review,
+run Flow A for Run, or update for edit/add. Run and Request Review own required
+promotion/push through `src/skills/evaluations/deployment-flow.md`; do not push
+here or require a separate command. Explicit standalone push remains supported.
+Repeat quality review returns to these choices without deployment.

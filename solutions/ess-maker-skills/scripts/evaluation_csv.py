@@ -5,13 +5,24 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 from datetime import datetime
+import io
+import json
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 import yaml
+
+from evaluation_method_policy import (
+    EvaluationMethodError,
+    document_kind,
+    validate_evaluation_documents,
+)
 
 
 class EvaluationCSVError(ValueError):
@@ -67,7 +78,7 @@ def _unique_export_stem(parent: dict[str, Any], folder: Path) -> str:
             continue
         try:
             candidate_parent, _ = _set_documents(candidate)
-        except (EvaluationCSVError, OSError):
+        except (EvaluationCSVError, EvaluationMethodError, OSError):
             continue
         if _export_stem(candidate_parent, candidate).casefold() == (
             export_stem.casefold()
@@ -96,12 +107,14 @@ def _set_documents(set_folder: Path) -> tuple[
 ]:
     parent = None
     cases: list[tuple[dict[str, Any], Path]] = []
-    for path in set_folder.glob("*.mcs.yml"):
+    for path in sorted(set_folder.glob("*.mcs.yml")):
         document = _load_yaml(path)
-        kind = document.get("kind")
+        kind = document_kind(document, context=str(path))
         if kind == "EvaluationSet":
+            if parent is not None:
+                raise EvaluationCSVError(f"Multiple EvaluationSet parents in {set_folder}")
             parent = document
-        elif kind in ("EvaluationData", "MultiTurnEvaluationCase"):
+        else:
             cases.append((document, path))
     if parent is None:
         raise EvaluationCSVError(
@@ -109,6 +122,13 @@ def _set_documents(set_folder: Path) -> tuple[
         )
     cases.sort(key=lambda item: _display_order(item[0], item[1]))
     return parent, cases
+
+
+def read_set_documents(set_folder: str | Path) -> tuple[
+    dict[str, Any], list[tuple[dict[str, Any], Path]],
+]:
+    """Read the parent and ordered cases with their source identities."""
+    return _set_documents(Path(set_folder))
 
 
 def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
@@ -121,13 +141,13 @@ def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
         (
             item for item in graders
             if isinstance(item, dict)
-            and item.get("kind") == "CompareMeaningGrader"
+            and document_kind(item, context="CSV grader") == "CompareMeaningGrader"
         ),
         None,
     )
     has_general = any(
         isinstance(item, dict)
-        and item.get("kind") == "GeneralQualityGrader"
+        and document_kind(item, context="CSV grader") == "GeneralQualityGrader"
         for item in graders
     )
     has_expected = any(row.get("expectedOutput") not in (None, "") for row in rows)
@@ -195,8 +215,7 @@ def _resolve_export_path(
     folder: Path,
     exports: Path,
     timestamp: str | None,
-) -> Path:
-    exports.mkdir(parents=True, exist_ok=True)
+) -> tuple[Path, set[Path]]:
     suffix = timestamp or datetime.now().strftime("%Y%m%d")
     date = re.sub(r"[^0-9]", "", suffix)[:8]
     if len(date) != 8:
@@ -209,50 +228,77 @@ def _resolve_export_path(
         path for path in exports.glob("*_*.csv")
         if path.name.split("_", 1)[-1] == f"{export_stem}.csv"
     ]
-    for stale in {*legacy_exports, *dated_exports} - {output}:
-        stale.unlink()
-    return output
+    return output, {*legacy_exports, *dated_exports} - {output}
+
+
+def _write_export(output: Path, content: str, stale_exports: set[Path]) -> None:
+    """Replace the preview atomically before removing superseded exports."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", newline="", encoding="utf-8",
+            dir=output.parent, prefix=".evaluation-", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+        os.replace(temporary, output)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    for stale in stale_exports:
+        stale.unlink(missing_ok=True)
 
 
 def generate_set_csv(
     set_folder: str | Path,
     exports_folder: str | Path,
     timestamp: str | None = None,
+    *,
+    strict: bool = True,
 ) -> Path:
     """Generate or refresh one evaluation set's CSV export.
 
-    Single-turn sets (`EvaluationData`) export the Prompt/Expected-response
-    grid; conversational sets (`MultiTurnEvaluationCase`) export the Copilot
-    Studio conversation-import format so multi-turn cases are preserved rather
-    than silently omitted.
+    Feature callers are strict by default. Explicit ``strict=False`` is only
+    for read-only export of historical formats during remote refresh.
     """
     folder = Path(set_folder)
     exports = Path(exports_folder)
     parent, case_documents = _set_documents(folder)
+    if strict:
+        validate_evaluation_documents(
+            parent, [document for document, _ in case_documents], context=str(folder),
+            case_names=[path.name for _, path in case_documents],
+        )
 
     single_turn_docs = [
         (document, path)
         for document, path in case_documents
-        if document.get("kind") == "EvaluationData"
+        if document_kind(document, context=str(path)) == "EvaluationData"
     ]
     multi_turn_docs = [
         (document, path)
         for document, path in case_documents
-        if document.get("kind") == "MultiTurnEvaluationCase"
+        if document_kind(document, context=str(path)) == "MultiTurnEvaluationCase"
     ]
-    output = _resolve_export_path(parent, folder, exports, timestamp)
+    if multi_turn_docs and single_turn_docs:
+        raise EvaluationCSVError(
+            f"{folder}: mixed single-turn/multi-turn sets cannot be exported without losing cases."
+        )
+    content = io.StringIO(newline="")
+    writer = csv.writer(content, quoting=csv.QUOTE_MINIMAL)
 
     if multi_turn_docs and not single_turn_docs:
-        with output.open("w", newline="", encoding="utf-8") as stream:
-            writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)
-            writer.writerow(["conversationNumber", "question", "response"])
-            for index, (document, _) in enumerate(multi_turn_docs, start=1):
-                for question, response in _multi_turn_pairs(document):
-                    writer.writerow([
-                        index,
-                        _formula_safe(question),
-                        _formula_safe(response),
-                    ])
+        writer.writerow(["conversationNumber", "question", "response"])
+        for index, (document, _) in enumerate(multi_turn_docs, start=1):
+            for question, response in _multi_turn_pairs(document):
+                writer.writerow([
+                    index,
+                    _formula_safe(question),
+                    _formula_safe(response),
+                ])
+        output, stale = _resolve_export_path(parent, folder, exports, timestamp)
+        _write_export(output, content.getvalue(), stale)
         return output
 
     rows: list[dict[str, Any]] = []
@@ -266,24 +312,26 @@ def generate_set_csv(
     if passing_score is not None:
         headers.append("Passing Score")
 
-    with output.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(headers)
-        for row in rows:
-            values = [
-                _formula_safe(row.get("input")),
-                _formula_safe(row.get("expectedOutput")),
-                method,
-            ]
-            if passing_score is not None:
-                values.append(passing_score)
-            writer.writerow(values)
+    writer.writerow(headers)
+    for row in rows:
+        values = [
+            _formula_safe(row.get("input")),
+            _formula_safe(row.get("expectedOutput")),
+            method,
+        ]
+        if passing_score is not None:
+            values.append(passing_score)
+        writer.writerow(values)
+    output, stale = _resolve_export_path(parent, folder, exports, timestamp)
+    _write_export(output, content.getvalue(), stale)
     return output
 
 
 def regenerate_evaluation_exports(
     agent_folder: str | Path,
     timestamp: str | None = None,
+    *,
+    strict: bool = True,
 ) -> list[Path]:
     """Generate CSV exports for every EvaluationSet under an agent folder."""
     agent = Path(agent_folder)
@@ -300,5 +348,23 @@ def regenerate_evaluation_exports(
             for path in set_folder.glob("*.mcs.yml")
         ):
             continue
-        generated.append(generate_set_csv(set_folder, exports, timestamp))
+        generated.append(generate_set_csv(set_folder, exports, timestamp, strict=strict))
     return generated
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evaluation-folder", required=True)
+    parser.add_argument("--exports-folder", required=True)
+    args = parser.parse_args()
+    try:
+        output = generate_set_csv(args.evaluation_folder, args.exports_folder)
+    except (EvaluationCSVError, EvaluationMethodError, OSError) as exc:
+        print(json.dumps({"status": "failed", "error": str(exc)}))
+        return 1
+    print(json.dumps({"status": "exported", "csv": str(output.resolve())}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

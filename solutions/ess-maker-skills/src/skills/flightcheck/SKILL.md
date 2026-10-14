@@ -141,15 +141,15 @@ Because it mutates the environment, you **MUST** ask for consent **before** you 
 the check. Do not run first and ask later. The terminal CLI cannot prompt you in
 chat (it is a non-interactive subprocess), so **you own the consent question**.
 
-The **same** `--runtime-reachability` probe also powers **WD-RUN-001** (the Workday
-active connector check): it stands up the same kind of transient flow, makes one
-read-only Workday call through the maker's connection, then deletes the flow. So
-the consent gate is required whenever **either** mutating probe is in scope.
+**WD-RUN-001** (the Workday run-health check) is **passive-only** and does **not**
+use this probe: it grades a real, recent end-to-end Workday run from run history
+and never writes to the tenant. If no fresh run exists it returns a guided
+NOT_CONFIGURED — see the **WD-RUN-001 user-assisted run** loop in Step 3. So this
+gate is about INFRA-003 only.
 
-**This gate applies when the scope runs a mutating probe: `full` (INFRA-003 and
-WD-RUN-001), `workday`, or `workdayextension` (WD-RUN-001).** For ServiceNow-only,
-Local-files-only, or Prerequisites-only scopes, skip this gate and go straight to
-Step 2b.
+**This gate applies only when INFRA-003 runs its mutating probe: scope `full`.**
+For `workday`, `workdayextension`, ServiceNow-only, Local-files-only, or
+Prerequisites-only scopes, skip this gate and go straight to Step 2b.
 
 For a native no-Dataverse agent, skip this gate for every supported scope.
 Its AgentBuilder, connection-inventory, capacity, and local checks are
@@ -169,13 +169,8 @@ Keep them in whatever phrasing you use.
 
 - **If the user says YES** → run the check **with** `--runtime-reachability` (Step 2b).
 - **If the user says NO** → run the check **without** the flag (Step 2b), then in the
-  summary note that the connectivity probe was skipped by choice. The passive
-  fallback depends on scope:
-  - **Workday scope (WD-RUN-001)** → the check falls back to the **passive
-    run-history** signal (recent Workday connector runs on the environment). No
-    manual step is required; just note that the active probe was declined.
-  - **INFRA-003 (full scope)** → INFRA-003 returns **Manual** guidance. Offer the
-    manual verification path:
+  summary note that the INFRA-003 connectivity probe was skipped by choice.
+  INFRA-003 returns **Manual** guidance. Offer the manual verification path:
 
 > Prefer to verify manually? You can confirm the connection is whitelisted:
 >
@@ -299,7 +294,7 @@ of things you CAN fix automatically vs. things that need manual action.
 
 **Auto-fixable** (offer to do these right now):
 - Compile errors in topics → run `/scan` skill
-- Missing Workday/ServiceNow connection → run `/connect` skill
+- Missing Workday connection → run `/connect` skill
 - Workday env vars not set → run `/connect workday` skill
 - Workday connections in Error state → run `/connect workday` skill
 - Disabled Workday/ServiceNow flows → enable via Dataverse MCP
@@ -393,3 +388,44 @@ Run `/flightcheck` again after making changes.
 ```
 
 **End of output. Stop here. Do not add commentary after this.**
+
+### 3d — WD-RUN-001 Workday user-assisted run (only when WD-RUN-001 is NotConfigured)
+
+WD-RUN-001 grades a **real, fresh** end-to-end Workday run — the full
+`Copilot → Workday → response back to Copilot` path, not just `Flow → Workday`.
+There is no safe headless way to trigger that path: the Workday connector is
+invoker-scoped, so the flow does not carry the end user's Workday token, and
+firing the flow directly only tests the flow leg. We have seen incidents where
+the flow succeeded but the Copilot experience still failed, so the only trustworthy
+signal is an actual user-driven run.
+
+The check cannot start that run for the user. So when WD-RUN-001 comes back
+**ℹ️ NotConfigured** (no Workday run finished in the last 60 minutes), walk the
+user through producing one, then re-run. Show this:
+
+```
+WD-RUN-001 needs a fresh end-to-end Workday run to grade, and there isn't one in
+the last 60 minutes. It only takes a moment to create one:
+
+1. Sign in to your deployed ESS Copilot agent (Microsoft 365 Copilot or Teams —
+   the same agent your employees use), as yourself.
+2. Ask one safe, read-only Workday question and wait for the agent to answer:
+   - "Who is my manager?"
+   - "What is my job title?"
+   These only read your own profile. They change nothing in Workday.
+3. Once you get an answer back in chat, the full round-trip has run.
+
+Tell me when that's done and I'll re-run the Workday check.
+```
+
+When the user confirms, re-run with the Workday scope (or the same scope they
+started with, if broader) within the 60-minute window:
+
+```
+python scripts/flightcheck/cli.py --scope workday --invocation-source adk --select-targets never {TARGET_FLAGS}
+```
+
+Then present the new results using the same format (3a → 3b → 3c). If WD-RUN-001
+is now ✅ Passed, the end-to-end path works. If it still comes back NotConfigured,
+the run likely landed outside the 60-minute window or did not reach Workday — ask
+the user to retry the safe question and re-run right after.

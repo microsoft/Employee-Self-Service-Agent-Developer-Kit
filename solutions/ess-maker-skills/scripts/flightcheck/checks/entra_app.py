@@ -94,8 +94,8 @@ _SIGNOPT_DESC = (
 def run_entra_app_checks(runner) -> list[CheckResult]:
     """Emit the five skill-3 Entra-app checkpoints.
 
-    Each emitter is invoked behind a guard so a single failure degrades to
-    a WARNING for that checkpoint instead of aborting the remaining checks.
+    Each emitter is invoked behind a guard so a single failure is recorded for
+    that checkpoint without aborting the remaining checks.
     """
     graph = getattr(runner, "graph", None)
     config = getattr(runner, "config", None) or {}
@@ -124,7 +124,7 @@ def run_entra_app_checks(runner) -> list[CheckResult]:
             status_hint = f" [HTTP {status_code}]" if status_code is not None else ""
             results.append(CheckResult(roles=_ROLES,
                 checkpoint_id=cp_id, category=_CATEGORY,
-                priority=priority, status=Status.WARNING.value,
+                priority=priority, status=Status.ERROR.value,
                 description=description,
                 result=(
                     f"Unable to verify {cp_id}: "
@@ -135,6 +135,8 @@ def run_entra_app_checks(runner) -> list[CheckResult]:
                     "causes are insufficient Graph permissions (HTTP 403) or "
                     "a transient Graph error (HTTP 5xx)."
                 ),
+                remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+                evidence={"executionError": True},
                 doc_link=_DOC_LINK,
             ))
     return results

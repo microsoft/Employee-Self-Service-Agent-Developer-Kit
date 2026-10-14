@@ -12,6 +12,7 @@ import shutil
 from typing import Any
 
 from evaluation_csv import evaluation_export_stem, generate_set_csv
+from evaluation_method_policy import EvaluationMethodError, validate_evaluation_folder
 
 
 class EvaluationPromotionError(RuntimeError):
@@ -82,6 +83,10 @@ def promote_workspace_set(
         raise EvaluationPromotionError(
             f"Workspace evaluation set not found or invalid: {source}"
         )
+    try:
+        validate_evaluation_folder(source)
+    except EvaluationMethodError as exc:
+        raise EvaluationPromotionError(str(exc)) from exc
     if not baseline.exists() and _is_resumable_staging(source, destination):
         csv_path = generate_set_csv(
             destination,

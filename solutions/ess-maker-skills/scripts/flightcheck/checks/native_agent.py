@@ -9,9 +9,14 @@ import uuid
 from typing import Any
 
 from agentbuilder import AgentBuilderHTTPError
-from setup_existing_da import validate_existing_dev_connection
+from setup_existing_da import (
+    ExistingDASetupError,
+    inspect_agent_route,
+    validate_existing_dev_connection,
+)
 
 from ..runner import CheckResult, Priority, Role, Status
+from ..agent_scope import active_agent
 from .connections import get_connection_status
 
 
@@ -34,31 +39,6 @@ def _result(
             Role.ESS_MAKER.value,
             Role.POWER_PLATFORM_ADMIN.value,
         ],
-    )
-
-
-def _active_agent(config: dict[str, Any]) -> dict[str, Any]:
-    agents = config.get("agents") or []
-    active_slug = config.get("activeAgent") or (config.get("agent") or {}).get(
-        "slug"
-    )
-    if active_slug:
-        active = next(
-            (
-                agent
-                for agent in agents
-                if isinstance(agent, dict) and agent.get("slug") == active_slug
-            ),
-            None,
-        )
-        if active is not None:
-            return active
-    single = config.get("agent")
-    if isinstance(single, dict) and single:
-        return single
-    return next(
-        (agent for agent in agents if isinstance(agent, dict)),
-        {},
     )
 
 
@@ -251,7 +231,10 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
     environment_id = getattr(runner, "env_id", None) or config.get(
         "environmentId"
     )
-    agent = _active_agent(config)
+    agent = active_agent(
+        config,
+        str(getattr(runner, "agent_slug", "") or "").strip() or None,
+    )
     agent_id = agent.get("botId")
     client = getattr(runner, "agentbuilder", None)
     connectivity = getattr(runner, "connectivity", None)
@@ -261,10 +244,10 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             _result(
                 "DA-AGENT-001",
                 Status.FAILED.value,
-                "Native Dev agent access",
+                "Native agent access",
                 "The native environment or active agent identity is missing "
                 "from .local/config.json.",
-                "Run /setup again to attach the exact Dev agent.",
+                "Run /setup again to attach the exact native agent.",
             )
         ]
     if client is None:
@@ -272,7 +255,7 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             _result(
                 "DA-AGENT-001",
                 Status.ERROR.value,
-                "Native Dev agent access",
+                "Native agent access",
                 "AgentBuilder authentication is unavailable.",
                 "Sign in to the native Power Platform environment and rerun "
                 "FlightCheck.",
@@ -296,16 +279,35 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
         ]
 
     try:
+        route = inspect_agent_route(
+            client,
+            environment_id=environment_id,
+            agent_id=agent_id,
+        )
+        route_alm = route.get("alm")
+        is_enrolled = (
+            route_alm.get("isEnrolled")
+            if isinstance(route_alm, dict)
+            else None
+        )
+        if is_enrolled is False:
+            allow_unenrolled_authoring = True
+        elif is_enrolled is True and route.get("realm") == "dev":
+            allow_unenrolled_authoring = False
+        else:
+            raise ExistingDASetupError(
+                "Direct agent lookup did not identify an editable Dev or "
+                "unenrolled authoring target."
+            )
         connection = validate_existing_dev_connection(
             client,
             environment_id=environment_id,
             agent_id=agent_id,
             selection_source="flightcheck",
             require_alm_family=False,
-            expected_schema_name=str(
-                runner.config.get("agent", {}).get("schemaName") or ""
-            )
-            or None,
+            expected_schema_name=str(agent.get("schemaName") or "") or None,
+            allow_missing_schema=True,
+            allow_unenrolled_authoring=allow_unenrolled_authoring,
         )
     except AgentBuilderHTTPError as exc:
         status = (
@@ -317,9 +319,9 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             _result(
                 "DA-AGENT-001",
                 status,
-                "Native Dev agent access",
+                "Native agent access",
                 str(exc),
-                "Verify access to the exact Dev agent, then rerun FlightCheck.",
+                "Verify access to the exact native agent, then rerun FlightCheck.",
             )
         ]
     except (ValueError, RuntimeError) as exc:
@@ -327,7 +329,7 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             _result(
                 "DA-AGENT-001",
                 Status.FAILED.value,
-                "Native Dev agent access",
+                "Native agent access",
                 str(exc),
                 "Repair the saved native agent identity with /setup, then "
                 "rerun FlightCheck.",
@@ -338,24 +340,36 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
         _result(
             "DA-AGENT-001",
             Status.PASSED.value,
-            "Native Dev agent access",
-            f"Exact Dev agent '{connection['agent']['name']}' is accessible.",
+            "Native agent access",
+            f"Exact native agent '{connection['agent']['name']}' is "
+            "accessible for authoring.",
         )
     ]
 
     try:
         changeset = client.fetch_components(str(uuid.UUID(str(agent_id))))
         bot = changeset.get("bot")
-        fetched_id = (
-            bot.get("cdsBotId") or bot.get("componentIdUnique")
-            if isinstance(bot, dict)
-            else None
-        )
+        if not isinstance(bot, dict):
+            raise ValueError("Component fetch did not return an exact bot.")
+        fetched_id = bot.get("cdsBotId")
         if str(uuid.UUID(str(fetched_id))).casefold() != str(
             uuid.UUID(str(agent_id))
         ).casefold():
             raise ValueError(
                 "Component fetch returned content for a different agent."
+            )
+        expected_schema = str(agent.get("schemaName") or "").strip()
+        fetched_schema = bot.get("schemaName")
+        if not isinstance(fetched_schema, str) or not fetched_schema.strip():
+            raise ValueError(
+                "Component fetch did not return a non-empty schemaName."
+            )
+        if (
+            expected_schema
+            and fetched_schema.casefold() != expected_schema.casefold()
+        ):
+            raise ValueError(
+                "Component fetch returned a different agent schema."
             )
         components = changeset.get("botComponentChanges")
         if not isinstance(components, list):

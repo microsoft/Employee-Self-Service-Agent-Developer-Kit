@@ -105,7 +105,7 @@ class TestErrSentinelRetention:
             scope="checkpoint:WD-FLOW-001",
             target_matcher=lambda cid: cid == "WD-FLOW-001",
         )
-        # A prerequisite/owner category that raises → "PRE-ERR" sentinel.
+        # A prerequisite/owner category that raises an execution-error sentinel.
         runner.register("Prerequisites", _fn_raising())
         runner.register(
             "Workday",
@@ -122,7 +122,7 @@ class TestErrSentinelRetention:
         # not match the target matcher.
         assert "WD-FLOW-001" in ids
         assert "WD-FLOW-002" not in ids
-        assert "PRE-ERR" in ids
+        assert "EXEC-001-PREREQUISITES-ERR" in ids
 
     def test_err_sentinel_shape_is_stable(self) -> None:
         runner = FlightCheckRunner(
@@ -136,7 +136,7 @@ class TestErrSentinelRetention:
         sentinels = [r for r in result.results if r.checkpoint_id.endswith("-ERR")]
         assert len(sentinels) == 1
         sentinel = sentinels[0]
-        assert sentinel.checkpoint_id == "PRE-ERR"  # category[:3].upper() + "-ERR"
+        assert sentinel.checkpoint_id == "EXEC-001-PREREQUISITES-ERR"
         assert sentinel.status == Status.ERROR.value
         assert sentinel.priority == Priority.HIGH.value
         assert sentinel.category == "Prerequisites"
@@ -186,4 +186,4 @@ class TestNoMatcherNoFilter:
         result = runner.run()
 
         ids = sorted(r.checkpoint_id for r in result.results)
-        assert ids == ["PRE-ERR", "WD-FLOW-001"]
+        assert ids == ["EXEC-001-PREREQUISITES-ERR", "WD-FLOW-001"]

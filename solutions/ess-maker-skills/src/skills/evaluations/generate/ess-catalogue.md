@@ -116,7 +116,12 @@ Not preconfigured OOB — buildable via Copilot Studio and Power Platform (Cocre
 | E7   | Custom Connector Integration                                                                         | Cross      | Custom connector                                  |
 | Fac. | Facilities (room/desk booking, badge/building access, maintenance requests, move/relocation support) | Facilities | Custom topic + Facilities/security/ITSM connector |
 
-Out-of-ESS examples — a goal that matches no ESS HR/IT/Facilities category at all: travel, expense, CRM/Salesforce, payroll processing, procurement.
+Out-of-ESS examples — a goal that matches no ESS HR/IT/Facilities category at
+all: entertainment trivia, consumer shopping or product recommendations, recipe
+planning, personal investing advice, or schoolwork. Do not assume travel,
+expense, payroll, procurement, or another workplace service is outside ESS; it
+may be a configured extension even when it is outside the selected evaluation
+goal.
 
 New domains beyond HR / IT / Cross / Facilities (e.g. Operations) and new scenarios are added by editing this catalogue (configuration, not code) and existing plans keep working; a scenario may be marked `deprecated` — still shown on an existing plan with a deprecation notice, but never offered in new intake.
 

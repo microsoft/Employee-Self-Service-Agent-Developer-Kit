@@ -201,9 +201,25 @@ class _FakeElementSerializer:
 
 
 class _FakeYamlSerializer:
+    class _Deserialize:
+        def __getitem__(self, _element_type: object) -> object:
+            return lambda _payload: _FakeDialog()
+
+    Deserialize = _Deserialize()
+
     @staticmethod
     def Serialize(_element: object) -> str:
         return "kind: AdaptiveDialog"
+
+
+class _FakeSerialize:
+    def __getitem__(self, _element_type: object) -> object:
+        return lambda _element, _options: '{"$kind":"AdaptiveDialog"}'
+
+
+class _FakeBidirectionalJsonSerializer:
+    Deserialize = _FakeDeserialize()
+    Serialize = _FakeSerialize()
 
 
 def test_validate_object_model_runtime_loads_dependencies(
@@ -240,5 +256,28 @@ def test_object_models_to_yaml_preserves_result_contract(
             "success": True,
             "elementType": "FakeDialog",
             "yaml": "kind: AdaptiveDialog",
+        }
+    ]
+
+
+def test_yaml_to_object_models_preserves_result_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    types = converter._ObjectModelTypes(
+        bot_element=object,
+        element_serializer=_FakeElementSerializer,
+        json_serializer=_FakeBidirectionalJsonSerializer,
+        yaml_serializer=_FakeYamlSerializer,
+    )
+    monkeypatch.setattr(converter, "_load_object_model", lambda: types)
+
+    assert converter.yaml_to_object_models(
+        [{"key": "topic", "yaml": "kind: AdaptiveDialog"}]
+    ) == [
+        {
+            "key": "topic",
+            "success": True,
+            "elementType": "FakeDialog",
+            "objectModel": {"$kind": "AdaptiveDialog"},
         }
     ]
