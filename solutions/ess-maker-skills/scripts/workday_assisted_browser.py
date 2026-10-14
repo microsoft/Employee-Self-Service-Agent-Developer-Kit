@@ -97,43 +97,36 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "url": _ENTRA_OVERVIEW_URL,
         "worksheetRow": "Directory name",
         "worksheetField": "selectedDirectoryDisplayName",
-        "sourceSurface": "entra-overview",
     },
     "entra-enterprise-application-display-name": {
         "url": _ENTRA_ENTERPRISE_APPLICATIONS_URL,
         "worksheetRow": "Enterprise application",
         "worksheetField": "applicationDisplayName",
-        "sourceSurface": "entra-enterprise-applications",
     },
     "entra-application-id": {
         "url": None,
         "worksheetRow": "Application ID",
         "worksheetField": "applicationId",
-        "sourceSurface": "entra-enterprise-application",
     },
     "entra-reply-url": {
         "url": None,
         "worksheetRow": "Selected Reply URL",
         "worksheetField": "replyUrl",
-        "sourceSurface": "entra-saml-basic-configuration",
     },
     "entra-name-id-source": {
         "url": None,
         "worksheetRow": "NameID source",
         "worksheetField": "nameIdSource",
-        "sourceSurface": "entra-saml-attributes-and-claims",
     },
     "entra-saml-signing-option": {
         "url": None,
         "worksheetRow": "SAML signing",
         "worksheetField": "samlSigningOption",
-        "sourceSurface": "entra-saml-signing-certificate",
     },
     "entra-certificate-thumbprint": {
         "url": _ENTRA_ENTERPRISE_APPLICATIONS_URL,
         "worksheetRow": "Certificate thumbprint (active certificate row)",
         "worksheetField": "certificateThumbprint",
-        "sourceSurface": "entra-saml-signing-certificate",
     },
     "entra-certificate-expiration": {
         "url": None,
@@ -141,25 +134,21 @@ _COLLECTION_OPERATION_DEFINITIONS = {
             "Certificate expiration date (active certificate row)"
         ),
         "worksheetField": "certificateValidTo",
-        "sourceSurface": "entra-saml-signing-certificate",
     },
     "entra-saml-configuration": {
         "url": None,
         "worksheetRow": "SAML configuration",
         "worksheetField": "entraChecks.samlMode",
-        "sourceSurface": "entra-saml-configuration",
     },
     "entra-signing-certificate-check": {
         "url": None,
         "worksheetRow": "Signing certificate",
         "worksheetField": "entraChecks.signingCertificate",
-        "sourceSurface": "entra-saml-signing-certificate",
     },
     "entra-authorized-connector": {
         "url": None,
         "worksheetRow": "Authorized connector",
         "worksheetField": "entraChecks.connectorPreauthorized",
-        "sourceSurface": "entra-app-registration-expose-api",
     },
     "entra-permissions-consent": {
         "url": None,
@@ -167,13 +156,11 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "worksheetField": (
             "entraChecks.graphDelegatedPermissions,entraChecks.adminConsent"
         ),
-        "sourceSurface": "entra-app-registration-api-permissions",
     },
     "entra-employee-assignment": {
         "url": None,
         "worksheetRow": "Employee assignment",
         "worksheetField": "entraChecks.userAssignment",
-        "sourceSurface": "entra-enterprise-application-assignment",
     },
     "entra-existing-configuration": {
         "url": None,
@@ -183,7 +170,6 @@ _COLLECTION_OPERATION_DEFINITIONS = {
             "entraChecks.authorizedClientsPreserved,"
             "entraChecks.permissionsPreserved"
         ),
-        "sourceSurface": "entra-app-registration-existing-configuration",
     },
 }
 _COLLECTION_OPERATIONS = set(_COLLECTION_OPERATION_DEFINITIONS)
@@ -203,6 +189,7 @@ class AssistedBrowserError(RuntimeError):
 
 
 def _now_iso() -> str:
+    """Use timezone-aware timestamps so browser and companion events can be ordered across processes."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -224,6 +211,7 @@ def sanitize_browser_url(value: str) -> str:
 
 
 def sanitize_browser_evidence_text(value: Any) -> str | None:
+    """Remove unrelated account identity from browser evidence before it enters companion state or output."""
     if value is None:
         return None
     text = str(value)
@@ -235,6 +223,7 @@ def sanitize_browser_evidence_text(value: Any) -> str | None:
 
 
 def validate_search_control(evidence: Mapping[str, Any]) -> None:
+    """Limit automated text entry to controls that present as search or filter inputs."""
     tag = str(evidence.get("tag") or "").casefold()
     input_type = str(evidence.get("type") or "").casefold()
     role = str(evidence.get("role") or "").casefold()
@@ -255,6 +244,7 @@ def validate_search_control(evidence: Mapping[str, Any]) -> None:
 
 
 def validate_search_value(value: Any) -> str:
+    """Bound search text to a short single-line value so fill operations cannot carry structured payloads."""
     normalized = _required_text(value, "search value", maximum=100)
     if "\n" in normalized or "\r" in normalized:
         raise AssistedBrowserError("Search value must be a single line.")
@@ -267,6 +257,7 @@ def _required_text(
     *,
     maximum: int,
 ) -> str:
+    """Centralize strict text validation for all untrusted CLI and loopback inputs."""
     if not isinstance(value, str):
         raise AssistedBrowserError(f"{label} must be text.")
     normalized = value.strip()
@@ -356,6 +347,7 @@ def validate_view(raw: Any) -> dict[str, Any]:
             maximum=250,
         )
     def normalize_action(action_raw: Any, label: str) -> dict[str, str]:
+        """Normalize one row-scoped action into the fixed capability shape accepted by the companion."""
         if not isinstance(action_raw, Mapping):
             raise AssistedBrowserError(f"{label} must be an object.")
         unknown_action_keys = set(action_raw) - _ACTION_KEYS
@@ -521,6 +513,7 @@ class CompanionState:
     """In-memory revision and render evidence for one ephemeral companion."""
 
     def __init__(self) -> None:
+        """Initialize isolated revision, interaction, render, and visual-guidance state for one companion session."""
         self._lock = threading.Lock()
         self._revision = 0
         self._view: dict[str, Any] | None = None
@@ -539,6 +532,7 @@ class CompanionState:
         self._target_pointers: list[dict[str, Any]] = []
 
     def publish(self, view: Any) -> dict[str, Any]:
+        """Advance the displayed revision while preserving only same-operation authorization and visual context."""
         normalized = validate_view(view)
         with self._lock:
             previous_collection = self._collection
@@ -629,6 +623,7 @@ class CompanionState:
             }
 
     def fetch(self) -> dict[str, Any] | None:
+        """Return the current render payload and mark the revision as fetched by the browser."""
         with self._lock:
             if self._view is None:
                 return None
@@ -656,6 +651,7 @@ class CompanionState:
         operation: str,
         mode: str = "navigate-and-capture",
     ) -> dict[str, Any]:
+        """Bind a browser action click to the matching revision, operation, and assistance mode."""
         with self._lock:
             view = self._view or {}
             actions = view.get("actions")
@@ -691,6 +687,7 @@ class CompanionState:
             return dict(self._collection)
 
     def complete_collection(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        """Replace in-flight collection state with the helper's terminal authorization result."""
         with self._lock:
             self._collection = dict(result)
             return dict(self._collection)
@@ -699,6 +696,7 @@ class CompanionState:
         self,
         operation: str,
     ) -> dict[str, Any]:
+        """Gate candidate-producing reads on explicit navigate-and-capture authorization."""
         with self._lock:
             if (
                 self._collection is None
@@ -715,6 +713,7 @@ class CompanionState:
         self,
         operation: str,
     ) -> dict[str, Any]:
+        """Gate non-mutating navigation assistance on either supported authorization mode."""
         with self._lock:
             if (
                 self._collection is None
@@ -733,6 +732,7 @@ class CompanionState:
         operation: str,
         control_label: str,
     ) -> None:
+        """Require the current view to disclose the exact reveal-only Edit action before it can run."""
         with self._lock:
             view = self._view or {}
             actions = view.get("actions")
@@ -763,6 +763,7 @@ class CompanionState:
         operation: str,
         error: str,
     ) -> dict[str, Any]:
+        """Record an actionable terminal failure for the active row without discarding the view."""
         with self._lock:
             self._collection = {
                 "operation": operation,
@@ -779,6 +780,7 @@ class CompanionState:
         operation: str,
         decision: str,
     ) -> dict[str, Any]:
+        """Accept one idempotent human decision for the confirmation in the current revision."""
         if decision not in {"confirmed", "rejected"}:
             raise AssistedBrowserError(
                 "Confirmation decision must be confirmed or rejected."
@@ -818,6 +820,7 @@ class CompanionState:
         content: bytes,
         metadata: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Attach one authorized contextual screenshot to the active worksheet operation."""
         with self._lock:
             if (
                 self._collection is None
@@ -837,6 +840,7 @@ class CompanionState:
             return dict(self._evidence_image_metadata)
 
     def evidence_image(self) -> bytes:
+        """Expose the contextual screenshot only after an authorized capture has supplied one."""
         with self._lock:
             if self._evidence_image is None:
                 raise AssistedBrowserError(
@@ -851,6 +855,7 @@ class CompanionState:
         metadata: Mapping[str, Any],
         append: bool = False,
     ) -> dict[str, Any]:
+        """Publish one target location, optionally preserving earlier same-row pointers."""
         with self._lock:
             if (
                 self._collection is None
@@ -878,6 +883,7 @@ class CompanionState:
         operation: str,
         metadata: list[Mapping[str, Any]],
     ) -> list[dict[str, Any]]:
+        """Atomically replace rail guidance with a coherent target set for the active row."""
         with self._lock:
             if (
                 self._collection is None
@@ -903,6 +909,7 @@ class CompanionState:
             return [dict(pointer) for pointer in self._target_pointers]
 
     def clear_target_pointer(self, *, operation: str) -> None:
+        """Discard stale target positions after navigation changes page geometry."""
         with self._lock:
             if any(
                 pointer.get("operation") == operation
@@ -917,6 +924,7 @@ class CompanionState:
         operation: str,
         value: str,
     ) -> dict[str, Any]:
+        """Accept a bounded manual fallback only after navigate-only assistance for the current row."""
         normalized_value = _required_text(
             value,
             "entry value",
@@ -955,6 +963,7 @@ class CompanionState:
             return dict(self._entry)
 
     def event(self, raw: Any) -> None:
+        """Track render acknowledgement, visibility, and heartbeat without treating events as user decisions."""
         if not isinstance(raw, Mapping):
             raise AssistedBrowserError("Companion event must be a JSON object.")
         event_type = raw.get("type")
@@ -974,6 +983,7 @@ class CompanionState:
                 self._rendered_at = _now_iso()
 
     def status(self) -> dict[str, Any]:
+        """Return a consistent snapshot for readiness checks and interaction correlation."""
         with self._lock:
             connected = (
                 self._heartbeat_at is not None
@@ -1003,6 +1013,7 @@ class CompanionState:
 
 
 class _Server(ThreadingHTTPServer):
+    """Carry authenticated companion state and browser-session context on the loopback HTTP server."""
     token: str
     companion_state: CompanionState
     root: Path
@@ -1015,9 +1026,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
     server: _Server
 
     def log_message(self, _format: str, *_args: object) -> None:
+        """Suppress default request logging so loopback tokens and browser paths do not reach console output."""
         return
 
     def _host_is_loopback(self) -> bool:
+        """Reject Host-header confusion by accepting only this server's loopback authorities."""
         host = self.headers.get("Host", "")
         return host in {
             f"127.0.0.1:{self.server.server_port}",
@@ -1025,12 +1038,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
         }
 
     def _authorized(self) -> bool:
+        """Authenticate private API calls with constant-time bearer-token comparison."""
         return secrets.compare_digest(
             self.headers.get("Authorization", ""),
             "Bearer " + self.server.token,
         )
 
     def _origin_is_safe(self) -> bool:
+        """Limit browser-originated requests to the companion's own loopback origins."""
         origin = self.headers.get("Origin")
         return origin in {
             None,
@@ -1044,6 +1059,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
         content_type: str,
         content_length: int,
     ) -> None:
+        """Apply no-cache and browser-hardening headers uniformly to every response."""
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(content_length))
@@ -1064,14 +1080,17 @@ class CompanionHandler(BaseHTTPRequestHandler):
         body: bytes,
         content_type: str,
     ) -> None:
+        """Write a complete binary response through the hardened header path."""
         self._headers(status, content_type, len(body))
         self.wfile.write(body)
 
     def _send_json(self, status: int, value: Any) -> None:
+        """Serialize API responses deterministically through the common response path."""
         body = json.dumps(value, sort_keys=True).encode("utf-8")
         self._send_bytes(status, body, "application/json; charset=utf-8")
 
     def _reject_if_unsafe(self, *, require_auth: bool) -> bool:
+        """Enforce loopback origin and optional bearer authentication before route handling."""
         if not self._host_is_loopback() or not self._origin_is_safe():
             self._send_json(403, {"error": "Request origin is not allowed."})
             return True
@@ -1081,6 +1100,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
         return False
 
     def _read_json(self) -> Any:
+        """Read a bounded UTF-8 JSON body to prevent memory abuse and validation bypass."""
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
@@ -1093,6 +1113,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             raise AssistedBrowserError("Request body must be valid UTF-8 JSON.") from exc
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        """Serve static assets and read-only session data from the authenticated loopback surface."""
         static_assets = {
             "/": ("companion.html", "text/html; charset=utf-8"),
             "/companion.js": (
@@ -1138,6 +1159,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Not found."})
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        """Route validated interaction and browser-assistance commands through capability checks."""
         if self._reject_if_unsafe(require_auth=True):
             return
         try:
@@ -1687,10 +1709,12 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
 
 def _session_path(root: Path) -> Path:
+    """Keep process rendezvous metadata in the workspace-scoped local state directory."""
     return root.resolve() / SESSION_PATH
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
+    """Persist session metadata atomically so readers never observe a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -1701,6 +1725,7 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
 
 
 def _load_session(root: Path) -> dict[str, Any]:
+    """Load and validate the minimum metadata required to address the active helper session."""
     path = _session_path(root)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -1731,6 +1756,7 @@ def _api_request(
     value: Any | None = None,
     timeout: float = 3.0,
 ) -> dict[str, Any]:
+    """Provide one authenticated JSON transport for CLI-to-companion loopback calls."""
     body = None
     method = "GET"
     headers = {"Authorization": "Bearer " + str(session["token"])}
@@ -1767,6 +1793,7 @@ def _api_request(
 
 
 def _session_is_alive(session: Mapping[str, Any]) -> bool:
+    """Probe the authenticated status endpoint instead of trusting stale process metadata."""
     try:
         _api_request(session, "/api/status", timeout=1.0)
         return True
@@ -1775,6 +1802,7 @@ def _session_is_alive(session: Mapping[str, Any]) -> bool:
 
 
 def _serve(root: Path) -> None:
+    """Run the loopback companion server and publish its rendezvous metadata."""
     token = os.environ.get(_TOKEN_ENV, "")
     if not token:
         raise AssistedBrowserError("Companion token was not supplied.")
@@ -1805,6 +1833,7 @@ def _serve(root: Path) -> None:
 
 
 def _start_server(root: Path, cdp_endpoint: str) -> tuple[dict[str, Any], bool]:
+    """Reuse a live session-owned server or launch a new detached loopback server."""
     path = _session_path(root)
     if path.exists():
         try:
@@ -1857,6 +1886,7 @@ def _start_server(root: Path, cdp_endpoint: str) -> tuple[dict[str, Any], bool]:
 
 
 def _parse_cdp_endpoint(value: str) -> tuple[str, int]:
+    """Restrict browser attachment to an explicit localhost HTTP debugging endpoint."""
     parsed = urlparse(value)
     if (
         parsed.scheme != "http"
@@ -1873,6 +1903,7 @@ def _parse_cdp_endpoint(value: str) -> tuple[str, int]:
 
 
 def _active_scope(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the established Workday target needed to derive bounded browser surfaces."""
     state = WorkdayConnectStore(root).load()
     scope = state.get("scope")
     if not isinstance(scope, dict):
@@ -1939,6 +1970,7 @@ def surface_url(root: Path, surface: str) -> str:
 
 
 def _playwright() -> tuple[Any, type[Exception]]:
+    """Load Playwright lazily so missing browser support produces a focused dependency error."""
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
@@ -1951,6 +1983,7 @@ def _playwright() -> tuple[Any, type[Exception]]:
 
 
 def _target_record(page: Any) -> dict[str, Any]:
+    """Capture sanitized target identity and geometry for pane discovery and layout checks."""
     client = page.context.new_cdp_session(page)
     try:
         target = client.send("Target.getTargetInfo")["targetInfo"]
@@ -2028,11 +2061,13 @@ def classify_layout(
 
 @dataclass
 class _BrowserTargets:
+    """Pair the session-owned application and companion target records discovered in Edge."""
     application: dict[str, Any] | None
     companion: dict[str, Any] | None
 
 
 def _find_targets(browser: Any, session: Mapping[str, Any]) -> _BrowserTargets:
+    """Resolve recorded target IDs with a bounded same-window fallback for initial recovery."""
     application = None
     companion = None
     expected_application = session.get("applicationTargetId")
@@ -2079,6 +2114,7 @@ def _open_initial_pages(
     *,
     pages_launched: bool,
 ) -> dict[str, Any]:
+    """Ensure one application page and one tokenized companion page exist in the attached browser."""
     companion_url = (
         f"http://127.0.0.1:{int(session['port'])}/#token={session['token']}"
     )
@@ -2160,6 +2196,7 @@ def _navigate_application(
     session: dict[str, Any],
     application_url: str,
 ) -> dict[str, Any]:
+    """Navigate only the session-owned application target to a precomputed surface."""
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
     try:
@@ -2193,6 +2230,7 @@ def _authorize_collection_operation(
     *,
     mode: str = "navigate-and-capture",
 ) -> dict[str, Any]:
+    """Bind a human-approved worksheet operation to the current application target and mode."""
     try:
         definition = _COLLECTION_OPERATION_DEFINITIONS[operation]
     except KeyError as exc:
@@ -2244,7 +2282,6 @@ def _authorize_collection_operation(
         ),
         "worksheetRow": definition["worksheetRow"],
         "worksheetField": definition["worksheetField"],
-        "sourceSurface": definition["sourceSurface"],
         "authorizedAt": _now_iso(),
     }
 
@@ -2257,6 +2294,7 @@ def _inspect_authorized_selector(
     limit: int,
     navigation_only: bool = False,
 ) -> dict[str, Any]:
+    """Collect bounded, sanitized, visible selector evidence from the authorized application page."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -2356,6 +2394,7 @@ def _inspect_authorized_selector(
 
 
 def validate_navigation_url(base_url: str, href: str) -> str:
+    """Resolve inspected links while requiring a secure absolute destination."""
     destination = urljoin(base_url, href)
     parsed = urlparse(destination)
     if parsed.scheme != "https" or not parsed.hostname:
@@ -2373,6 +2412,7 @@ def _follow_authorized_link(
     frame_index: int,
     match_index: int,
 ) -> dict[str, Any]:
+    """Follow one inspected visible link and return sanitized navigation evidence."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -2455,6 +2495,7 @@ def _capture_authorized_element(
     frame_index: int,
     match_index: int,
 ) -> tuple[bytes, dict[str, Any]]:
+    """Capture a bounded contextual crop around one inspected visible target."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -2556,6 +2597,7 @@ def _fill_navigation_search(
     match_index: int,
     value: Any,
 ) -> dict[str, Any]:
+    """Fill only an inspected search control without submitting or choosing a result."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     search_value = validate_search_value(value)
@@ -2623,6 +2665,7 @@ def target_pointer_position(
     box: Mapping[str, Any],
     viewport_height: float,
 ) -> dict[str, Any]:
+    """Map application viewport geometry into a stable companion-rail position."""
     if viewport_height <= 0:
         raise AssistedBrowserError(
             "Application viewport height must be positive."
@@ -2643,6 +2686,7 @@ def validate_reveal_control(
     operation: str,
     evidence: Mapping[str, Any],
 ) -> str:
+    """Constrain reveal navigation to a visibly named Edit button for a supported row."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     label = next(
@@ -2674,6 +2718,7 @@ def _inspect_reveal_control(
     frame_index: int,
     match_index: int,
 ) -> dict[str, Any]:
+    """Revalidate the exact visible Edit control before the reveal action is offered."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -2740,6 +2785,7 @@ def _reveal_authorized_values(
     frame_index: int,
     match_index: int,
 ) -> dict[str, Any]:
+    """Activate the disclosed reveal-only Edit control without saving or confirming changes."""
     session = _load_session(root)
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
@@ -2800,6 +2846,7 @@ def _position_authorized_target(
     frame_index: int,
     match_index: int,
 ) -> dict[str, Any]:
+    """Scroll one authorized target into view and derive its rail-guidance metadata."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -2896,6 +2943,7 @@ def _position_authorized_targets(
     operation: str,
     target_specs: list[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Center related targets together and produce coherent rail positions."""
     if operation not in _COLLECTION_OPERATIONS:
         raise AssistedBrowserError("Unsupported collection operation.")
     session = _load_session(root)
@@ -3017,6 +3065,7 @@ def _stop_server_after_failed_start(
     session: Mapping[str, Any],
     server_started: bool,
 ) -> str | None:
+    """Roll back browser and server resources created by an unsuccessful start."""
     errors = []
     try:
         _close_owned_browser(session)
@@ -3040,6 +3089,7 @@ def _stop_server_after_failed_start(
 
 
 def _start(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Establish or reuse the session-owned server and isolated browser pages for a named surface."""
     _parse_cdp_endpoint(args.cdp)
     application_url = surface_url(root, args.surface)
     session, server_started = _start_server(root, args.cdp)
@@ -3124,6 +3174,7 @@ def _start(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _open(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Retarget the existing session-owned application pane without rebuilding the companion."""
     session = _load_session(root)
     if not _session_is_alive(session):
         raise AssistedBrowserError(
@@ -3147,6 +3198,7 @@ def _open(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _present(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Validate a view locally before publishing it as the next companion revision."""
     session = _load_session(root)
     if str(args.view_file) == "-":
         raw = json.load(sys.stdin)
@@ -3160,6 +3212,7 @@ def _present(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _status(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Combine persisted session identity with live companion state for orchestration decisions."""
     session = _load_session(root)
     result = _api_request(session, "/api/status")
     return {
@@ -3177,6 +3230,7 @@ def _interaction_completed_after_publication(
     interaction: str,
     revision: int,
 ) -> dict[str, Any] | None:
+    """Recognize only terminal interaction results for the requested operation and revision."""
     if status.get("revision") != revision:
         return None
     current = status.get(interaction)
@@ -3219,6 +3273,7 @@ def _interaction_completed_after_publication(
 
 
 def _wait(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Bridge browser interactions back to the caller while rejecting stale revisions and bounding wait time."""
     if args.timeout < 1 or args.timeout > 600:
         raise AssistedBrowserError(
             "Wait timeout must be from 1 through 600 seconds."
@@ -3262,6 +3317,7 @@ def _wait(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _inspect(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Forward a bounded selector inspection through the authenticated companion API."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3276,6 +3332,7 @@ def _inspect(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _follow(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Forward one inspected-link navigation through the authenticated companion API."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3291,6 +3348,7 @@ def _follow(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _capture(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Request a contextual screenshot for one inspected target."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3307,6 +3365,7 @@ def _capture(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _fill_search(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Request bounded text entry into one inspected search or filter control."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3323,6 +3382,7 @@ def _fill_search(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _point(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Request companion-rail guidance for one inspected target."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3338,6 +3398,7 @@ def _point(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _point_targets(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Load a target set and request atomic multi-target rail guidance."""
     if str(args.targets_file) == "-":
         targets = json.load(sys.stdin)
     else:
@@ -3357,6 +3418,7 @@ def _point_targets(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _reveal(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Request activation of one inspected and disclosed reveal-only Edit control."""
     session = _load_session(root)
     return _api_request(
         session,
@@ -3372,6 +3434,7 @@ def _reveal(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _inspect_layout(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Report whether session-owned pages are visibly arranged for side-by-side assistance."""
     session = _load_session(root)
     sync_playwright, playwright_error = _playwright()
     playwright = sync_playwright().start()
@@ -3397,6 +3460,7 @@ def _inspect_layout(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _close_owned_browser(session: Mapping[str, Any]) -> bool:
+    """Terminate only the browser process launched and recorded by this helper session."""
     pid = session.get("browserPid")
     if not isinstance(pid, int) or pid <= 0:
         return False
@@ -3420,6 +3484,7 @@ def _close_owned_browser(session: Mapping[str, Any]) -> bool:
 
 
 def _stop(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Stop the companion server, close owned Edge, and preserve attached user-owned browsers."""
     session = _load_session(root)
     browser_closed = _close_owned_browser(session)
     _api_request(session, "/api/stop", value={})
@@ -3432,6 +3497,7 @@ def _stop(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 
 def _redact_error_text(value: str, root: Path) -> str:
+    """Remove session tokens and secret-like URL parameters before emitting CLI errors."""
     redacted = value
     path = _session_path(root)
     if path.exists():
@@ -3450,6 +3516,7 @@ def _redact_error_text(value: str, root: Path) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define the fixed command and argument surface for assisted-browser capabilities."""
     parser = argparse.ArgumentParser(
         description="Guide native DA Workday browser handoffs in split screen."
     )
@@ -3574,6 +3641,7 @@ _HANDLERS = {
 
 
 def main() -> None:
+    """Dispatch one CLI command and emit one machine-readable success or redacted error record."""
     parser = build_parser()
     args = parser.parse_args()
     root = args.root.resolve()

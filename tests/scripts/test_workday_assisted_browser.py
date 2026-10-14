@@ -128,7 +128,7 @@ def test_view_contract_accepts_final_worksheet_confirmation_only() -> None:
             "Do these final worksheet values accurately reflect the completed "
             "Microsoft Entra setup?"
         ),
-        "confirmLabel": "Confirm and submit worksheet",
+        "confirmLabel": "Send values to ADK",
         "rejectLabel": "Review worksheet rows",
     }
     view = _view() | {
@@ -241,7 +241,6 @@ def test_entra_collection_operations_have_row_scoped_definitions(
 
     assert definition["worksheetRow"] == worksheet_row
     assert definition["worksheetField"]
-    assert definition["sourceSurface"]
 
 
 def test_browser_url_redacts_query_and_fragment_secrets() -> None:

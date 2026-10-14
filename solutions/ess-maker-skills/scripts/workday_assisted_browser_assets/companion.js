@@ -17,6 +17,7 @@ let renderedEntryKey = null;
 let renderedConfirmationKey = null;
 let renderedTargetPointerKey = null;
 
+/** Create text-only DOM nodes so companion data never becomes executable markup. */
 function textElement(tag, text, className) {
   const element = document.createElement(tag);
   element.textContent = text;
@@ -26,6 +27,7 @@ function textElement(tag, text, className) {
   return element;
 }
 
+/** Render each published revision once while preserving interaction state returned by the server. */
 function render(payload) {
   const view = payload.view;
   if (!view || payload.revision === renderedRevision) {
@@ -77,6 +79,7 @@ function render(payload) {
       if (active) {
         button.disabled = true;
       } else {
+        // Convert one explicit human click into revision-bound row authorization.
         button.addEventListener("click", async () => {
           for (const candidate of actionGroup.querySelectorAll("button")) {
             candidate.disabled = true;
@@ -117,6 +120,7 @@ function render(payload) {
     }
     nodes.push(actionGroup);
     const disclaimers = [
+      // Present each action disclaimer once even when multiple modes share it.
       ...new Set(actions.map((action) => action.disclaimer).filter(Boolean)),
     ];
     for (const disclaimer of disclaimers) {
@@ -127,6 +131,7 @@ function render(payload) {
   guidance.replaceChildren(...nodes);
 }
 
+/** Show transient collection progress or a collected worksheet value without retaining stale results. */
 function renderCollection(result) {
   if (!result) {
     collection.hidden = true;
@@ -153,8 +158,6 @@ function renderCollection(result) {
     values.append(
       textElement("dt", result.worksheetRow),
       textElement("dd", result.value),
-      textElement("dt", "Evidence"),
-      textElement("dd", "Read from " + result.sourceSurface),
     );
     nodes.push(textElement("h2", "Collected value"), values);
     collection.dataset.status = "success";
@@ -172,6 +175,7 @@ function renderCollection(result) {
   collection.replaceChildren(...nodes);
 }
 
+/** Offer a contextual screenshot only after the human explicitly requests visual help. */
 async function renderEvidenceImage(metadata) {
   if (!metadata) {
     evidence.hidden = true;
@@ -196,6 +200,7 @@ async function renderEvidenceImage(metadata) {
     "secondary-action",
   );
   button.type = "button";
+  // Fetch and reveal the authorized screenshot only after the visual-help click.
   button.addEventListener("click", async () => {
     button.disabled = true;
     button.textContent = "Loading screenshot...";
@@ -233,6 +238,7 @@ async function renderEvidenceImage(metadata) {
   renderedEvidenceImageId = metadata.id;
 }
 
+/** Render one revision-bound confirmation and prevent duplicate decisions. */
 function renderConfirmation(view, result, revision) {
   if (!view || !view.confirmation || !result) {
     confirmation.hidden = true;
@@ -267,6 +273,7 @@ function renderConfirmation(view, result, revision) {
     for (const button of [confirmButton, rejectButton]) {
       button.type = "button";
     }
+    // Submit exactly one human decision for the confirmation currently on screen.
     const decide = async (decision) => {
       confirmButton.disabled = true;
       rejectButton.disabled = true;
@@ -286,7 +293,9 @@ function renderConfirmation(view, result, revision) {
         rejectButton.disabled = false;
       }
     };
+    // Bind the primary choice to the confirmed terminal state.
     confirmButton.addEventListener("click", () => void decide("confirmed"));
+    // Bind the secondary choice to the rejected terminal state.
     rejectButton.addEventListener("click", () => void decide("rejected"));
     actions.append(confirmButton, rejectButton);
     nodes.push(actions);
@@ -313,6 +322,7 @@ function renderConfirmation(view, result, revision) {
   renderedConfirmationKey = key;
 }
 
+/** Render the bounded manual-entry fallback for the current worksheet row. */
 function renderEntry(view, result, revision) {
   if (!view || !view.entry || !result) {
     entry.hidden = true;
@@ -353,6 +363,7 @@ function renderEntry(view, result, revision) {
     "primary-action",
   );
   button.type = "button";
+  // Submit manual text only through the entry contract for the displayed revision.
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -381,8 +392,10 @@ function renderEntry(view, result, revision) {
   renderedEntryKey = key;
 }
 
+/** Project authorized application targets into stable, accessible rail pointers. */
 function renderTargetPointers(metadata) {
   const pointers = Array.isArray(metadata) ? metadata : [];
+  // Build a stable key so unchanged target sets are not rendered repeatedly.
   const key = pointers.map((pointer) => pointer.id).join("|");
   if (key === renderedTargetPointerKey) {
     return;
@@ -415,6 +428,7 @@ function renderTargetPointers(metadata) {
     tooltip.className = "target-tooltip";
     tooltip.setAttribute("role", "tooltip");
     tooltip.textContent = guidance;
+    // Toggle one pointer explanation while closing any previously opened sibling.
     pointer.addEventListener("click", (event) => {
       event.stopPropagation();
       const opening = marker.dataset.open !== "true";
@@ -430,12 +444,14 @@ function renderTargetPointers(metadata) {
   renderedTargetPointerKey = key;
 }
 
+// Dismiss pointer explanations when the human clicks outside a marker.
 document.addEventListener("click", () => {
   for (const marker of targetPointers.children) {
     marker.dataset.open = "false";
   }
 });
 
+/** Send authenticated, no-cache requests to the session-owned loopback server. */
 async function request(path, options = {}) {
   if (!token) {
     throw new Error("The guidance link is missing its session token.");
@@ -455,6 +471,7 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+/** Report render and visibility liveness without encoding a user decision. */
 async function sendEvent(type) {
   await request("/api/event", {
     method: "POST",
@@ -466,6 +483,7 @@ async function sendEvent(type) {
   });
 }
 
+/** Acknowledge each rendered revision once so orchestration can verify readiness. */
 async function acknowledgeRender() {
   if (renderedRevision === acknowledgedRevision) {
     return;
@@ -474,6 +492,7 @@ async function acknowledgeRender() {
   acknowledgedRevision = renderedRevision;
 }
 
+/** Reconcile the browser UI with the latest companion state and maintain connection status. */
 async function poll() {
   try {
     const payload = await request("/api/view");
@@ -495,9 +514,12 @@ async function poll() {
   }
 }
 
+// Refresh liveness immediately when page visibility changes.
 document.addEventListener("visibilitychange", () => {
   void sendEvent("heartbeat");
 });
+// Keep companion content responsive to server-side revision changes.
 setInterval(() => void poll(), 800);
+// Maintain a lightweight connection heartbeat independently of view polling.
 setInterval(() => void sendEvent("heartbeat"), 2000);
 void poll();
