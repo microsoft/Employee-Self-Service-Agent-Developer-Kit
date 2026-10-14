@@ -657,6 +657,18 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     elif existing.get("environmentId"):
         config["environmentId"] = existing["environmentId"]
 
+    # Snapshot extraction must retain the installer's ring, but never transfer
+    # it when setup switches to a different environment.
+    existing_endpoint = existing.get("dataverseEndpoint")
+    if (
+        isinstance(existing_endpoint, str)
+        and existing_endpoint
+        and existing_endpoint.rstrip("/").casefold()
+        == agent_info["url"].rstrip("/").casefold()
+        and "ring" in existing
+    ):
+        config["ring"] = existing["ring"]
+
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):
         if key in existing and key not in config:
