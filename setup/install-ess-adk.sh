@@ -830,7 +830,7 @@ with open(path, 'w', encoding='utf-8') as f:
     if [[ -n "$BOT_ID" ]]; then
         step "Fetching agent solution from Dataverse"
         if [[ -f "$FETCH_PY" ]]; then
-            FETCH_ARGS=("$FETCH_PY" "--url" "$ENV_URL" "--bot-id" "$BOT_ID" "--name" "$AGENT_NAME" "--schema" "$SCHEMA_NAME")
+            FETCH_ARGS=("$FETCH_PY" "--url" "$ENV_URL" "--bot-id" "$BOT_ID" "--name" "$AGENT_NAME" "--schema" "$SCHEMA_NAME" "--refresh")
             if [[ "$IS_MANAGED" == "true" ]]; then
                 FETCH_ARGS+=("--managed")
             fi
