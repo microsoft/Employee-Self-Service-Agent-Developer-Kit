@@ -609,7 +609,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
 
     NEEDS_CONFIGURATION=true
     if [[ -f "$CONFIG_PATH" ]]; then
-        SAVED_RING=$("$FLIGHTCHECK_PYTHON" -c "
+        if SAVED_RING=$("$FLIGHTCHECK_PYTHON" -c "
 import json, sys
 from urllib.parse import urlparse
 with open(sys.argv[1], encoding='utf-8-sig') as f:
@@ -618,8 +618,11 @@ ring = str(config.get('ring') or '').strip().lower()
 endpoint = str(config.get('powerPlatformApiEndpoint') or '').strip()
 inferred = ''
 if endpoint:
-    parsed = urlparse(endpoint)
-    host = (parsed.hostname or '').lower()
+    try:
+        parsed = urlparse(endpoint)
+        host = (parsed.hostname or '').lower()
+    except ValueError:
+        raise SystemExit('ERROR: Existing config has an invalid Power Platform API endpoint.')
     for candidate, suffix in [('test', 'api.test.powerplatform.com'), ('preprod', 'api.preprod.powerplatform.com'), ('prod', 'api.powerplatform.com')]:
         if parsed.scheme == 'https' and (host == suffix or host.endswith('.' + suffix)):
             inferred = candidate
@@ -631,7 +634,12 @@ if ring and ring not in {'prod', 'preprod', 'test'}:
 if ring and inferred and ring != inferred:
     raise SystemExit('ERROR: Existing config ring conflicts with its Power Platform API endpoint.')
 print(ring or inferred)
-" "$CONFIG_PATH")
+" "$CONFIG_PATH"); then
+            SAVED_RING_VALID=true
+        else
+            SAVED_RING_VALID=false
+            warn "Existing ring or endpoint settings are invalid. Reconfigure to select a new target."
+        fi
         echo ""
         echo "    Config already exists at $CONFIG_PATH"
         if [[ -n "$RING_EXPLICIT" && -n "$SAVED_RING" && "$RING" != "$SAVED_RING" ]]; then
@@ -645,9 +653,22 @@ print(ring or inferred)
                 RING="$SAVED_RING"
             fi
         else
-            if [[ -z "$SAVED_RING" ]]; then
-                err "Existing config has no recorded ring. Reconfigure to select a target in a known ring."
+            if [[ "$SAVED_RING_VALID" != "true" ]]; then
+                err "Cannot keep a target with invalid ring or endpoint settings. Reconfigure to select a new target."
                 exit 1
+            fi
+            if [[ -z "$SAVED_RING" ]]; then
+                warn "The saved target has no recorded ring. No ring will be assumed."
+                echo "    Confirm the saved target ring: prod, preprod, or test (blank cancels)."
+                read -rp "    Saved target ring: " SAVED_RING
+                SAVED_RING=$(printf '%s' "$SAVED_RING" | tr '[:upper:]' '[:lower:]')
+                if [[ "$SAVED_RING" != "prod" && "$SAVED_RING" != "preprod" && "$SAVED_RING" != "test" ]]; then
+                    err "A valid saved target ring must be explicitly confirmed. Configuration was not changed."
+                    exit 1
+                fi
+                if [[ -n "$RING_EXPLICIT" && "$RING" != "$SAVED_RING" ]]; then
+                    warn "Requested ring '$RING' differs from confirmed saved ring '$SAVED_RING'. Keeping the saved target in its confirmed ring."
+                fi
             fi
             NEEDS_CONFIGURATION=false
             RING="$SAVED_RING"

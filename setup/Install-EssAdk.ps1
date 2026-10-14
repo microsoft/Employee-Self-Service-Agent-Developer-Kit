@@ -1272,7 +1272,14 @@ if ($FlightCheckOnly) {
     $needsConfiguration = -not (Test-Path $configPath)
     if (-not $needsConfiguration) {
         $configState = Get-Content $configPath -Raw | ConvertFrom-Json
-        $savedRing = Get-FlightCheckConfigRing $configState
+        $savedRing = ''
+        $configRingError = $null
+        try {
+            $savedRing = Get-FlightCheckConfigRing $configState
+        } catch {
+            $configRingError = $_.Exception.Message
+            Write-Warn2 $configRingError
+        }
         Write-Host ''
         Write-Host "    Config already exists at $configPath" -ForegroundColor White
         if ($ringExplicit -and $savedRing -and $Ring -ne $savedRing) {
@@ -1285,8 +1292,19 @@ if ($FlightCheckOnly) {
         }
         $needsConfiguration = $reconfigure -match '^[Yy]$|^[Yy][Ee][Ss]$'
         if (-not $needsConfiguration) {
+            if ($configRingError) {
+                throw 'Cannot keep a target with invalid ring or endpoint settings. Reconfigure to select a new target.'
+            }
             if (-not $savedRing) {
-                throw 'Existing config has no recorded ring. Reconfigure to select a target in a known ring.'
+                Write-Warn2 'The saved target has no recorded ring. No ring will be assumed.'
+                Write-Host '    Confirm the saved target ring: prod, preprod, or test (blank cancels).' -ForegroundColor Gray
+                $savedRing = ([string](Read-Host '    Saved target ring')).Trim().ToLowerInvariant()
+                if ($savedRing -notin @('prod', 'preprod', 'test')) {
+                    throw 'A valid saved target ring must be explicitly confirmed. Configuration was not changed.'
+                }
+                if ($ringExplicit -and $Ring -ne $savedRing) {
+                    Write-Warn2 "Requested ring '$Ring' differs from confirmed saved ring '$savedRing'. Keeping the saved target in its confirmed ring."
+                }
             }
             $Ring = $savedRing
             Write-Ok "Keeping existing config and ring '$Ring'"

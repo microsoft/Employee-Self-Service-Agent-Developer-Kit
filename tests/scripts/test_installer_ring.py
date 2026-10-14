@@ -298,6 +298,92 @@ def test_saved_ring_evidence_is_not_silently_relabelled(shell, tmp_path, saved, 
         assert state["ring"] == config["ring"] == expected
 
 
+@pytest.mark.parametrize(
+    ("explicit", "confirmed"),
+    [(None, "prod"), (None, "test"), ("prod", "prod"), ("test", "prod"), ("prod", " PREPROD ")],
+)
+def test_legacy_ring_confirmation_changes_only_ring(shell, tmp_path, explicit, confirmed):
+    saved = _saved("prod")
+    del saved["ring"]
+    saved.update(
+        environmentId="saved-environment",
+        agents=[saved["agent"], {"botId": "another-bot", "name": "Another"}],
+        activeAgent="saved",
+        connections={"workday": {"enabled": False, "index": 0, "value": ""}},
+        workdayTestEmployeeId="fixture-employee",
+        referenceSource="local",
+        environmentSku="Sandbox",
+        customSetting={"nested": [False, 0, "", None]},
+    )
+
+    state, config, calls, _ = _configure(
+        shell, tmp_path, saved=saved, ring=explicit, answers=["n", confirmed],
+    )
+
+    assert state["caught"] is None
+    assert calls == []
+    assert state["ring"] == confirmed.strip().lower()
+    assert config == {**saved, "ring": confirmed.strip().lower()}
+
+
+@pytest.mark.parametrize("answer", ["", "unknown", "y"])
+def test_legacy_ring_invalid_confirmation_preserves_config(shell, tmp_path, answer):
+    saved = _saved("prod")
+    del saved["ring"]
+
+    state, _, calls, unchanged = _configure(
+        shell, tmp_path, saved=saved, answers=["n", answer],
+    )
+
+    assert "must be explicitly confirmed" in state["caught"]
+    assert calls == []
+    assert unchanged
+
+
+@pytest.mark.parametrize(
+    "invalid_settings",
+    [
+        {"powerPlatformApiEndpoint": "http://api.powerplatform.com"},
+        {"powerPlatformApiEndpoint": "https://unrecognized.example"},
+        {"powerPlatformApiEndpoint": "https://["},
+        {"powerPlatformApiEndpoint": "https://api.test.powerplatform.com"},
+        {"ring": "unsupported"},
+    ],
+)
+@pytest.mark.parametrize("reconfigure", [True, False])
+def test_invalid_saved_settings_allow_reconfiguration_but_not_retention(
+    shell, tmp_path, invalid_settings, reconfigure,
+):
+    saved = {**_saved("prod"), **invalid_settings}
+    state, config, calls, unchanged = _configure(
+        shell, tmp_path, saved=saved,
+        answers=["y", "2", "2"] if reconfigure else ["n"],
+    )
+
+    if reconfigure:
+        assert state["caught"] is None
+        assert config["ring"] == "prod"
+        assert config["environmentId"] == "other-env"
+        assert config["agent"]["botId"] == "other-bot"
+        assert "powerPlatformApiEndpoint" not in config
+        assert len(calls) == 2
+    else:
+        assert "Cannot keep a target" in state["caught"]
+        assert calls == []
+        assert unchanged
+
+
+def test_invalid_saved_endpoint_and_failed_reconfiguration_preserve_config(shell, tmp_path):
+    saved = {**_saved("prod"), "powerPlatformApiEndpoint": "https://["}
+
+    state, _, _, unchanged = _configure(
+        shell, tmp_path, saved=saved, answers=["y"], fail=True,
+    )
+
+    assert "Environment listing failed" in state["caught"]
+    assert unchanged
+
+
 @pytest.mark.parametrize("ring", [None, "test"])
 def test_bootstrap_preserves_whether_ring_was_explicit(shell, tmp_path, ring):
     if Path(shell).stem == "bash":
