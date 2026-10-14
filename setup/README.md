@@ -162,8 +162,12 @@ flag, the saved ring is retained. If an explicit ring
 differs from the saved ring, the installer asks whether to switch and select a
 new environment and agent or keep the saved target and ring. Reconfiguration
 does not delete the saved configuration before discovery and selection succeed.
-Legacy configurations without a recorded or endpoint-inferred ring require
-reconfiguration rather than guessing the target's ring.
+When keeping a legacy target without a recorded or endpoint-inferred ring,
+you must explicitly enter its ring. There is no default; a blank or invalid
+answer stops without changing configuration. Confirmation updates only the
+ring, preserving the saved target and other settings.
+Invalid or conflicting saved ring/endpoint settings cannot be kept, but you
+can choose reconfiguration to replace them after successful target selection.
 
 **Non-prod limitation:** environment discovery supports all three rings, but
 the legacy full-check path still uses production Power Platform Admin, PowerApps,
