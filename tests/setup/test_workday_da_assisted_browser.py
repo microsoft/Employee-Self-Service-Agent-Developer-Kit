@@ -14,15 +14,10 @@ _WORKDAY_DA = (
     / "setup"
     / "workday-da"
 )
-_SCRIPTS = (
-    _REPO_ROOT
-    / "solutions"
-    / "ess-maker-skills"
-    / "scripts"
-)
+_SCRIPTS = _REPO_ROOT / "solutions" / "ess-maker-skills" / "scripts"
 
 
-def test_assisted_browser_is_scoped_to_native_da_workday() -> None:
+def test_companion_is_isolated_from_existing_workday_phases() -> None:
     cea = (
         _REPO_ROOT
         / "solutions"
@@ -36,95 +31,40 @@ def test_assisted_browser_is_scoped_to_native_da_workday() -> None:
     connection = (_WORKDAY_DA / "configure-power-platform.md").read_text(
         encoding="utf-8"
     )
-    validation = (_WORKDAY_DA / "verify-connection.md").read_text(
-        encoding="utf-8"
-    )
-    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
-        encoding="utf-8"
-    )
+    validation = (_WORKDAY_DA / "verify-connection.md").read_text(encoding="utf-8")
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
 
     assert "workday_assisted_browser.py" not in cea
+    assert "assisted-browser.md" not in connection
+    assert "assisted-browser.md" not in validation
     assert "shared/assisted-browser.md" in entra
-    assert "shared/assisted-browser.md" in connection
-    assert "shared/assisted-browser.md" in validation
+    assert "shared/entra-assisted-browser.md" in entra
 
 
-def test_all_native_da_browser_boundaries_use_named_surfaces() -> None:
-    connection = (_WORKDAY_DA / "configure-power-platform.md").read_text(
-        encoding="utf-8"
-    )
-    validation = (_WORKDAY_DA / "verify-connection.md").read_text(
-        encoding="utf-8"
-    )
-    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
-        encoding="utf-8"
-    )
-    guide = (_WORKDAY_DA / "shared" / "assisted-browser.md").read_text(
-        encoding="utf-8"
-    )
-
-    for surface in (
-        "dataverse-connection",
-        "workday-connection",
-        "agent-connections",
-        "workday-topics",
-    ):
-        assert surface in connection
-        assert surface in guide
-    assert "entra-configuration" in entra
-    assert "entra-configuration" in guide
-    assert "maker-validation" in validation
-    assert "maker-validation" in guide
-
-
-def test_helper_preserves_maker_owned_actions_and_controller_authority() -> None:
-    guide = (_WORKDAY_DA / "shared" / "assisted-browser.md").read_text(
-        encoding="utf-8"
-    )
-    normalized = " ".join(guide.split())
-
-    assert "`scripts/workday_connect.py` remains the sole lifecycle authority" in guide
-    assert "must not automate Edge browser chrome" in guide
-    for action in ("Create", "Manage", "Save", "Allow"):
-        assert f"**{action}**" in guide
-    assert "send a Test-pane prompt" in normalized
-    assert "Verify outcomes through the existing controller command" in guide
-
-
-def test_entra_companion_preserves_administrator_ownership() -> None:
-    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(
-        encoding="utf-8"
-    )
+def test_manual_worksheet_and_companion_share_one_collection_interaction() -> None:
+    entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
     normalized = " ".join(entra.split())
 
-    assert "presentation choice only" in normalized
-    assert "must not be written to controller state" in normalized
-    assert "The administrator manually performs and attests" in normalized
-    assert "the helper must not navigate the application pane" in normalized
-    assert "certificate body" in normalized
-    assert "entra-directory-display-name" in normalized
-    assert "Confirm or reject each candidate in the companion" in normalized
-    assert "Do not return to chat between confirmed rows" in normalized
-    assert "Review final Microsoft Entra worksheet" in normalized
-    assert "`entra-final-worksheet` confirmation operation" in normalized
-    assert "A rejected final review blocks forwarding" in normalized
+    assert "Microsoft Entra app administrator handoff -" in entra
+    assert "Your tenant values" in entra
+    assert "Launch browser companion for assistance" in entra
+    assert '"allowFreeformInput": true' in entra
+    assert "Free-form entry is the manual path" in normalized
     assert (
-        "Do not leave the confirmed companion values only in ephemeral "
-        "browser state"
-    ) in normalized
+        "`completed` companion result supplies the exact worksheet text" in normalized
+    )
+    assert "Continue with the manual worksheet" in normalized
+    assert "Do not add **Continue with the manual worksheet**" in normalized
+    assert "record-entra --verification-worksheet-file" in entra
 
 
 def test_companion_renderer_never_uses_html_injection() -> None:
     markup = (
-        _SCRIPTS
-        / "workday_assisted_browser_assets"
-        / "companion.html"
+        _SCRIPTS / "workday_assisted_browser_assets" / "companion.html"
     ).read_text(encoding="utf-8")
-    script = (
-        _SCRIPTS
-        / "workday_assisted_browser_assets"
-        / "companion.js"
-    ).read_text(encoding="utf-8")
+    script = (_SCRIPTS / "workday_assisted_browser_assets" / "companion.js").read_text(
+        encoding="utf-8"
+    )
 
     assert "textContent" in script
     assert "replaceChildren" in script
@@ -149,36 +89,3 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert '"Navigation assistance active"' not in script
     assert "innerHTML" not in script
     assert "eval(" not in script
-
-
-def test_navigate_only_reads_are_not_limited_to_navigation_controls() -> None:
-    helper = (_SCRIPTS / "workday_assisted_browser.py").read_text(
-        encoding="utf-8"
-    )
-    contract = (
-        _WORKDAY_DA / "shared" / "assisted-browser.md"
-    ).read_text(encoding="utf-8")
-
-    assert "if navigation_only:" not in helper
-    assert (
-        "including worksheet-value elements, to locate targets and support "
-        "administrator comparison"
-    ) in contract
-    assert (
-        "prohibits remote-state modification in every assistance mode"
-        in contract
-    )
-    assert (
-        "works generically across all supported worksheet operations and "
-        "portal lists"
-    ) in contract
-    assert "sole modification-control exception" in contract
-    assert "row's manual instructions determine the Edit control" in contract
-    assert "companion disclaimer name that exact control" in contract
-    assert "Arbitrary Edit controls are still prohibited" in contract
-    assert "immediately present the next outstanding worksheet row" in contract
-    assert (
-        "Confirm and submit worksheet"
-        in contract
-    )
-    assert "Only after the result is `confirmed`" in contract

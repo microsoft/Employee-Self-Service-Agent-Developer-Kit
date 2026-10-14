@@ -4,10 +4,6 @@
 
 This phase guides an administrator through the required Entra changes and
 records the administrator's non-secret response.
-For administrator-owned browser actions in this phase, read and follow
-`shared/assisted-browser.md`. Use the `entra-configuration` surface only when
-the Entra administrator will complete the handoff on this computer. Keep the
-existing forwardable handoff when the administrator will work elsewhere.
 It requires one Microsoft Entra app administrator with either the
 **Application Administrator** or **Cloud Application Administrator** role.
 These are alternative role options; the same person does not need both.
@@ -112,30 +108,6 @@ After **Yes**, record the engagement boundary:
 python scripts/workday_connect.py administrator-stage --phase entra --substage administrator-engaged
 ```
 
-Ask how the administrator will complete the handoff with this exact
-`vscode_askQuestions` form:
-
-```json
-[
-  {
-    "header": "Microsoft Entra handoff",
-    "question": "How will the Microsoft Entra app administrator complete this handoff?",
-    "options": [
-      {
-        "label": "Use the split-screen guide on this computer"
-      },
-      {
-        "label": "Send the shareable handoff to the administrator"
-      }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Leave the selection unset. This is a presentation choice only and must not be
-written to controller state or treated as administrator evidence.
-
 Then generate the guided handoff packet:
 
 ```powershell
@@ -145,107 +117,6 @@ python scripts/workday_connect.py entra-handoff
 This command reads only the recorded lifecycle state. It does not authenticate
 to Microsoft Graph, discover applications, or make an Entra change. Use the
 returned `packet` for every packet-driven value below.
-
-If the maker selected **Use the split-screen guide on this computer**, start
-the `entra-configuration` assisted-browser surface and complete the manual
-Split Screen pairing check before presenting guidance. Support the worksheet
-rows below:
-
-- show the manual path **Microsoft Entra ID -> Overview**;
-- explain that **Navigate only** authorizes bounded visible-page reads for
-  navigation and administrator comparison without automatically producing a
-  worksheet candidate, while **Navigate and capture** may present a visible
-  value as a row-scoped candidate for confirmation;
-- show the packet's canonical Entra tenant ID as the expected non-secret value;
-- include the `entra-directory-display-name` action from
-  `shared/assisted-browser.md`.
-
-After Directory name is confirmed and recorded, present **Enterprise
-application** with the manual path **Microsoft Entra ID -> Enterprise
-applications** and the `entra-enterprise-application-display-name` action.
-Use live inspection evidence to collaborate with the administrator while
-selecting the exact Workday application. Do not choose by display name alone;
-verify its SAML Identifier matches the packet's expected Service Provider ID.
-
-Once the exact enterprise application is selected, present **Application ID**
-with the manual path **the exact Workday enterprise application -> Overview**
-and the `entra-application-id` action. This operation authorizes reads on the
-current exact-application pane instead of resetting navigation. Use live
-evidence to pair the Application ID with the confirmed enterprise application.
-The app registration must later show that same Application ID.
-
-Continue with the next rows on the exact application's SAML surfaces:
-
-- present **Selected Reply URL** with the manual path **the exact Workday enterprise application -> Single sign-on -> SAML -> Basic SAML Configuration** and the `entra-reply-url` action;
-- present **NameID source** with the manual path **the exact Workday enterprise application -> Single sign-on -> SAML -> Attributes & Claims -> Unique User Identifier (Name ID)** and the `entra-name-id-source` action;
-- present **SAML signing** with the manual path **the exact Workday enterprise application -> Single sign-on -> SAML -> SAML Signing Certificate -> Edit -> Signing Option** and the `entra-saml-signing-option` action.
-- present **Certificate thumbprint** and **Certificate expiration date** from the active certificate row with `entra-certificate-thumbprint` and `entra-certificate-expiration`;
-- present **SAML configuration** on the main SAML page with `entra-saml-configuration`;
-- present **Signing certificate** with `entra-signing-certificate-check` for the approved-channel transfer attestation, without reading or returning certificate contents;
-- present **Authorized connector** on the exact app registration's **Expose an API** surface with `entra-authorized-connector`;
-- present **Permissions and consent** on the exact app registration's **API permissions** surface with `entra-permissions-consent`.
-- present **Employee assignment** on the exact enterprise application's **Properties** and **Users and groups** surfaces with `entra-employee-assignment`;
-- present **Existing configuration** on the exact app registration's **Expose an API** and **API permissions** surfaces with `entra-existing-configuration`.
-
-These operations authorize continued reads and safe inspected-link navigation. Certificate thumbprint starts from the Enterprise applications list so the session can re-establish the exact application after a restarted browser; the following rows continue from that application. If the required value is behind an edit panel or another portal control that `follow` cannot safely activate, tell the administrator in the companion how to open that surface manually. Do not click the control for them.
-
-Use **Navigate only** before each row's collection attempt. Inspect the reached surface first. Show a text-entry fallback only when bounded browser evidence cannot collect or safely disambiguate the value; never make transcription the default path.
-
-Never invoke the action endpoint on the administrator's behalf. Immediately
-after presenting the row action, run assisted-browser `wait` with interaction
-`collection`, the presented operation, and the returned revision. Continue
-when the wait returns `collection.status` as `authorized` or `navigated`. Use
-the helper's `inspect` operation to gather bounded visible evidence across the
-existing pane's frames. Treat the initial selector as a heuristic: on a miss,
-ambiguity, or unexpected portal structure, use returned live evidence to
-adapt and inspect again. Authorization remains active for this worksheet row
-after a failed read. Do not encode one selector as the authoritative Entra
-contract.
-
-Bring each candidate into the companion only after its row-specific identity
-rule is established. Replace the authorization action with a confirmation for
-the same operation, then run assisted-browser `wait` with interaction
-`confirmation` and that confirmation's revision. Confirm or reject each
-candidate in the companion; do not repeat those questions in chat. After the
-wait result reports confirmation status `confirmed`, write that row's
-controller fields to the partial-evidence input and run
-`record-administrator-evidence`. The controller merges individual
-`entraChecks` entries with checks recorded for earlier rows. Verify that the
-row is absent from `invalidFields` and `outstandingFields`, then immediately
-present the next outstanding worksheet row and start its collection wait. Do
-not return to chat between confirmed rows. If the administrator selects
-**Search again**,
-keep the row authorization active, inspect again, and present a new candidate.
-Do not claim a worksheet row is complete from a selector hit or companion
-confirmation alone; controller acceptance remains required.
-
-After the Existing configuration row is controller-accepted and
-`outstandingFields` is empty, build
-`.local/connect/workday-da/entra-return-worksheet.txt` from the complete
-accumulated evidence, but do not submit it yet. Present a final companion view
-titled **Review final Microsoft Entra worksheet**. Show every labeled value
-from that exact return worksheet as companion fields, including the six
-scalar values, safe certificate metadata, and all confirmation outcomes. Use
-the dedicated `entra-final-worksheet` confirmation operation with:
-
-- prompt: **Do these final worksheet values accurately reflect the completed Microsoft Entra setup?**
-- confirm label: **Confirm and submit worksheet**
-- reject label: **Review worksheet rows**
-
-Run assisted-browser `wait` for interaction `confirmation`, operation
-`entra-final-worksheet`, and the final review revision. Submit the exact
-displayed worksheet through `record-entra` only when the result is
-`confirmed`. A rejected final review blocks forwarding. Reopen the affected
-worksheet rows, update the accumulated evidence and return worksheet, then
-present a new final review revision.
-
-Do not put an application Object ID, scope GUID, certificate body, token, or
-credential in the companion. Outside the one authorized operation, the helper
-must not navigate the application pane, select the directory or application,
-click a portal control, or claim that any task completed from browser
-observation. The administrator manually performs and attests every remaining
-task. If Split Screen cannot be prepared, continue with the shareable handoff
-below.
 
 Render one standalone section titled **Microsoft Entra app administrator handoff -
 share this whole section**. It must contain the administrator role, canonical
@@ -366,43 +237,57 @@ The next phase must consume the recorded identifiers and transferred
 certificate without asking the maker to re-engage the Entra app administrator.
 Only an explicit controller-detected Entra target change may reopen this phase.
 
-After the worksheet, ask exactly:
+After the worksheet, introduce the optional browser companion:
 
-**Has the Microsoft Entra app administrator completed this handoff, including
-Grant admin consent (by a separate consent-capable administrator only if
-tenant policy required one)?**
+> The browser companion can open an isolated Edge window beside a local guide
+> and help the administrator navigate, inspect visible non-secret values, and
+> populate this same worksheet. The administrator still owns sign-in,
+> application selection, every portal change, consent, and saving. The
+> companion does not modify Microsoft Entra or write Workday lifecycle state.
 
-Do not treat the answer as a broad "everything is done" confirmation or as
-configuration evidence. It is only the coordination boundary before answer
-collection and verification.
+Read `shared/assisted-browser.md` for the generic session boundary and
+`shared/entra-assisted-browser.md` for the Entra worksheet session.
 
-Present **Yes, the tasks are complete** and **Not yet** as the standard
-choices, initially unset and with custom entry disabled. **Not yet** keeps the
-phase waiting and does not show the response form. Only after **Yes** may the
-skill record the completion boundary and collect evidence.
+Collect the Entra app administrator's completed worksheet or launch assistance
+through one combined interaction. Do not add **Continue with the manual
+worksheet** or another manual-path choice. Free-form entry is the manual path.
+Object IDs, the scope GUID, derived tenant URLs, and complete URI lists are not
+required.
 
-After **Yes**, run:
-
-```powershell
-python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
-```
-
-Then collect the Entra app administrator's values in one response. Object IDs, the
-scope GUID, derived tenant URLs, and complete URI lists are not required. A
-reply such as "done", "all good", "continue", or "proceed" is not evidence and
-must not be converted into administrator attestation.
-
-The VS Code question UI renders an array of questions as a sequential wizard.
-Do not submit one question per worksheet field. Use one
-`vscode_askQuestions` call containing exactly one free-form question:
+Use one `vscode_askQuestions` call:
 
 ```json
 [
   {
     "header": "Microsoft Entra app administrator details",
-    "question": "Paste the completed Microsoft Entra app administrator details in one response. Do not include credentials, tokens, certificate contents, or private keys."
+    "question": "Paste the completed Microsoft Entra app administrator details in one response, or launch the browser companion for assistance. Do not include credentials, tokens, certificate contents, or private keys.",
+    "options": [
+      {
+        "label": "Launch browser companion for assistance"
+      }
+    ],
+    "allowFreeformInput": true
   }
 ]
+```
+
+Leave the interaction unset. If the administrator supplies free-form worksheet
+text, preserve it unchanged as the response. If they select **Launch browser
+companion for assistance**, follow `shared/entra-assisted-browser.md`. A
+`completed` companion result supplies the exact worksheet text as the same
+response. A `cancelled` or `blocked` result returns to this same combined
+interaction without recording completion or evidence.
+
+A reply such as "done", "all good", "continue", or "proceed" is not evidence
+and must not be converted into administrator attestation. Do not submit one
+question per worksheet field and do not create another worksheet after the
+companion returns.
+
+After either path produces completed worksheet text, record the coordination
+boundary:
+
+```powershell
+python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
 Preserve the response unchanged. The controller recognizes the generated table
@@ -438,9 +323,6 @@ Certificate expiration date:
 
 Then ask for that completed mini-template in one free-form response. Do not
 say only "paste a revised worksheet" without the location and template.
-When the assisted-browser session is active, present the same missing or
-invalid labels and capture locations in a new constrained companion revision.
-Do not infer a correction from the current portal page.
 
 Do not perform a maker-authenticated Graph reread after the administrator
 submits the response. Role-aware execution will perform those real API checks
@@ -481,14 +363,6 @@ If an exact replay matches the persisted evidence, the controller returns
 controller has reopened Entra and invalidated downstream deployment state.
 Repeat the guided administrator handoff for the changed target; do not
 continue from the stale tenant foundation.
-
-After `record-entra` succeeds, stop the assisted-browser session if this phase
-started it. A forwarded handoff does not start or stop a browser session.
-For the split-screen path, run `record-entra` immediately after the final
-worksheet review is confirmed. The Existing configuration row must already be
-accepted and all Entra `outstandingFields` must be empty. Submit the same
-return worksheet that was displayed in the final companion review. Do not
-leave the confirmed companion values only in ephemeral browser state.
 
 The JSON must contain the administrator-confirmed directory display name,
 Workday application display name and Application ID, selected Reply URL, safe
