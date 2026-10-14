@@ -373,11 +373,24 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
 def cmd_set_state(args: argparse.Namespace) -> int:
     plan = _load(args)
+    existing = plan.task(args.task)
+    was_completed = bool(existing and existing.get("state") == "Completed")
     try:
         plan.set_task_state(args.task, args.state)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    # A completion applied through this path (e.g. an edit.md checkbox tick or a
+    # "mark it done" chat intent on an already-shared plan) is a
+    # local-not-yet-pushed completion exactly like a capture `--complete`, so flag
+    # it `pendingSync` too. That puts it on the push backlog (`pending-sync`) so the
+    # next successful entry re-pushes it to the shared plan if the in-turn push is
+    # skipped or fails — without this, an edit-driven completion could land locally
+    # yet never reach the service, so other owners never see it and a later pull
+    # looks authoritative. Only a genuine transition into Completed flags it:
+    # re-stating Completed, or moving to any other state, leaves the backlog alone.
+    if args.state == "Completed" and not was_completed:
+        plan.mark_task_pending_sync(args.task)
     _save(plan, args)
     print(f"Task {args.task!r} -> {args.state}")
     return 0

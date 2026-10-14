@@ -218,27 +218,49 @@ model), store it in **one** create call rather than task-by-task:
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.
 
-## Ongoing edits — keep the service authoritative
+## Ongoing edits — keep local and the shared plan in step
 
-Once a plan is on the service, route mutations through the tools (not just the
-local cache), then re-hydrate so the cache reflects the server's response:
+Once a plan is on the service, an edit isn't finished until it has landed on
+**both** sides: the local cache (so the maker's `ESS-scenario-plan.md` reflects what
+they asked for) **and** the shared planner (so every other owner — and a later pull
+— sees it). Dropping either half is the bug this guards against — a local-only edit
+never reaches other accounts, and a tool-only edit leaves the local `.json`/`.md`
+stale — so run all three steps for every follow-up change on a live plan:
 
-- **Change a task's state:** `set_project_plan_task_state`.
-- **Record what a task produced:** `complete_project_plan_task` (Phase 6 capture).
-  This is **coupled to the local complete, not a deferred step**: the moment a
-  `capture-setup` / `capture-discover` / `pin-output --complete` flags a task
-  `pendingSync`, push it in the same turn — `pending-sync` prints the exact
-  `projectId` / `planId` / `taskId` / `outputs` / `etag`; call the tool, then
-  re-hydrate to clear the flag. If the push can't reach the service, the
-  completion stays `pendingSync` locally and syncs on the next entry (the Pull
-  step above preserves and re-attempts it). Full flow:
-  `src/skills/planner/capture.md` → *Sync each local complete to the shared plan*.
-- **Edit task content** (title/description/produces/consumes): `update_project_plan_task`.
-- **Add a task later:** `create_project_plan_task` (or
-  `create_role_assigned_project_plan_task` for a role-owned task).
+1. **Apply it locally** through the CLI — the maker-facing round-trip in
+   `src/skills/planner/edit.md` writes `plan.json` and regenerates the Markdown in
+   one step (and runs the coherence loop for a scope change). A capture `--complete`
+   (`src/skills/planner/capture.md`) is this step for a completion.
+2. **Push the same change to the service** through its matching tool — never the
+   local cache alone:
+   - **Change a task's state:** `set_project_plan_task_state`.
+   - **Record what a task produced:** `complete_project_plan_task` (Phase 6
+     capture). This is **coupled to the local complete, not a deferred step**: the
+     moment a `capture-setup` / `capture-discover` / `pin-output --complete` (or an
+     `edit.md` checkbox tick applied via `set-state`) flags a task `pendingSync`,
+     push it in the same turn — `pending-sync` prints the exact `projectId` /
+     `planId` / `taskId` / `outputs` / `etag`; call the tool, then re-hydrate to
+     clear the flag. If the push can't reach the service, the completion stays
+     `pendingSync` locally and syncs on the next entry (the Pull step above
+     preserves and re-attempts it). Full flow: `src/skills/planner/capture.md` →
+     *Sync each local complete to the shared plan*.
+   - **Edit task content** (title/description/produces/consumes): `update_project_plan_task`.
+   - **Add a task later:** `create_project_plan_task` (or
+     `create_role_assigned_project_plan_task` for a role-owned task).
+   - **Remove a task:** its delete tool.
 
-After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` →
-`import-remote-plan`) so the local view and the Markdown summary match the service.
+   Guard each per-task call with **that task's own etag** (from the hydrated cache
+   or a fresh `get_project_plan`), never the plan's activation etag — that mismatch
+   is a 412. On any failure, walk the sign-in ladder at the top of this file; a
+   change that can't be pushed stays in the local cache and re-syncs on the next
+   successful entry.
+3. **Re-hydrate before you show the plan back or end the turn** — `get_project_plan`
+   + `list_project_plan_tasks` → `import-remote-plan` — so the local view and the
+   Markdown summary match the server's authoritative response (ids, etags, any
+   server-side effect). A batch of edits may share **one** re-hydrate at the end,
+   but never re-render the plan for the maker, or leave the turn, with the local
+   cache and the service out of step — that stale `.md`/`.json` is exactly the
+   symptom this prevents.
 
 ## Flow 2 — "what am I assigned?" is answered by the service
 

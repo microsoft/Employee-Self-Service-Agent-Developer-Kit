@@ -163,12 +163,31 @@ have the full set — foundation (if not already present), connect/author, and
 evaluation — the same exhaustiveness Phase 3 enforces, so no in-scope capability
 ships without the tasks that build it.
 
-**4. Confirm destructive cascades, then show it back.** Removing a stream can orphan
-work the maker didn't explicitly name — confirm before deleting (the "Ask where
-ambiguous" rule below). Only once `check-deps` reports a coherent graph and
-`validate` passes, re-render (`summary`) and present the refreshed plan the usual
-way — the download link **then** the grouped checklist — calling out what changed
-(tasks added/removed, system re-pointed, new ordering/waves).
+**4. Propagate to the shared plan when it's live — then confirm cascades and show it
+back.** Only once `check-deps` reports a coherent graph and `validate` passes:
+
+- **If the plan is on the shared planner** (it has a plan id and reads as shared,
+  not `(local, not synced)`), the edit is **not** finished when the local cache is
+  written — every applied change must also reach the service, or other owners (and a
+  later pull) never see it, and the next re-hydrate can quietly revert it. Route
+  each change through its matching task tool **and then re-hydrate** so the local
+  view and Markdown match the server — this is the *Ongoing edits* loop in
+  `src/skills/planner/sync.md` (state → `set_project_plan_task_state`; content →
+  `update_project_plan_task`; added task → `create_project_plan_task` /
+  `create_role_assigned_project_plan_task`; removed task → its delete tool; a
+  completion with its outputs → `complete_project_plan_task` via the `pending-sync`
+  backlog). Guard each call with **that task's own etag** (never the plan's
+  activation etag — that 412s), and walk the sync.md sign-in ladder on any failure;
+  a change that can't be pushed stays local and re-syncs on the next successful entry.
+- **If it's still a local draft** (`(local, not synced)`, no plan id), stay local —
+  there's nothing to push until the sponsor shares it (`src/skills/planner/sync.md`
+  → *Share*).
+
+Removing a stream can orphan work the maker didn't explicitly name — confirm before
+deleting (the "Ask where ambiguous" rule below). Then re-render (`summary`) and
+present the refreshed plan the usual way — the download link **then** the grouped
+checklist — calling out what changed (tasks added/removed, system re-pointed, new
+ordering/waves).
 
 > **Why this matters.** The maker edits a readable plan, not a dependency graph — the
 > Markdown can't express `produces`/`consumes`, and a one-word swap ("use

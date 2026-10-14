@@ -359,6 +359,35 @@ def test_set_state_completed_refused_with_unresolved_produces(tmp_path, capsys):
     assert Plan.load(plan_path).task("T1")["state"] != "Completed"
 
 
+def test_set_state_completed_flags_pending_sync(tmp_path, capsys):
+    # A completion applied via the direct `set-state` path (an edit.md checkbox tick
+    # or a "mark it done" chat intent) is a local-not-yet-pushed completion, so it
+    # lands on the push backlog exactly like a capture `--complete` — otherwise an
+    # edit-driven completion on a shared plan could never reach the service.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Approve scope", "--role", "maker")
+    capsys.readouterr()
+    assert _run("--plan", plan_path, "set-state", "--task", "T1", "--state", "Completed") == 0
+    task = Plan.load(plan_path).task("T1")
+    assert task["state"] == "Completed"
+    assert task["pendingSync"] is True
+    # It surfaces in the push backlog the agent reconciles on the next sync.
+    capsys.readouterr()
+    assert _run("--plan", plan_path, "pending-sync") == 0
+    assert [t["localId"] for t in json.loads(capsys.readouterr().out)["tasks"]] == ["T1"]
+
+
+def test_set_state_non_completed_does_not_flag_pending_sync(tmp_path):
+    # Only a genuine transition *into* Completed is a pending push; other states
+    # (and re-stating Completed) never touch the backlog.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Approve scope", "--role", "maker")
+    assert _run("--plan", plan_path, "set-state", "--task", "T1", "--state", "InProgress") == 0
+    assert "pendingSync" not in Plan.load(plan_path).task("T1")
+
+
 # --- setup-status: the read-only guard shared by the /setup env-reuse offer and
 # --- the planner first-run-setup reconcile -------------------------------------
 
