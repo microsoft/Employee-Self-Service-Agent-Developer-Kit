@@ -88,7 +88,8 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true; Ring = $Ring }
+$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true }
+if ($PSBoundParameters.ContainsKey('Ring')) { $installerArgs.Ring = $Ring }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

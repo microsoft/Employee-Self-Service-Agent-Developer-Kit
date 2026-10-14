@@ -108,7 +108,7 @@ def main():
         "--ring",
         choices=("prod", "preprod", "test"),
         default="prod",
-        help="Power Platform service ring for environment resolution.",
+        help="Power Platform service ring for environment listing and resolution.",
     )
     parser.add_argument("--select", type=int, default=None,
                         help="Select environment by number and output JSON")
@@ -138,7 +138,7 @@ def main():
             print_environment_table,
         )
 
-        dv_environments, excluded = get_dataverse_environments()
+        dv_environments, excluded = get_dataverse_environments(ring=args.ring)
 
         print(f"Found {len(dv_environments)} Dataverse-linked environment(s).")
         if excluded:
