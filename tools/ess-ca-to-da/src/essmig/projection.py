@@ -36,10 +36,11 @@ import io
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
+from ruamel.yaml.scalarstring import LiteralScalarString
 
 from essmig.discovery import CaComponent
 from essmig.ess import CA_AGENT_SCHEMANAMES, DA_SCHEMANAME_BY_VERTICAL
@@ -492,6 +493,27 @@ def dump(node: Any) -> str:
     stream = io.StringIO()
     _yaml().dump(node, stream)
     return stream.getvalue()
+
+
+def block_scalar(text: str) -> str:
+    """Return ``text`` as a literal block scalar (``|-``) when it spans lines.
+
+    A plain multi-line ``str`` is emitted by ruamel as a double-quoted scalar with
+    ``\\n`` escapes, which the ESS template never does (it writes ``instructions`` and
+    other prose as ``|-``). That makes an otherwise small edit read as one giant
+    replaced line in ``customizationsMade.md`` and ships an ugly ``agent.yml``. Wrap
+    multi-line text so it re-emits as a block scalar, matching the template; leave a
+    single-line string untouched.
+
+    Newlines are normalized to ``\\n`` first: a literal block scalar cannot carry an
+    embedded carriage return without escaping (which defeats the purpose), and the
+    surrounding ``agent.yml`` is written LF-only regardless. ruamel preserves trailing
+    whitespace inside a literal block, so lines that end in spaces are kept as-is.
+    """
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if "\n" not in normalized:
+        return text
+    return cast(str, LiteralScalarString(normalized))
 
 
 def load_fragment(text: str) -> Any:

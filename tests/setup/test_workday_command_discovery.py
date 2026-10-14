@@ -34,12 +34,16 @@ def test_menu_exposes_specific_and_generic_connect_commands() -> None:
     assert "| `/connect` | Choose an available integration |" in menu
 
 
-def test_repo_root_redirect_recognizes_connect_workday() -> None:
-    instructions = (_REPO_ROOT / ".github" / "copilot-instructions.md").read_text(
-        encoding="utf-8"
-    )
+def test_maker_prompt_catalog_exposes_routing_descriptions() -> None:
+    prompt_files = sorted(_PROMPTS.glob("*.prompt.md"))
 
-    assert "- `/connect-workday`" in instructions
+    assert prompt_files
+    for prompt_file in prompt_files:
+        parts = prompt_file.read_text(encoding="utf-8").split("---", 2)
+        assert len(parts) == 3, f"{prompt_file.name} has no YAML frontmatter"
+        assert (
+            "description:" in parts[1]
+        ), f"{prompt_file.name} has no routing description"
 
 
 def test_readme_documents_da_scope_and_target_deployment() -> None:
@@ -60,3 +64,23 @@ def test_connect_workday_bypasses_runtime_readiness_gate() -> None:
 
     assert "typed `/connect` or `/connect-workday`" in normalized
     assert "even when runtime `connect_ready` is false" in normalized
+
+
+def test_connect_workday_routes_to_architecture_aware_connect() -> None:
+    instructions = (
+        _SOLUTION / ".github" / "copilot-instructions.md"
+    ).read_text(encoding="utf-8")
+    hybrid_boundary = (
+        _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = _normalize(instructions)
+
+    assert (
+        "(`/connect workday` or `/connect-workday`) | "
+        "`src/skills/connect/SKILL.md`"
+    ) in normalized
+    assert (
+        "Provision/connect the Workday setup environment (`/connect workday`) "
+        "| `src/skills/setup/SKILL.md`"
+    ) not in normalized
+    assert "immediately read\n`src/skills/connect/SKILL.md`" in hybrid_boundary

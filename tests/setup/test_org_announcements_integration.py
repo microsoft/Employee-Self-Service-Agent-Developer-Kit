@@ -92,7 +92,7 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
 
 
 def test_announcements_are_registered_across_current_entry_points() -> None:
-    repo_instructions = _REPO_INSTRUCTIONS.read_text(encoding="utf-8")
+    repo_instructions = _normalized(_REPO_INSTRUCTIONS)
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     menu = _MENU.read_text(encoding="utf-8")
     foundation = _FOUNDATION.read_text(encoding="utf-8")
@@ -107,7 +107,9 @@ def test_announcements_are_registered_across_current_entry_points() -> None:
     assert "`ess-org-announcements` MCP server" in instructions
     assert "`/org-announcements`" in menu
     assert "`/org-announcements`" in foundation
-    assert "(Setup, Customize landing page, Post an announcement" in setup_readme
+    assert "A **Customization** rail listing common tasks (Post an announcement" in setup_readme
+    assert "A guided layout" in setup_readme
+    assert "all developer surfaces hidden" not in setup_readme
     assert "**Post an announcement**" in profile_readme
     assert "query: 'Create an organization announcement'" in extension
     assert "label: 'Post an announcement'" in extension

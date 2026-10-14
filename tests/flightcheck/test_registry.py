@@ -73,9 +73,14 @@ class TestResolve:
         assert registry.resolve("WD-PKG-001").key == "WD-PKG-001"
 
     def test_exact_beats_family(self):
-        # WD-CONN-010 / -012 / -102 are fixed entries that must NOT collapse
+        # These fixed entries must NOT collapse
         # into the WD-CONN family even though that family exists.
-        for fixed in ("WD-CONN-010", "WD-CONN-012", "WD-CONN-102"):
+        for fixed in (
+            "WD-CONN-010",
+            "WD-CONN-012",
+            "WD-CONN-013",
+            "WD-CONN-102",
+        ):
             assert registry.resolve(fixed).key == fixed
             assert registry.resolve(fixed).is_family is False
 
@@ -133,12 +138,20 @@ class TestTransitiveRequirements:
         # Only the Workday owning function runs (no prereqs).
         assert [label for label, _ in plan.ordered_fns] == ["Workday"]
 
+    def test_obo_sharing_checkpoint_needs_selected_agent_and_dataverse(self):
+        plan = registry.transitive_requirements("WD-CONN-013")
+        assert plan.clients == frozenset({
+            registry.DATAVERSE,
+            registry.AGENTBUILDER,
+        })
+        assert registry.PP_ADMIN not in plan.clients
+        assert plan.requires_dataverse_endpoint is True
+        assert [label for label, _ in plan.ordered_fns] == ["Workday"]
+
     def test_closure_unions_clients_across_prereqs(self):
-        # WD-CONN-012 itself declares only dataverse, but pulls pp_admin in via
-        # its WD-001 prerequisite — naive one-level resolution would miss it.
+        # WD-CONN-012 uses only the Dataverse connection-reference inventory.
         plan = registry.transitive_requirements("WD-CONN-012")
-        assert registry.DATAVERSE in plan.clients
-        assert registry.PP_ADMIN in plan.clients
+        assert plan.clients == frozenset({registry.DATAVERSE})
         assert plan.requires_dataverse_endpoint is True
 
     def test_wd_run_001_resolves_and_unions_pp_admin_and_dataverse(self):
@@ -156,17 +169,13 @@ class TestTransitiveRequirements:
         labels = [label for label, _ in plan.ordered_fns]
         assert labels.index("External Systems") < labels.index("Workday")
 
-    def test_external_systems_orders_before_workday(self):
-        # _workday_flows must be hydrated by run_external_systems_checks before
-        # run_workday_checks runs (which early-returns without it).
+    def test_connection_completeness_does_not_require_flow_inventory(self):
         plan = registry.transitive_requirements("WD-CONN-012")
         labels = [label for label, _ in plan.ordered_fns]
         fns = [fn for _, fn in plan.ordered_fns]
-        assert labels.index("External Systems") < labels.index("Workday")
-        assert run_external_systems_checks in fns
+        assert labels == ["Workday"]
+        assert run_external_systems_checks not in fns
         assert run_workday_checks in fns
-        # Each category function registered exactly once despite multiple specs
-        # sharing run_workday_checks.
         assert fns.count(run_workday_checks) == 1
 
     def test_env002_pulls_env001_prereq(self):
@@ -188,6 +197,21 @@ class TestTransitiveRequirements:
         assert plan.requires_config is False
         assert len(plan.ordered_fns) == 1
 
+    def test_env_004_resolves_to_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ENV-004")
+        assert spec is not None and spec.key == "ENV-004"
+        assert spec.category_label == "Environment"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        # ENV-004 was re-pointed off the Dataverse connectionreference table to
+        # the Declarative Agent minimalBots components API, so it must not
+        # require a Dataverse endpoint, and its detail rows must not resolve.
+        plan = registry.transitive_requirements("ENV-004")
+        assert registry.AGENTBUILDER in plan.clients
+        assert plan.requires_dataverse_endpoint is False
+        assert plan.requires_config is True
+        assert registry.resolve("ENV-004-GRS") is None
+        assert registry.resolve("ENV-004-UR-001") is None
+
     def test_native_agent_checkpoints_use_only_native_read_clients(self):
         access = registry.transitive_requirements("DA-AGENT-001")
         assert access.clients == frozenset({registry.AGENTBUILDER})
@@ -207,6 +231,17 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_ess_soln_uses_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ESS-SOLN-001")
+        assert spec is not None and spec.key == "ESS-SOLN-001"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.requires_dataverse_endpoint is False
+
+        plan = registry.transitive_requirements("ESS-SOLN-001")
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
+        assert plan.requires_config is True
+        assert plan.requires_dataverse_endpoint is False
+
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
         assert spec is not None and spec.key == "ENV-009"
@@ -216,24 +251,19 @@ class TestTransitiveRequirements:
         assert plan.requires_dataverse_endpoint is True
         assert len(plan.ordered_fns) == 1
 
-    def test_ess_soln_001_resolves_and_pulls_env_prereqs(self):
+    def test_ess_soln_001_resolves_to_agentbuilder_configure_read(self):
         spec = registry.resolve("ESS-SOLN-001")
         assert spec is not None and spec.key == "ESS-SOLN-001"
         assert spec.category_label == "Solution"
         assert spec.category_fn is run_solution_checks
-        # Solution presence is a pure Dataverse read.
-        assert spec.clients == frozenset({registry.DATAVERSE})
-        assert spec.prereqs == ("ENV-002",)
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.prereqs == ()
         plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert registry.DATAVERSE in plan.clients
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.requires_config is True
-        assert plan.requires_dataverse_endpoint is True
-        # Own fn (run_solution_checks) plus the shared run_environment_checks
-        # that ENV-001+ENV-002 pull in -> exactly two, environment first.
+        assert plan.requires_dataverse_endpoint is False
         fns = [fn for _label, fn in plan.ordered_fns]
-        assert run_solution_checks in fns
-        assert len(fns) == 2
-        assert fns.index(run_solution_checks) == len(fns) - 1
+        assert fns == [run_solution_checks]
 
 
 class TestListCheckpoints:
@@ -294,7 +324,7 @@ class TestWorkdayExtensionCheckpoints:
     """skill-5 mints five checkpoints, all sharing
     checks/workday_extension.run_workday_extension_checks, category
     "Workday Extension". Two are always-MANUAL echoes/attestations, three are
-    programmatic (one Dataverse read + two pure-local)."""
+    programmatic (one minimalBots components read + two pure-local)."""
 
     _ALL = (
         "WD-CONN-AUTH-001",
@@ -329,9 +359,9 @@ class TestWorkdayExtensionCheckpoints:
         assert registry.resolve("WD-CONN-AUTH-001").key == "WD-CONN-AUTH-001"
         assert registry.resolve("WD-CONN-AUTH-001").is_family is False
 
-    def test_dv_conn_spec_declares_dataverse_and_pp_admin(self):
+    def test_dv_conn_spec_requires_only_dataverse(self):
         spec = registry.resolve("DV-CONN-001")
-        assert spec.clients == frozenset({registry.DATAVERSE, registry.PP_ADMIN})
+        assert spec.clients == frozenset({registry.DATAVERSE})
         assert spec.requires_dataverse_endpoint is True
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
@@ -352,15 +382,30 @@ class TestWorkdayExtensionCheckpoints:
         # infra-owning role (see checks/workday_extension.py note).
         assert Role.POWER_PLATFORM_ADMIN.value in spec.roles
 
-    def test_dv_conn_plan_unions_clients(self):
+    def test_dv_conn_plan_requires_only_dataverse(self):
         plan = registry.transitive_requirements("DV-CONN-001")
-        assert registry.DATAVERSE in plan.clients
-        assert registry.PP_ADMIN in plan.clients
+        assert plan.clients == frozenset({registry.DATAVERSE})
 
     def test_all_five_are_listable(self):
         keys = {spec.key for spec in registry.list_checkpoints()}
         for cp in self._ALL:
             assert cp in keys
+
+
+class TestPublishingCheckpoints:
+    def test_pub_checks_resolve_to_publishing_category_with_agentbuilder(self):
+        for cp in ("PUB-001", "PUB-002"):
+            spec = registry.resolve(cp)
+            assert spec is not None and spec.key == cp
+            assert spec.category_label == "Publishing"
+            assert spec.clients == frozenset({registry.AGENTBUILDER})
+            assert spec.requires_dataverse_endpoint is False
+            assert spec.priority == Priority.CRITICAL.value
+            assert Role.ESS_MAKER.value in spec.roles
+
+    def test_pub_checks_are_listable(self):
+        keys = {spec.key for spec in registry.list_checkpoints()}
+        assert {"PUB-001", "PUB-002"} <= keys
 
 
 class TestTopicCheckpoints:
@@ -406,3 +451,44 @@ class TestTopicCheckpoints:
         keys = {spec.key for spec in registry.list_checkpoints()}
         for key in self._FAMILIES:
             assert key in keys
+
+
+class TestDaProfilesExcludeCeaSolutionGate:
+    """DA readiness profiles must gate on the DA package check, not the
+    classic (CEA) base-solution check.
+
+    ``ESS-SOLN-001`` only recognizes the CEA solution family, so a GA DA
+    environment (which installs the DA parent + Workday child packages,
+    not the CEA base) would be wrongly marked not-ready. ``WD-DA-PKG-001``
+    is the DA-native solution gate and must be present from the package-ready
+    boundary onward. Regression guard for the PR #327 carry-over finding.
+    """
+
+    _DA_PROFILES = (
+        "workday-da:setup-readiness",
+        "workday-da:package-ready",
+        "workday-da:dataverse-ready",
+        "workday-da:final",
+    )
+    _PACKAGE_GATED_PROFILES = (
+        "workday-da:package-ready",
+        "workday-da:dataverse-ready",
+        "workday-da:final",
+    )
+
+    def test_da_profiles_do_not_carry_ess_soln_001(self):
+        for name in self._DA_PROFILES:
+            profile = registry.resolve_profile(name)
+            assert profile is not None, name
+            assert "ESS-SOLN-001" not in profile.checkpoint_ids, name
+
+    def test_da_profiles_carry_the_da_package_gate(self):
+        for name in self._PACKAGE_GATED_PROFILES:
+            profile = registry.resolve_profile(name)
+            assert profile is not None, name
+            assert "WD-DA-PKG-001" in profile.checkpoint_ids, name
+
+    def test_ess_soln_001_still_registered_for_cea_flows(self):
+        # Removing it from the DA profiles must not deregister the check;
+        # the CEA/legacy paths still resolve and target it.
+        assert registry.resolve("ESS-SOLN-001") is not None

@@ -23,14 +23,17 @@ ServiceNow-specific wiring:
   connection would silently mask a broken ServiceNow one.
 * The summary row uses checkpoint prefix ``SN-CONN-001`` and category
   ``ServiceNow``; per-connection rows continue at ``SN-CONN-002``.
-* The not-configured remediation must reference ``/connect servicenow``
-  so operators have a one-line fix path.
+* The not-configured remediation must use manual configuration guidance,
+  not the unavailable ADK guided setup command.
 * The doc_link must point at the ServiceNow integration docs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import unescape
+import json
+import re
 from typing import Any
 
 import pytest
@@ -40,6 +43,11 @@ from tests.conftest import require_validated_mock
 from tests.mocks import pp_admin as pp
 
 require_validated_mock(pp)
+
+_SERVICENOW_MESSAGE = (
+    "Guided ServiceNow setup is not yet available in ADK. You can configure the "
+    "ServiceNow connection manually in Copilot Studio or contact admin."
+)
 
 
 @dataclass
@@ -254,21 +262,30 @@ class TestBadConfig:
 
     @responses.activate
     def test_no_servicenow_connections_returns_not_configured(
-        self, runner: _MinimalRunner
+        self, runner: _MinimalRunner, tmp_path
     ) -> None:
         """Empty connections list — clean tenant, ServiceNow not set up
-        yet. Must be NOT_CONFIGURED with the `/connect servicenow`
-        hint, not FAILED."""
+        yet. Keep manual configuration guidance in the result and report."""
         from flightcheck.checks.servicenow import _check_connections
-        responses.add(**pp.list_connections(env_id=runner.env_id, connections=[]))
+        from flightcheck.runner import FlightCheckRunner, save_results
 
-        results = _check_connections(runner)
-        summary = _result_by_id(results, "SN-CONN-001")
+        responses.add(**pp.list_connections(env_id=runner.env_id, connections=[]))
+        report_runner = FlightCheckRunner(scope="servicenow")
+        report_runner.pp_admin = runner.pp_admin
+        report_runner.env_id = runner.env_id
+        report_runner.register("ServiceNow", _check_connections)
+
+        run_result = report_runner.run()
+        summary = _result_by_id(run_result.results, "SN-CONN-001")
         assert summary.status == "NotConfigured"
         assert "No ServiceNow connections" in summary.result
-        # The /connect prompt is the operator's one-line fix path —
-        # losing it would turn this into an unactionable status row.
-        assert "/connect servicenow" in summary.remediation
+        assert summary.remediation == _SERVICENOW_MESSAGE
+        save_results(run_result, output_dir=str(tmp_path))
+        data = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+        assert data["results"][0]["remediation"] == _SERVICENOW_MESSAGE
+        report = unescape((tmp_path / "report.html").read_text(encoding="utf-8"))
+        assert _SERVICENOW_MESSAGE in report
+        assert re.search(r"/connect\b", report) is None
 
     @responses.activate
     def test_only_non_servicenow_connections_returns_not_configured(
@@ -290,7 +307,7 @@ class TestBadConfig:
         summary = _result_by_id(results, "SN-CONN-001")
         assert summary.status == "NotConfigured"
         assert "No ServiceNow connections" in summary.result
-        assert "/connect servicenow" in summary.remediation
+        assert summary.remediation == _SERVICENOW_MESSAGE
 
 
 class TestMixedState:

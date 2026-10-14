@@ -31,12 +31,14 @@ def test_parse_profiles_reads_cloud_and_active_marker():
         {
             "index": "1",
             "active": False,
+            "username": "user@contoso.com",
             "cloud": "Public",
             "environment_url": None,
         },
         {
             "index": "2",
             "active": True,
+            "username": "user@contoso.com",
             "cloud": "Preprod",
             "environment_url": "https://org.crm10.dynamics.com",
         },
@@ -59,7 +61,7 @@ def test_runtime_install_uses_preprod_pac_profile_and_application():
             )
         return _result()
 
-    schema = m.install_workday_package(
+    result = m.install_workday_package(
         "https://org.crm10.dynamics.com",
         "runtime",
         ring="preprod",
@@ -67,7 +69,8 @@ def test_runtime_install_uses_preprod_pac_profile_and_application():
         runner=runner,
     )
 
-    assert schema == "msdyn_EssWorkdayRuntime"
+    assert result["schemaName"] == "msdyn_EssWorkdayRuntime"
+    assert result["authenticatedAccount"] == "user@contoso.com"
     assert calls[-1][0] == [
         "pac.exe",
         "application",
@@ -262,6 +265,74 @@ def test_rejects_multiple_profiles_for_exact_preprod_environment():
         )
 
 
+def test_preprod_auth_selects_exact_environment_and_username():
+    import install_workday_da_extension as m
+
+    calls = []
+    auth_lists = iter(
+        [
+            (
+                "[1] user1@contoso.com Preprod "
+                "https://org.crm10.dynamics.com\n"
+                "[2] user2@contoso.com Preprod "
+                "https://org.crm10.dynamics.com/\n"
+            ),
+            (
+                "[1] user1@contoso.com Preprod "
+                "https://org.crm10.dynamics.com\n"
+                "[2] * user2@contoso.com Preprod "
+                "https://org.crm10.dynamics.com/\n"
+            ),
+        ]
+    )
+
+    def runner(command, *, capture_output, timeout):
+        calls.append([str(part) for part in command])
+        if command[1:3] == ["auth", "list"]:
+            return _result(stdout=next(auth_lists))
+        return _result()
+
+    profile = m.ensure_pac_auth(
+        Path("pac.exe"),
+        ring="preprod",
+        environment_url="https://org.crm10.dynamics.com",
+        preferred_username="user2@contoso.com",
+        runner=runner,
+    )
+
+    assert calls[1] == ["pac.exe", "auth", "select", "--index", "2"]
+    assert profile["username"] == "user2@contoso.com"
+    assert profile["active"] is True
+
+
+def test_preprod_auth_rejects_wrong_account_after_profile_creation():
+    import install_workday_da_extension as m
+
+    auth_lists = iter(
+        [
+            "",
+            (
+                "[1] * wrong@contoso.com Preprod "
+                "https://org.crm10.dynamics.com\n"
+            ),
+        ]
+    )
+
+    def runner(command, *, capture_output, timeout):
+        if command[1:3] == ["auth", "list"]:
+            return _result(stdout=next(auth_lists))
+        return _result()
+
+    with pytest.raises(m.PacCliError, match="does not match the requested"):
+        m.ensure_pac_auth(
+            Path("pac.exe"),
+            ring="preprod",
+            environment_url="https://org.crm10.dynamics.com",
+            preferred_username="maker@contoso.com",
+            runner=runner,
+        )
+
+
 def test_legacy_da_uses_targeted_appsource_application():
     import install_workday_da_extension as m
 
@@ -273,7 +344,7 @@ def test_legacy_da_uses_targeted_appsource_application():
             return _result(stdout="[1] * user@contoso.com Public\n")
         return _result()
 
-    schema = m.install_workday_package(
+    result = m.install_workday_package(
         "https://org.crm.dynamics.com",
         "legacy-da",
         ring="prod",
@@ -281,7 +352,7 @@ def test_legacy_da_uses_targeted_appsource_application():
         runner=runner,
     )
 
-    assert schema == "msdyn_EssDAHRWorkday"
+    assert result["schemaName"] == "msdyn_EssDAHRWorkday"
     assert calls[-1][-1] == "msdyn_EssDAHRWorkdayHCM"
 
 

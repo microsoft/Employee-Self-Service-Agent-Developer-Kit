@@ -1,10 +1,13 @@
 # Run Evaluation Test Sets
 
-Run deployed Copilot Studio evaluation test sets through the Power Platform
-API and retrieve run results.
+Prepare and run the selected Copilot Studio evaluation test set through the
+shared deployment flow and Power Platform API, or retrieve run results.
 
-This skill requires a configured agent and completed `.local/config.json`.
+Execution requires a configured agent and completed `.local/config.json`.
 Commands run from the `solutions/ess-maker-skills/` directory.
+Read `src/skills/evaluations/experience-contract.md` and
+`src/skills/evaluations/deployment-flow.md`. Run includes required deployment;
+never require a separate typed push command or push the same set twice.
 
 ## Intent routing
 
@@ -22,10 +25,11 @@ discovery only. It does not authorize executing any test set.
 
 The selection flow must use two separate user turns:
 
-1. Run `list-sets`, display the eligible choices, ask the user to select or
+1. Run `list-sets --include-local`, display the eligible choices, ask the user to select or
    confirm one, and **STOP**.
 2. Only after the user's next message explicitly selects or confirms a
-   displayed test set may the `run` command be invoked.
+   displayed test set may preparation and the `run-prepared` command proceed,
+   subject to deployment consent and explicit connection selection.
 
 Never start a run in the same turn that discovers the candidates. This remains
 mandatory when there is only one eligible set, when a fuzzy query returns one
@@ -37,99 +41,140 @@ contains only one set. Do not infer selection from any of those conditions.
 If the user names a test set, run:
 
 ```text
-python scripts/evaluation_runs.py list-sets --query "{user text}"
+python scripts/evaluation_runs.py list-sets --include-local --query "{user text}"
 ```
 
-The script starts from `{agent.folder}/evaluations/`, reads each EvaluationSet
-parent ID from `.component-map.json`, and confirms that ID is active in the
-Power Platform API. It returns both runnable and review-blocked matches.
+This explicit preparation discovery includes workspace and current-agent local
+sets, not unrelated agents. It distinguishes `canPrepare` from
+`currentlyRunnable`, includes `requiresPreparation`, `hasLocalChanges`, exact
+`localFolder`, source, current/mapped IDs, and `blockedReason`.
 
-Display every match whose `runnable` value is `true` with name, test-set ID,
-state, local folder, and case count. If a returned match has `runnable=false`,
-show it separately as unavailable and copy its `blockedReason` verbatim:
-
-- A set with an active review request explains that review must be completed
-  and pushed.
-- A set completed locally while the deployed baseline remains
-  `review_requested` explains that the completion must be pushed.
-
-Sets with no review tag, synchronized `review_completed`, unknown statuses, or
-unreadable legacy metadata remain runnable. Ask the user to select or confirm
-one of the runnable choices. Never offer a blocked set as a selection and never
-silently choose a fuzzy match. Stop after asking; do not invoke
-`evaluation_runs.py run` in this turn.
+Show currently runnable sets and sets that can be prepared as separate states.
+`currentlyRunnable=null` means readiness is unknown: show preparation/connection
+checks pending and the returned `readinessReason`, not "runnable".
+Do not call a local/dirty set deployed or runnable yet. A valid explicitly
+completed local review marker may require synchronization before Run; that is
+not permission to complete a pending review. Show the returned reason.
+For `canPrepare=false`, show it as unavailable and copy the actual blocker.
+Malformed methods/review state must not become a legacy runnable exception.
+Never silently choose a fuzzy match. Stop after asking, even for one candidate.
 
 If the user does not name a test set, run:
 
 ```text
-python scripts/evaluation_runs.py list-sets
+python scripts/evaluation_runs.py list-sets --include-local
 ```
 
-Display all active deployed test sets represented in the configured agent's
-local `evaluations/` folder. Show runnable sets as choices and review-blocked
-sets with their returned `blockedReason`. Ask which runnable set to run.
-Stop after asking, even if the list contains only one runnable test set.
+Display all returned current-agent/workspace candidates with their actual
+preparation state. Ask which eligible exact set to run and stop after asking.
 
 If no match is returned, show the available sets instead of guessing.
-Workspace-only test sets are not runnable until they are pushed to the
-configured agent. Test sets tagged `review_requested` are also not runnable
-until their pending review status is cleared or changed to `review_completed`.
+Workspace-only sets can be selected for preparation, but cannot start until
+verified deployment. A pending `review_requested` blocks Run until explicitly
+completed through Flow R2 and synchronized using the existing backend behavior.
+Native local completion is not a remote review marker, but does not itself
+block preparation. Never clear a pending tag to run.
 
-### 2. Start the selected set
+### 2. Prepare the selected set and connection
 
 Enter this step only when the current user message explicitly selects or
 confirms one of the choices displayed in the immediately preceding assistant
 turn.
 
-Run:
+Retain the selected `localFolder` and source, not a display-name lookup or
+possibly stale deployed ID. Follow the shared deployment admission and preview:
 
 ```text
-python scripts/evaluation_runs.py run --test-set-id "{id}" --test-set-name "{displayName}"
+python scripts/evaluation_deployment.py preview --set-folder "{set-folder}" --action run
 ```
 
-Before starting the run, the script discovers the signed-in user's Microsoft
-Copilot Studio connections in the selected environment and keeps only profiles
-whose status is `Connected`.
+Show the exact returned target/scope/diff and obtain approval. Keep its
+`confirmationToken`; preserve any explicit replacement/deletion consent as
+specified in the deployment flow. Do not deploy separately here.
+For native `deploymentBehavior=new_copy`, explain before consent that the
+existing insert API creates a new deployed ID and retains the old remote copy.
+Case omissions affect only the new copy, not the old remote set. Start only the
+actual ID returned by preparation; unchanged `reuse` still requires verification.
 
-- If exactly one profile is connected, use it automatically.
-- If multiple profiles exist, use the latest profile matching the signed-in
-  Power Apps account.
-- If automatic matching fails, run:
+Require explicit connection selection, even if only one profile exists or an
+automatic account match is possible. For both Dataverse and native MinimalBot
+agents, run:
 
-  ```text
-  python scripts/evaluation_runs.py list-connections
-  ```
+```text
+python scripts/evaluation_runs.py list-connections
+```
 
-  Display every returned profile with its display name, account name, creator,
-  and connection ID. Ask the user to select one using `vscode_askQuestions`,
-  then **STOP**. Do not start the evaluation in the same turn.
-- After the user selects a profile, retry the previously selected test set:
+Show returned connected profiles with display name, account name, creator, and
+connection ID. `matchesSignedInAccount` is context, not permission to select
+automatically. Ask the user to select with the structured question control and
+**STOP**. A user-supplied explicit connection ID may be carried forward, but the
+run command must validate it against this environment and connected status.
+Do not silently choose a profile.
 
-  ```text
-  python scripts/evaluation_runs.py run --test-set-id "{id}" --test-set-name "{displayName}" --mcs-connection-id "{connectionId}"
-  ```
+If no connected profile is available, explain the actual prerequisite and
+offer **Retry connection discovery** after repair; stop instead of running.
+Missing, disconnected, or unverified selected profiles block both backends.
+Do not invent a connected status or bypass the existing pending-review gates
+merely because connection discovery succeeded.
 
-- If no connected profile is returned, explain that the connection must be
-  created or repaired in Power Apps or Power Automate. Ask the user to choose
-  **Retry connection discovery** when ready, then stop. On their next turn,
-  rerun `list-connections`.
+This mandatory profile is the **Microsoft Copilot Studio** evaluation identity.
+Other tool connections declared by the agent are optional run bindings: include
+an unambiguous connected profile when available, but do not block the whole run
+because an unrelated connector such as ServiceNow has no profile. A test case
+that actually invokes an unavailable connector may fail at runtime; report that
+case result rather than preventing every evaluation from starting.
 
-> **Dataverse-free (MinimalBot) agents:** `list-connections` is not wired for
-> these agents. `run` auto-selects the single connected `shared_microsoftcopilotstudio`
-> profile in the environment; if selection is ambiguous, pass
-> `--mcs-connection-id` explicitly. Do not instruct the maker to run
-> `list-connections` for a Dataverse-free agent.
+### 3. Deploy and start exactly once
 
-Every run must include a validated `mcsConnectionId`; do not start an
-anonymous evaluation run.
+Only after explicit set selection, deployment consent, and connection selection:
 
-Show the test-set name, run ID, initial state, processed/total case count, and
-explain that execution continues asynchronously. Always include:
+```text
+python scripts/evaluation_runs.py run-prepared --set-folder "{set-folder}" --confirmation-token "{confirmationToken}" --yes --mcs-connection-id "{connectionId}"
+```
 
-> Running your evaluation may take a while. Please return in 10-15 minutes to
-> see the results.
+Add `--replace` only if the approved preview used it, and `--force-delete` only
+for exact approved Dataverse remote deletions, not native copy omissions.
+This command invokes the shared deployment
+helper, verifies source/target identity and method/review admission, then starts
+the verified deployed set. Do not also call `evaluation_deployment.py deploy`
+or `evaluation_runs.py run` for this same operation.
 
-The `run` command also returns this exact text in `userGuidance`. Copy
+If the preview token is stale, preview and confirm again. If deployment fails,
+no run starts: `stage=deployment` is not run success. If deployment succeeded
+but start failed, `status=run_failed`, `stage=run` and the returned `deployment`
+describe distinct outcomes. Report both stages and the returned recovery
+`userGuidance`, not a success link; inspect run history before retrying
+execution, and do not repeat deployment blindly. For multiple explicitly
+selected sets, retain separate tokens, approvals, and outcomes; never reuse
+one set's ID/link.
+
+Every run must include a validated `mcsConnectionId`; no anonymous evaluation.
+
+Show the test-set name, run ID, returned initial state and any returned
+processed/total case count, and explain that execution continues
+asynchronously. Native HTTP 202 means accepted, not completed; do not invent
+missing progress fields. Copy the returned `userGuidance`, then include the
+optional navigation link:
+
+> [Open this run in Copilot Studio]({agentStudioUrl}) (optional)
+
+Use the successful command's `agentStudioUrl` with the same link label as
+completed results. Use only its new run ID and actual deployed set identity;
+never build a URL from conversation history or a local slug. If no valid run
+ID is returned, do not show success or a run link. If a real run started but
+`agentStudioUrl` is absent/null, report the run ID/state and that its link is
+unavailable, including the returned `navigationWarning`. Do not fabricate a
+URL, label an overview as run details, retry start for navigation, poll, or
+wait for completion to show the link.
+Do not use the completed-result "Done" wording for an in-progress run.
+
+Always include:
+
+> I've started running your test set in Copilot Studio. This may take 10-15
+> minutes. Return here to view the results when the run is complete; you don't
+> need to open Copilot Studio.
+
+The successful start command returns this exact text in `userGuidance`. Copy
 `userGuidance` verbatim into the successful start response. This is a hard
 postcondition: never finish a successful run-start turn without it, even when
 the initial state is already `Completed` or the run finishes unusually quickly.
@@ -184,43 +229,82 @@ Evaluate view. If `agentStudioUrl` is absent or `null`, render the same
 sentence with "Copilot Studio" as plain text (no link). Never fabricate a
 different URL. This line precedes everything below.
 
-First show:
+After the required first line, render completed results in this exact order and
+format. Replace brace-delimited values with returned or deterministically
+derived data. Preserve the headings, punctuation, blank lines, and table column
+order. Do not prepend a metadata table or repeat the generated-case preview.
 
-- Test-set name, run name/ID, state, start/end times, and total cases.
-- A completion summary with passed, failed, and pass-rate totals.
-- A verdict against a clearly stated target. Use a target returned by the API
-  or configured grader when available; otherwise label the default 95% target
-  as a reporting target, not an API value.
+```text
+**Eval run complete — {passed} of {total} passed, {failed} failed ({pass-rate}%)**
 
-Then analyze and present:
+Verdict: {verdict against the stated target}
 
-1. **Results by scenario group** - render every row returned in
-   `analysis.scenarioGroups` using this exact table:
+**Results by scenario group**
 
-   > | Group | Cases | Pass | Fail | Pass rate |
-   > |---|---:|---:|---:|---:|
+| Group | Cases | Pass | Fail | Pass rate |
+|---|---:|---:|---:|---:|
+| {group} | {cases} | {passed} | {failed} | {pass-rate}% {status-icon} |
 
-   The script uses the test-set name as a single group when the API supplies no
-   reliable finer-grained scenario metadata. Never omit this table merely
-   because it contains one row; use that fallback rather than inventing
-   categories.
-2. **Failure analysis - grouped by observed cause** - render every row returned
-   in `analysis.failureGroups` using this exact table:
+**Expected failures**
 
-   > | # | Observed cause | Cases | Owner | Suggested action | Representative evidence |
-   > |---:|---|---:|---|---|---|
+{evidence-based explanation, or "No failures were explicitly marked as expected for this run."}
 
-   The script groups failed cases using metric status/data plus `errorReason`
-   and `aiResultReason`. Use its returned category, counts, evidence, and
-   suggested action without replacing them with unstructured bullets. These
-   are observed failure patterns, not proven root causes. Never invent an
-   owner; the script returns `Unassigned` when ownership is unavailable.
-3. **Detailed evidence** - retain per-test-case state, every metric type and
-   status, error/AI-result reasons, and metric data returned by the API.
+{expected-failure table only when explicit expected-failure evidence exists}
 
-End with the strongest evidence-based pattern and the next corrective action.
-Do not claim promotion readiness unless the user has configured a promotion
-threshold and the run clears it.
+**Failure analysis — grouped by root cause**
+
+| # | Root cause category | Cases | Owner | Suggested action | Representative evidence |
+|---:|---|---:|---|---|---|
+| {number} | {category} | {count} ({failure-percentage}%) | {owner} | {action} | {evidence} |
+
+📌 Pattern: {strongest evidence-based pattern across the failed cases}
+
+**Who needs to do what**
+
+• {owner}: {consolidated corrective actions}
+• Gate: {target and the condition required before promotion}
+
+{one concise question offering the most useful next corrective action}
+```
+
+Use `✅` when a scenario group meets the stated target and `❌` when it does not.
+Use a target returned by the API or configured grader when available; otherwise
+say that 95% is the reporting target, not an API-provided threshold. The verdict
+must state whether the run clears that target and identify the concentrated
+failure area when the evidence supports one. Do not claim promotion readiness
+unless the configured target is cleared.
+
+Render every row returned in `analysis.scenarioGroups`. The script uses the
+test-set name as a single group when the API supplies no reliable finer-grained
+scenario metadata. Use that fallback rather than inventing categories.
+
+Always render **Expected failures**. Only classify a failure as expected when
+the returned run data or selected evaluation metadata explicitly identifies it
+that way. When explicit groups exist, introduce why they were expected and use:
+
+> | Group | Cases | Pass | Fail | Pass rate |
+> |---|---:|---:|---:|---:|
+
+Otherwise render exactly:
+
+> No failures were explicitly marked as expected for this run.
+
+Render every row returned in `analysis.failureGroups`. The script groups failed
+cases using metric status/data plus `errorReason` and `aiResultReason`. Treat
+each category as an evidence-based root-cause hypothesis, not a proven fact.
+Use returned counts, evidence, and suggested actions. Never invent an owner;
+render `Unassigned` when ownership is unavailable.
+
+Build **📌 Pattern** from the largest returned failure group and its percentage
+of failures, adding a cross-group conclusion only when supported by returned
+evidence. Under **Who needs to do what**, consolidate actions by returned owner;
+do not create people, assignments, ticket numbers, commands, or deadlines.
+Retain per-test-case states, metric statuses/data, and error/AI-result reasons
+internally for follow-up, but do not append another detailed-results table.
+
+After completed results, relevant explicit edit or subsequent workflow actions
+may be offered through the shared experience contract. Never automatically
+restart a run or repeat deployment after displaying status/results.
 
 The script maps `testCaseId` to local case names using
 `.component-map.json` when available. If no local mapping exists, show the

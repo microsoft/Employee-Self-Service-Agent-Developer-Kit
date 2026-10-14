@@ -288,8 +288,12 @@ class GraphClient:
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
         self._token: str | None = None
+        self.signed_in_username: str | None = None
 
-    def authenticate(self) -> str:
+    def authenticate(
+        self,
+        preferred_username: str | None = None,
+    ) -> str:
         """Acquire a Graph access token, reusing the shared MSAL cache."""
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
@@ -305,14 +309,31 @@ class GraphClient:
 
         # Try silent first
         accounts = app.get_accounts()
+        preferred = str(preferred_username or "").casefold()
+        selected_account = next(
+            (
+                account for account in accounts
+                if str(account.get("username") or "").casefold()
+                == preferred
+            ),
+            accounts[0] if accounts and not preferred else None,
+        )
         result = None
-        if accounts:
-            result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
+        if selected_account is not None:
+            result = app.acquire_token_silent(
+                GRAPH_SCOPES,
+                account=selected_account,
+            )
 
         if not result or "access_token" not in result:
             print("Opening browser for Microsoft Graph sign-in...")
+            selected_account = None
+            interactive_options = {"prompt": "select_account"}
+            if preferred_username:
+                interactive_options["login_hint"] = preferred_username
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES, prompt="select_account"
+                GRAPH_SCOPES,
+                **interactive_options,
             )
 
         if "access_token" not in result:
@@ -327,6 +348,12 @@ class GraphClient:
         _persist_token_cache(cache, cache_path)
 
         self._token = result["access_token"]
+        claims = result.get("id_token_claims", {}) or {}
+        self.signed_in_username = (
+            claims.get("preferred_username")
+            or claims.get("upn")
+            or (selected_account or {}).get("username")
+        )
         return self._token
 
     @property

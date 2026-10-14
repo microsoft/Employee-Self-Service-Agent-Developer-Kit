@@ -12,9 +12,9 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-# Developer mode: pin INSTALL_MODE so install-ess-adk.sh uses `code chat`
-# to open /setup in the sidebar panel, skips the terminal mode prompt, and
-# does not apply the chat-first layout.
+# Developer mode: pin INSTALL_MODE so install-ess-adk.sh opens the rendered
+# README preview, skips the terminal mode prompt, and does not apply the
+# guided rail layout. `/setup` is user-driven — run it yourself in Copilot Chat.
 export INSTALL_MODE="developer"
 
 # Parse optional --branch / --source-base-url arguments

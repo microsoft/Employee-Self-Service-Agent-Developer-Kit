@@ -11,7 +11,13 @@ testsets", "show test sets tagged for review", or "I am the reviewer." Those
 requests must first use `src/skills/evaluations/review/SKILL.md` to list
 `review_requested` sets and obtain a user selection. This validator is invoked
 only when quality validation is explicitly requested or when an evaluation
-create/update/review flow calls it after editing cases.
+create/update flow calls it after editing cases. Human/SME review alone does
+not invoke quality scoring.
+
+Read `src/skills/evaluations/experience-contract.md`. Its
+**Post-generation quality report** is the sole maker-facing presentation
+contract. Do not emit a progress message or separate preamble before it.
+This is a review of authored prompts/assertions, not tenant runtime execution.
 
 ---
 
@@ -31,12 +37,98 @@ Where:
   category label, prior conversation, or agent slug.
 - This supports both workspace-level sets and configured-agent sets.
 
-The script calls the Copilot API and returns dimension scores and flagged cases.
+The script calls the GitHub Copilot API and returns dimension scores and flagged
+cases. Automated scoring requires an effective `github.com` credential whose
+account has GitHub Copilot access. GitHub authentication for source control and
+Copilot Studio authentication do not establish that entitlement.
 
-If the script fails, report its actual error reason before falling back to Step
-2. Do not label every failure as "script unavailable": distinguish an invalid
-folder, authentication failure, missing dependency, and API failure. Otherwise
-skip Step 2 and go straight to Step 3.
+The parent may re-invoke this validator with one of these explicit continuation
+inputs in addition to the same exact set folder:
+
+- `authenticationRetry=true` means the user completed or selected authentication.
+  Run Step 1 exactly once. If it still returns `authentication_required`, do not
+  return another recovery request; continue directly to Step 2.
+- `manualFallbackAuthorized=true` plus `fallbackReason="{reason}"` means the user
+  explicitly selected manual scoring or declined authentication. Skip Step 1
+  and begin at Step 2 using that reason as operational evidence. Incomplete
+  login, installation, restart, or identity verification never authorizes this
+  flag; preserve the selected folder and resume authentication recovery instead.
+
+These inputs prevent a fresh subagent from losing recovery state. Never infer
+either input from prior conversation or local files.
+
+If the command exits with code `3` and returns JSON with
+`status=authentication_required`, follow **Authentication recovery** below. Do
+not perform manual scoring yet unless `authenticationRetry=true`; in that case
+the one allowed retry has failed, so continue to Step 2. For other failures,
+report the actual error reason before falling back to Step 2. Do not label every
+failure as "script unavailable": distinguish an invalid folder, missing
+dependency, rate limit, network failure, and API failure. Otherwise skip Step 2
+and go straight to Step 3.
+
+For this exit code, stdout is one JSON object with no normal report preamble;
+parse that object. Exit code `2` remains argparse usage failure and is not an
+authentication signal.
+
+The stable authentication reasons are `gh_cli_missing`,
+`gh_not_authenticated`, `github_auth_timeout`, and `copilot_unauthorized`.
+`environmentOverride`, when present, is credential-source evidence rather than
+a separate reason.
+
+### Authentication recovery
+
+Return the complete `authentication_required` result to the parent without
+manually scoring. The parent owns user interaction because this validator runs
+as a subagent. The parent must retain the exact selected set folder and:
+
+1. Explain that automated **test-set quality scoring** sends the selected
+   prompts and expected responses to the GitHub Copilot API and requires the
+   effective `github.com` account to have GitHub Copilot access. This is not the
+   Compare Meaning scoring performed by a published Copilot Studio run.
+2. Show the returned `account` when present. If `environmentOverride` is
+   present, explain that the named environment variable takes precedence over
+   stored GitHub CLI accounts. Never display or request its token value, and
+   never unset or replace it without the user's action.
+3. Invoke the structured question control:
+
+   > Automated quality scoring cannot use the current GitHub credential. What
+   > would you like to do?
+
+   Offer exactly:
+
+   - **Sign in or switch GitHub account and retry automated scoring**
+   - **Continue with manual scoring**
+
+4. If manual scoring is selected or the question is declined, re-invoke this
+   validator with the same folder, `manualFallbackAuthorized=true`, and the
+   returned reason as `fallbackReason`. Do not describe manual scoring as
+   automated or as Copilot Studio run scoring.
+5. If authentication is selected:
+   - For `gh_cli_missing`, explain that GitHub CLI must be installed and stop;
+     do not claim authentication succeeded or consume the one retry. The user
+     can resume the same selected set after installing it.
+   - For an environment override, ask the user to update or remove the named
+     variable in the terminal that launched VS Code, then restart VS Code and
+     resume the same selected set. Account switching does not bypass that
+     override. Do not retry in the current agent process or consume the one
+     retry because its inherited environment cannot change.
+   - Otherwise run `gh auth status --hostname github.com`. If the desired
+     licensed account is already stored, use the structured question control to
+     select it and run
+     `gh auth switch --hostname github.com --user "{selected account}"`.
+     If it is not stored, instruct the user to run
+     `gh auth login --hostname github.com --web` in the integrated terminal and
+     wait for confirmation. For stale credentials, instruct the user to run
+     `gh auth refresh --hostname github.com` there and wait for confirmation.
+     Do not launch either interactive browser command in a captured subprocess.
+6. Verify the effective identity with
+   `gh api --hostname github.com user --jq .login`. Then re-invoke this validator
+   for the same folder with `authenticationRetry=true`. Do not rediscover or
+   choose another set.
+7. That new validator invocation owns the single retry. If it succeeds, it
+   continues to Step 3. If it returns another authentication-required result,
+   it reports the effective account and reason and continues to Step 2. It must
+   not return another recovery request. Never enter an authentication loop.
 
 **If re-invoked after fixes** (the parent passes a list of edited files):
 - Script path: re-run the script on the full category — fast enough to rescore all.
@@ -46,9 +138,14 @@ skip Step 2 and go straight to Step 3.
   file can introduce new redundancy, shift utterance-type balance, or create
   coverage gaps with unedited files.
 
-At the top of your report, indicate which path was used:
-- Script succeeded: `📊 Scored using evaluate_evals.py (Copilot API)`
-- Script failed, fall back: `⚠️ Automated scoring failed ({reason}) — scored manually`
+Keep whether the script or fallback path was used in the returned internal
+evidence. Do not add a scoring-method banner to the maker-facing scorecard.
+When non-authentication automated scoring fails, or authentication was declined
+or still fails after the one allowed retry, report the actual failure to the
+parent as operational evidence before returning a manually scored result.
+Record that internal status as
+`⚠️ Automated scoring failed ({reason}) — scored manually`; do not render it as
+a scorecard banner.
 
 The script automatically skips `MultiTurnEvaluationCase` files — no action
 needed.
@@ -57,7 +154,8 @@ needed.
 
 ## Step 2 — Manual scoring (fallback only)
 
-**Only run this step if the script in Step 1 failed.**
+**Only run this step for a non-authentication script failure, after the user
+declines authentication, or after the single authenticated retry fails.**
 
 Read each YAML file at the provided paths. For EvaluationData files, extract:
 - `input` — the user utterance being tested
@@ -132,38 +230,23 @@ Each case matches what its corresponding topic actually does.
 
 ## Step 3 — Present the quality report
 
-For each scored category, show this exact table format:
+Render **Post-generation quality report** from
+`src/skills/evaluations/experience-contract.md` exactly. The visible scorecard
+always uses these eight labels and this order: Validity, Realism, Assertion
+Quality, Coverage, Diversity, Redundancy, Failure Modes, Discriminative. Map
+the rubric's `Failure Mode Coverage` and `Discriminative Power` results to the
+two shortened display labels. Topic Alignment remains internal supporting
+evidence when applicable; it does not add a ninth scorecard line.
 
-> **Quality: `{category}`** — overall **{score}/5** ({label})
->
-> **How is this scored?** Each of your test cases is reviewed against 8–9
-> dimensions and assigned a 1–5 score. The overall score is a holistic
-> judgment across all dimensions.
->
-> | Dimension | Score | What it checks |
-> |-----------|-------|----------------|
-> | Validity | {n}/5 | Inputs are grammatically correct and plausible as real user utterances |
-> | Realism | {n}/5 | Inputs sound like things real employees would say, not formal policy language |
-> | Assertion Quality | {n}/5 | Expected outputs are specific and describe observable agent behavior |
-> | Coverage | {n}/5 | Cases span a meaningful spread of sub-topics and positive/boundary/negative types |
-> | Diversity | {n}/5 | Inputs use genuinely different vocabulary, structure, and formality levels |
-> | Redundancy | {n}/5 | No two cases test the exact same input and expected behavior |
-> | Failure Mode Coverage | {n}/5 | Negative/edge cases reflect realistic failure modes, not contrived refusals |
-> | Discriminative Power | {n}/5 | Inputs are clearly scoped so they won't accidentally trigger the wrong topic |
-> | Topic Alignment | {n}/5 | Each case matches what its corresponding topic actually does |
+The parent already displayed the generated prompts and expected responses.
+Never repeat those case tables, rebuild them, quote them beneath findings, or
+create a new table during quality validation. Return only the compact scorecard;
+detailed case evidence remains internal unless the maker enters the fix flow.
 
-Include the Topic Alignment row **only** for `topic-triggering` and
-`integration-data` categories. Omit the row entirely for all other categories —
-do not show it as N/A or blank.
-
-Score labels: 5 = ✓ Excellent, 4 = ✓ Good, 3 = ⚠ Fair, 2 = ✗ Weak, 1 = ✗ Poor
-
-For any dimension that scored **3/5 or below**, list the specific test cases
-that contributed to the low score directly under that row:
-
-> ⚠️ **`{dimension}`** scored **{n}/5** — test cases that caused this:
-> - `{filename}.mcs.yml` — {issue description}
-> - `{filename}.mcs.yml` — {issue description}
+Derive positive, boundary, and negative counts by classifying each actual case,
+not from filenames. Retain flagged filenames, issues, recommendations, optional
+Topic Alignment, and automated/manual evidence in the result returned to the
+parent, but do not append them to the compact maker-facing scorecard.
 
 ---
 
@@ -175,40 +258,31 @@ Classify each category:
   dimension scored **3/5 or below**, surface those dimensions and flagged
   cases, then add:
 
-  > No fix required to push — but consider addressing before running live evaluations.
+  > No quality fix is required by this gate, but consider addressing these
+  > findings before running in Copilot Studio. Method/deployment checks still apply.
 
 - **Review** (overall 3/5) — has flagged cases, surface them to the user.
 - **Fail** (overall 1/5 or 2/5) — serious quality issues, do not push without fixes.
 
-If all categories **Pass** with no low-scoring dimensions, say:
+If all categories **Pass**, the compact scorecard and its optional-improvement
+lines are the complete maker-facing quality result. Do not append a second pass
+statement.
 
-> ✅ All categories passed quality validation. Proceeding to review.
-
-If all pass but some dimensions scored 3/5 or below, say:
-
-> ✅ Quality gate passed. Some dimensions scored low — see details above.
-
-If any category is **Review** or **Fail**, show:
-
-> ⚠️ **`{category}`** scored **{score}/5** ({label}).
->
-> These test cases were flagged:
->
-> | # | File | Dimension | Issue |
-> |---|------|-----------|-------|
-> | 1 | `{filename}.mcs.yml` | {dimension} | {issue description} |
-> | 2 | `{filename}.mcs.yml` | {dimension} | {issue description} |
->
-> **Recommendation:** {recommendation}
->
-> Return this report to the parent agent. The parent create/update flow will
-> prompt the user for A/B/C and apply fixes in batch before re-validating.
+If any category is **Review** or **Fail**, return the detailed flagged-case
+evidence to the parent for the A/B/C fix interaction, but keep the scorecard
+itself in the exact compact format. The parent may use case numbers during that
+fix interaction; it must not rewrite the scorecard as a table.
 
 ---
 
 ## Step 5 — Return to parent
 
 Return the quality report to the parent agent. The parent will handle
-user interaction, fixes, and re-validation.
+user interaction, fixes, and re-validation, then offer the shared four maker
+actions. Do not show a competing menu or automatically push, request human
+review, or run an evaluation. An explicit repeat quality review returns to
+those choices, not another automatic review.
 
-This is a gate, not a hard blocker — the user can always choose to push as-is.
+The user may continue as-is through the existing quality fix/continue flow.
+That choice does not bypass method admission, missing-content errors,
+deployment consent, connection selection, or review-state gates.

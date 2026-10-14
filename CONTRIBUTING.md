@@ -125,3 +125,14 @@ Before committing, **always review what's staged** to avoid accidentally includi
 - If an accidental file slips through, remove it in the same PR — don't leave orphan files for others to clean up
 
 Accidental commits pollute history, can leak internal workflows, and waste reviewer time on irrelevant diffs.
+
+### 8. Telemetry impact review
+
+Before opening a PR, ask:
+
+1. Does this change add a CLI entry point (`--profile`, `--scope`, or a subcommand)? Wire `emit_flightcheck_telemetry(...)` and the `adk.*` emitters into the new path.
+2. Does this change add a status, verdict, or outcome bucket such as `Status.BLOCKED`? Add the counter to `_run_data`, update `derive_run_outcome`, and pass the enum value through check-level emission.
+3. Does this change add a stable per-item field such as severity, remediation ID, automation type, connector, or profile? Thread it through [`flightcheck/telemetry.py`](solutions/ess-maker-skills/scripts/flightcheck/telemetry.py) and add the corresponding Aria cube dimension. Fields that exist only in `results.json` do not reach dashboards.
+4. Does this change alter a scope, category, or dimension whose Aria projection depends on string shape, such as `scope="profile:workday-da:post-connection"`? Update the derivation in [`flightcheck/telemetry.py`](solutions/ess-maker-skills/scripts/flightcheck/telemetry.py) and check the additive emitters in [`adk_telemetry.py`](solutions/ess-maker-skills/scripts/adk_telemetry.py).
+
+If none applies, note **no telemetry impact** in the PR description. If telemetry work is deliberately deferred, link the follow-up work item. Never add a capability without either wiring telemetry or explicitly documenting the deferral.

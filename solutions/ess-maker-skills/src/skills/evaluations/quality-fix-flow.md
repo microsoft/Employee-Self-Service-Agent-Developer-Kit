@@ -7,9 +7,10 @@ Do not duplicate this logic in any of those files.
 
 ---
 
-**If the gate returns Review (3/5) or Fail (1–2/5)**, the subagent's report
-will include the flagged cases table. Show the user this prompt and wait for
-their response:
+**If the gate returns Review (3/5) or Fail (1–2/5)**, the subagent returns
+detailed flagged-case evidence to the parent while keeping it out of the compact
+scorecard. Number those findings for this fix interaction, show the user this
+prompt, and wait for their response:
 
 > What would you like to do?
 > - **A** — Fix all flagged cases
@@ -27,7 +28,7 @@ When the user responds:
 **Fix flow (A or B)**:
 1. For each selected case, read the current file and note the existing `input`
    and `expectedOutput` values (these become the **Before** values in the summary).
-2. Devise a fix based on the issue description from the flagged cases table.
+2. Devise a fix based on the issue description from the flagged-case evidence.
    Edit the file with the new values.
 3. After all edits are done, show a summary of what changed:
 
