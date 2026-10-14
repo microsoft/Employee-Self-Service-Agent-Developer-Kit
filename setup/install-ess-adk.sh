@@ -22,11 +22,8 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
-# RING: prod | preprod | test. Forwarded to `flightcheck/cli.py --ring` in
-# FlightCheck-only mode. Defaults to prod (matches the BAP endpoint the
-# installer uses for environment discovery). PMs validating a non-prod
-# environment override via `RING=preprod` or `--ring preprod` on the
-# bootstrap-flightcheck-mac.sh one-liner.
+# Preserve whether the caller requested a ring so defaults cannot override a saved target.
+RING_EXPLICIT="${RING+x}"
 RING="${RING:-prod}"
 if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
     case "$RING" in
@@ -610,19 +607,55 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
     SCHEMA_NAME=""
     IS_MANAGED="true"
 
+    NEEDS_CONFIGURATION=true
     if [[ -f "$CONFIG_PATH" ]]; then
+        SAVED_RING=$("$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+from urllib.parse import urlparse
+with open(sys.argv[1], encoding='utf-8-sig') as f:
+    config = json.load(f)
+ring = str(config.get('ring') or '').strip().lower()
+endpoint = str(config.get('powerPlatformApiEndpoint') or '').strip()
+inferred = ''
+if endpoint:
+    parsed = urlparse(endpoint)
+    host = (parsed.hostname or '').lower()
+    for candidate, suffix in [('test', 'api.test.powerplatform.com'), ('preprod', 'api.preprod.powerplatform.com'), ('prod', 'api.powerplatform.com')]:
+        if parsed.scheme == 'https' and (host == suffix or host.endswith('.' + suffix)):
+            inferred = candidate
+            break
+    if not inferred:
+        raise SystemExit('ERROR: Existing config has an invalid Power Platform API endpoint.')
+if ring and ring not in {'prod', 'preprod', 'test'}:
+    raise SystemExit('ERROR: Existing config has an unsupported Power Platform ring.')
+if ring and inferred and ring != inferred:
+    raise SystemExit('ERROR: Existing config ring conflicts with its Power Platform API endpoint.')
+print(ring or inferred)
+" "$CONFIG_PATH")
         echo ""
         echo "    Config already exists at $CONFIG_PATH"
-        read -rp "    Reconfigure? (Y/N): " RECONFIGURE
-        if [[ "$RECONFIGURE" =~ ^[Yy] ]]; then
-            rm -f "$CONFIG_PATH"
-            ok "Removed existing config — starting fresh"
+        if [[ -n "$RING_EXPLICIT" && -n "$SAVED_RING" && "$RING" != "$SAVED_RING" ]]; then
+            warn "Requested ring '$RING' differs from saved ring '$SAVED_RING'."
+            read -rp "    Switch to $RING and select a new environment and agent? (y/N): " RECONFIGURE
         else
-            ok "Keeping existing config"
+            read -rp "    Reconfigure? (y/N): " RECONFIGURE
+        fi
+        if [[ "$RECONFIGURE" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
+            if [[ -z "$RING_EXPLICIT" && -n "$SAVED_RING" ]]; then
+                RING="$SAVED_RING"
+            fi
+        else
+            if [[ -z "$SAVED_RING" ]]; then
+                err "Existing config has no recorded ring. Reconfigure to select a target in a known ring."
+                exit 1
+            fi
+            NEEDS_CONFIGURATION=false
+            RING="$SAVED_RING"
+            ok "Keeping existing config and ring '$RING'"
         fi
     fi
 
-    if [[ ! -f "$CONFIG_PATH" ]]; then
+    if [[ "$NEEDS_CONFIGURATION" == "true" ]]; then
         step "Configuring FlightCheck environment"
 
         if [[ ! -f "$DISCOVER_PY" ]]; then
@@ -632,43 +665,47 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
 
         # --- Step 1: List environments ---
         echo ""
-        echo "    Listing Power Platform environments in your tenant..."
+        echo "    Listing Power Platform environments in ring '$RING'..."
         echo "    A browser window will open for sign-in."
         echo ""
 
-        ENV_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments 2>&1) || true
+        ENV_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments --ring "$RING" 2>&1) && ENV_EXIT=0 || ENV_EXIT=$?
         # Filter machine-parseable JSON dump lines that discover.py emits for
         # programmatic consumers (skills parse these; a maker running the
         # installer just sees an unreadable wall of JSON).
         echo "$ENV_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
-        if echo "$ENV_OUTPUT" | grep -q "^ERROR:"; then
+        if [[ $ENV_EXIT -ne 0 ]]; then
             err "Environment listing failed."
             exit 1
         fi
 
         echo ""
         read -rp "    Select environment number from the list above: " ENV_CHOICE
-        ENV_CHOICE="${ENV_CHOICE// /}"
         if [[ -z "$ENV_CHOICE" || ! "$ENV_CHOICE" =~ ^[0-9]+$ ]]; then
             err "Invalid selection. Please re-run and pick a number."
             exit 1
         fi
 
-        # Re-run with --select
-        if ! SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments --select "$ENV_CHOICE" 2>&1); then
-            err "Environment selection failed."
-            exit 1
-        fi
-
-        ENV_JSON_LINE=$(echo "$SELECT_OUTPUT" | grep "^SELECTED_ENV_JSON:" | sed 's/^SELECTED_ENV_JSON://')
-        if [[ -z "$ENV_JSON_LINE" ]]; then
-            err "Could not parse environment selection output."
-            exit 1
-        fi
+        # Resolve the number against the displayed snapshot, never a refreshed inventory.
+        ENV_JSON_LINE=$(printf '%s\n' "$ENV_OUTPUT" | "$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+lines = [line.split(':', 1)[1] for line in sys.stdin if line.startswith('ENVIRONMENT_LIST_JSON:')]
+if len(lines) != 1:
+    raise SystemExit('ERROR: Could not parse environment list output.')
+records = json.loads(lines[0])
+index = int(sys.argv[1])
+if not 1 <= index <= len(records):
+    raise SystemExit('ERROR: Invalid environment selection.')
+selected = records[index - 1]
+if not selected.get('id'):
+    raise SystemExit('ERROR: Selected environment has no environment ID.')
+print(json.dumps(selected))
+" "$ENV_CHOICE")
 
         ENV_URL=$(echo "$ENV_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('instanceUrl','').rstrip('/'))")
         ENV_DISPLAY=$(echo "$ENV_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('displayName',''))")
+        ENV_ID=$(echo "$ENV_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
         if [[ -z "$ENV_URL" ]]; then
             err "Selected environment has no linked Dataverse URL."
@@ -686,7 +723,12 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo "$AGENT_OUTPUT" | grep -Ev '^(ENVIRONMENT_LIST_JSON|AGENT_DISCOVERY_JSON|SELECTED_ENV_JSON|SELECTED_AGENT_JSON):' || true
 
         if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
-            warn "Agent discovery failed. Config will be created without a bot ID."
+            warn "Agent discovery failed. Agent-specific checks cannot be configured."
+            read -rp "    Run environment-wide checks only? (y/N): " CONTINUE_WITHOUT_AGENT
+            if [[ ! "$CONTINUE_WITHOUT_AGENT" =~ ^([Yy]|[Yy][Ee][Ss])$ ]]; then
+                err "Agent discovery failed. Existing config was preserved."
+                exit 1
+            fi
             BOT_ID=""
             AGENT_NAME="FlightCheck-only (no agent selected)"
             SCHEMA_NAME=""
@@ -694,25 +736,31 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         else
             echo ""
             read -rp "    Select agent number (or press Enter for environment-wide checks only): " AGENT_CHOICE
-            AGENT_CHOICE="${AGENT_CHOICE// /}"
 
-            if [[ -n "$AGENT_CHOICE" && "$AGENT_CHOICE" =~ ^[0-9]+$ ]]; then
-                AGENT_SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" --select "$AGENT_CHOICE" 2>&1) || true
-                AGENT_JSON_LINE=$(echo "$AGENT_SELECT_OUTPUT" | grep "^SELECTED_AGENT_JSON:" | sed 's/^SELECTED_AGENT_JSON://')
-
-                if [[ -n "$AGENT_JSON_LINE" ]]; then
-                    BOT_ID=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('botid',''))")
-                    AGENT_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))")
-                    SCHEMA_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('schemaname',''))")
-                    IS_MANAGED=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('ismanaged') else 'false')")
-                    ok "Agent: $AGENT_NAME"
-                else
-                    warn "Agent selection failed. Continuing without bot ID."
-                    BOT_ID=""
-                    AGENT_NAME="FlightCheck-only (no agent selected)"
-                    SCHEMA_NAME=""
-                    IS_MANAGED="true"
+            if [[ -n "$AGENT_CHOICE" ]]; then
+                if [[ ! "$AGENT_CHOICE" =~ ^[0-9]+$ ]]; then
+                    err "Invalid agent selection."
+                    exit 1
                 fi
+                AGENT_JSON_LINE=$(printf '%s\n' "$AGENT_OUTPUT" | "$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+lines = [line.split(':', 1)[1] for line in sys.stdin if line.startswith('AGENT_DISCOVERY_JSON:')]
+if len(lines) != 1:
+    raise SystemExit('ERROR: Could not parse agent list output.')
+records = json.loads(lines[0])
+index = int(sys.argv[1])
+if not 1 <= index <= len(records):
+    raise SystemExit('ERROR: Invalid agent selection.')
+selected = records[index - 1]
+if not selected.get('botid'):
+    raise SystemExit('ERROR: Selected agent has no bot ID.')
+print(json.dumps(selected))
+" "$AGENT_CHOICE")
+                BOT_ID=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('botid',''))")
+                AGENT_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))")
+                SCHEMA_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('schemaname',''))")
+                IS_MANAGED=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('ismanaged') else 'false')")
+                ok "Agent: $AGENT_NAME"
             else
                 warn "Skipping agent selection. Some agent-specific checks will be skipped."
                 BOT_ID=""
@@ -731,6 +779,7 @@ config = {
     'configVersion': 1,
     'setup': 'flightcheck-only',
     'dataverseEndpoint': sys.argv[1],
+    'environmentId': sys.argv[8],
     'ring': sys.argv[6],
     'flightCheckOnly': True,
     'agent': {
@@ -753,36 +802,20 @@ config = {
 }
 with open(sys.argv[7], 'w', encoding='utf-8') as f:
     json.dump(config, f, indent=4)
-" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$RING" "$CONFIG_PATH"
+" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$RING" "$CONFIG_PATH" "$ENV_ID"
         ok "Created $CONFIG_PATH"
     fi
 
-    # Reuse the retained config's ring, infer it from a saved environment API
-    # endpoint, or migrate a legacy config with the requested/default ring.
-    # Print only the effective ring so command substitution remains bounded.
-    RING=$("$FLIGHTCHECK_PYTHON" -c "
+    # Persist only the chosen ring, without relabeling a retained target.
+    "$FLIGHTCHECK_PYTHON" -c "
 import json, sys
-path, requested = sys.argv[1:3]
+path, ring = sys.argv[1:3]
 with open(path, encoding='utf-8') as f:
     config = json.load(f)
-ring = str(config.get('ring') or '').strip().lower()
-endpoint = str(config.get('powerPlatformApiEndpoint') or '').strip().lower()
-if not ring:
-    if 'api.test.powerplatform.com' in endpoint:
-        ring = 'test'
-    elif 'api.preprod.powerplatform.com' in endpoint:
-        ring = 'preprod'
-    elif 'api.powerplatform.com' in endpoint:
-        ring = 'prod'
-if not ring:
-    ring = requested
-if ring not in {'prod', 'preprod', 'test'}:
-    raise SystemExit(f\"Unsupported Power Platform ring in existing config: {ring}\")
 config['ring'] = ring
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(config, f, indent=4)
-print(ring)
-" "$CONFIG_PATH" "$RING")
+" "$CONFIG_PATH" "$RING"
 
     # --- Read config values if they came from an existing file ---
     if [[ -z "$BOT_ID" && -f "$CONFIG_PATH" ]]; then
@@ -818,12 +851,7 @@ print(ring)
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    # --ring <RING>: the FlightCheck-only installer discovers environments via
-    # BAP prod (api.bap.microsoft.com) by default, so we target the prod
-    # service ring unless the caller overrode RING (typically a PM validating
-    # a preprod/test environment). Persisting the ring supports later
-    # /flightcheck runs; forwarding it explicitly also covers this first run
-    # and older configs.
+    # Discovery, saved configuration, and the first check use the same ring.
     "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always --ring "$RING"
     exit $?
 fi

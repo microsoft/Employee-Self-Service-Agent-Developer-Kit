@@ -115,6 +115,12 @@ That's it. The script handles everything automatically:
 4. Shows the agents in that environment — pick one (or skip)
 5. Runs the full FlightCheck validation and displays results
 
+Installer discovery currently lists Dataverse-linked environments and their
+Dataverse-backed agents. It does not discover native Declarative Agents.
+If agent discovery fails, you must explicitly choose environment-wide checks
+to continue without an agent. Invalid selections stop setup instead of silently
+changing the selected target or check coverage.
+
 If fetching the selected agent's solution fails, the installer prints a warning
 and the fetch diagnostics, then continues to FlightCheck. Local file checks may
 be skipped; this is not proof that the selected agent is ready. Resolve any
@@ -144,7 +150,21 @@ The FlightCheck-only installer targets the Power Platform **prod** service ring 
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --ring preprod
 ```
 
-Accepted values: `prod`, `preprod`, `test`.
+Accepted values: `prod`, `preprod`, `test`. Environment discovery uses the
+requested ring. The service ring is not the environment's type: a Sandbox
+environment can belong to the prod ring.
+
+On reruns without a ring flag, the saved ring is retained. If an explicit ring
+differs from the saved ring, the installer asks whether to switch and select a
+new environment and agent or keep the saved target and ring. Reconfiguration
+does not delete the saved configuration before discovery and selection succeed.
+Legacy configurations without a recorded or endpoint-inferred ring require
+reconfiguration rather than guessing the target's ring.
+
+**Non-prod limitation:** environment discovery supports all three rings, but
+the legacy full-check path still uses production Power Platform Admin, PowerApps,
+and Flow endpoints. Successful discovery does not establish complete preprod/test
+validation. Do not interpret missing non-prod admin data as readiness evidence.
 
 ### Running FlightCheck again (after initial setup)
 
