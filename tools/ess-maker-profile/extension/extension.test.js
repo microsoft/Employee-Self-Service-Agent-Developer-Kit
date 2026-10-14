@@ -59,8 +59,8 @@ function test(name, fn) {
 
 console.log('ACTIONS structure:');
 
-test('has 8 actions', () => {
-    assert.strictEqual(ACTIONS.length, 8);
+test('has 9 actions', () => {
+    assert.strictEqual(ACTIONS.length, 9);
 });
 
 test('every action has required fields', () => {
@@ -79,6 +79,21 @@ test('landing-page action sends the skill-triggering query', () => {
     assert.strictEqual(landingPage.label, 'Customize landing page');
     assert.strictEqual(landingPage.query, 'Customize my landing page');
     assert.deepStrictEqual(landingPage.requires, ['setup']);
+});
+
+test('announcements action sends the skill-triggering query', () => {
+    const announcements = ACTIONS.find(a => a.id === 'announcements');
+    assert.strictEqual(announcements.label, 'Post an announcement');
+    assert.strictEqual(announcements.query, 'Create an organization announcement');
+    assert.strictEqual(announcements.sub, 'Reach audiences in the selected agent');
+    assert.deepStrictEqual(announcements.requires, ['setup']);
+});
+
+test('announcement tutorial explains agent scope without tenant-wide promises', () => {
+    assert.ok(src.includes('<strong>Agent-scoped</strong>'));
+    assert.ok(src.includes('100-current/50-archived'));
+    assert.ok(!src.includes('shared by every ESS agent'));
+    assert.ok(!src.includes('Reach your whole organization'));
 });
 
 test('setup has no requirements', () => {
@@ -252,6 +267,12 @@ test('landing-page package prompts existing 0.4.24 installs to reinstall', () =>
     const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
     assert.strictEqual(extensionIsStale('0.4.24', packageJson.version), true);
     assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
+});
+
+test('announcement package prompts existing 0.4.25 installs to reinstall', () => {
+    assert.strictEqual(compareVersions(pkg.version, '0.4.25'), 1);
+    assert.strictEqual(extensionIsStale('0.4.25', pkg.version), true);
+    assert.ok(ACTIONS.some((action) => action.id === 'announcements'));
 });
 
 test('extensionIsStale false when a version is missing', () => {
