@@ -154,7 +154,8 @@ Accepted values: `prod`, `preprod`, `test`. Environment discovery uses the
 requested ring. The service ring is not the environment's type: a Sandbox
 environment can belong to the prod ring.
 
-On reruns without a ring flag, the saved ring is retained. If an explicit ring
+The saved ring survives agent snapshot extraction. On reruns without a ring
+flag, the saved ring is retained. If an explicit ring
 differs from the saved ring, the installer asks whether to switch and select a
 new environment and agent or keep the saved target and ring. Reconfiguration
 does not delete the saved configuration before discovery and selection succeed.
