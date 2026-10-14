@@ -1511,9 +1511,9 @@ if ($FlightCheckOnly) {
         if (Test-Path $fetchPy) {
             Push-Location $workspace
             try {
+                # Config already records the chosen environment; --url would request a retarget.
                 $fetchArgs = $pyBaseArgs + @(
                     $fetchPy,
-                    '--url', $envUrl,
                     '--bot-id', $botId,
                     '--name', $agentName,
                     '--schema', $schemaName,

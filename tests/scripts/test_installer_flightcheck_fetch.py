@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import fetch_and_setup
 
 
 INSTALLER = Path(__file__).resolve().parents[2] / "setup" / "Install-EssAdk.ps1"
@@ -137,7 +139,7 @@ def test_fetch_uses_exit_status_and_continues_to_flightcheck(
     assert state["locationRestored"] is True
     assert "--refresh" in state["fetchArgs"]
     assert state["fetchArgs"][state["fetchArgs"].index("--bot-id") + 1] == "mock-agent"
-    assert state["fetchArgs"][state["fetchArgs"].index("--url") + 1] == "https://orgmocktenant.crm.dynamics.com"
+    assert "--url" not in state["fetchArgs"]
     if exit_code == 0:
         assert "Agent solution fetched and extracted" in output
         assert "Local file checks may be skipped" not in output
@@ -182,3 +184,32 @@ def test_python_launch_error_restores_state_without_claiming_success(
     assert state["preference"] == "Stop"
     assert state["spinnerStopped"] is True
     assert state["locationRestored"] is True
+
+
+def test_installer_fetch_arguments_resolve_saved_environment(
+    powershell: str, tmp_path: Path,
+) -> None:
+    _, state = _run_fetch(powershell, tmp_path)
+    parser = argparse.ArgumentParser()
+    for flag in ("url", "environment-id", "bot-id", "name", "schema"):
+        parser.add_argument("--" + flag)
+    parser.add_argument("--managed", action="store_true")
+    parser.add_argument("--refresh", action="store_true")
+    args = parser.parse_args(state["fetchArgs"])
+    config = {
+        "dataverseEndpoint": "https://selected.crm.dynamics.com",
+        "environmentId": "selected-environment",
+        "agent": {
+            "botId": "mock-agent",
+            "name": "Mock ESS Agent",
+            "schemaName": "mock_agent",
+            "isManaged": True,
+        },
+    }
+
+    target = fetch_and_setup._resolve_refresh_target(args, config)
+
+    assert target == (
+        "https://selected.crm.dynamics.com", "selected-environment",
+        "mock-agent", "Mock ESS Agent", "mock_agent", True,
+    )
