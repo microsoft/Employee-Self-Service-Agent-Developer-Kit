@@ -299,6 +299,7 @@ test('registers the Workday assisted-browser companion command', () => {
     assert.ok(/function startAssistedBrowserWatcher/.test(src));
     assert.ok(/function _proxyAssistedBrowserRequest/.test(src));
     assert.ok(/ASSISTED_BROWSER_API_PATHS/.test(src));
+    assert.ok(/basename\(root\.fsPath\).*ess-maker-skills/.test(src));
 });
 
 test('quick start view is a tree (no webview type)', () => {

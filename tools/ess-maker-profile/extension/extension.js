@@ -491,6 +491,13 @@ async function _readAssistedBrowserSession() {
 }
 
 function _assistedBrowserAssetRoot(root) {
+    if (_path.basename(root.fsPath).toLowerCase() === 'ess-maker-skills') {
+        return vscode.Uri.joinPath(
+            root,
+            'scripts',
+            'workday_assisted_browser_assets',
+        );
+    }
     return vscode.Uri.joinPath(
         root,
         'solutions',
