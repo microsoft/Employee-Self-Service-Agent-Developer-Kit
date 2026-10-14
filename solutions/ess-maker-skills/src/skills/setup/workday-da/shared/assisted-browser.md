@@ -61,12 +61,17 @@ Do not use an agent-opened private browser page as a substitute. Before browser 
 
 ## Present constrained guidance
 
-Write a view under `.local/connect/workday-da/` and present it:
+Build the current view from the phase guide's canonical JSON template and present it. Prefer standard input so a previous row's view file cannot become workflow state:
 
 ```powershell
-python scripts/workday_assisted_browser.py present --view-file "{VIEW_FILE}"
+$view = @'
+{CURRENT_VIEW_JSON}
+'@
+$view | python scripts/workday_assisted_browser.py present --view-file -
 python scripts/workday_assisted_browser.py status
 ```
+
+A workspace-local view file remains available for debugging, but it is only an input payload. Replace the complete payload for each revision rather than patching a previous row and never use it to infer worksheet progress, row authorization, or the next operation.
 
 Before claiming the view is ready, require:
 

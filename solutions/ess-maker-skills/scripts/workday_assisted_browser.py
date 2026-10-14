@@ -36,13 +36,23 @@ from urllib.request import Request, urlopen
 
 from cdp_driver import is_cdp_up, launch_browser
 from drive_topic import test_pane_url
-from workday_connect_store import WorkdayConnectStore
+from workday_connect_entra_contracts import (
+    ENTRA_WORKSHEET_LABEL_ALIASES,
+    ENTRA_WORKSHEET_LABELS,
+)
+from workday_connect_store import (
+    WorkdayConnectStore,
+    WorkdayConnectStoreError,
+)
 
 
 RESULT_MARKER = "WORKDAY_ASSIST_RESULT_JSON="
 ERROR_MARKER = "WORKDAY_ASSIST_ERROR_JSON="
 DEFAULT_CDP = "http://localhost:9237"
 SESSION_PATH = Path(".local/connect/workday-da/assisted-browser.json")
+WORKSHEET_DRAFT_PATH = Path(
+    ".local/connect/workday-da/entra-companion-draft.json"
+)
 ASSET_ROOT = Path(__file__).with_name("workday_assisted_browser_assets")
 _TOKEN_ENV = "ESS_WORKDAY_ASSIST_TOKEN"
 _BROWSER_MODE_ENV = "ESS_WORKDAY_ASSIST_BROWSER_MODE"
@@ -107,36 +117,43 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "url": _ENTRA_OVERVIEW_URL,
         "worksheetRow": "Directory name",
         "worksheetField": "selectedDirectoryDisplayName",
+        "sensitive": False,
     },
     "entra-enterprise-application-display-name": {
         "url": _ENTRA_ENTERPRISE_APPLICATIONS_URL,
         "worksheetRow": "Enterprise application",
         "worksheetField": "applicationDisplayName",
+        "sensitive": False,
     },
     "entra-application-id": {
         "url": None,
         "worksheetRow": "Application ID",
         "worksheetField": "applicationId",
+        "sensitive": False,
     },
     "entra-reply-url": {
         "url": None,
         "worksheetRow": "Selected Reply URL",
         "worksheetField": "replyUrl",
+        "sensitive": False,
     },
     "entra-name-id-source": {
         "url": None,
         "worksheetRow": "NameID source",
         "worksheetField": "nameIdSource",
+        "sensitive": False,
     },
     "entra-saml-signing-option": {
         "url": None,
         "worksheetRow": "SAML signing",
         "worksheetField": "samlSigningOption",
+        "sensitive": False,
     },
     "entra-certificate-thumbprint": {
         "url": _ENTRA_ENTERPRISE_APPLICATIONS_URL,
         "worksheetRow": "Certificate thumbprint (active certificate row)",
         "worksheetField": "certificateThumbprint",
+        "sensitive": False,
     },
     "entra-certificate-expiration": {
         "url": None,
@@ -144,21 +161,25 @@ _COLLECTION_OPERATION_DEFINITIONS = {
             "Certificate expiration date (active certificate row)"
         ),
         "worksheetField": "certificateValidTo",
+        "sensitive": False,
     },
     "entra-saml-configuration": {
         "url": None,
         "worksheetRow": "SAML configuration",
         "worksheetField": "entraChecks.samlMode",
+        "sensitive": False,
     },
     "entra-signing-certificate-check": {
         "url": None,
         "worksheetRow": "Signing certificate",
         "worksheetField": "entraChecks.signingCertificate",
+        "sensitive": False,
     },
     "entra-authorized-connector": {
         "url": None,
         "worksheetRow": "Authorized connector",
         "worksheetField": "entraChecks.connectorPreauthorized",
+        "sensitive": False,
     },
     "entra-permissions-consent": {
         "url": None,
@@ -166,11 +187,13 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "worksheetField": (
             "entraChecks.graphDelegatedPermissions,entraChecks.adminConsent"
         ),
+        "sensitive": False,
     },
     "entra-employee-assignment": {
         "url": None,
         "worksheetRow": "Employee assignment",
         "worksheetField": "entraChecks.userAssignment",
+        "sensitive": False,
     },
     "entra-existing-configuration": {
         "url": None,
@@ -180,9 +203,11 @@ _COLLECTION_OPERATION_DEFINITIONS = {
             "entraChecks.authorizedClientsPreserved,"
             "entraChecks.permissionsPreserved"
         ),
+        "sensitive": False,
     },
 }
 _COLLECTION_OPERATIONS = set(_COLLECTION_OPERATION_DEFINITIONS)
+_WORKSHEET_OPERATION_ORDER = tuple(_COLLECTION_OPERATION_DEFINITIONS)
 _FINAL_WORKSHEET_CONFIRMATION_OPERATION = "entra-final-worksheet"
 _CONFIRMATION_OPERATIONS = _COLLECTION_OPERATIONS | {
     _FINAL_WORKSHEET_CONFIRMATION_OPERATION
@@ -3757,6 +3782,255 @@ def _present(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     return {"presented": True, **result}
 
 
+def _load_worksheet_draft(root: Path) -> dict[str, str]:
+    """Load the existing session-owned worksheet draft without exposing its values."""
+    path = root.resolve() / WORKSHEET_DRAFT_PATH
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AssistedBrowserError(
+            "The Entra companion worksheet draft is unreadable."
+        ) from exc
+    if not isinstance(raw, Mapping):
+        raise AssistedBrowserError(
+            "The Entra companion worksheet draft must be a JSON object."
+        )
+    known_rows = set(ENTRA_WORKSHEET_LABELS)
+    normalized_rows = {
+        row: ENTRA_WORKSHEET_LABEL_ALIASES.get(row, row) for row in raw
+    }
+    unknown_rows = {
+        row for row, normalized in normalized_rows.items() if normalized not in known_rows
+    }
+    if unknown_rows:
+        raise AssistedBrowserError(
+            "The Entra companion worksheet draft contains unsupported rows: "
+            + ", ".join(sorted(unknown_rows))
+        )
+    if len(set(normalized_rows.values())) != len(normalized_rows):
+        raise AssistedBrowserError(
+            "The Entra companion worksheet draft contains duplicate row aliases."
+        )
+    return {
+        normalized_rows[row]: _required_text(
+            value,
+            f"worksheet draft value for {row}",
+            maximum=4000,
+        )
+        for row, value in raw.items()
+    }
+
+
+def _load_entra_controller_projection(root: Path) -> dict[str, Any]:
+    """Read only the Entra lifecycle fields needed by companion orchestration."""
+    try:
+        raw = WorkdayConnectStore(root).load()
+    except WorkdayConnectStoreError as exc:
+        raise AssistedBrowserError(
+            "Connect Workday state is unreadable."
+        ) from exc
+    phases = raw.get("phases") if isinstance(raw, Mapping) else None
+    entra = phases.get("entra") if isinstance(phases, Mapping) else None
+    if not isinstance(entra, Mapping):
+        raise AssistedBrowserError(
+            "Connect Workday state does not contain the Entra phase."
+        )
+    administrator = entra.get("administrator")
+    return {
+        "phase": "entra",
+        "status": _required_text(
+            entra.get("status"),
+            "Entra phase status",
+            maximum=40,
+        ),
+        "administratorSubstage": (
+            _required_text(
+                administrator.get("substage"),
+                "Entra administrator substage",
+                maximum=80,
+            )
+            if isinstance(administrator, Mapping)
+            and administrator.get("substage") is not None
+            else None
+        ),
+        "updatedAt": entra.get("updatedAt"),
+    }
+
+
+def _current_view_operation(status: Mapping[str, Any]) -> str | None:
+    """Resolve the operation named by the current primary interaction."""
+    view = status.get("view")
+    if not isinstance(view, Mapping):
+        return None
+    for key in ("confirmation", "entry", "visualHelp", "action"):
+        interaction = view.get(key)
+        if isinstance(interaction, Mapping):
+            operation = interaction.get("operation")
+            if isinstance(operation, str):
+                return operation
+    actions = view.get("actions")
+    if isinstance(actions, list) and actions:
+        operation = actions[0].get("operation")
+        if isinstance(operation, str):
+            return operation
+    return None
+
+
+def _worksheet_stage(
+    status: Mapping[str, Any],
+    operation: str,
+) -> tuple[str, str | None]:
+    """Classify the current row stage from revision-bound interaction state."""
+    confirmation = status.get("confirmation")
+    if (
+        isinstance(confirmation, Mapping)
+        and confirmation.get("operation") == operation
+    ):
+        confirmation_status = confirmation.get("status")
+        stages = {
+            "waiting": "awaiting-confirmation",
+            "confirmed": "candidate-confirmed",
+            "rejected": "candidate-rejected",
+        }
+        if confirmation_status not in stages:
+            raise AssistedBrowserError(
+                "The companion confirmation state is unsupported."
+            )
+        return stages[confirmation_status], "confirmation"
+    entry = status.get("entry")
+    if isinstance(entry, Mapping) and entry.get("operation") == operation:
+        entry_status = entry.get("status")
+        stages = {
+            "waiting": "awaiting-entry",
+            "submitted": "entry-submitted",
+        }
+        if entry_status not in stages:
+            raise AssistedBrowserError(
+                "The companion entry state is unsupported."
+            )
+        return stages[entry_status], "entry"
+    collection = status.get("collection")
+    if (
+        isinstance(collection, Mapping)
+        and collection.get("operation") == operation
+    ):
+        collection_status = collection.get("status")
+        stages = {
+            "collecting": "authorizing",
+            "authorized": "authorized",
+            "navigated": "navigation-complete",
+            "failed": "navigation-failed",
+        }
+        if collection_status not in stages:
+            raise AssistedBrowserError(
+                "The companion collection state is unsupported."
+            )
+        return stages[collection_status], "collection"
+    return "awaiting-action", "action"
+
+
+def _worksheet_status(
+    _args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Project existing worksheet authorities into one compact orchestration result."""
+    session = _load_session(root)
+    if session.get("surface") != "entra-configuration":
+        raise AssistedBrowserError(
+            "worksheet-status requires the entra-configuration companion surface."
+        )
+    live = _api_request(session, "/api/view")
+    draft = _load_worksheet_draft(root)
+    controller = _load_entra_controller_projection(root)
+    recorded_rows = [
+        operation
+        for operation in _WORKSHEET_OPERATION_ORDER
+        if _COLLECTION_OPERATION_DEFINITIONS[operation]["worksheetRow"] in draft
+    ]
+    next_operation = next(
+        (
+            operation
+            for operation in _WORKSHEET_OPERATION_ORDER
+            if operation not in recorded_rows
+        ),
+        None,
+    )
+    operation = _current_view_operation(live)
+    active_row = None
+    final_review = None
+    if operation == _FINAL_WORKSHEET_CONFIRMATION_OPERATION:
+        stage, interaction = _worksheet_stage(live, operation)
+        final_review = {
+            "stage": stage,
+            "pendingInteraction": interaction,
+            "viewRevision": live.get("revision"),
+        }
+    elif operation is not None:
+        definition = _COLLECTION_OPERATION_DEFINITIONS.get(operation)
+        if definition is None:
+            raise AssistedBrowserError(
+                "The current companion operation is not a worksheet row."
+            )
+        stage, interaction = _worksheet_stage(live, operation)
+        collection = live.get("collection")
+        collection_status = (
+            collection.get("status")
+            if isinstance(collection, Mapping)
+            and collection.get("operation") == operation
+            else None
+        )
+        visual_help = live.get("visualHelp")
+        target_pointers = live.get("targetPointers")
+        active_row = {
+            "operation": operation,
+            "worksheetRow": definition["worksheetRow"],
+            "sensitive": definition["sensitive"],
+            "stage": stage,
+            "pendingInteraction": interaction,
+            "viewRevision": live.get("revision"),
+            "mode": (
+                collection.get("mode")
+                if isinstance(collection, Mapping)
+                and collection.get("operation") == operation
+                else None
+            ),
+            "authorized": collection_status in {"authorized", "navigated"},
+            "recorded": definition["worksheetRow"] in draft,
+            "targetPointed": (
+                isinstance(target_pointers, list)
+                and bool(target_pointers)
+                and all(
+                    isinstance(pointer, Mapping)
+                    and pointer.get("operation") == operation
+                    for pointer in target_pointers
+                )
+            ),
+            "visualHelpStatus": (
+                visual_help.get("status")
+                if isinstance(visual_help, Mapping)
+                and visual_help.get("operation") == operation
+                else None
+            ),
+        }
+    return {
+        "schemaVersion": 1,
+        "surface": session.get("surface"),
+        "browserMode": session.get("browserMode", _EDGE_BROWSER_MODE),
+        "controller": controller,
+        "worksheet": {
+            "requiredCount": len(_WORKSHEET_OPERATION_ORDER),
+            "recordedCount": len(recorded_rows),
+            "complete": len(recorded_rows) == len(_WORKSHEET_OPERATION_ORDER),
+            "recordedRows": recorded_rows,
+            "nextOperation": next_operation,
+        },
+        "activeRow": active_row,
+        "finalReview": final_review,
+    }
+
+
 def _status(_args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Combine persisted session identity with live companion state for orchestration decisions."""
     session = _load_session(root)
@@ -4185,6 +4459,7 @@ def build_parser() -> argparse.ArgumentParser:
     present.add_argument("--view-file", type=Path, required=True)
 
     commands.add_parser("status")
+    commands.add_parser("worksheet-status")
     wait = commands.add_parser("wait")
     wait.add_argument(
         "--operation",
@@ -4295,6 +4570,7 @@ _HANDLERS = {
     "open": _open,
     "present": _present,
     "status": _status,
+    "worksheet-status": _worksheet_status,
     "wait": _wait,
     "inspect": _inspect,
     "follow": _follow,

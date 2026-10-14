@@ -170,3 +170,24 @@ def test_entra_companion_has_explicit_capture_and_visual_help_contract() -> None
     assert "only after the human selects **Show me what to click**" in entra
     assert "Build `positionRatio` from the post-scroll geometry" in protocol
     assert "Set `centered` to `true` only" in protocol
+
+
+def test_entra_companion_uses_compact_authoritative_worksheet_projection() -> None:
+    protocol = (_WORKDAY_DA / "shared" / "assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+    entra = (_WORKDAY_DA / "shared" / "entra-assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "present --view-file -" in protocol
+    assert "only an input payload" in protocol
+    assert "never use it to infer worksheet progress" in protocol
+    assert "entra-companion-draft.json" in entra
+    assert "confirmed worksheet values only" in entra
+    assert "worksheet-status" in entra
+    assert "`activeRow`" in entra
+    assert "`worksheet.recordedRows`" in entra
+    assert "`worksheet.nextOperation`" in entra
+    assert "deliberately omits confirmed values and historical views" in entra
+    assert "Do not reconstruct progress" in entra

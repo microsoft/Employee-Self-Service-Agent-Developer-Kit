@@ -70,12 +70,72 @@ def _detected_value_view(
     }
 
 
+def _stub_entra_controller_state(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    status: str = "active",
+    substage: str = "administrator-engaged",
+) -> None:
+    state = {
+        "phases": {
+            "entra": {
+                "status": status,
+                "updatedAt": "2026-10-14T18:56:53Z",
+                "administrator": {"substage": substage},
+            }
+        }
+    }
+
+    class StubStore:
+        def load(self) -> dict:
+            return state
+
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "WorkdayConnectStore",
+        lambda _root: StubStore(),
+    )
+
+
+def _write_worksheet_draft(
+    root: Path,
+    values: dict[str, str],
+) -> None:
+    path = (
+        root
+        / ".local"
+        / "connect"
+        / "workday-da"
+        / "entra-companion-draft.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(values) + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_view_contract_accepts_only_constrained_content() -> None:
     assert validate_view(_view()) == _view()
 
     invalid = _view() | {"html": "<button>Approve</button>"}
     with pytest.raises(AssistedBrowserError, match="unsupported fields: html"):
         validate_view(invalid)
+
+
+def test_worksheet_operations_match_canonical_entra_labels() -> None:
+    assert tuple(
+        definition["worksheetRow"]
+        for definition in (
+            workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
+        )
+    ) == workday_assisted_browser.ENTRA_WORKSHEET_LABELS
+    assert all(
+        definition["sensitive"] is False
+        for definition in (
+            workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
+        )
+    )
 
 
 def test_view_contract_rejects_unknown_nested_field() -> None:
@@ -248,6 +308,229 @@ def test_view_contract_accepts_visual_help_with_same_row_confirmation() -> None:
         match="must target the same worksheet row",
     ):
         validate_view(mismatched)
+
+
+def test_worksheet_status_projects_existing_authorities_without_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_entra_controller_state(monkeypatch)
+    _write_worksheet_draft(
+        tmp_path,
+        {"Directory name": "EmployeeHub"},
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "entra-configuration",
+            "browserMode": "vscode",
+        },
+    )
+    live = {
+        "revision": 5,
+        "view": {
+            "confirmation": {
+                "operation": "entra-enterprise-application-display-name"
+            },
+            "visualHelp": {
+                "operation": "entra-enterprise-application-display-name"
+            },
+        },
+        "collection": {
+            "operation": "entra-enterprise-application-display-name",
+            "mode": "navigate-and-capture",
+            "status": "authorized",
+        },
+        "confirmation": {
+            "operation": "entra-enterprise-application-display-name",
+            "revision": 5,
+            "status": "waiting",
+        },
+        "visualHelp": {
+            "operation": "entra-enterprise-application-display-name",
+            "revision": 5,
+            "status": "waiting",
+        },
+        "targetPointers": [
+            {
+                "operation": "entra-enterprise-application-display-name",
+                "label": "Enterprise application",
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        lambda _session, path: live
+        if path == "/api/view"
+        else pytest.fail(f"Unexpected API path: {path}"),
+    )
+
+    result = workday_assisted_browser._worksheet_status(
+        argparse.Namespace(),
+        tmp_path,
+    )
+
+    assert result["controller"] == {
+        "phase": "entra",
+        "status": "active",
+        "administratorSubstage": "administrator-engaged",
+        "updatedAt": "2026-10-14T18:56:53Z",
+    }
+    assert result["worksheet"] == {
+        "requiredCount": 14,
+        "recordedCount": 1,
+        "complete": False,
+        "recordedRows": ["entra-directory-display-name"],
+        "nextOperation": "entra-enterprise-application-display-name",
+    }
+    assert result["activeRow"] == {
+        "operation": "entra-enterprise-application-display-name",
+        "worksheetRow": "Enterprise application",
+        "sensitive": False,
+        "stage": "awaiting-confirmation",
+        "pendingInteraction": "confirmation",
+        "viewRevision": 5,
+        "mode": "navigate-and-capture",
+        "authorized": True,
+        "recorded": False,
+        "targetPointed": True,
+        "visualHelpStatus": "waiting",
+    }
+    assert "EmployeeHub" not in json.dumps(result)
+
+
+def test_worksheet_status_rejects_unknown_draft_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_entra_controller_state(monkeypatch)
+    _write_worksheet_draft(
+        tmp_path,
+        {"Unknown worksheet row": "value"},
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "entra-configuration",
+            "browserMode": "vscode",
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        lambda _session, _path: {"revision": 1, "view": {}},
+    )
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="unsupported rows: Unknown worksheet row",
+    ):
+        workday_assisted_browser._worksheet_status(
+            argparse.Namespace(),
+            tmp_path,
+        )
+
+
+def test_worksheet_draft_normalizes_existing_label_aliases(
+    tmp_path: Path,
+) -> None:
+    _write_worksheet_draft(
+        tmp_path,
+        {
+            "Certificate thumbprint": "AA11",
+            "Certificate expiration date": "2028-06-23",
+        },
+    )
+
+    assert workday_assisted_browser._load_worksheet_draft(tmp_path) == {
+        "Certificate thumbprint (active certificate row)": "AA11",
+        "Certificate expiration date (active certificate row)": "2028-06-23",
+    }
+
+
+def test_worksheet_status_requires_entra_companion_surface(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "workday-connection",
+            "browserMode": "vscode",
+        },
+    )
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="requires the entra-configuration companion surface",
+    ):
+        workday_assisted_browser._worksheet_status(
+            argparse.Namespace(),
+            tmp_path,
+        )
+
+
+def test_worksheet_status_projects_final_review_without_draft_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_entra_controller_state(
+        monkeypatch,
+        status="blocked",
+        substage="awaiting-completion",
+    )
+    draft = {
+        definition["worksheetRow"]: f"value-{index}"
+        for index, definition in enumerate(
+            workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
+        )
+    }
+    _write_worksheet_draft(tmp_path, draft)
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "entra-configuration",
+            "browserMode": "vscode",
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        lambda _session, _path: {
+            "revision": 20,
+            "view": {
+                "confirmation": {
+                    "operation": "entra-final-worksheet",
+                }
+            },
+            "confirmation": {
+                "operation": "entra-final-worksheet",
+                "revision": 20,
+                "status": "waiting",
+            },
+        },
+    )
+
+    result = workday_assisted_browser._worksheet_status(
+        argparse.Namespace(),
+        tmp_path,
+    )
+
+    assert result["worksheet"]["complete"] is True
+    assert result["worksheet"]["nextOperation"] is None
+    assert result["activeRow"] is None
+    assert result["finalReview"] == {
+        "stage": "awaiting-confirmation",
+        "pendingInteraction": "confirmation",
+        "viewRevision": 20,
+    }
+    for value in draft.values():
+        assert value not in json.dumps(result)
 
 
 @pytest.mark.parametrize(
