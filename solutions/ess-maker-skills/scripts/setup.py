@@ -33,11 +33,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from datetime import date
 
 from auth import EXPECTED_CONFIG_VERSION
+from checkpoint import create_checkpoint
 from evaluation_csv import regenerate_evaluation_exports
 from evaluation_review import REVIEW_FILENAME, metadata_from_description
 
@@ -761,7 +761,7 @@ def create_baseline(output_dir):
     if os.path.exists(baseline_dir):
         for attempt in range(5):
             try:
-                shutil.rmtree(baseline_dir, onexc=_on_rm_error)
+                shutil.rmtree(baseline_dir, onerror=_on_rm_error)
                 break
             except (PermissionError, OSError):
                 if attempt < 4:
@@ -840,15 +840,10 @@ def main():
             )
             sys.exit(1)
         print("Creating checkpoint before refresh...")
-        result = subprocess.run(
-            [sys.executable, "scripts/checkpoint.py",
-             "auto-save before refresh"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            print(result.stdout.strip())
-        else:
-            print(f"Warning: checkpoint failed: {result.stderr.strip()}")
+        # Reconfiguration can clear the saved folder or still name another agent.
+        # Checkpoint the directory being replaced and stop if preservation fails.
+        checkpoint_number = create_checkpoint(output_dir, "auto-save before refresh")
+        print(f"Created checkpoint {checkpoint_number}.")
         print("")
 
     # Load components JSON
