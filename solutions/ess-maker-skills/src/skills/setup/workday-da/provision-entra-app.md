@@ -239,11 +239,12 @@ Only an explicit controller-detected Entra target change may reopen this phase.
 
 After the worksheet, introduce the optional browser companion:
 
-> The browser companion can open an isolated Edge window beside a local guide
-> and help the administrator navigate, inspect visible non-secret values, and
-> populate this same worksheet. The administrator still owns sign-in,
-> application selection, every portal change, consent, and saving. The
-> companion does not modify Microsoft Entra or write Workday lifecycle state.
+> The browser companion opens a local guide beside a user-shared VS Code
+> Integrated Browser page and helps the administrator navigate, inspect visible
+> non-secret values, locate controls, and populate this same worksheet. The
+> administrator still owns sign-in, application selection, every portal
+> change, consent, and saving. The companion does not modify Microsoft Entra or
+> write Workday lifecycle state.
 
 Read `shared/assisted-browser.md` for the generic session boundary and
 `shared/entra-assisted-browser.md` for the Entra worksheet session.

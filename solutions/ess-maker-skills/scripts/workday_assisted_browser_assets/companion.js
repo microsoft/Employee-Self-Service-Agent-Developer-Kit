@@ -130,9 +130,8 @@ function render(payload) {
           for (const candidate of actionGroup.querySelectorAll("button")) {
             candidate.disabled = true;
           }
-          button.textContent = vscodeApi
-            ? "Authorizing..."
-            : action.mode === "navigate-only"
+          button.textContent =
+            action.mode === "navigate-only"
               ? "Navigating..."
               : "Navigating and authorizing capture...";
           renderCollection({
@@ -191,7 +190,7 @@ function renderCollection(result) {
       textElement("h2", "Collection in progress"),
       textElement(
         "p",
-        "The authorized application pane is being prepared for this worksheet row.",
+        "Browser assistance is navigating the authorized application pane and reading the requested row.",
       ),
     );
     collection.dataset.status = "checking";

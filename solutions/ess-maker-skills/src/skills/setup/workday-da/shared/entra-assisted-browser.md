@@ -43,14 +43,18 @@ Store the in-progress draft only under `.local/connect/workday-da/`.
    - request **Navigate only** unless the row explicitly supports candidate capture;
    - continue when the human selects the row action;
    - use bounded inspection and navigation to assist the human;
+   - publish the inspected target through the companion rail before asking the human to confirm it;
+   - publish the bounded contextual screenshot when the shared-browser tool surface provides one;
    - present one candidate or required attestation for human confirmation;
    - after local confirmation, update only the ephemeral draft;
    - continue to the next unresolved row.
 4. If the human rejects a row candidate, retain the row authorization and inspect again. Do not invalidate unrelated draft values.
-5. When bounded inspection cannot reliably collect or disambiguate a required value, request manual entry for that row.
-6. Open a row-specific **Edit** control only when the current companion view names that exact control and explains that it will reveal existing values. Do not change or save anything in the revealed panel.
-7. For a worksheet setting that requires administrator attestation, present the worksheet's attestation and continue only after the human selects **Attest**.
-8. If the required worksheet value remains unresolved, return `blocked` with a concise reason and return to the existing combined worksheet interaction.
+5. A missing first result is not a completed search. Retain the row authorization, re-read the page, identify the visible search or filter control, and try the exact safe identifiers already available for that row. Inspect every visible result and available result page before concluding that no candidate can be verified.
+6. Do not stop or return to chat because a shared-browser element reference became stale, one search term returned no match, the page refreshed, or the human rejected a candidate. Re-inspect and continue the same row.
+7. When bounded inspection cannot reliably collect or disambiguate a required value after those retries, request manual entry for that row.
+8. Open a row-specific **Edit** control only when the current companion view names that exact control and explains that it will reveal existing values. Do not change or save anything in the revealed panel.
+9. For a worksheet setting that requires administrator attestation, present the worksheet's attestation and continue only after the human selects **Attest**.
+10. Return `blocked` only when the authorized portal surface remains unreachable, every bounded search and manual fallback for the row has been exhausted, or continuing would require an ambiguous selection or prohibited mutation. Return to the existing combined worksheet interaction with a concise reason.
 
 ## Protect the worksheet
 

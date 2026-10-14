@@ -13,6 +13,8 @@ state remains exclusively owned by workday_connect.py.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -47,6 +49,8 @@ _BROWSER_MODE_ENV = "ESS_WORKDAY_ASSIST_BROWSER_MODE"
 _EDGE_BROWSER_MODE = "edge"
 _VSCODE_BROWSER_MODE = "vscode"
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_SHARED_CAPTURE_BYTES = 1024 * 1024
+_MAX_SHARED_CAPTURE_BODY_BYTES = 2 * 1024 * 1024
 _MAX_VIEW_FIELDS = 16
 _CONNECTED_WINDOW_SECONDS = 6.0
 _ENTRA_OVERVIEW_URL = (
@@ -224,6 +228,73 @@ def sanitize_browser_evidence_text(value: Any) -> str | None:
     ):
         return "[REDACTED_ACCOUNT_CONTEXT]"
     return _EMAIL_PATTERN.sub("[REDACTED_EMAIL]", text)
+
+
+def normalize_shared_browser_targets(raw: Any) -> list[dict[str, Any]]:
+    """Validate semantic target positions reported by the shared VS Code browser adapter."""
+    if not isinstance(raw, list) or not raw:
+        raise AssistedBrowserError(
+            "targets must contain at least one application target."
+        )
+    if len(raw) > _MAX_VIEW_FIELDS:
+        raise AssistedBrowserError(
+            f"targets may contain at most {_MAX_VIEW_FIELDS} application targets."
+        )
+    normalized: list[dict[str, Any]] = []
+    for index, target in enumerate(raw):
+        if not isinstance(target, Mapping):
+            raise AssistedBrowserError(f"targets[{index}] must be an object.")
+        if set(target) - {"centered", "label", "positionRatio"}:
+            raise AssistedBrowserError(f"targets[{index}] fields are invalid.")
+        ratio = target.get("positionRatio")
+        if ratio is None:
+            ratio = (index + 1) / (len(raw) + 1)
+        if (
+            isinstance(ratio, bool)
+            or not isinstance(ratio, (int, float))
+            or not 0 <= float(ratio) <= 1
+        ):
+            raise AssistedBrowserError(
+                f"targets[{index}].positionRatio must be between 0 and 1."
+            )
+        centered = target.get("centered", len(raw) == 1)
+        if not isinstance(centered, bool):
+            raise AssistedBrowserError(f"targets[{index}].centered must be boolean.")
+        normalized.append(
+            {
+                "label": _required_text(
+                    target.get("label"),
+                    f"targets[{index}].label",
+                    maximum=120,
+                ),
+                "positionRatio": round(
+                    min(max(float(ratio), 0.05), 0.95),
+                    4,
+                ),
+                "centered": centered,
+            }
+        )
+    return normalized
+
+
+def decode_shared_browser_capture(value: Any) -> bytes:
+    """Decode one bounded PNG supplied by the shared VS Code browser adapter."""
+    encoded = _required_text(
+        value,
+        "imageBase64",
+        maximum=_MAX_SHARED_CAPTURE_BODY_BYTES,
+    )
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise AssistedBrowserError(
+            "Shared browser capture must be valid Base64."
+        ) from exc
+    if not content or len(content) > _MAX_SHARED_CAPTURE_BYTES:
+        raise AssistedBrowserError("Shared browser capture size is invalid.")
+    if not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise AssistedBrowserError("Shared browser capture must be a PNG image.")
+    return content
 
 
 def validate_search_control(evidence: Mapping[str, Any]) -> None:
@@ -1147,13 +1218,13 @@ class CompanionHandler(BaseHTTPRequestHandler):
             return True
         return False
 
-    def _read_json(self) -> Any:
+    def _read_json(self, *, maximum: int = _MAX_BODY_BYTES) -> Any:
         """Read a bounded UTF-8 JSON body to prevent memory abuse and validation bypass."""
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
             raise AssistedBrowserError("Invalid Content-Length.") from exc
-        if length <= 0 or length > _MAX_BODY_BYTES:
+        if length <= 0 or length > maximum:
             raise AssistedBrowserError("Request body size is invalid.")
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
@@ -1477,11 +1548,42 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 )
                 return
             if self.path == "/api/capture":
-                raw = self._read_json()
+                raw = self._read_json(
+                    maximum=(
+                        _MAX_SHARED_CAPTURE_BODY_BYTES
+                        if self.server.browser_mode == _VSCODE_BROWSER_MODE
+                        else _MAX_BODY_BYTES
+                    )
+                )
                 if not isinstance(raw, Mapping):
                     raise AssistedBrowserError(
                         "Screenshot request must be a JSON object."
                     )
+                if self.server.browser_mode == _VSCODE_BROWSER_MODE:
+                    if set(raw) != {"imageBase64", "label", "operation"}:
+                        raise AssistedBrowserError(
+                            "Shared browser screenshot fields are invalid."
+                        )
+                    operation = _required_text(
+                        raw.get("operation"),
+                        "operation",
+                        maximum=80,
+                    )
+                    self.server.companion_state.require_navigation_collection(operation)
+                    result = self.server.companion_state.set_evidence_image(
+                        operation=operation,
+                        content=decode_shared_browser_capture(raw.get("imageBase64")),
+                        metadata={
+                            "label": _required_text(
+                                raw.get("label"),
+                                "label",
+                                maximum=120,
+                            ),
+                            "capturedAt": _now_iso(),
+                        },
+                    )
+                    self._send_json(200, {"evidenceImage": result})
+                    return
                 if set(raw) != {
                     "frameIndex",
                     "matchIndex",
@@ -1661,6 +1763,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     maximum=80,
                 )
                 target_specs = raw.get("targets")
+                if self.server.browser_mode == _VSCODE_BROWSER_MODE:
+                    self.server.companion_state.require_navigation_collection(operation)
+                    result = self.server.companion_state.set_target_pointers(
+                        operation=operation,
+                        metadata=normalize_shared_browser_targets(target_specs),
+                    )
+                    self._send_json(200, {"targetPointers": result})
+                    return
                 if not isinstance(target_specs, list) or not target_specs:
                     raise AssistedBrowserError(
                         "targets must contain at least one application target."
@@ -3571,6 +3681,47 @@ def _follow(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 def _capture(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Request a contextual screenshot for one inspected target."""
     session = _load_session(root)
+    if session.get("browserMode") == _VSCODE_BROWSER_MODE:
+        if args.image_file is None or not args.label:
+            raise AssistedBrowserError(
+                "VS Code capture requires --image-file and --label."
+            )
+        if any(
+            value is not None
+            for value in (
+                args.selector,
+                args.frame_index,
+                args.match_index,
+            )
+        ):
+            raise AssistedBrowserError(
+                "VS Code capture does not accept selector or match arguments."
+            )
+        try:
+            content = args.image_file.read_bytes()
+        except OSError as exc:
+            raise AssistedBrowserError(
+                "Shared browser capture could not be read."
+            ) from exc
+        decode_shared_browser_capture(base64.b64encode(content).decode("ascii"))
+        return _api_request(
+            session,
+            "/api/capture",
+            value={
+                "operation": args.operation,
+                "imageBase64": base64.b64encode(content).decode("ascii"),
+                "label": args.label,
+            },
+            timeout=30.0,
+        )
+    if args.selector is None or args.frame_index is None or args.match_index is None:
+        raise AssistedBrowserError(
+            "Edge capture requires selector, frame index, and match index."
+        )
+    if args.image_file is not None or args.label is not None:
+        raise AssistedBrowserError(
+            "Edge capture does not accept shared browser image arguments."
+        )
     return _api_request(
         session,
         "/api/capture",
@@ -3819,9 +3970,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(_COLLECTION_OPERATIONS),
         required=True,
     )
-    capture.add_argument("--selector", required=True)
-    capture.add_argument("--frame-index", type=int, required=True)
-    capture.add_argument("--match-index", type=int, required=True)
+    capture.add_argument("--selector")
+    capture.add_argument("--frame-index", type=int)
+    capture.add_argument("--match-index", type=int)
+    capture.add_argument("--image-file", type=Path)
+    capture.add_argument("--label")
     fill_search = commands.add_parser("fill-search")
     fill_search.add_argument(
         "--operation",

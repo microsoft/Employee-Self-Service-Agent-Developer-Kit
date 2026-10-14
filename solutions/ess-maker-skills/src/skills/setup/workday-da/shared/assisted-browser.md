@@ -9,8 +9,13 @@ The companion may:
 - host constrained guidance in the ESS Maker extension's webview;
 - provide the bounded application URL for a user-opened VS Code Integrated Browser page;
 - reuse an active companion session for the same lifecycle;
+- open a named application surface defined by the helper;
 - render constrained text, fields, steps, actions, confirmations, and manual-entry controls;
-- coordinate bounded browser-tool inspection after the human shares the Integrated Browser page with the agent and authorizes the named operation;
+- inspect bounded visible-page evidence after the human authorizes the named operation;
+- follow an already-inspected visible Entra link when the destination remains on `https://entra.microsoft.com`;
+- fill an already-inspected visible search or filter input;
+- capture one bounded contextual screenshot around an inspected visible target when the shared-browser tool surface provides one;
+- scroll an inspected target into view and show its approximate position in the companion rail;
 - wait for revision-bound action, entry, or confirmation decisions;
 - close the companion webview and loopback server when assistance ends.
 
@@ -96,16 +101,52 @@ Continue from the returned result without requiring a duplicate chat message. A 
 
 After the named row is authorized:
 
-- use the agent's built-in browser tools only against the shared Integrated Browser page;
+- use the agent's built-in browser tools as the VS Code implementation of the Edge version's bounded `inspect`, `follow`, `fill-search`, `capture`, `point`, and `reveal` operations;
 - navigate to the returned `targetUrl` only when the authorization result supplies one;
-- inspect visible elements before every click, fill, or capture;
+- read and inspect the visible page before every click, fill, capture, or candidate decision;
 - keep the operation within the authorized worksheet row and action mode;
 - re-inspect after navigation, popup completion, or page refresh;
 - leave sign-in, consent, save, assignment, upload, and other mutations to the human.
 
 Browser element references are fresh evidence, not durable portal contracts. Do not broaden the operation when an element is missing or the page is ambiguous. If a popup or auxiliary window contains a human-owned sign-in step, wait for the human to finish it and share the resulting application page if the browser tool no longer sees the intended parent page.
 
-After the authorized browser operation reaches the intended page state, record completion before publishing a manual-entry fallback or moving to another row:
+The shared-browser adapter must preserve the Edge companion's interaction model:
+
+- keep the current row authorization active while inspecting, searching, following links, pointing to targets, showing a screenshot, or asking the human to confirm a candidate;
+- treat an empty result, missed selector, stale element reference, or rejected candidate as a reason to re-inspect within the same row, not as a reason to end assistance;
+- inspect all visible candidates and available result pages that remain within the authorized row before declaring the target unavailable;
+- use only exact target facts already supplied by the phase, such as the application display name, Application ID, tenant, or Service Provider ID, when narrowing a search;
+- never select an ambiguous application for the human;
+- offer the row's existing manual-entry fallback only after bounded inspection cannot reliably collect or disambiguate the value.
+
+After an inspected target is visible, write one or more semantic target positions to a JSON file and publish the same rail arrows used by the Edge implementation:
+
+```json
+[
+  {
+    "label": "{VISIBLE_TARGET_LABEL}",
+    "positionRatio": 0.5,
+    "centered": true
+  }
+]
+```
+
+```powershell
+python scripts/workday_assisted_browser.py point-targets `
+  --operation "{OPERATION}" `
+  --targets-file "{TARGETS_FILE}"
+```
+
+When the shared-browser tool surface can save a bounded PNG around that target, publish the same optional **Show me what to click** evidence used by the Edge implementation:
+
+```powershell
+python scripts/workday_assisted_browser.py capture `
+  --operation "{OPERATION}" `
+  --image-file "{PNG_FILE}" `
+  --label "{VISIBLE_TARGET_LABEL}"
+```
+
+After the authorized browser operation reaches the intended page state, record navigation completion before publishing a manual-entry fallback or moving to another row:
 
 ```powershell
 python scripts/workday_assisted_browser.py shared-browser-result `
@@ -113,7 +154,7 @@ python scripts/workday_assisted_browser.py shared-browser-result `
   --status navigated
 ```
 
-If the shared browser cannot complete the operation, report `--status failed --error "{SAFE_REASON}"` instead. Do not mark navigation complete merely because the action was authorized.
+Report `--status failed --error "{SAFE_REASON}"` only when the shared browser itself is unusable or the authorized surface cannot be reached after recovery. A search with no matching candidate is not a browser failure and must not end assistance. Do not mark navigation complete merely because the action was authorized.
 
 ## End or cancel assistance
 

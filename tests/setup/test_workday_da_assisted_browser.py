@@ -84,6 +84,8 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert 'tooltip.className = "target-tooltip"' in script
     assert 'pointer.textContent = "←"' in script
     assert "navigation-disclaimer" in script
+    assert '"Authorizing..."' not in script
+    assert '"Navigating..."' in script
     assert '"Navigation complete"' not in script
     assert '"Navigation authorized"' not in script
     assert '"Capture authorization active"' not in script
@@ -103,4 +105,29 @@ def test_companion_uses_user_opened_shared_integrated_browser() -> None:
     assert "agent-opened private browser page" in protocol
     assert "built-in browser tools" in protocol
     assert "shared-browser-result" in protocol
+    assert "point-targets" in protocol
+    assert "--image-file" in protocol
+    assert "A search with no matching candidate is not a browser failure" in protocol
     assert "start --surface \"{SURFACE}\" --launch" not in protocol
+
+
+def test_vscode_companion_retains_edge_search_and_retry_behavior() -> None:
+    protocol = (_WORKDAY_DA / "shared" / "assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+    entra = (_WORKDAY_DA / "shared" / "entra-assisted-browser.md").read_text(
+        encoding="utf-8"
+    )
+
+    for capability in (
+        "inspect bounded visible-page evidence",
+        "follow an already-inspected visible Entra link",
+        "fill an already-inspected visible search or filter input",
+        "capture one bounded contextual screenshot",
+        "show its approximate position in the companion rail",
+    ):
+        assert capability in protocol
+    assert "retain the row authorization" in entra
+    assert "A missing first result is not a completed search" in entra
+    assert "Do not stop or return to chat" in entra
+    assert "every visible result and available result page" in entra

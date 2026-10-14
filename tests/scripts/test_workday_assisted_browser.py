@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -20,6 +21,8 @@ from workday_assisted_browser import (
     CompanionState,
     _Server,
     classify_layout,
+    decode_shared_browser_capture,
+    normalize_shared_browser_targets,
     sanitize_browser_url,
     sanitize_browser_evidence_text,
     surface_url,
@@ -510,6 +513,96 @@ def test_vscode_collection_authorizes_shared_browser_without_cdp(
     assert result["status"] == "authorized"
     assert result["sharedBrowserRequired"] is True
     assert result["targetUrl"].startswith("https://entra.microsoft.com/")
+
+
+def test_shared_browser_targets_preserve_companion_pointer_contract() -> None:
+    assert normalize_shared_browser_targets(
+        [
+            {
+                "label": "EmployeeHub",
+                "positionRatio": 0.5,
+                "centered": True,
+            }
+        ]
+    ) == [
+        {
+            "label": "EmployeeHub",
+            "positionRatio": 0.5,
+            "centered": True,
+        }
+    ]
+
+    distributed = normalize_shared_browser_targets(
+        [{"label": "First"}, {"label": "Second"}]
+    )
+    assert [target["positionRatio"] for target in distributed] == [
+        0.3333,
+        0.6667,
+    ]
+    assert all(target["centered"] is False for target in distributed)
+
+
+def test_shared_browser_capture_requires_bounded_png() -> None:
+    content = b"\x89PNG\r\n\x1a\nbounded"
+    assert (
+        decode_shared_browser_capture(base64.b64encode(content).decode("ascii"))
+        == content
+    )
+
+    with pytest.raises(AssistedBrowserError, match="must be a PNG"):
+        decode_shared_browser_capture(base64.b64encode(b"not-an-image").decode("ascii"))
+
+
+def test_vscode_capture_uses_shared_browser_image_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    content = b"\x89PNG\r\n\x1a\nbounded"
+    image = tmp_path / "target.png"
+    image.write_bytes(content)
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {"browserMode": "vscode"},
+    )
+    requested = {}
+
+    def fake_request(
+        _session: dict,
+        path: str,
+        *,
+        value: dict,
+        timeout: float,
+    ) -> dict:
+        requested.update(
+            {
+                "path": path,
+                "value": value,
+                "timeout": timeout,
+            }
+        )
+        return {"evidenceImage": {"label": value["label"]}}
+
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        fake_request,
+    )
+    result = workday_assisted_browser._capture(
+        argparse.Namespace(
+            operation="entra-directory-display-name",
+            selector=None,
+            frame_index=None,
+            match_index=None,
+            image_file=image,
+            label="Directory name",
+        ),
+        tmp_path,
+    )
+
+    assert result == {"evidenceImage": {"label": "Directory name"}}
+    assert requested["path"] == "/api/capture"
+    assert base64.b64decode(requested["value"]["imageBase64"]) == content
 
 
 def test_shared_browser_completion_unlocks_manual_entry() -> None:
@@ -1209,6 +1302,94 @@ def test_loopback_api_requires_bearer_and_tracks_render() -> None:
             payload = json.loads(response.read())
         assert payload["renderedRevision"] == revision
         assert payload["visible"] is True
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_vscode_loopback_accepts_shared_target_and_capture_evidence(
+    tmp_path: Path,
+) -> None:
+    server = _Server(("127.0.0.1", 0), CompanionHandler)
+    server.token = "test-token"
+    server.root = tmp_path
+    server.browser_mode = "vscode"
+    server.cdp_endpoint = ""
+    server.companion_state = CompanionState()
+    view = _view() | {
+        "action": {
+            "label": "Navigate and capture",
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+        }
+    }
+    revision = server.companion_state.publish(view)["revision"]
+    server.companion_state.begin_collection(
+        revision=revision,
+        operation="entra-directory-display-name",
+        mode="navigate-and-capture",
+    )
+    server.companion_state.complete_collection(
+        {
+            "operation": "entra-directory-display-name",
+            "mode": "navigate-and-capture",
+            "status": "authorized",
+            "authorizedAt": workday_assisted_browser._now_iso(),
+        }
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    headers = {
+        "Authorization": "******",
+        "Content-Type": "application/json",
+    }
+    headers["Authorization"] = "Bearer " + server.token
+    try:
+        point_request = Request(
+            f"{origin}/api/point-targets",
+            data=json.dumps(
+                {
+                    "operation": "entra-directory-display-name",
+                    "targets": [
+                        {
+                            "label": "EmployeeHub",
+                            "positionRatio": 0.5,
+                            "centered": True,
+                        }
+                    ],
+                }
+            ).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(point_request, timeout=2) as response:
+            pointers = json.loads(response.read())["targetPointers"]
+        assert pointers[0]["label"] == "EmployeeHub"
+
+        content = b"\x89PNG\r\n\x1a\nbounded"
+        capture_request = Request(
+            f"{origin}/api/capture",
+            data=json.dumps(
+                {
+                    "operation": "entra-directory-display-name",
+                    "imageBase64": base64.b64encode(content).decode("ascii"),
+                    "label": "EmployeeHub",
+                }
+            ).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(capture_request, timeout=2) as response:
+            metadata = json.loads(response.read())["evidenceImage"]
+        assert metadata["label"] == "EmployeeHub"
+
+        status_request = Request(f"{origin}/api/status", headers=headers)
+        with urlopen(status_request, timeout=2) as response:
+            status = json.loads(response.read())
+        assert status["targetPointers"][0]["label"] == "EmployeeHub"
+        assert status["evidenceImage"]["label"] == "EmployeeHub"
     finally:
         server.shutdown()
         thread.join(timeout=2)
