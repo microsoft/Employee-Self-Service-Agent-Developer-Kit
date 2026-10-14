@@ -71,7 +71,8 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert "acknowledgedRevision" in script
     assert "await acknowledgeRender()" in script
     assert 'request("/api/confirmation"' in script
-    assert 'fetch("/api/evidence-image"' in script
+    assert 'bridgeRequest(' in script
+    assert '"/api/evidence-image"' in script
     assert "URL.createObjectURL" in script
     assert "Show me what to click" in script
     assert 'request("/api/entry"' in script
@@ -89,3 +90,17 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert '"Navigation assistance active"' not in script
     assert "innerHTML" not in script
     assert "eval(" not in script
+
+
+def test_companion_uses_user_opened_shared_integrated_browser() -> None:
+    protocol = (
+        _WORKDAY_DA / "shared" / "assisted-browser.md"
+    ).read_text(encoding="utf-8")
+
+    assert 'start --surface "{SURFACE}" --vscode' in protocol
+    assert "**View** > **Browser**" in protocol
+    assert "**Share with Agent**" in protocol
+    assert "agent-opened private browser page" in protocol
+    assert "built-in browser tools" in protocol
+    assert "shared-browser-result" in protocol
+    assert "start --surface \"{SURFACE}\" --launch" not in protocol

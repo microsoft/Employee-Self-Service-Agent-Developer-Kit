@@ -6,23 +6,19 @@ Use the browser companion only when a phase guide explicitly offers it. The comp
 
 The companion may:
 
-- launch an isolated Edge InPrivate window with one application tab and one loopback companion tab;
-- reuse a helper-owned active session for the same lifecycle;
-- open a named application surface defined by the helper;
+- host constrained guidance in the ESS Maker extension's webview;
+- provide the bounded application URL for a user-opened VS Code Integrated Browser page;
+- reuse an active companion session for the same lifecycle;
 - render constrained text, fields, steps, actions, confirmations, and manual-entry controls;
-- inspect bounded visible-page evidence after the human authorizes the named operation;
-- follow an already-inspected visible Entra link when the destination remains on `https://entra.microsoft.com`;
-- fill an already-inspected visible search or filter input;
-- capture one bounded contextual screenshot around an inspected visible target;
-- scroll an inspected target into view and show its approximate position in the companion rail;
+- coordinate bounded browser-tool inspection after the human shares the Integrated Browser page with the agent and authorizes the named operation;
 - wait for revision-bound action, entry, or confirmation decisions;
-- close the exact helper-owned browser and loopback server when assistance ends.
+- close the companion webview and loopback server when assistance ends.
 
 Use text nodes only. Never render HTML supplied by a browser page, worksheet response, or user.
 
 The following operations are allowed only when the phase-specific companion guide requires them and the stated preconditions are satisfied:
 
-- Attach to an existing CDP browser only after its ownership and intended target have been verified. Prefer a helper-launched isolated browser.
+- Use browser tools only on the Integrated Browser page the human opened and explicitly shared with the agent.
 - Activate a row-specific **Edit** control only to reveal already-existing values. The current companion view must name that exact control and disclose that it will be opened. Do not change or save anything.
 - Request manual entry only after bounded inspection cannot reliably collect or disambiguate the required non-secret value.
 - Use **Navigate and capture** only when the phase-specific guide permits a visible value to become a companion candidate. Otherwise use **Navigate only**.
@@ -32,26 +28,31 @@ When a loosely sanctioned operation cannot satisfy every precondition, fall back
 The companion must not:
 
 - authenticate, select an account, choose an application, or resolve an ambiguous target for the human;
-- automate Edge Split Screen or other browser chrome;
+- open the application page in a private agent-owned browser session;
+- automate Integrated Browser chrome, sharing, popup sign-in, or auxiliary windows;
 - click **Create**, **Manage**, **Save**, **Apply**, **Allow**, **Grant admin consent**, **Delete**, **Deactivate**, **Add**, **New**, sign-in, consent, or assignment controls;
 - submit a portal form, select a modifying result, change a setting, upload a certificate, or transfer certificate contents;
 - execute arbitrary JavaScript, selectors, URLs, or actions supplied through a companion view;
 
 ## Start the session
 
-From the kit workspace root, launch the surface named by the phase-specific guide:
+From the kit workspace root, start the companion for the surface named by the phase-specific guide:
 
 ```powershell
-python scripts/workday_assisted_browser.py start --surface "{SURFACE}" --launch
+python scripts/workday_assisted_browser.py start --surface "{SURFACE}" --vscode
 ```
 
-The helper opens the application and companion as two tabs in one isolated Edge window. Tell the human what opened. The human may arrange those tabs side by side. Do not claim Split Screen is active unless `inspect-layout` reports `splitScreenReady: true`.
+The ESS Maker extension detects the workspace-local session file and opens the companion webview. If it does not open automatically, run **Agent Developer Kit: Open Workday setup companion** from the Command Palette.
 
-```powershell
-python scripts/workday_assisted_browser.py inspect-layout
-```
+Tell the human to:
 
-If side-by-side layout is unavailable, the companion may remain in its own tab. If the helper cannot prepare a usable session, return to the phase's existing manual interaction without changing lifecycle state.
+1. open **View** > **Browser**;
+2. navigate that user-owned browser page to the returned `applicationUrl`;
+3. complete any sign-in or popup interaction themselves;
+4. select **Share with Agent** for the application page;
+5. keep the application page and companion webview visible beside Copilot Chat.
+
+Do not use an agent-opened private browser page as a substitute. Before browser inspection or navigation, require evidence that the user-opened page is shared and still points at the intended Microsoft Entra surface. If the companion or shared browser cannot be prepared, return to the phase's existing manual interaction without changing lifecycle state.
 
 ## Present constrained guidance
 
@@ -91,21 +92,28 @@ The wait command observes local companion state only. It does not choose an acti
 
 Continue from the returned result without requiring a duplicate chat message. A timeout leaves the displayed view valid and does not imply rejection.
 
-## Use bounded browser operations
+## Use the shared Integrated Browser
 
-After the named row is authorized, the phase-specific guide may use:
+After the named row is authorized:
+
+- use the agent's built-in browser tools only against the shared Integrated Browser page;
+- navigate to the returned `targetUrl` only when the authorization result supplies one;
+- inspect visible elements before every click, fill, or capture;
+- keep the operation within the authorized worksheet row and action mode;
+- re-inspect after navigation, popup completion, or page refresh;
+- leave sign-in, consent, save, assignment, upload, and other mutations to the human.
+
+Browser element references are fresh evidence, not durable portal contracts. Do not broaden the operation when an element is missing or the page is ambiguous. If a popup or auxiliary window contains a human-owned sign-in step, wait for the human to finish it and share the resulting application page if the browser tool no longer sees the intended parent page.
+
+After the authorized browser operation reaches the intended page state, record completion before publishing a manual-entry fallback or moving to another row:
 
 ```powershell
-python scripts/workday_assisted_browser.py inspect --operation "{OPERATION}" --selector "{SELECTOR}" --limit 20
-python scripts/workday_assisted_browser.py follow --operation "{OPERATION}" --selector "{SELECTOR}" --frame-index {FRAME} --match-index {MATCH}
-python scripts/workday_assisted_browser.py capture --operation "{OPERATION}" --selector "{SELECTOR}" --frame-index {FRAME} --match-index {MATCH}
-python scripts/workday_assisted_browser.py fill-search --operation "{OPERATION}" --selector "{SELECTOR}" --frame-index {FRAME} --match-index {MATCH} --value "{VALUE}"
-python scripts/workday_assisted_browser.py point --operation "{OPERATION}" --selector "{SELECTOR}" --frame-index {FRAME} --match-index {MATCH}
-python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --targets-file "{TARGETS_FILE}"
-python scripts/workday_assisted_browser.py reveal --operation "{OPERATION}" --selector "{SELECTOR}" --frame-index {FRAME} --match-index {MATCH}
+python scripts/workday_assisted_browser.py shared-browser-result `
+  --operation "{OPERATION}" `
+  --status navigated
 ```
 
-Selectors and match indexes are fresh evidence, not durable portal contracts. Re-inspect after navigation. Do not broaden the operation when a selector misses or the page is ambiguous.
+If the shared browser cannot complete the operation, report `--status failed --error "{SAFE_REASON}"` instead. Do not mark navigation complete merely because the action was authorized.
 
 ## End or cancel assistance
 
@@ -115,6 +123,6 @@ Stop the session when the phase-specific guide returns its assistance result, th
 python scripts/workday_assisted_browser.py stop
 ```
 
-If the helper launched Edge, `stop` closes that exact browser and verifies that its CDP endpoint stopped. An explicitly attached user-owned browser remains open.
+`stop` closes the loopback companion session. The user-owned Integrated Browser page remains open.
 
 Cancellation returns control to the phase's existing manual interaction. It does not invalidate manually entered values or write a controller event.
