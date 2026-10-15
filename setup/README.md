@@ -128,6 +128,23 @@ reported access or connectivity error and rerun the installer to retry the fetch
 Snapshot fetching uses refresh mode so reruns can update an existing agent
 folder. Setup creates a local checkpoint before replacing existing files and
 stops if the checkpoint fails; this does not publish changes to the agent.
+Refresh removes previously mapped agent-component files that disappeared from
+the complete server inventory, including obsolete paths after a rename.
+Local edits to those files remain recoverable from the checkpoint.
+Files that were never mapped are preserved; an incoming component that would
+overwrite a local-only file stops refresh with a conflict.
+Missing or invalid ownership maps, colliding component paths, and previously
+extracted components returned without usable data stop refresh before overwrite.
+Optional workflow or template-configuration fetch failures are not treated as
+evidence of deletion.
+
+The executable installer tests prefer Git Bash on Windows and verify that the
+chosen Bash can run their script paths and Python executable.
+An unusable WSL launcher does not prevent trying installed Git Bash.
+If no compatible Bash exists, Bash cases skip with a prerequisite diagnostic;
+the tests do not install software.
+Continuous-integration jobs requiring Bash coverage must provision a compatible
+shell and check that those cases execute rather than skip.
 
 ### Changing your environment or agent
 
