@@ -29,7 +29,7 @@ from agentbuilder import AgentBuilderHTTPError
 
 from ..runner import CheckResult, Role, Status
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
 M365_INTEGRATED_APPS_URL = (
     "https://admin.microsoft.com/Adminportal/Home#/Settings/IntegratedApps"

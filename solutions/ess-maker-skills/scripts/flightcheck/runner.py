@@ -15,6 +15,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Callable
 
+from .agent_scope import is_declarative_agent
+from .documentation import apply_documentation_context
 
 FLIGHTCHECK_RESULT_SCHEMA_VERSION = "flightcheck.result.v2"
 
@@ -89,6 +91,7 @@ class CheckResult:
     roles: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        apply_documentation_context(self, declarative=False)
         if not self.severity:
             self.severity = _default_severity(self.status, self.priority)
         if not self.automation_type:
@@ -281,6 +284,10 @@ class FlightCheckRunner:
                 if self._target_matcher(r.checkpoint_id)
                 or r.evidence.get("executionError") is True
             ]
+
+        declarative = is_declarative_agent(self)
+        for result in self.results:
+            apply_documentation_context(result, declarative=declarative)
 
         # Build category summaries
         cat_map: dict[str, CategorySummary] = {}

@@ -239,7 +239,7 @@ class TestBadConfig:
         assert "must be set manually" in wd_001.result
         assert "/connect workday" in wd_001.remediation
         assert wd_001.doc_link.startswith(
-            "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+            "https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service"
         )
 
     @responses.activate

@@ -214,7 +214,7 @@ class TestPassed:
         assert r.priority == "High"
         assert _VERIFIED_DOMAIN in r.result
         assert r.doc_link.startswith(
-            "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+            "https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service"
         )
 
     @responses.activate

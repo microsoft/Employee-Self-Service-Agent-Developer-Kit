@@ -16,7 +16,7 @@ from ..runner import CheckResult, Priority, Role, Status
 from .connections import check_connector_connections
 from .external_systems import _categorize_servicenow_flows
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 # Expected ServiceNow template config scenario names (from HRSD + ITSM extension packs)
 EXPECTED_TEMPLATE_CONFIGS = {
@@ -665,5 +665,4 @@ def _count_matching_topics(topic_files: list[str], pack_type: str) -> int:
         if any(p.replace(" ", "") in normalized for p in patterns):
             count += 1
     return count
-
 

@@ -32,7 +32,7 @@ from .. import agent_scope
 
 _ESS_SOLN_DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install"
+    "employee-self-service/maker-journey-declarative-agent#install-an-employee-self-service-agent-template"
 )
 _ESS_SOLN_DESCRIPTION = "ESS base agent package present in the environment"
 # The CA check proved ESS identity by the Dataverse solution uniquename prefix
