@@ -316,7 +316,15 @@ class FlightCheckRunner:
 
         declarative = is_declarative_agent(self)
         for result in self.results:
-            apply_documentation_context(result, declarative=declarative)
+            result_declarative = declarative
+            if "agentSlug" in result.evidence:
+                subject_slug = result.evidence["agentSlug"]
+                result_declarative = (
+                    isinstance(subject_slug, str)
+                    and subject_slug != ""
+                    and is_declarative_agent(self, subject_slug=subject_slug)
+                )
+            apply_documentation_context(result, declarative=result_declarative)
 
         # Build category summaries
         cat_map: dict[str, CategorySummary] = {}
