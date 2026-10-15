@@ -532,6 +532,13 @@ and do the per-tier verification.
     infer DA from the current branch or an environment's package mix.
     Existing DA setup records the metadata. Do not fabricate DA guidance
     when no corresponding published article has been verified.
+    Producers that inspect multiple agents must attach the exact inspected
+    slug as `evidence["agentSlug"]` to each agent-owned result. The runner
+    resolves documentation for that subject, not its display label or the
+    active agent. Only rows owned by the selected agent may use eligible
+    workspace/profile fallback. Unknown, ambiguous, and explicitly non-DA
+    siblings retain compatibility links; never borrow another agent's type.
+    Rows without subject evidence retain the existing run-context policy.
 
 ---
 
