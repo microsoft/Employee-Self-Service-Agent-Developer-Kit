@@ -496,6 +496,22 @@ and do the per-tier verification.
     `tests/flightcheck/checks/test_workday_*.py` for the test
     contract this principle requires.
 
+    **Declarative Agent exception:** explicit `releaseLine: "da"` metadata
+    for the selected agent/workspace, or the Workday DA profile, identifies
+    an employee-authenticated path with no ISU. Use
+    `agent_scope.is_declarative_agent(runner)` before legacy ISU reads,
+    prompts, or probes. Environment-wide legacy references do not make
+    ISU checks applicable to a selected DA. Keep employee permission
+    validation manual and retain connection, flow and runtime checks.
+    Never infer the selected agent's type from Dataverse presence or a
+    sibling agent.
+
+    The Workday Runtime reference and the domain package's OAuthUser
+    reference can coexist. Exactly one of each, with no legacy ISU or
+    unknown Workday reference, is a known non-ISU shape. Validate both
+    bindings. Duplicates and unknown shapes remain warnings. Targeted
+    `WD-ENV` and `WD-WF` runs must hydrate the fingerprint before gating.
+
 ---
 
 ## Things you must NOT do

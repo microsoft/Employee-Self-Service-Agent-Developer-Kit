@@ -50,6 +50,8 @@ from ._saml_utils import (
 )
 from .connections import check_connector_connections, filter_connections_by_connector, get_connection_status
 
+from ..agent_scope import is_declarative_agent
+
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
 # The 3 critical Dataverse environment variables for Workday
@@ -653,6 +655,8 @@ def run_workday_checks(runner) -> list[CheckResult]:
             requested("WD-PKG-001"),
             requested("WD-CONN-012"),
             requested("WD-SEC-003"),
+            requested_family("WD-ENV"),
+            requested_family("WD-WF"),
         ))
         if needs_package:
             results.extend(
@@ -1209,7 +1213,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
     WD-CONN-012 doesn't have to re-query).
 
     The verdict is one of:
-      * ``simplified`` — exact match on {ff0df}, or the Workday Runtime ref
+      * ``simplified`` — {ff0df}, the Workday Runtime ref, or both (unique)
       * ``full``       — exact match on {ff0df, 0786a, d6081}
       * ``none``       — no Workday refs at all (no Workday integration)
       * ``partial``    — strict non-empty subset of LEGACY_REF_SUFFIXES that
@@ -1316,12 +1320,15 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 2. Exact Workday Runtime match. Runtime uses the same OBO/no-legacy-ISU
+    # 2. Workday Runtime, optionally alongside the domain package's OAuthUser.
+    # Both references use the signed-in user; neither introduces an ISU.
+    # Runtime uses the same OBO/no-legacy-ISU
     # behavior as the existing simplified package, so preserve the established
     # flavor value consumed by downstream gates.
     if (
         len(runtime_refs) == 1
-        and not known_suffixes
+        and unique_known_suffixes
+        and known_suffixes <= SIMPLIFIED_REF_SUFFIXES
         and not unknown_suffixes
         and not unknown_format_names
     ):
@@ -1338,7 +1345,10 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
             description="Workday install flavor (simplified vs full / legacy)",
             result=(
                 f"Detected {WORKDAY_RUNTIME_PACKAGE} reference shape "
-                "(1 Workday Runtime OBO connection reference)." + flow_note
+                f"({len(workday_refs)} Workday connection reference(s): "
+                "Workday Runtime OBO"
+                + (" + OAuthUser/OBO" if known_suffixes else "")
+                + ")." + flow_note
             ),
             doc_link=doc_simplified,
         ))
@@ -1524,6 +1534,11 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
     ]
     if flavor == "simplified" and runtime_refs:
         expected_rows = [("Workday Runtime (OBO)", runtime_refs[0])]
+        expected_rows.extend(
+            (_REF_SUFFIX_ROLES["ff0df"], row)
+            for row in refs
+            if _extract_ref_suffix(row.get("connectionreferencelogicalname")) == "ff0df"
+        )
     else:
         expected = (
             SIMPLIFIED_REF_SUFFIXES
@@ -1841,7 +1856,9 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
 # We gate them on the WD-PKG-001 verdict cached on
 # `runner._workday_package_flavor`. To avoid suppressing real bugs:
 #
-#   * We skip ONLY on a positive `"simplified"` verdict. Any other
+#   * Explicit DA metadata skips legacy ISU checks regardless of unrelated
+#     environment-wide legacy references. Otherwise, skip only on a positive
+#     `"simplified"` verdict. Any other
 #     verdict (None, "full", "partial", "unknown", "none", "skipped")
 #     runs the existing logic — operators debugging a broken install
 #     need maximum signal, not silence.
@@ -1856,12 +1873,11 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
 #     standalone diagnostic.
 
 def _simplified_install_skip(
-    *, checkpoint_id: str, description: str,
+    runner, *, checkpoint_id: str, description: str,
     priority: str = Priority.HIGH.value,
     category: str = "Workday",
 ) -> CheckResult:
-    """Build a SKIPPED CheckResult for an ISU/RaaS check gated on
-    `runner._workday_package_flavor == "simplified"`.
+    """Skip an ISU/RaaS check for explicit DA or a known non-ISU package.
 
     `category` defaults to "Workday" but can be overridden for the
     workflow-test check, which uses the distinct "Workday Workflows"
@@ -1873,6 +1889,24 @@ def _simplified_install_skip(
     (WD-PKG-001's verdict); `remediation` carries the actionable
     contingency for an operator who intended the OTHER install flavor.
     """
+    if is_declarative_agent(runner):
+        return CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id=checkpoint_id,
+            category=category,
+            priority=priority,
+            status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                "Declarative Agent metadata identifies the signed-in employee "
+                "Workday path. This legacy ISU/RaaS check does not apply; "
+                "DA does not require an integration system user."
+            ),
+            doc_link=(
+                "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+                "employee-self-service/declarative-agent-workday"
+            ),
+        )
+
     return CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id=checkpoint_id,
         category=category,
@@ -1881,13 +1915,13 @@ def _simplified_install_skip(
         description=description,
         result=(
             "WD-PKG-001 detected the simplified Workday install shape "
-            "(1 connection reference, OBO/OAuthUser). This check is "
+            "(OBO/OAuthUser references only). This check is "
             "ISU/RaaS-specific and does not apply on the simplified "
             "install — OBO uses the signed-in user's identity."
         ),
         remediation=(
             "If you intended to install the full / legacy SOAP+custom "
-            "integration, the same 1-ref shape also matches a broken "
+            "integration, an OAuthUser-only 1-ref shape also matches a broken "
             "full install where the 2 ISU connection references "
             "(Generic User, Context Generic User) failed to deploy. "
             "See WD-PKG-001's diagnostic to confirm your install "
@@ -1907,9 +1941,10 @@ def _check_env_vars(runner) -> list[CheckResult]:
     `_simplified_install_skip` for the SKIP message contract.
     """
     flavor = getattr(runner, "_workday_package_flavor", None)
-    if flavor == "simplified":
+    if flavor == "simplified" or is_declarative_agent(runner):
         return [
             _simplified_install_skip(
+                runner,
                 checkpoint_id=meta["id"],
                 description=meta["description"],
                 priority=(
@@ -2041,8 +2076,9 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     `_simplified_install_skip` for the SKIP message contract.
     """
     flavor = getattr(runner, "_workday_package_flavor", None)
-    if flavor == "simplified":
+    if flavor == "simplified" or is_declarative_agent(runner):
         return [_simplified_install_skip(
+            runner,
             checkpoint_id="WD-ENV-101",
             description="ISU username vs Entra UPN format alignment",
         )]
@@ -4181,13 +4217,13 @@ def _check_workflows(runner) -> list[CheckResult]:
     for the SKIP message contract.
     """
     flavor = getattr(runner, "_workday_package_flavor", None)
-    if flavor == "simplified":
+    if flavor == "simplified" or is_declarative_agent(runner):
         results = [_simplified_install_skip(
+            runner,
             checkpoint_id="WD-WF-000",
             description="Workday SOAP workflow tests",
             category="Workday Workflows",
         )]
-        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     results = []
@@ -4730,15 +4766,15 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     doc_link = WD_SEC_003_DOC_LINK
 
     flavor = getattr(runner, "_workday_package_flavor", None)
-    da_profile = bool(getattr(runner, "workday_da_profile", False))
+    da_profile = is_declarative_agent(runner)
     if flavor == "simplified" or da_profile:
         install_context = (
-            "This Workday DA profile validates the signed-in employee "
+            "This Workday DA context validates the signed-in employee "
             "delegated path."
             if da_profile
             else (
                 "WD-PKG-001 detected the simplified Workday install "
-                "shape (1 connection reference, OBO/OAuthUser)."
+                "shape (OBO/OAuthUser references only)."
             )
         )
         return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
@@ -5398,8 +5434,9 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     doc_link = f"{DOC_BASE}/workday-extensibility"
 
     flavor = getattr(runner, "_workday_package_flavor", None)
-    if flavor == "simplified":
+    if flavor == "simplified" or is_declarative_agent(runner):
         return [_simplified_install_skip(
+            runner,
             checkpoint_id=cp_id,
             description=description,
             category=category,
