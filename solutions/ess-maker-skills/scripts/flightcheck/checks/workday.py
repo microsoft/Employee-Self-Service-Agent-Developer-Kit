@@ -4224,6 +4224,20 @@ def _check_workflows(runner) -> list[CheckResult]:
             description="Workday SOAP workflow tests",
             category="Workday Workflows",
         )]
+        # Exact checkpoint filtering must retain why a known probe is inapplicable.
+        targets = set(getattr(runner, "execution_targets", ()))
+        scope = getattr(runner, "scope", "")
+        if scope.startswith("checkpoint:"):
+            targets.add(scope.split(":", 1)[1])
+        for index, workflow in enumerate(WORKFLOWS, start=1):
+            checkpoint_id = f"WD-WF-{index:03d}"
+            if checkpoint_id in targets:
+                results.append(_simplified_install_skip(
+                    runner,
+                    checkpoint_id=checkpoint_id,
+                    description=f"Workflow: {workflow['name']} ({workflow['type']})",
+                    category="Workday Workflows",
+                ))
         return results
 
     results = []

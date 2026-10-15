@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 import responses
 
-from flightcheck import registry
+from flightcheck import cli, registry
 from flightcheck.checks import workday
 from flightcheck.runner import FlightCheckRunner
 from tests.conftest import require_validated_mock
@@ -54,7 +54,10 @@ def test_explicit_da_never_reads_isu_configuration_or_prompts(check, flavor, mon
 
 
 @responses.activate
-@pytest.mark.parametrize("target", ["WD-ENV", "WD-ENV-001", "WD-ENV-101", "WD-WF", "WD-WF-000"])
+@pytest.mark.parametrize("target", [
+    "WD-ENV", "WD-ENV-001", "WD-ENV-101", "WD-WF", "WD-WF-000",
+    *[f"WD-WF-{index:03d}" for index in range(1, len(workday.WORKFLOWS) + 1)],
+])
 def test_targeted_legacy_checks_hydrate_package_before_applicability(
     target, fake_dataverse_url, fake_token, monkeypatch
 ):
@@ -89,3 +92,51 @@ def test_targeted_legacy_checks_hydrate_package_before_applicability(
     assert report.results
     assert all(row.status == "Skipped" for row in report.results)
     assert all(registry.matches(target, row.checkpoint_id) for row in report.results)
+
+
+@pytest.mark.parametrize("source", ["selected_da", "non_isu_package"])
+@pytest.mark.parametrize("target", [
+    "WD-WF", "WD-WF-000", "WD-WF-016", "WD-WF-999",
+])
+def test_workflow_applicability_survives_checkpoint_contract(source, target, monkeypatch):
+    # Arrange: use the CLI's exact matching and fail-closed contract.
+    runner = FlightCheckRunner(
+        scope=f"checkpoint:{target}",
+        target_matcher=lambda cid: (
+            registry.matches(target, cid)
+            or cid.startswith("CHECKPOINT-CONTRACT-")
+        ),
+    )
+    runner.execution_targets = (target,)
+    runner.config = (
+        {"activeAgent": "hr", "agents": [{"slug": "hr", "releaseLine": "da"}]}
+        if source == "selected_da" else {}
+    )
+    runner._workday_package_flavor = "full" if source == "selected_da" else "simplified"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Applicability handling attempted legacy credentials or probes")
+
+    for name in (
+        "_resolve_workday_metadata", "_resolve_workday_credentials",
+        "_soap_call", "_get_unknown_workday_scenarios",
+    ):
+        monkeypatch.setattr(workday, name, unexpected)
+    runner.register("Workday Workflows", workday._check_workflows)
+    runner.register("FlightCheck Checkpoint", cli._single_checkpoint_contract_check(target))
+
+    # Act.
+    report = runner.run()
+    rows = {row.checkpoint_id: row for row in report.results}
+
+    # Assert: never manufacture a successful probe or a known ID for unknown requests.
+    assert cli._run_exit_code(report) == 1
+    if target == "WD-WF-999":
+        assert set(rows) == {"CHECKPOINT-CONTRACT-MISSING"}
+    else:
+        expected_id = "WD-WF-000" if target == "WD-WF" else target
+        assert set(rows) == {expected_id, "CHECKPOINT-CONTRACT-UNRESOLVED"}
+        assert rows[expected_id].status == "Skipped"
+        assert "ISU" in rows[expected_id].result
+        assert rows["CHECKPOINT-CONTRACT-UNRESOLVED"].status == "Blocked"
+        assert all("Restore checkpoint dispatch" not in row.remediation for row in rows.values())
