@@ -60,10 +60,7 @@ from auth import query_all
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
 
-DOC_BASE = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service"
-)
+from ..documentation import DOC_BASE
 _DOC_SIMPLIFIED = f"{DOC_BASE}/workday-simplified-setup"
 
 _CATEGORY = "Workday Extension"

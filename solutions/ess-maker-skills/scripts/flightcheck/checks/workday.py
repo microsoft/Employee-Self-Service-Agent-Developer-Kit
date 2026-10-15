@@ -51,8 +51,7 @@ from ._saml_utils import (
 from .connections import check_connector_connections, filter_connections_by_connector, get_connection_status
 
 from ..agent_scope import is_declarative_agent
-
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 # The 3 critical Dataverse environment variables for Workday
 ENV_VARS = {
@@ -248,8 +247,7 @@ CERT_EXPIRY_WARN_DAYS = 30
 # src/reference/ess-docs/integrations/workday.md (lines 77-104) which
 # is the vendored snapshot of this MS Learn page.
 _WORKDAY_SSO_DOC_LINK = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service/workday#task-1-create-the-x509-public-key"
+    f"{DOC_BASE}/workday#task-1-create-the-x509-public-key"
 )
 
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
@@ -1901,10 +1899,7 @@ def _simplified_install_skip(
                 "Workday path. This legacy ISU/RaaS check does not apply; "
                 "DA does not require an integration system user."
             ),
-            doc_link=(
-                "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-                "employee-self-service/declarative-agent-workday"
-            ),
+            doc_link=f"{DOC_BASE}/declarative-agent-workday",
         )
 
     return CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
@@ -4482,10 +4477,7 @@ def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
 #   used by WD-WF-016 / WD-WF-017. Per the AGENTS.md "same endpoint =
 #   method + path" rule, no new cassette is required for this check.
 
-WD_SEC_003_DOC_LINK = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service/workday"
-)
+WD_SEC_003_DOC_LINK = f"{DOC_BASE}/workday"
 
 # Faultstring substrings the probe matches against. Lowercased for
 # resilience to Workday version differences. Source: the customer

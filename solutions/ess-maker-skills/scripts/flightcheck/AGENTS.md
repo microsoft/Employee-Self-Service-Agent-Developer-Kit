@@ -512,6 +512,16 @@ and do the per-tier verification.
     bindings. Duplicates and unknown shapes remain warnings. Targeted
     `WD-ENV` and `WD-WF` runs must hydrate the fingerprint before gating.
 
+    **Documentation routing:** use `documentation.DOC_BASE` for ESS Learn
+    links. `CheckResult` repairs obsolete paths, and the runner resolves
+    DA articles and verified section anchors before console/JSON/HTML
+    output, including URLs embedded in remediation. Keep mappings in
+    `documentation.py`, not separate report templates. Configurations
+    without DA metadata retain custom-engine article selection; do not
+    infer DA from the current branch or an environment's package mix.
+    Existing DA setup records the metadata. Do not fabricate DA guidance
+    when no corresponding published article has been verified.
+
 ---
 
 ## Things you must NOT do

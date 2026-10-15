@@ -978,8 +978,8 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
 # ───────────────────────────────────────────────────────────────────────
 
 _DOC_LINK_INFRA_006 = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service/prepare#allow-the-external-systems-connector"
+    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+    "employee-self-service/prepare#allow-the-external-systems-connector-within-power-platform"
 )
 
 
