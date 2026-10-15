@@ -20,8 +20,9 @@ from ``oid``. The API validates the token and enforces authorization.
 
 A 401 allows one refresh and replay for the original account and tenant.
 The initial credential source is retained: explicit tokens are reread and
-MSAL refresh is silent. Unavailable credentials require renewed sign-in or
-a replacement token from the maker.
+MSAL tries silent refresh before browser reauthentication. Reauthentication
+uses an available account hint, and the replacement token must identify the
+original account and tenant before the request is replayed.
 """
 
 from __future__ import annotations
@@ -163,49 +164,69 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
     return result["access_token"]
 
 
-def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+def _get_login_hint(identity: dict[str, Any]) -> str | None:
+    """Extract an advisory sign-in hint; tenant and object id bind the identity."""
+    for name in ("login_hint", "preferred_username", "upn", "unique_name", "username"):
+        value = identity.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _refresh_msal_token(
+    tenant_id: str, object_id: str, *, login_hint: str | None = None
+) -> str:
     import msal
 
     app = _create_msal_app(tenant_id)
     # get_accounts() groups profiles by home account and can expose another
     # tenant's local id. Resolve the original tenant profile through the cache.
-    home_account_ids = {
-        account["home_account_id"]
+    profiles = [
+        account
         for account in app.token_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
         if isinstance(realm := account.get("realm"), str)
         and realm.casefold() == tenant_id.casefold()
         and isinstance(local_id := account.get("local_account_id"), str)
         and local_id.casefold() == object_id.casefold()
         and account.get("home_account_id")
-    }
+    ]
+    home_account_ids = {profile["home_account_id"] for profile in profiles}
     accounts = [
         account for account in app.get_accounts()
         if account.get("home_account_id") in home_account_ids
     ]
-    if len(accounts) != 1:
-        raise AgentConfigApiError(
-            "The original account is unavailable for token refresh. "
-            "Sign in again as that account and retry.",
-            http_status=401,
+    result = None
+    if len(accounts) == 1:
+        result = app.acquire_token_silent(
+            _SCOPE, account=accounts[0], force_refresh=True
         )
-    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
     if not result or not result.get("access_token"):
+        if login_hint is None and len(profiles) == 1:
+            login_hint = _get_login_hint(profiles[0])
+        result = _acquire_token_interactive_form_post(app, login_hint=login_hint)
+    if not result or not result.get("access_token"):
+        error = result.get("error", "unknown_error") if result else "unknown_error"
         raise AgentConfigApiError(
-            "Could not refresh the access token for the original account. "
-            "Sign in again as that account and retry.",
+            f"Could not reauthenticate the original account ({error}). "
+            "Retry and complete sign-in with that account.",
             http_status=401,
         )
     return result["access_token"]
 
 
-def _acquire_token_interactive_form_post(app: Any) -> dict[str, Any]:
+def _acquire_token_interactive_form_post(
+    app: Any, *, login_hint: str | None = None
+) -> dict[str, Any]:
     server = http.server.HTTPServer(("127.0.0.1", 0), _FormPostCaptureHandler)
     redirect_uri = f"http://localhost:{server.server_port}"
+    account_options = (
+        {"login_hint": login_hint} if login_hint else {"prompt": "select_account"}
+    )
     flow = app.initiate_auth_code_flow(
         scopes=_SCOPE,
         redirect_uri=redirect_uri,
         response_mode="form_post",
-        prompt="select_account",
+        **account_options,
     )
 
     _FormPostCaptureHandler.captured = {}
@@ -313,6 +334,7 @@ class AgentConfigBaseClient:
         self._token = _resolve_token()
         self.tenant_id = _decode_tenant_id_from_jwt(self._token)
         self._object_id = _decode_object_id_from_jwt(self._token)
+        self._login_hint = _get_login_hint(_decode_jwt_payload(self._token))
         self.max_retries = 3
         self.timeout = 30.0
         self._transport = transport
@@ -377,7 +399,9 @@ class AgentConfigBaseClient:
                     http_status=401,
                 )
         else:
-            token = _refresh_msal_token(self.tenant_id, self._object_id)
+            token = _refresh_msal_token(
+                self.tenant_id, self._object_id, login_hint=self._login_hint
+            )
 
         _validate_token_tenant(token, self.tenant_id)
         object_id = _decode_object_id_from_jwt(token)
@@ -416,9 +440,10 @@ class AgentConfigBaseClient:
         """Execute a request with bounded retry for transient responses.
 
         One 401 recovery per request refreshes credentials for the original
-        account and tenant through the initial token source. MSAL refresh is
-        silent; explicit token sources are reread. Authentication failures
-        after the single replay are surfaced to the caller.
+        account and tenant through the initial token source. MSAL tries silent
+        refresh, then account-hinted browser sign-in if needed; explicit token
+        sources are reread. Authentication failures after the single replay
+        are surfaced to the caller.
 
         ``transform_payload`` controls the landing-page camelCase/PascalCase key
         conversion applied to the response body. It defaults to ``True`` so the
