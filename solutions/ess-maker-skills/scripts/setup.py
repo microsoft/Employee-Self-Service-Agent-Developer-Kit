@@ -30,6 +30,7 @@ Called by the onboarding skill Step 3. The agent:
 
 import argparse
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -37,7 +38,7 @@ import sys
 from datetime import date
 
 from auth import EXPECTED_CONFIG_VERSION
-from checkpoint import create_checkpoint
+from checkpoint import _require_physical_containment, create_checkpoint
 from evaluation_csv import regenerate_evaluation_exports
 from evaluation_review import REVIEW_FILENAME, metadata_from_description
 
@@ -102,13 +103,15 @@ def categorize_topic(name):
     return "General"
 
 
-def load_json(filepath):
+def load_json(filepath, *, require_complete=False):
     """Load JSON, handling both bare arrays and wrapper objects."""
     with open(filepath, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
+        if require_complete and data.get("@odata.nextLink"):
+            raise ValueError("Refresh requires all component inventory pages.")
         for key in ("value", "records", "results"):
             if key in data and isinstance(data[key], list):
                 return data[key]
@@ -120,7 +123,119 @@ def load_json(filepath):
 # Core operations
 # ---------------------------------------------------------------------------
 
-def extract_components(components, output_dir):
+def component_path(comp, evaluation_set_folders):
+    """Return the extraction path shared by refresh planning and writing."""
+    ctype = comp.get("componenttype")
+    schema = comp.get("schemaname", "unknown")
+    name = comp.get("name", schema)
+    subfolder, extension = TYPE_MAP.get(ctype, ("other", ".mcs.yml"))
+    if subfolder is None:
+        return extension
+    if ctype == 19:
+        parent_id = comp.get("parentbotcomponentid")
+        set_id = parent_id if parent_id is not None else comp.get("botcomponentid")
+        set_folder = evaluation_set_folders.get(
+            set_id, "unassigned" if parent_id else friendly_filename(name, schema),
+        )
+        subfolder = f"evaluations/{set_folder}"
+    return f"{subfolder}/{friendly_filename(name, schema)}{extension}"
+
+
+def evaluation_folders(components):
+    return {
+        comp["botcomponentid"]: friendly_filename(
+            comp.get("name", comp.get("schemaname", "evaluation-set")),
+            comp.get("schemaname", "evaluation-set"),
+        )
+        for comp in components
+        if (comp.get("componenttype") == 19
+            and not comp.get("parentbotcomponentid")
+            and comp.get("botcomponentid"))
+    }
+
+
+def checked_component_path(output_dir, relative_path):
+    """Treat manifest paths as untrusted before using them to write or delete."""
+    if not isinstance(relative_path, str):
+        raise ValueError("Component map paths must be strings.")
+    parts = relative_path.replace("\\", "/").split("/")
+    if (ntpath.splitdrive(relative_path)[0]
+            or any(part in ("", ".", "..") or ":" in part
+                   or part.endswith((" ", ".")) for part in parts)
+            or parts[0].startswith(".")
+            or not relative_path.endswith(".mcs.yml")):
+        raise ValueError(f"Unsafe component path: {relative_path}")
+    path = os.path.join(output_dir, *parts)
+    _require_physical_containment(output_dir, path, label="Component path")
+    return path
+
+
+def plan_component_refresh(components, output_dir):
+    """Validate ownership and complete inventory before changing working files.
+
+    Returns the old map and obsolete botcomponent paths. Optional inventories
+    cannot prove deletion, so their entries remain owned until fetched again.
+    """
+    map_path = os.path.join(output_dir, ".component-map.json")
+    with open(map_path, encoding="utf-8") as stream:
+        old_map = json.load(stream)
+    if not isinstance(old_map, dict):
+        raise ValueError("Refresh requires an object in .component-map.json.")
+
+    old_paths = {}
+    for relative, entry in old_map.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"Invalid component map entry: {relative}")
+        if "botcomponentid" not in entry:
+            continue
+        if not isinstance(entry["botcomponentid"], str) or not entry["botcomponentid"]:
+            raise ValueError(f"Missing component identity: {relative}")
+        path = checked_component_path(output_dir, relative)
+        if os.path.lexists(path) and not os.path.isfile(path):
+            raise ValueError(f"Mapped component is not a file: {relative}")
+        key = relative.replace("\\", "/").casefold()
+        if key in old_paths:
+            raise ValueError(f"Duplicate component map path: {relative}")
+        old_paths[key] = relative
+
+    folders = evaluation_folders(components)
+    incoming_paths = {}
+    incoming_ids = set()
+    owned_ids = {old_map[path]["botcomponentid"] for path in old_paths.values()}
+    for comp in components:
+        component_id = comp.get("botcomponentid")
+        if not isinstance(component_id, str) or not component_id:
+            raise ValueError("Refresh inventory contains a missing component identity.")
+        if component_id in incoming_ids:
+            raise ValueError(f"Duplicate incoming component identity: {component_id}")
+        incoming_ids.add(component_id)
+        data = comp.get("data")
+        if data is not None and not isinstance(data, str):
+            raise ValueError(f"Component data must be text: {component_id}")
+        if data is None or data == "":
+            if component_id in owned_ids:
+                raise ValueError(
+                    f"Previously extracted component has no usable data: {component_id}"
+                )
+            continue
+        relative = component_path(comp, folders)
+        path = checked_component_path(output_dir, relative)
+        key = relative.casefold()
+        if key in incoming_paths:
+            raise ValueError(f"Incoming components share an output path: {relative}")
+        incoming_paths[key] = relative
+        if os.path.lexists(path) and key not in old_paths:
+            raise ValueError(f"Incoming component conflicts with local-only file: {relative}")
+
+    # A new component may legitimately reuse a deleted component's old path.
+    obsolete = [
+        relative for key, relative in old_paths.items()
+        if key not in incoming_paths
+    ]
+    return old_map, obsolete
+
+
+def extract_components(components, output_dir, *, obsolete_paths=None):
     """Write each component's data to the correct subfolder. Returns stats."""
     os.makedirs(output_dir, exist_ok=True)
 
@@ -136,16 +251,7 @@ def extract_components(components, output_dir):
     # EvaluationData records point to their EvaluationSet parent by ID. Build
     # this lookup before writing so ordering from Dataverse does not matter and
     # every type-19 component lands under evaluations/<set>/.
-    evaluation_set_folders = {}
-    for comp in components:
-        if (comp.get("componenttype") == 19
-                and not comp.get("parentbotcomponentid")):
-            set_id = comp.get("botcomponentid")
-            if set_id:
-                evaluation_set_folders[set_id] = friendly_filename(
-                    comp.get("name", comp.get("schemaname", "evaluation-set")),
-                    comp.get("schemaname", "evaluation-set"),
-                )
+    evaluation_set_folders = evaluation_folders(components)
 
     topics = []
     variables = []
@@ -168,35 +274,10 @@ def extract_components(components, output_dir):
         botcomponentid = comp.get("botcomponentid")
         parent_id = comp.get("parentbotcomponentid")
 
-        mapping = TYPE_MAP.get(ctype)
-        if mapping is None:
-            subfolder, filename = "other", f"{friendly_filename(name, schemaname)}.mcs.yml"
-        else:
-            subfolder, ext = mapping
-            if subfolder is None:
-                # Singleton files like agent.mcs.yml / settings.mcs.yml
-                subfolder, filename = "", ext
-            else:
-                filename = f"{friendly_filename(name, schemaname)}{ext}"
-
-        if ctype == 19:
-            if parent_id:
-                set_folder = evaluation_set_folders.get(parent_id, "unassigned")
-            else:
-                set_folder = evaluation_set_folders.get(
-                    botcomponentid,
-                    friendly_filename(name, schemaname),
-                )
-            subfolder = f"evaluations/{set_folder}"
-
-        if subfolder:
-            folder = os.path.join(output_dir, subfolder)
-            os.makedirs(folder, exist_ok=True)
-            filepath = os.path.join(folder, filename)
-            relative_path = f"{subfolder}/{filename}"
-        else:
-            filepath = os.path.join(output_dir, filename)
-            relative_path = filename
+        relative_path = component_path(comp, evaluation_set_folders)
+        filepath = checked_component_path(output_dir, relative_path)
+        folder = os.path.dirname(filepath)
+        os.makedirs(folder, exist_ok=True)
 
         content = data.replace("\r\n", "\n")
         with open(filepath, "w", encoding="utf-8") as f:
@@ -254,14 +335,18 @@ def extract_components(components, output_dir):
         for comp in components
         if comp.get("componenttype") == 19 and comp.get("botcomponentid")
     }
-    for old_path, old_entry in existing_component_map.items():
-        if (old_entry.get("componenttype") != 19
-                or old_entry.get("botcomponentid") not in incoming_evaluation_ids
-                or old_path in component_map):
-            continue
-        stale_path = os.path.join(output_dir, *old_path.split("/"))
+    if obsolete_paths is None:
+        obsolete_paths = [
+            path for path, entry in existing_component_map.items()
+            if (entry.get("componenttype") == 19
+                and entry.get("botcomponentid") in incoming_evaluation_ids
+                and path not in component_map)
+        ]
+    for old_path in obsolete_paths:
+        stale_path = checked_component_path(output_dir, old_path)
         if os.path.isfile(stale_path):
             os.remove(stale_path)
+            print(f"Removed obsolete component: {old_path}")
 
     # Refresh preserves historical service formats; feature mutations validate strictly.
     evaluation_exports = regenerate_evaluation_exports(output_dir, strict=False)
@@ -831,7 +916,8 @@ def main():
     # script would silently overwrite local edits when the LLM forgets to
     # pass --refresh on a re-run. With --refresh, checkpoint first then
     # proceed.
-    if os.path.exists(output_dir):
+    refreshing = os.path.exists(output_dir)
+    if refreshing:
         if not args.refresh:
             print(
                 f"ERROR: {output_dir} already exists. Re-running setup will\n"
@@ -839,16 +925,10 @@ def main():
                 "overwrite, or remove the directory first."
             )
             sys.exit(1)
-        print("Creating checkpoint before refresh...")
-        # Reconfiguration can clear the saved folder or still name another agent.
-        # Checkpoint the directory being replaced and stop if preservation fails.
-        checkpoint_number = create_checkpoint(output_dir, "auto-save before refresh")
-        print(f"Created checkpoint {checkpoint_number}.")
-        print("")
 
     # Load components JSON
     print(f"Loading components from {args.components}...")
-    components = load_json(args.components)
+    components = load_json(args.components, require_complete=True)
     if not components:
         print("ERROR: No components found in JSON file.")
         sys.exit(1)
@@ -865,9 +945,30 @@ def main():
         print(f"Loading workflows from {args.workflows}...")
         workflows = load_json(args.workflows)
 
+    old_map = {}
+    obsolete_paths = None
+    if refreshing:
+        try:
+            old_map, obsolete_paths = plan_component_refresh(components, output_dir)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: Cannot safely refresh the existing snapshot: {exc}")
+            sys.exit(1)
+        print("Creating checkpoint before refresh...")
+        # Preserve the exact selected folder, not a potentially different saved target.
+        checkpoint_number = create_checkpoint(output_dir, "auto-save before refresh")
+        print(f"Created checkpoint {checkpoint_number}.")
+        print("")
+
     # Extract components to local files
     print(f"Extracting to {output_dir}/...")
-    stats = extract_components(components, output_dir)
+    stats = extract_components(
+        components, output_dir, obsolete_paths=obsolete_paths,
+    )
+    stats["component_map"] = {
+        **{path: entry for path, entry in old_map.items()
+           if "botcomponentid" not in entry},
+        **stats["component_map"],
+    }
 
     # Extract template configs to local files
     tc_stats = None

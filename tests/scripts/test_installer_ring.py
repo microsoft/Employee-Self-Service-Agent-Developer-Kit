@@ -26,15 +26,106 @@ def _quote(value: str | Path) -> str:
 
 
 @pytest.fixture(params=["powershell", "pwsh", "bash"])
-def shell(request):
+def shell(request, tmp_path_factory):
+    if request.param == "bash":
+        return _find_bash(tmp_path_factory.mktemp("bash probe's workspace"))
     executable = shutil.which(request.param)
-    if not executable and request.param == "bash":
-        git_bash = Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe"
-        if git_bash.is_file():
-            executable = str(git_bash)
     if not executable:
         pytest.skip(f"{request.param} is not installed")
     return executable
+
+
+def _bash_candidates():
+    if os.name == "nt":
+        for root in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            directory = os.environ.get(root)
+            if directory:
+                suffix = ("Programs", "Git") if root == "LOCALAPPDATA" else ("Git",)
+                candidate = Path(directory).joinpath(*suffix, "bin", "bash.exe")
+                if candidate.is_file():
+                    yield str(candidate)
+    discovered = shutil.which("bash")
+    if discovered:
+        yield discovered
+
+
+def _find_bash(probe_directory):
+    # Probe the actual Windows-path/Python contract, not just `bash -c true`.
+    probe = probe_directory / "probe.sh"
+    python_command = shlex.quote(Path(sys.executable).as_posix())
+    probe.write_text(
+        f"{python_command} -c 'from pathlib import Path; "
+        'print("BASH_PROBE_OK" if Path("probe.sh").is_file() else "WRONG_CWD")'
+        "'\n",
+        encoding="utf-8",
+    )
+    failures = []
+    for executable in dict.fromkeys(_bash_candidates()):
+        try:
+            result = subprocess.run(
+                [executable, str(probe)], cwd=probe_directory,
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            failures.append(f"{executable}: {type(exc).__name__}")
+            continue
+        if result.returncode == 0 and result.stdout.strip() == "BASH_PROBE_OK":
+            return executable
+        failures.append(f"{executable}: incompatible shell (exit {result.returncode})")
+    pytest.skip(
+        "No usable Bash for the installer tests. Install Git Bash on Windows "
+        "or Bash on other platforms. " + "; ".join(failures)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows shell discovery")
+def test_bash_candidates_prefer_git_bash_over_wsl_launcher(tmp_path, monkeypatch):
+    monkeypatch.setenv("ProgramW6432", str(tmp_path))
+    git_bash = tmp_path / "Git" / "bin" / "bash.exe"
+    git_bash.parent.mkdir(parents=True)
+    git_bash.touch()
+    launcher = r"C:\Windows\System32\bash.exe"
+    monkeypatch.setattr(shutil, "which", lambda name: launcher)
+
+    candidates = list(_bash_candidates())
+
+    assert candidates[0] == str(git_bash)
+    assert candidates[-1] == launcher
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout", "missing", "wrong-cwd"])
+def test_bash_discovery_rejects_unusable_candidate(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(sys.modules[__name__], "_bash_candidates", lambda: iter([
+        "unusable-bash", "usable-bash",
+    ]))
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["cwd"] == tmp_path
+        assert kwargs["timeout"] == 10
+        assert command[1] == str(tmp_path / "probe.sh")
+        if command[0] == "unusable-bash":
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(command, 10)
+            if failure == "missing":
+                raise FileNotFoundError("missing executable")
+            return subprocess.CompletedProcess(
+                command, 1 if failure == "exit" else 0, stdout="WRONG_CWD", stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="BASH_PROBE_OK\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    assert _find_bash(tmp_path) == "usable-bash"
+    assert [command[0] for command in calls] == ["unusable-bash", "usable-bash"]
+
+
+def test_bash_discovery_skips_with_actionable_prerequisite(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "_bash_candidates", lambda: iter([]))
+
+    with pytest.raises(pytest.skip.Exception, match="Install Git Bash"):
+        _find_bash(tmp_path)
 
 
 def _configure(shell, tmp_path, *, saved=None, ring=None, answers=(), fail=False, fail_agent=False):
