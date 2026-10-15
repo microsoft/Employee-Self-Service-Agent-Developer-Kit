@@ -480,7 +480,7 @@ def test_bootstrap_preserves_whether_ring_was_explicit(shell, tmp_path, ring):
     if Path(shell).stem == "bash":
         pytest.skip("PowerShell bootstrap contract")
     installer = (
-        "param($Branch, [switch]$FlightCheckOnly, $Ring = 'prod', $InstallRoot)\n"
+        "param($Branch, [switch]$FlightCheckOnly, $Ring = 'prod', $InstallRoot, $FlightCheckScope)\n"
         "Write-Output ('ARGS:' + (@{explicit=$PSBoundParameters.ContainsKey('Ring'); "
         "ring=$Ring} | ConvertTo-Json -Compress))"
     )
@@ -493,7 +493,7 @@ function Invoke-WebRequest {{
     [IO.File]::WriteAllText($OutFile, {_quote(installer)})
 }}
 $bootstrap = [IO.File]::ReadAllText({_quote(ROOT / 'setup' / 'bootstrap-flightcheck.ps1')})
-& ([scriptblock]::Create($bootstrap)) {invocation}
+& ([scriptblock]::Create($bootstrap)) -FlightCheckScope workday {invocation}
 """
     encoded = base64.b64encode(harness.encode("utf-16-le")).decode("ascii")
     result = subprocess.run(
