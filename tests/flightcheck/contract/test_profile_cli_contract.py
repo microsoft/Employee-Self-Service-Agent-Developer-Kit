@@ -12,6 +12,7 @@ import pytest
 
 import auth
 from flightcheck import cli, registry
+from flightcheck.agent_scope import is_declarative_agent
 from flightcheck.runner import (
     CheckResult,
     FlightCheckRunner,
@@ -166,6 +167,67 @@ def test_profile_passes_preferred_account_and_forces_read_only(
     assert result.requested_validation_context["agentSlug"] == "ess-hr"
     assert result.requested_validation_context["environmentId"] == ""
     assert result.validation_context["agentId"].endswith("3333")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("selection,expected", [
+    ("none", False),
+    ("explicit_da", True),
+    ("explicit_legacy", False),
+    ("configured_da", True),
+    ("compatibility_da", True),
+])
+def test_legacy_profile_does_not_promote_first_record_to_da_selection(
+    selection, expected, reverse, tmp_path, monkeypatch,
+) -> None:
+    # Arrange: keep the real profile and CLI runner, but replace API checks.
+    config = _config()
+    config.pop("activeAgent")
+    config["agents"] = [
+        {"slug": "hr", "releaseLine": "da"},
+        {"slug": "legacy", "releaseLine": "cea"},
+    ]
+    if reverse:
+        config["agents"].reverse()
+    if selection == "configured_da":
+        config["activeAgent"] = "hr"
+    if selection == "compatibility_da":
+        config["agent"] = {"slug": "hr", "releaseLine": "da"}
+    explicit_slug = {
+        "explicit_da": "hr",
+        "explicit_legacy": "legacy",
+    }.get(selection)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    observed = []
+
+    def check(runner):
+        observed.append(is_declarative_agent(runner))
+        return []
+
+    monkeypatch.setattr(registry, "profile_requirements", lambda _name: SimpleNamespace(
+        clients=frozenset(),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        ordered_fns=[("Applicability", check)],
+    ))
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_emit_run_telemetry", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "save_results", lambda *_a, **_k: None)
+
+    # Act.
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(_args(
+            profile="workday-legacy:diagnostic",
+            agent_slug=explicit_slug,
+            agent_schema_name=None,
+        ))
+
+    # Assert: missing evidence remains blocked, but list order never supplies DA identity.
+    assert exc.value.code == 1
+    assert observed == [expected]
 
 
 def test_profile_rejects_mixed_authenticated_accounts_without_hint(
