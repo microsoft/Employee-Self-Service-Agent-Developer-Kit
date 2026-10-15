@@ -51,7 +51,7 @@ _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
 _DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install"
+    "employee-self-service/declarative-agent-workday"
 )
 _DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
 

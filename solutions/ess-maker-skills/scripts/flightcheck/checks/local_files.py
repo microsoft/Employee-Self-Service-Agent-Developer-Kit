@@ -16,7 +16,7 @@ import yaml
 
 from ..runner import CheckResult, Priority, Role, Status
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
 
 

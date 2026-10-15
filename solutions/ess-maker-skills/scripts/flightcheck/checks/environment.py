@@ -24,7 +24,7 @@ from .licensing import (
 )
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 
 _ENV004_GRS_DESCRIPTION = "ESS agent GRS commit pin"
@@ -916,13 +916,8 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
 #                one of them.
 # ---------------------------------------------------------------------------
 
-# Pinned to the current canonical MS Learn path. The module-level DOC_BASE
-# points at /copilot/microsoft-365/employee-self-service which 301-redirects
-# to /microsoft-365/copilot/employee-self-service; bypass the redirect here
-# so this link stays stable without rewriting DOC_BASE (out of scope for this PR).
 _PREFSOL_DOC_LINK = (
-    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-    "employee-self-service/install#set-up-a-preferred-solution"
+    f"{DOC_BASE}/install#set-up-a-preferred-solution"
 )
 _PREFSOL_DESCRIPTION = "Maker has preferred customization solution selected"
 
