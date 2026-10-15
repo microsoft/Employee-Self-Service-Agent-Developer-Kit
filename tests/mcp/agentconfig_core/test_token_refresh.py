@@ -35,8 +35,8 @@ OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 OTHER_OBJECT_ID = "00000000-0000-0000-0000-000000004444"
 
 
-def _token(version, tenant=TENANT_ID, object_id=OBJECT_ID):
-    payload = {"tid": tenant, "version": version}
+def _token(version, tenant=TENANT_ID, object_id=OBJECT_ID, **claims):
+    payload = {"tid": tenant, "version": version, **claims}
     if object_id is not None:
         payload["oid"] = object_id
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
@@ -50,7 +50,7 @@ def isolate_authentication(monkeypatch):
     monkeypatch.setattr(base_client, "configured_tenant_id", lambda: TENANT_ID)
 
     def unexpected_interactive(*args, **kwargs):
-        pytest.fail("Automatic refresh must not open an interactive sign-in")
+        pytest.fail("Unexpected interactive sign-in")
 
     monkeypatch.setattr(
         base_client, "_acquire_token_interactive_form_post", unexpected_interactive
@@ -167,8 +167,10 @@ def test_replacement_cannot_change_the_original_account_or_tenant(
     assert requests == [f"Bearer {initial}"]
 
 
-def _mock_msal_refresh(monkeypatch, result, accounts=None, profiles=None):
-    original = _token("initial")
+def _mock_msal_refresh(
+    monkeypatch, result, accounts=None, profiles=None, token_claims=None
+):
+    original = _token("initial", **(token_claims or {}))
     monkeypatch.setattr(base_client, "_resolve_token", lambda: original)
     calls = []
     matching_account = {
@@ -249,11 +251,23 @@ def test_msal_refresh_resolves_the_original_profile_in_a_multitenant_account(mon
     assert calls == [(base_client._SCOPE, grouped_account, {"force_refresh": True})]
 
 
-def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(monkeypatch):
+@pytest.mark.parametrize("interactive", [False, True])
+def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(
+    monkeypatch, interactive
+):
     replacement = _token("replacement")
     initial, account, calls = _mock_msal_refresh(
-        monkeypatch, {"access_token": replacement}
+        monkeypatch,
+        {"error": "interaction_required"} if interactive else {"access_token": replacement},
     )
+    sign_ins = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": replacement}
+
+    if interactive:
+        monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
     requests = []
 
     def handler(request):
@@ -273,14 +287,25 @@ def test_msal_refresh_is_forced_for_original_identity_and_bounded_on_401(monkeyp
 
     asyncio.run(run())
     assert calls == [(base_client._SCOPE, account, {"force_refresh": True})]
+    assert len(sign_ins) == int(interactive)
     assert requests == [f"Bearer {initial}", f"Bearer {replacement}"]
 
 
 @pytest.mark.parametrize("failure", ["missing-account", "interaction-required"])
-def test_failed_silent_refresh_does_not_select_another_account(monkeypatch, failure):
+@pytest.mark.parametrize("interactive_error", ["access_denied", "timeout"])
+def test_failed_reauthentication_does_not_select_another_account(
+    monkeypatch, failure, interactive_error
+):
     result = {"error": "interaction_required"}
     accounts = [] if failure == "missing-account" else None
     initial, _, calls = _mock_msal_refresh(monkeypatch, result, accounts)
+    sign_ins = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"error": interactive_error, "error_description": "private details"}
+
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
     requests = []
 
     def handler(request):
@@ -295,17 +320,32 @@ def test_failed_silent_refresh_does_not_select_another_account(monkeypatch, fail
                 await client._request("GET", "/resource")
             assert caught.value.http_status == 401
             assert "original account" in str(caught.value)
+            assert interactive_error in str(caught.value)
+            assert "private details" not in str(caught.value)
         finally:
             await client.aclose()
 
     asyncio.run(run())
+    assert sign_ins == [None]
     assert requests == [f"Bearer {initial}"]
     assert len(calls) == (0 if failure == "missing-account" else 1)
 
 
-def test_concurrent_401_responses_share_one_refresh(monkeypatch):
+@pytest.mark.parametrize("interactive", [False, True])
+def test_concurrent_401_responses_share_one_refresh(monkeypatch, interactive):
     replacement = _token("replacement")
-    initial, _, calls = _mock_msal_refresh(monkeypatch, {"access_token": replacement})
+    initial, _, calls = _mock_msal_refresh(
+        monkeypatch,
+        {"error": "interaction_required"} if interactive else {"access_token": replacement},
+    )
+    sign_ins = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": replacement}
+
+    if interactive:
+        monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
     rejected = 0
     requests = []
 
@@ -340,7 +380,168 @@ def test_concurrent_401_responses_share_one_refresh(monkeypatch):
 
     asyncio.run(run())
     assert len(calls) == 1
+    assert len(sign_ins) == int(interactive)
     assert len(requests) == 4
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing-account",
+        "missing-profile",
+        "ambiguous-account",
+        "interaction-required",
+        "empty-result",
+    ],
+)
+def test_reauthentication_recovers_and_keeps_the_client_usable(
+    monkeypatch, method, failure
+):
+    accounts = [] if failure == "missing-account" else None
+    profiles = [] if failure == "missing-profile" else None
+    if failure == "ambiguous-account":
+        accounts = [
+            {
+                "home_account_id": home_account_id,
+                "local_account_id": OBJECT_ID,
+                "realm": TENANT_ID,
+            }
+            for home_account_id in ("first-home-account", "second-home-account")
+        ]
+    initial, _, calls = _mock_msal_refresh(
+        monkeypatch,
+        None if failure == "empty-result" else {"error": "interaction_required"},
+        accounts=accounts,
+        profiles=profiles,
+        token_claims={"preferred_username": "maker@example.test"},
+    )
+    replacement = _token("replacement")
+    sign_ins = []
+    requests = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": replacement}
+
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
+
+    def handler(request):
+        authorization = request.headers["Authorization"]
+        requests.append(authorization)
+        if authorization == f"Bearer {initial}":
+            return httpx.Response(401, json={})
+        assert authorization == f"Bearer {replacement}"
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler)
+
+    async def run():
+        try:
+            assert await client._request(method, "/resource", idempotent=False) == {"ok": True}
+            assert await client._request("GET", "/next-tool") == {"ok": True}
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert sign_ins == ["maker@example.test"]
+    assert len(calls) == int(failure in ("interaction-required", "empty-result"))
+    assert requests == [
+        f"Bearer {initial}", f"Bearer {replacement}", f"Bearer {replacement}",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("claims", "cached_username", "expected_hint"),
+    [
+        (
+            {"login_hint": "opaque-hint", "preferred_username": "maker@example.test"},
+            "cached@example.test",
+            "opaque-hint",
+        ),
+        (
+            {"preferred_username": "maker@example.test", "upn": "alias@example.test"},
+            "cached@example.test",
+            "maker@example.test",
+        ),
+        ({"upn": "maker@example.test"}, None, "maker@example.test"),
+        ({"unique_name": "maker@example.test"}, None, "maker@example.test"),
+        ({"preferred_username": "  maker@example.test  "}, None, "maker@example.test"),
+        (
+            {"login_hint": [], "preferred_username": False, "upn": " "},
+            "cached@example.test",
+            "cached@example.test",
+        ),
+        ({}, "cached@example.test", "cached@example.test"),
+        ({}, None, None),
+        ({}, 123, None),
+    ],
+)
+def test_reauthentication_hints_the_original_account(
+    monkeypatch, claims, cached_username, expected_hint
+):
+    _, account, _ = _mock_msal_refresh(
+        monkeypatch, {"error": "interaction_required"}, token_claims=claims
+    )
+    account["username"] = cached_username
+    replacement = _token("replacement")
+    sign_ins = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": replacement}
+
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    assert client._acquire_replacement_token() == replacement
+    assert sign_ins == [expected_hint]
+
+
+@pytest.mark.parametrize(
+    "failure", ["different-tenant", "different-user", "missing-user", "unchanged-token"]
+)
+def test_interactive_reauthentication_cannot_replace_the_original_identity(
+    monkeypatch, failure
+):
+    initial, _, _ = _mock_msal_refresh(
+        monkeypatch, {"error": "interaction_required"},
+        token_claims={"preferred_username": "maker@example.test"},
+    )
+    replacement = {
+        "different-tenant": _token("replacement", tenant=OTHER_TENANT_ID),
+        "different-user": _token("replacement", object_id=OTHER_OBJECT_ID),
+        "missing-user": _token("replacement", object_id=None),
+        "unchanged-token": initial,
+    }[failure]
+    sign_ins = []
+    requests = []
+
+    def sign_in(app, *, login_hint):
+        sign_ins.append(login_hint)
+        return {"access_token": replacement}
+
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", sign_in)
+
+    def handler(request):
+        requests.append(request.headers["Authorization"])
+        return httpx.Response(401, json={})
+
+    client = _client(handler)
+
+    async def run():
+        try:
+            with pytest.raises((base_client.AgentConfigApiError, ValueError)):
+                await client._request("POST", "/resource", idempotent=False)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert client._token == initial
+    assert client.tenant_id == TENANT_ID
+    assert client._object_id == OBJECT_ID
+    assert sign_ins == ["maker@example.test"]
+    assert requests == [f"Bearer {initial}"]
 
 
 @pytest.mark.parametrize("status", [400, 403, 404, 409, 412])
