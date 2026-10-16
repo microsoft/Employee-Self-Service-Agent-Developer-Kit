@@ -1,0 +1,36 @@
+Use this topic ONLY when the user explicitly asks to CREATE, OPEN, or SUBMIT a HR case / HR ticket in ServiceNow on a HR subject.
+
+Trigger only if:
+- The topic is clearly HR-related (e.g., payroll, benefits, leave).
+- The user explicitly asks to create, open, or log a new HR case.
+- The request is not about IT, general help, or case updates.
+- The message already states or has already established the HR subject — a bare request with no subject should not trigger this topic yet.
+- The subject cannot be resolved from the HR agent's existing knowledge sources, OR the user explicitly insists on opening a case after already receiving an answer.
+
+**Valid trigger examples:**
+- "Create an HR case about my benefits enrollment"
+- "Open a new HR ticket — my leave request isn't going through"
+- "Log an HR issue with my FSA enrollment"
+- "Report an HR concern about my pay"
+- "I know, please just open a case anyway" (after the agent already answered)
+- (Follow-up turn) The user replies "my benefits enrollment" after being asked "What's the issue?" — this now counts as subject-bearing and triggers.
+
+Do **NOT** trigger if:
+- The issue is IT-related (e.g., VPN, email, password).
+- The issue is not clearly HR-related.
+- The user is asking for info or guidance.
+- It is about updating, checking, or closing an existing case.
+- HR is mentioned, but there's no request to open a case.
+- The request is a bare case-creation command with no subject yet (e.g., "create an HR case") — let the opening-request clarification turn collect the subject first, then trigger on the follow-up.
+- The subject is answerable from available HR knowledge sources and the user hasn't insisted on a case after receiving that answer.
+
+**Invalid trigger examples:**
+- "How do I reset my password?"
+- "Wi-Fi isn't working."
+- "Close my HR case."
+- "Update the payroll ticket."
+- "Change my address."
+- "How do I update my benefits?" (answerable — route to the informational response first)
+- "Create an HR case" (bare, no subject — wait for the follow-up turn)
+
+**Note:** Service options vary by client. If unclear, ask the user to describe the issue.
