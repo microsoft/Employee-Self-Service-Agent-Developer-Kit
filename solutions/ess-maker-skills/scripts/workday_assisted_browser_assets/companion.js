@@ -243,7 +243,13 @@ async function loadEvidenceImage() {
 }
 
 /** Request and render contextual visual help independently of candidate confirmation. */
-async function renderVisualHelp(view, visualHelp, metadata, revision) {
+async function renderVisualHelp(
+  view,
+  visualHelp,
+  metadata,
+  revision,
+  pointerStatus,
+) {
   if (!view?.visualHelp || !visualHelp) {
     evidence.hidden = true;
     evidence.replaceChildren();
@@ -261,6 +267,8 @@ async function renderVisualHelp(view, visualHelp, metadata, revision) {
     visualHelp.failedAt || "",
     visualHelp.completedAt || "",
     metadata?.id || "",
+    pointerStatus?.status || "",
+    pointerStatus?.updatedAt || "",
   ].join(":");
   if (key === renderedVisualHelpKey) {
     return;
@@ -302,6 +310,12 @@ async function renderVisualHelp(view, visualHelp, metadata, revision) {
   if (visualHelp.status === "requested") {
     button.textContent = "Preparing screenshot...";
     button.disabled = true;
+  } else if (pointerStatus?.status !== "ready") {
+    button.textContent =
+      pointerStatus?.status === "failed"
+        ? "Visual guidance unavailable"
+        : "Locating target...";
+    button.disabled = true;
   } else {
     button.textContent =
       visualHelp.status === "failed"
@@ -332,6 +346,14 @@ async function renderVisualHelp(view, visualHelp, metadata, revision) {
       textElement(
         "p",
         visualHelp.error || "The screenshot could not be prepared.",
+        "decision-error",
+      ),
+    );
+  } else if (pointerStatus?.status === "failed") {
+    nodes.push(
+      textElement(
+        "p",
+        pointerStatus.error || "The target could not be positioned.",
         "decision-error",
       ),
     );
@@ -414,7 +436,7 @@ function renderConfirmation(view, result, revision) {
     nodes.push(
       textElement(
         "p",
-        "Search again requested. The existing row authorization remains active.",
+        "Review again requested. The existing row authorization remains active.",
       ),
     );
     confirmation.dataset.status = "checking";
@@ -442,11 +464,108 @@ function renderEntry(view, result, revision) {
     return;
   }
   if (result.status === "submitted") {
+    const submittedMultiple =
+      result.values && typeof result.values === "object";
     entry.replaceChildren(
-      textElement("h2", "Worksheet value submitted"),
-      textElement("p", "The session will record this worksheet value."),
+      textElement(
+        "h2",
+        submittedMultiple
+          ? "Worksheet values submitted"
+          : "Worksheet value submitted",
+      ),
+      textElement(
+        "p",
+        submittedMultiple
+          ? "The session will record these worksheet values."
+          : "The session will record this worksheet value.",
+      ),
     );
     entry.dataset.status = "success";
+    entry.hidden = false;
+    renderedEntryKey = key;
+    return;
+  }
+  const submitValue = async (payload, buttons) => {
+    for (const button of buttons) {
+      button.disabled = true;
+    }
+    try {
+      const response = await request("/api/entry", {
+        method: "POST",
+        body: JSON.stringify({
+          operation: view.entry.operation,
+          revision,
+          ...payload,
+        }),
+      });
+      renderEntry(view, response.entry, revision);
+    } catch (error) {
+      for (const button of buttons) {
+        button.disabled = false;
+      }
+      entry.append(textElement("p", error.message, "decision-error"));
+    }
+  };
+  if (Array.isArray(view.entry.options)) {
+    const actions = document.createElement("div");
+    actions.className = "confirmation-actions";
+    const buttons = view.entry.options.map((option, index) => {
+      const button = textElement(
+        "button",
+        option,
+        index === 0 ? "primary-action" : "secondary-action",
+      );
+      button.type = "button";
+      button.addEventListener("click", () => {
+        void submitValue({ value: option }, buttons);
+      });
+      actions.append(button);
+      return button;
+    });
+    entry.replaceChildren(
+      textElement("h2", "Choose the worksheet response"),
+      textElement("p", view.entry.label),
+      actions,
+    );
+    entry.dataset.status = "checking";
+    entry.hidden = false;
+    renderedEntryKey = key;
+    return;
+  }
+  if (Array.isArray(view.entry.inputs)) {
+    const inputs = view.entry.inputs.map((inputDefinition, index) => {
+      const label = textElement("label", inputDefinition.label);
+      const input = document.createElement("input");
+      input.id = `manual-entry-value-${index}`;
+      input.type = "text";
+      input.placeholder = inputDefinition.placeholder;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      label.htmlFor = input.id;
+      return { inputDefinition, label, input };
+    });
+    const button = textElement(
+      "button",
+      view.entry.submitLabel,
+      "primary-action",
+    );
+    button.type = "button";
+    button.addEventListener("click", () => {
+      const values = Object.fromEntries(
+        inputs.map(({ inputDefinition, input }) => [
+          inputDefinition.key,
+          input.value,
+        ]),
+      );
+      void submitValue({ values }, [button]);
+    });
+    entry.replaceChildren(
+      textElement("h2", "Enter the values manually"),
+      textElement("p", view.entry.label),
+      ...inputs.flatMap(({ label, input }) => [label, input]),
+      button,
+    );
+    entry.dataset.status = "checking";
     entry.hidden = false;
     renderedEntryKey = key;
     return;
@@ -466,22 +585,8 @@ function renderEntry(view, result, revision) {
   );
   button.type = "button";
   // Submit manual text only through the entry contract for the displayed revision.
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    try {
-      const response = await request("/api/entry", {
-        method: "POST",
-        body: JSON.stringify({
-          operation: view.entry.operation,
-          revision,
-          value: input.value,
-        }),
-      });
-      renderEntry(view, response.entry, revision);
-    } catch (error) {
-      button.disabled = false;
-      entry.append(textElement("p", error.message, "decision-error"));
-    }
+  button.addEventListener("click", () => {
+    void submitValue({ value: input.value }, [button]);
   });
   entry.replaceChildren(
     textElement("h2", "Enter the value manually"),
@@ -494,11 +599,66 @@ function renderEntry(view, result, revision) {
   renderedEntryKey = key;
 }
 
+/** Spread nearby targets so every authorized application pointer remains usable. */
+function layoutTargetPointers(metadata) {
+  const pointers = Array.isArray(metadata) ? metadata : [];
+  const positioned = pointers
+    .map((pointer) => ({
+      pointer,
+      desired: Math.max(
+        5,
+        Math.min(95, Number(pointer.positionRatio) * 100),
+      ),
+    }))
+    .sort((left, right) => left.desired - right.desired);
+  const minimumGap = 5;
+  for (let start = 0; start < positioned.length; ) {
+    let end = start + 1;
+    while (
+      end < positioned.length &&
+      positioned[end].desired - positioned[end - 1].desired < minimumGap
+    ) {
+      end += 1;
+    }
+    const group = positioned.slice(start, end);
+    const center =
+      group.reduce((total, item) => total + item.desired, 0) / group.length;
+    const span = minimumGap * (group.length - 1);
+    const first = Math.max(5, Math.min(95 - span, center - span / 2));
+    for (let index = 0; index < group.length; index += 1) {
+      group[index].position = first + minimumGap * index;
+    }
+    start = end;
+  }
+  for (let index = 1; index < positioned.length; index += 1) {
+    positioned[index].position = Math.max(
+      positioned[index].position,
+      positioned[index - 1].position + minimumGap,
+    );
+  }
+  if (
+    positioned.length &&
+    positioned[positioned.length - 1].position > 95
+  ) {
+    const shift = positioned[positioned.length - 1].position - 95;
+    for (const item of positioned) {
+      item.position -= shift;
+    }
+  }
+  if (positioned.length && positioned[0].position < 5) {
+    const shift = 5 - positioned[0].position;
+    for (const item of positioned) {
+      item.position += shift;
+    }
+  }
+  return positioned;
+}
+
 /** Project authorized application targets into stable, accessible rail pointers. */
 function renderTargetPointers(metadata) {
-  const pointers = Array.isArray(metadata) ? metadata : [];
+  const pointers = layoutTargetPointers(metadata);
   // Build a stable key so unchanged target sets are not rendered repeatedly.
-  const key = pointers.map((pointer) => pointer.id).join("|");
+  const key = pointers.map(({ pointer }) => pointer.id).join("|");
   if (key === renderedTargetPointerKey) {
     return;
   }
@@ -508,24 +668,28 @@ function renderTargetPointers(metadata) {
     renderedTargetPointerKey = key;
     return;
   }
-  for (const metadata of pointers) {
-    const percent = Math.max(
-      5,
-      Math.min(95, Number(metadata.positionRatio) * 100),
-    );
+  for (let index = 0; index < pointers.length; index += 1) {
+    const { pointer: metadata, position } = pointers[index];
+    const ordinal =
+      pointers.length > 1
+        ? `Target ${index + 1} of ${pointers.length}. `
+        : "";
     const guidance = metadata.centered
-      ? "Use " + metadata.label + " in the application pane."
-      : metadata.label +
+      ? ordinal + "Use " + metadata.label + " in the application pane."
+      : ordinal +
+        metadata.label +
         " is visible in the application pane but could not be centered.";
     const marker = document.createElement("div");
     marker.className = "target-marker";
-    marker.style.setProperty("--target-y", percent + "%");
+    marker.style.setProperty("--target-y", position + "%");
     marker.dataset.open = "false";
     const pointer = document.createElement("button");
     pointer.className = "target-pointer";
     pointer.type = "button";
     pointer.textContent = "←";
     pointer.setAttribute("aria-label", guidance);
+    pointer.setAttribute("aria-posinset", String(index + 1));
+    pointer.setAttribute("aria-setsize", String(pointers.length));
     const tooltip = document.createElement("div");
     tooltip.className = "target-tooltip";
     tooltip.setAttribute("role", "tooltip");
@@ -602,18 +766,19 @@ async function poll() {
   try {
     const payload = await request("/api/view");
     render(payload);
-    await renderVisualHelp(
-      payload.view,
-      payload.visualHelp,
-      payload.evidenceImage,
-      payload.revision,
-    );
     renderCollection(payload.collection);
     renderEntry(payload.view, payload.entry, payload.revision);
     renderConfirmation(payload.view, payload.confirmation, payload.revision);
     renderTargetPointers(
       payload.targetPointers ||
         (payload.targetPointer ? [payload.targetPointer] : []),
+    );
+    void renderVisualHelp(
+      payload.view,
+      payload.visualHelp,
+      payload.evidenceImage,
+      payload.revision,
+      payload.targetPointersStatus,
     );
     await acknowledgeRender();
     connection.textContent = "Guidance connected";

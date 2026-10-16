@@ -92,6 +92,256 @@ ENTRA_WORKSHEET_LABEL_ALIASES = {
         "Certificate expiration date (active certificate row)"
     ),
 }
+ENTRA_WORKSHEET_CHOICE_OUTCOMES = {
+    "SAML configuration": {
+        "Yes, confirmed": "confirmed",
+    },
+    "Signing certificate": {
+        "Yes, confirmed": "confirmed",
+    },
+    "Authorized connector": {
+        "Yes, confirmed": "confirmed",
+    },
+    "Permissions and consent": {
+        "Yes, permissions and consent are confirmed": "confirmed",
+    },
+    "Employee assignment": {
+        "Yes, access is confirmed or assignment is not required": "confirmed",
+    },
+    "Existing configuration": {
+        "Preserved without changes": "preserved",
+        "Remediated without replacing unrelated configuration": "remediated",
+    },
+}
+ENTRA_CAPTURE_INSTRUCTIONS = (
+    {
+        "information": "Directory name",
+        "fields": ("selectedDirectoryDisplayName",),
+        "portalLocation": (
+            "Microsoft Entra admin center -> Microsoft Entra ID -> Overview"
+        ),
+        "instruction": (
+            "Record the exact display name of the deployment directory."
+        ),
+        "exampleValue": "Contoso",
+    },
+    {
+        "information": "Enterprise application",
+        "fields": ("applicationDisplayName",),
+        "portalLocation": (
+            "Microsoft Entra ID -> Enterprise applications -> the exact "
+            "Workday application -> Overview"
+        ),
+        "instruction": "Record the exact application display name.",
+        "exampleValue": "Workday",
+    },
+    {
+        "information": "Application ID",
+        "fields": ("applicationId",),
+        "portalLocation": (
+            "Microsoft Entra ID -> Enterprise applications -> the exact "
+            "Workday application -> Overview"
+        ),
+        "instruction": (
+            "Record the Application ID. Do not record either Object ID."
+        ),
+        "exampleValue": "11111111-1111-1111-1111-111111111111",
+    },
+    {
+        "information": "Selected Reply URL",
+        "fields": ("replyUrl",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Basic SAML Configuration"
+        ),
+        "instruction": (
+            "Record the Reply URL intended for this Workday tenant."
+        ),
+        "exampleValue": (
+            "https://wd5.myworkday.com/contoso/login-saml2.htmld"
+        ),
+    },
+    {
+        "information": "NameID source",
+        "fields": ("nameIdSource", "entraChecks.nameId"),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Attributes & Claims -> Unique User "
+            "Identifier (Name ID)"
+        ),
+        "instruction": "Record the exact source attribute.",
+        "exampleValue": "user.userPrincipalName",
+    },
+    {
+        "information": "SAML signing",
+        "fields": (
+            "samlSigningOption",
+            "entraChecks.samlSigningOption",
+        ),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate card -> "
+            "Edit pencil -> Signing Option"
+        ),
+        "instruction": (
+            "Record the exact value shown in the Signing Option field."
+        ),
+        "exampleValue": "Sign SAML response and assertion",
+    },
+    {
+        "information": "Certificate thumbprint (active certificate row)",
+        "fields": ("certificateThumbprint",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> active "
+            "certificate row"
+        ),
+        "instruction": "Record the active certificate thumbprint.",
+        "exampleValue": "A1B2C3D4E5F6",
+    },
+    {
+        "information": (
+            "Certificate expiration date (active certificate row)"
+        ),
+        "fields": ("certificateValidTo",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> active "
+            "certificate row"
+        ),
+        "instruction": "Record the Expiration date exactly as displayed.",
+        "exampleValue": "2027-01-01",
+    },
+    {
+        "information": "SAML configuration",
+        "fields": ("entraChecks.samlMode",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Set up Workday -> Login URL"
+        ),
+        "instruction": "Confirm the Login URL is configured.",
+        "exampleValue": "Yes, confirmed",
+    },
+    {
+        "information": "Signing certificate",
+        "fields": ("entraChecks.signingCertificate",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> "
+            "Certificate (Base64) -> Download"
+        ),
+        "instruction": (
+            "Confirm the active Base64 certificate was downloaded and "
+            "transferred through the approved customer channel to the person "
+            "completing the Workday handoff. Do not return the certificate in "
+            "chat."
+        ),
+        "exampleValue": "Yes, confirmed",
+    },
+    {
+        "information": "Authorized connector",
+        "fields": ("entraChecks.connectorPreauthorized",),
+        "portalLocation": (
+            "App registrations -> the exact Workday registration -> Expose "
+            "an API -> Application ID URI, Scopes defined by this API, and "
+            "Authorized client applications"
+        ),
+        "instruction": (
+            "On Expose an API, ensure the Application ID URI is "
+            "api://{Application ID}, add or repair only the "
+            "user_impersonation scope, and authorize Workday connector "
+            f"{WORKDAY_CONNECTOR_APP_ID} for that scope. Preserve all "
+            "unrelated scopes and authorized clients. Confirm after this "
+            "configuration is complete."
+        ),
+        "exampleValue": "Yes, confirmed",
+    },
+    {
+        "information": "Permissions and consent",
+        "fields": (
+            "entraChecks.graphDelegatedPermissions",
+            "entraChecks.adminConsent",
+        ),
+        "portalLocation": (
+            "App registrations -> the exact Workday registration -> API "
+            "permissions -> Microsoft Graph delegated permissions"
+        ),
+        "instruction": (
+            "On API permissions, add or verify the Microsoft Graph delegated "
+            "permissions openid, profile, and User.Read, preserving unrelated "
+            "permissions. Grant administrator consent for the tenant, then "
+            "confirm all three permissions show granted consent."
+        ),
+        "exampleValue": (
+            "Yes, permissions and consent are confirmed"
+        ),
+    },
+    {
+        "information": "Employee assignment",
+        "fields": ("entraChecks.userAssignment",),
+        "portalLocation": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Users and groups"
+        ),
+        "instruction": (
+            "On Users and groups, add or confirm that the intended ESS "
+            "employee security group is present. We prefer a maintained "
+            "group over individual users. Confirm after access is configured."
+        ),
+        "exampleValue": (
+            "Yes, access is confirmed or assignment is not required"
+        ),
+    },
+    {
+        "information": "Existing configuration",
+        "fields": (
+            "entraChecks.existingScopesPreserved",
+            "entraChecks.authorizedClientsPreserved",
+            "entraChecks.permissionsPreserved",
+        ),
+        "portalLocation": (
+            "App registrations -> the exact Workday registration -> Expose "
+            "an API and API permissions"
+        ),
+        "instruction": (
+            "Confirm unrelated scopes, authorized clients, and permissions "
+            "were preserved. Choose whether they were already preserved or "
+            "were remediated without replacing unrelated configuration."
+        ),
+        "exampleValue": "Preserved without changes",
+    },
+)
+
+
+def _copy_capture_instruction(
+    instruction: Mapping[str, Any],
+) -> dict[str, Any]:
+    copied = {
+        **instruction,
+        "fields": list(instruction["fields"]),
+    }
+    choices = ENTRA_WORKSHEET_CHOICE_OUTCOMES.get(
+        str(instruction["information"])
+    )
+    if choices is not None:
+        copied["acceptedValues"] = list(choices)
+    return copied
+
+
+def entra_capture_instructions() -> list[dict[str, Any]]:
+    """Return independent administrator capture rows for rendering."""
+    return [
+        _copy_capture_instruction(instruction)
+        for instruction in ENTRA_CAPTURE_INSTRUCTIONS
+    ]
+
+
+def entra_capture_instruction(information: str) -> dict[str, Any]:
+    """Return one administrator capture row by its canonical worksheet label."""
+    for instruction in ENTRA_CAPTURE_INSTRUCTIONS:
+        if instruction["information"] == information:
+            return _copy_capture_instruction(instruction)
+    raise KeyError(information)
 
 
 def parse_entra_return_worksheet(
@@ -104,33 +354,35 @@ def parse_entra_return_worksheet(
         label="Microsoft Entra app administrator return worksheet",
         label_aliases=ENTRA_WORKSHEET_LABEL_ALIASES,
     )
-    confirmed = {
-        "Yes, confirmed": "confirmed",
-    }
     permissions = _worksheet_choice(
         values,
         "Permissions and consent",
-        {
-            "Yes, permissions and consent are confirmed": "confirmed",
-        },
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Permissions and consent"],
     )
     preservation = _worksheet_choice(
         values,
         "Existing configuration",
-        {
-            "Preserved without changes": "preserved",
-            "Remediated without replacing unrelated configuration": "remediated",
-        },
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Existing configuration"],
     )
-    _worksheet_choice(values, "SAML configuration", confirmed)
-    _worksheet_choice(values, "Signing certificate", confirmed)
-    _worksheet_choice(values, "Authorized connector", confirmed)
+    _worksheet_choice(
+        values,
+        "SAML configuration",
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["SAML configuration"],
+    )
+    _worksheet_choice(
+        values,
+        "Signing certificate",
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Signing certificate"],
+    )
+    _worksheet_choice(
+        values,
+        "Authorized connector",
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Authorized connector"],
+    )
     _worksheet_choice(
         values,
         "Employee assignment",
-        {
-            "Yes, access is confirmed or assignment is not required": "confirmed",
-        },
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Employee assignment"],
     )
     name_id = _safe_nonsecret_text(
         values["NameID source"],
@@ -419,195 +671,7 @@ def build_entra_handoff(
         },
         "requiresRediscovery": not guided and app is None,
         "actions": actions,
-        "captureInstructions": [
-            {
-                "information": "Directory name",
-                "fields": ["selectedDirectoryDisplayName"],
-                "portalLocation": (
-                    "Microsoft Entra admin center -> Microsoft Entra ID -> Overview"
-                ),
-                "instruction": (
-                    "Record the exact display name of the deployment directory."
-                ),
-                "exampleValue": "Contoso",
-            },
-            {
-                "information": "Enterprise application",
-                "fields": ["applicationDisplayName"],
-                "portalLocation": (
-                    "Microsoft Entra ID -> Enterprise applications -> the "
-                    "exact Workday application -> Overview"
-                ),
-                "instruction": "Record the exact application display name.",
-                "exampleValue": "Workday",
-            },
-            {
-                "information": "Application ID",
-                "fields": ["applicationId"],
-                "portalLocation": (
-                    "Microsoft Entra ID -> Enterprise applications -> the "
-                    "exact Workday application -> Overview"
-                ),
-                "instruction": (
-                    "Record the Application ID. Do not record either Object ID."
-                ),
-                "exampleValue": "11111111-1111-1111-1111-111111111111",
-            },
-            {
-                "information": "Selected Reply URL",
-                "fields": ["replyUrl"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> Basic SAML "
-                    "Configuration"
-                ),
-                "instruction": (
-                    "Record the Reply URL intended for this Workday tenant."
-                ),
-                "exampleValue": "https://wd5.myworkday.com/contoso/login-saml2.htmld",
-            },
-            {
-                "information": "NameID source",
-                "fields": ["nameIdSource", "entraChecks.nameId"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> Attributes & "
-                    "Claims -> Unique User Identifier (Name ID)"
-                ),
-                "instruction": "Record the exact source attribute.",
-                "exampleValue": "user.userPrincipalName",
-            },
-            {
-                "information": "SAML signing",
-                "fields": [
-                    "samlSigningOption",
-                    "entraChecks.samlSigningOption",
-                ],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> SAML Signing "
-                    "Certificate card -> Edit pencil -> Signing Option"
-                ),
-                "instruction": (
-                    "Record the exact value shown in the Signing Option field."
-                ),
-                "exampleValue": "Sign SAML response and assertion",
-            },
-            {
-                "information": "Certificate thumbprint (active certificate row)",
-                "fields": ["certificateThumbprint"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> SAML Signing "
-                    "Certificate -> active certificate row"
-                ),
-                "instruction": "Record the active certificate thumbprint.",
-                "exampleValue": "A1B2C3D4E5F6",
-            },
-            {
-                "information": "Certificate expiration date (active certificate row)",
-                "fields": ["certificateValidTo"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> SAML Signing "
-                    "Certificate -> active certificate row"
-                ),
-                "instruction": "Record the Expiration date exactly as displayed.",
-                "exampleValue": "2027-01-01",
-            },
-            {
-                "information": "SAML configuration",
-                "fields": ["entraChecks.samlMode"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML"
-                ),
-                "instruction": (
-                    "Confirm the Identifier, Reply URL, Login URL, NameID, and "
-                    "signing option match this handoff."
-                ),
-                "exampleValue": "Yes, confirmed",
-            },
-            {
-                "information": "Signing certificate",
-                "fields": ["entraChecks.signingCertificate"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Single sign-on -> SAML -> SAML Signing "
-                    "Certificate"
-                ),
-                "instruction": (
-                    "Confirm the active Base64 certificate was downloaded and "
-                    "transferred through the approved customer channel to the "
-                    "person completing the Workday handoff. Do not return the "
-                    "certificate in chat."
-                ),
-                "exampleValue": "Yes, confirmed",
-            },
-            {
-                "information": "Authorized connector",
-                "fields": ["entraChecks.connectorPreauthorized"],
-                "portalLocation": (
-                    "App registrations -> the exact Workday registration -> "
-                    "Expose an API"
-                ),
-                "instruction": (
-                    "Confirm the api:// Application ID URI, user_impersonation "
-                    "scope, and connector "
-                    f"{WORKDAY_CONNECTOR_APP_ID} is authorized for that scope, "
-                    "without copying the scope GUID."
-                ),
-                "exampleValue": "Yes, confirmed",
-            },
-            {
-                "information": "Permissions and consent",
-                "fields": [
-                    "entraChecks.graphDelegatedPermissions",
-                    "entraChecks.adminConsent",
-                ],
-                "portalLocation": (
-                    "App registrations -> the exact Workday registration -> "
-                    "API permissions"
-                ),
-                "instruction": (
-                    "Confirm openid, profile, and User.Read are present and "
-                    "administrator consent is granted."
-                ),
-                "exampleValue": "Yes, permissions and consent are confirmed",
-            },
-            {
-                "information": "Employee assignment",
-                "fields": ["entraChecks.userAssignment"],
-                "portalLocation": (
-                    "Enterprise applications -> the exact Workday "
-                    "application -> Properties and Users and groups"
-                ),
-                "instruction": (
-                    "Confirm the intended ESS employee group has access, or "
-                    "that assignment is not required."
-                ),
-                "exampleValue": (
-                    "Yes, access is confirmed or assignment is not required"
-                ),
-            },
-            {
-                "information": "Existing configuration",
-                "fields": [
-                    "entraChecks.existingScopesPreserved",
-                    "entraChecks.authorizedClientsPreserved",
-                    "entraChecks.permissionsPreserved",
-                ],
-                "portalLocation": (
-                    "App registrations -> the exact Workday registration -> "
-                    "Expose an API and API permissions"
-                ),
-                "instruction": (
-                    "Confirm unrelated scopes, authorized clients, and "
-                    "permissions were preserved."
-                ),
-                "exampleValue": "Preserved without changes",
-            },
-        ],
+        "captureInstructions": entra_capture_instructions(),
         "informationToReturn": [
             "Selected directory display name and exact Workday application "
             "display name and Application ID",

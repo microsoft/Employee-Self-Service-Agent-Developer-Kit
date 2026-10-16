@@ -248,6 +248,10 @@ After the worksheet, introduce the optional browser companion:
 
 Read `shared/assisted-browser.md` for the generic session boundary and
 `shared/entra-assisted-browser.md` for the Entra worksheet session.
+For the entire assisted session, execute every baseline, inspection, navigation,
+and recovery action with the built-in code runner from the shared
+`Browser Pages` context. Keep the currently shared VS Code Integrated Browser
+page as that context through every retry and worksheet row.
 
 Collect the Entra app administrator's completed worksheet or launch assistance
 through one combined interaction. Do not add **Continue with the manual

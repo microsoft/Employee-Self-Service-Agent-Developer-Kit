@@ -25,7 +25,7 @@ The following operations are allowed only when the phase-specific companion guid
 
 - Use browser tools only on the Integrated Browser page the human opened and explicitly shared with the agent.
 - Activate a row-specific **Edit** control only to reveal already-existing values. The current companion view must name that exact control and disclose that it will be opened. Do not change or save anything.
-- Request manual entry only after bounded inspection cannot reliably collect or disambiguate the required non-secret value.
+- Request manual entry when the human selected **Navigate only**, or after bounded inspection cannot reliably collect or disambiguate the required non-secret value.
 - Use **Navigate and capture** only for a row marked `Sensitive: No` by the phase-specific guide. A row marked `Sensitive: Yes` must use **Navigate only** and must not expose captured text, detected-value confirmation, pointing, or screenshot controls.
 
 When a loosely sanctioned operation cannot satisfy every precondition, fall back to written manual guidance.
@@ -46,6 +46,14 @@ From the kit workspace root, start the companion for the surface named by the ph
 ```powershell
 python scripts/workday_assisted_browser.py start --surface "{SURFACE}" --vscode
 ```
+
+During a companion restart, run `stop` and `start` as separate commands. Read the session status after each start:
+
+```powershell
+python scripts/workday_assisted_browser.py status
+```
+
+The companion is ready for a view when status reports `running: true` and `surface: "{SURFACE}"`. When a running session has another surface or no surface, run the same `start --surface "{SURFACE}" --vscode` command again and read status again. Present the first view after the requested surface is ready.
 
 The ESS Maker extension detects the workspace-local session file and opens the companion webview. If it does not open automatically, run **Agent Developer Kit: Open Workday setup companion** from the Command Palette.
 
@@ -109,7 +117,7 @@ Use `--interaction any` when a candidate confirmation also offers visual help. I
 After the named row is authorized:
 
 - use the agent's built-in browser tools as the VS Code implementation of the Edge version's bounded `inspect`, `follow`, `fill-search`, `screenshot`, `point-targets`, and `reveal` operations;
-- navigate to the returned `targetUrl` only when the authorization result supplies one;
+- inspect the current shared page first and navigate to a returned `targetUrl` only when the page is not already at the authorized destination;
 - read and inspect the visible page before every click, fill, screenshot, or candidate decision;
 - keep the operation within the authorized worksheet row and action mode;
 - re-inspect after navigation, popup completion, or page refresh;
@@ -126,7 +134,18 @@ The shared-browser adapter must preserve the Edge companion's interaction model:
 - never select an ambiguous application for the human;
 - offer the row's existing manual-entry fallback only after bounded inspection cannot reliably collect or disambiguate the value.
 
-After an inspected target is visible, scroll it into view, attempt to center it vertically in the application pane, and re-inspect it. Build `positionRatio` from the post-scroll geometry. Set `centered` to `true` only when the reinspection shows that centering succeeded. Then write one or more semantic target positions to a JSON file and publish the same rail arrows used by the Edge implementation:
+For a non-sensitive detected value, publish the confirmation view before calculating pointer geometry. Retain the returned revision. The companion renders the candidate and confirmation immediately while target positioning remains pending:
+
+```json
+{
+  "visualHelp": {
+    "operation": "{OPERATION}",
+    "label": "{VISIBLE_TARGET_LABEL}"
+  }
+}
+```
+
+If the phase-specific baseline returned pointer `targets`, retain that exact set in memory and submit it after the confirmation is published. For rows without baseline targets, scroll the current row's inspected targets into view after confirmation and re-inspect all post-scroll geometry in one browser call. Build `positionRatio` from the post-scroll geometry for each target. Set `centered` to `true` when the reinspection shows that centering succeeded. Publish every target required by the current row together:
 
 ```json
 [
@@ -139,23 +158,22 @@ After an inspected target is visible, scroll it into view, attempt to center it 
 ```
 
 ```powershell
+$targetsJson | python scripts/workday_assisted_browser.py point-targets `
+  --operation "{OPERATION}" `
+  --revision {CONFIRMATION_REVISION} `
+  --targets-file -
+```
+
+If geometry inspection fails, report the safe reason through the same revision-bound command:
+
+```powershell
 python scripts/workday_assisted_browser.py point-targets `
   --operation "{OPERATION}" `
-  --targets-file "{TARGETS_FILE}"
+  --revision {CONFIRMATION_REVISION} `
+  --error "{SAFE_REASON}"
 ```
 
-For a non-sensitive detected-value confirmation, include this auxiliary control in the view before a screenshot exists:
-
-```json
-{
-  "visualHelp": {
-    "operation": "{OPERATION}",
-    "label": "{VISIBLE_TARGET_LABEL}"
-  }
-}
-```
-
-Wait for the human to select **Show me what to click**. Only after `wait` reports `interaction: visual-help`, use the browser tool surface to attempt a bounded PNG around the already-pointed target and publish it:
+Pointer failure is non-blocking: the confirmation remains actionable and the companion reports that visual guidance is unavailable. If `point-targets` rejects a stale update because the human already decided the confirmation or a newer revision exists, treat that as normal completion and do not republish the candidate. Wait for the human to select **Show me what to click** only after the pointer set is ready. Only after `wait` reports `interaction: visual-help`, use the browser tool surface to attempt a bounded PNG around the already-pointed target and publish it:
 
 ```powershell
 python scripts/workday_assisted_browser.py screenshot `
@@ -175,7 +193,7 @@ python scripts/workday_assisted_browser.py screenshot-result `
 
 The companion changes the control to **Screenshot unsuccessful** and keeps it actionable. Screenshot failure does not revoke row authorization or decide the candidate confirmation.
 
-After the authorized browser operation reaches the intended page state, record navigation completion before publishing a manual-entry fallback or moving to another row:
+After the authorized browser operation reaches the intended page state, record navigation completion before publishing any post-navigation row interaction or moving to another row:
 
 ```powershell
 python scripts/workday_assisted_browser.py shared-browser-result `

@@ -39,6 +39,7 @@ from drive_topic import test_pane_url
 from workday_connect_entra_contracts import (
     ENTRA_WORKSHEET_LABEL_ALIASES,
     ENTRA_WORKSHEET_LABELS,
+    entra_capture_instruction,
 )
 from workday_connect_store import (
     WorkdayConnectStore,
@@ -71,6 +72,13 @@ _ENTRA_ENTERPRISE_APPLICATIONS_URL = (
     "https://entra.microsoft.com/"
     "#view/Microsoft_AAD_IAM/StartboardApplicationsMenuBlade/"
     "~/AppAppsPreview"
+)
+_ENTRA_USERS_AND_GROUPS_URL_TEMPLATE = (
+    "https://entra.microsoft.com/"
+    "#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Users/"
+    "objectId/{SERVICE_PRINCIPAL_OBJECT_ID}/"
+    "appId/{APPLICATION_ID}/preferredSingleSignOnMode/saml/"
+    "servicePrincipalType/Application/fromNav/"
 )
 _SURFACES = (
     "entra-configuration",
@@ -110,7 +118,10 @@ _ENTRY_KEYS = {
     "label",
     "placeholder",
     "submitLabel",
+    "options",
+    "inputs",
 }
+_ENTRY_INPUT_KEYS = {"key", "label", "placeholder"}
 _VISUAL_HELP_KEYS = {"operation", "label"}
 _COLLECTION_OPERATION_DEFINITIONS = {
     "entra-directory-display-name": {
@@ -123,6 +134,24 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "url": _ENTRA_ENTERPRISE_APPLICATIONS_URL,
         "worksheetRow": "Enterprise application",
         "worksheetField": "applicationDisplayName",
+        "worksheetRows": [
+            "Enterprise application",
+            "Application ID",
+        ],
+        "combinedSummary": (
+            "Collect the Enterprise application name and Application ID from "
+            "the same Overview page."
+        ),
+        "combinedSteps": [
+            (
+                "Record the read-only Name field as Enterprise "
+                "application."
+            ),
+            (
+                "Record the read-only Application ID field as Application "
+                "ID."
+            ),
+        ],
         "sensitive": False,
     },
     "entra-application-id": {
@@ -147,6 +176,18 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "url": None,
         "worksheetRow": "SAML signing",
         "worksheetField": "samlSigningOption",
+        "worksheetRows": [
+            "SAML signing",
+            "Certificate expiration date (active certificate row)",
+        ],
+        "combinedSummary": (
+            "Collect the SAML signing option and active certificate "
+            "expiration from the same SAML page."
+        ),
+        "combinedSteps": [
+            "Record the selected SAML signing option.",
+            "Record the active certificate expiration date.",
+        ],
         "sensitive": False,
     },
     "entra-certificate-thumbprint": {
@@ -195,24 +236,225 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "worksheetField": "entraChecks.userAssignment",
         "sensitive": False,
     },
-    "entra-existing-configuration": {
-        "url": None,
-        "worksheetRow": "Existing configuration",
-        "worksheetField": (
-            "entraChecks.existingScopesPreserved,"
-            "entraChecks.authorizedClientsPreserved,"
-            "entraChecks.permissionsPreserved"
+}
+_PRESERVATION_OPERATION = "entra-existing-configuration"
+_PRESERVATION_WORKSHEET_ROW = "Existing configuration"
+_MULTI_INPUT_ENTRY_KEYS = {
+    "entra-enterprise-application-display-name": {
+        "Enterprise application",
+        "Application ID",
+    },
+    "entra-saml-signing-option": {
+        "SAML signing",
+        "Certificate expiration date (active certificate row)",
+    },
+}
+_ENTRA_NAVIGATION_HINTS = {
+    "entra-directory-display-name": {
+        "portalPath": "Microsoft Entra admin center -> Microsoft Entra ID -> Overview",
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-directory-name.js"
         ),
-        "sensitive": False,
+        "observedHints": [
+            'getByText("{DIRECTORY_DISPLAY_NAME}", { exact: true })',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-enterprise-application-display-name": {
+        "portalPath": (
+            "Microsoft Entra ID -> Enterprise applications -> the exact "
+            "Workday application -> Overview"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-enterprise-application.js"
+        ),
+        "observedHints": [
+            'getByRole("searchbox", { name: "Search box", exact: true })',
+            'getByRole("link", { name: "{APPLICATION_DISPLAY_NAME}", exact: true })',
+            'getByRole("heading", { name: "{APPLICATION_DISPLAY_NAME} | Overview", exact: true })',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-application-id": {
+        "portalPath": (
+            "Microsoft Entra ID -> Enterprise applications -> the exact "
+            "Workday application -> Overview"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-application-id.js"
+        ),
+        "observedHints": [
+            'locator(\'input[aria-label="Application ID"]\')',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-reply-url": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Basic SAML Configuration"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-reply-url.js"
+        ),
+        "observedHints": [
+            'getByText("{EXPECTED_REPLY_URL}", { exact: true })',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-name-id-source": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Attributes & Claims -> Unique User "
+            "Identifier (Name ID)"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-name-id-source.js"
+        ),
+        "observedHints": [
+            'getByText("{EXPECTED_NAME_ID_SOURCE}", { exact: true })',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-saml-signing-option": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate card -> "
+            "Edit pencil -> Signing Option"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-saml-signing-option.js"
+        ),
+        "observedHints": [
+            "Sign SAML response and assertion",
+            'getByRole("combobox", { name: "Signing Option", exact: true })',
+        ],
+        "fallbackHints": [],
+    },
+    "entra-certificate-thumbprint": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> active "
+            "certificate row"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-certificate-thumbprint.js"
+        ),
+        "observedHints": [
+            "Thumbprint",
+            "Active",
+        ],
+        "fallbackHints": [],
+    },
+    "entra-certificate-expiration": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> active "
+            "certificate row"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-certificate-expiration.js"
+        ),
+        "observedHints": [
+            "Expiration",
+            "Active",
+        ],
+        "fallbackHints": [],
+    },
+    "entra-saml-configuration": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> Set up Workday -> Login URL"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-saml-configuration.js"
+        ),
+        "observedHints": ["Login URL"],
+        "fallbackHints": [],
+    },
+    "entra-signing-certificate-check": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Single sign-on -> SAML -> SAML Signing Certificate -> "
+            "Certificate (Base64) -> Download"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-signing-certificate-check.js"
+        ),
+        "observedHints": [
+            "Certificate (Base64)",
+            "Download",
+        ],
+        "fallbackHints": [],
+    },
+    "entra-authorized-connector": {
+        "portalPath": (
+            "App registrations -> the exact Workday registration -> Expose "
+            "an API -> Application ID URI, Scopes defined by this API, and "
+            "Authorized client applications"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-authorized-connector.js"
+        ),
+        "observedHints": [
+            "Application ID URI",
+            "user_impersonation",
+            "Authorized client applications",
+            "4e4707ca-5f53-46a6-a819-f7765446e6ff",
+        ],
+        "fallbackHints": [],
+    },
+    "entra-permissions-consent": {
+        "portalPath": (
+            "App registrations -> the exact Workday registration -> API "
+            "permissions -> Microsoft Graph delegated permissions"
+        ),
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-permissions-consent.js"
+        ),
+        "observedHints": [
+            'getByText("User.Read", { exact: true })',
+            "openid",
+            "profile",
+            "Delegated",
+            "Admin consent",
+        ],
+        "fallbackHints": [],
+    },
+    "entra-employee-assignment": {
+        "portalPath": (
+            "Enterprise applications -> the exact Workday application -> "
+            "Users and groups"
+        ),
+        "lastKnownUrlTemplate": _ENTRA_USERS_AND_GROUPS_URL_TEMPLATE,
+        "baselineScript": (
+            "scripts/workday_assisted_browser_playwright/"
+            "entra-employee-assignment.js"
+        ),
+        "observedHints": ["Users and groups"],
+        "fallbackHints": [],
     },
 }
 _COLLECTION_OPERATIONS = set(_COLLECTION_OPERATION_DEFINITIONS)
 _WORKSHEET_OPERATION_ORDER = tuple(_COLLECTION_OPERATION_DEFINITIONS)
+_ENTRY_OPERATIONS = _COLLECTION_OPERATIONS | {_PRESERVATION_OPERATION}
+_PRESENT_OPERATIONS = _ENTRY_OPERATIONS
 _FINAL_WORKSHEET_CONFIRMATION_OPERATION = "entra-final-worksheet"
 _CONFIRMATION_OPERATIONS = _COLLECTION_OPERATIONS | {
     _FINAL_WORKSHEET_CONFIRMATION_OPERATION
 }
-_WAIT_OPERATIONS = _CONFIRMATION_OPERATIONS
+_WAIT_OPERATIONS = _CONFIRMATION_OPERATIONS | {_PRESERVATION_OPERATION}
 _EMAIL_PATTERN = re.compile(
     r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
     re.IGNORECASE,
@@ -586,33 +828,146 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "entry.operation",
             maximum=80,
         )
-        if operation not in _COLLECTION_OPERATIONS:
+        if operation not in _ENTRY_OPERATIONS:
             raise AssistedBrowserError(
-                "entry.operation is not a supported collection operation."
+                "entry.operation is not a supported worksheet entry operation."
             )
-        normalized["entry"] = {
+        normalized_entry = {
             "operation": operation,
             "label": _required_text(
                 entry_raw.get("label"),
                 "entry.label",
                 maximum=120,
             ),
-            "placeholder": _required_text(
-                entry_raw.get("placeholder"),
-                "entry.placeholder",
-                maximum=160,
-            ),
-            "submitLabel": _required_text(
+        }
+        options_raw = entry_raw.get("options")
+        inputs_raw = entry_raw.get("inputs")
+        if (
+            operation == _PRESERVATION_OPERATION
+            and options_raw is None
+        ):
+            raise AssistedBrowserError(
+                "Existing configuration requires its canonical choices."
+            )
+        if options_raw is not None and inputs_raw is not None:
+            raise AssistedBrowserError(
+                "An entry may not define both options and inputs."
+            )
+        if inputs_raw is not None:
+            expected_keys = _MULTI_INPUT_ENTRY_KEYS.get(operation)
+            if expected_keys is None:
+                raise AssistedBrowserError(
+                    "Multiple worksheet inputs are not supported for this "
+                    "operation."
+                )
+            if entry_raw.get("placeholder") is not None:
+                raise AssistedBrowserError(
+                    "A multiple-input entry may not define placeholder."
+                )
+            if not isinstance(inputs_raw, list) or len(inputs_raw) != 2:
+                raise AssistedBrowserError(
+                    "entry.inputs must contain the two overview values."
+                )
+            inputs = []
+            for index, input_raw in enumerate(inputs_raw):
+                if not isinstance(input_raw, Mapping):
+                    raise AssistedBrowserError(
+                        f"entry.inputs[{index}] must be an object."
+                    )
+                unknown_input_keys = set(input_raw) - _ENTRY_INPUT_KEYS
+                if unknown_input_keys:
+                    raise AssistedBrowserError(
+                        f"entry.inputs[{index}] contains unsupported fields: "
+                        + ", ".join(sorted(unknown_input_keys))
+                    )
+                inputs.append(
+                    {
+                        "key": _required_text(
+                            input_raw.get("key"),
+                            f"entry.inputs[{index}].key",
+                            maximum=80,
+                        ),
+                        "label": _required_text(
+                            input_raw.get("label"),
+                            f"entry.inputs[{index}].label",
+                            maximum=120,
+                        ),
+                        "placeholder": _required_text(
+                            input_raw.get("placeholder"),
+                            f"entry.inputs[{index}].placeholder",
+                            maximum=160,
+                        ),
+                    }
+                )
+            if {entry_input["key"] for entry_input in inputs} != expected_keys:
+                raise AssistedBrowserError(
+                    "entry.inputs do not match the operation's worksheet rows."
+                )
+            normalized_entry["inputs"] = inputs
+            normalized_entry["submitLabel"] = _required_text(
                 entry_raw.get("submitLabel"),
                 "entry.submitLabel",
                 maximum=80,
-            ),
-        }
+            )
+        elif options_raw is None:
+            normalized_entry["placeholder"] = _required_text(
+                entry_raw.get("placeholder"),
+                "entry.placeholder",
+                maximum=160,
+            )
+            normalized_entry["submitLabel"] = _required_text(
+                entry_raw.get("submitLabel"),
+                "entry.submitLabel",
+                maximum=80,
+            )
+        else:
+            if (
+                entry_raw.get("placeholder") is not None
+                or entry_raw.get("submitLabel") is not None
+            ):
+                raise AssistedBrowserError(
+                    "A constrained entry may not define placeholder or submitLabel."
+                )
+            if (
+                not isinstance(options_raw, list)
+                or not 1 <= len(options_raw) <= 4
+            ):
+                raise AssistedBrowserError(
+                    "entry.options must contain one through four choices."
+                )
+            options = [
+                _required_text(
+                    option,
+                    f"entry.options[{index}]",
+                    maximum=160,
+                )
+                for index, option in enumerate(options_raw)
+            ]
+            if len(set(options)) != len(options):
+                raise AssistedBrowserError(
+                    "entry.options choices must be unique."
+                )
+            if operation == _PRESERVATION_OPERATION:
+                expected_options = entra_capture_instruction(
+                    _PRESERVATION_WORKSHEET_ROW
+                ).get("acceptedValues", [])
+                if options != expected_options:
+                    raise AssistedBrowserError(
+                        "Existing configuration choices must match the "
+                        "worksheet contract."
+                    )
+            normalized_entry["options"] = options
+        normalized["entry"] = normalized_entry
     visual_help_raw = raw.get("visualHelp")
     if visual_help_raw is not None:
-        if confirmation_raw is None:
+        constrained_entry = normalized.get("entry")
+        if confirmation_raw is None and not (
+            isinstance(constrained_entry, Mapping)
+            and constrained_entry.get("options")
+        ):
             raise AssistedBrowserError(
-                "visualHelp requires a detected-value confirmation."
+                "visualHelp requires a detected-value confirmation or "
+                "constrained entry."
             )
         if not isinstance(visual_help_raw, Mapping):
             raise AssistedBrowserError("visualHelp must be an object.")
@@ -631,9 +986,13 @@ def validate_view(raw: Any) -> dict[str, Any]:
             raise AssistedBrowserError(
                 "visualHelp.operation is not a supported collection operation."
             )
-        if normalized["confirmation"]["operation"] != operation:
+        review_interaction = (
+            normalized.get("confirmation") or constrained_entry
+        )
+        if review_interaction["operation"] != operation:
             raise AssistedBrowserError(
-                "visualHelp and confirmation must target the same worksheet row."
+                "visualHelp and the review interaction must target the same "
+                "worksheet row."
             )
         normalized["visualHelp"] = {
             "operation": operation,
@@ -668,6 +1027,7 @@ class CompanionState:
         self._evidence_image: bytes | None = None
         self._evidence_image_metadata: dict[str, Any] | None = None
         self._target_pointers: list[dict[str, Any]] = []
+        self._target_pointers_status: dict[str, Any] | None = None
 
     def publish(self, view: Any) -> dict[str, Any]:
         """Advance the displayed revision while preserving only same-operation authorization and visual context."""
@@ -679,14 +1039,38 @@ class CompanionState:
             previous_target_pointers = self._target_pointers
             entry = normalized.get("entry")
             visual_help = normalized.get("visualHelp")
-            if isinstance(entry, Mapping) and (
-                previous_collection is None
-                or previous_collection.get("status") != "navigated"
-                or previous_collection.get("operation") != entry["operation"]
+            constrained_entry = (
+                isinstance(entry, Mapping) and bool(entry.get("options"))
+            )
+            preservation_entry = (
+                isinstance(entry, Mapping)
+                and entry.get("operation") == _PRESERVATION_OPERATION
+            )
+            allowed_entry_statuses = (
+                {"authorized", "navigated"}
+                if constrained_entry
+                else {"navigated"}
+            )
+            if (
+                isinstance(entry, Mapping)
+                and not preservation_entry
+                and (
+                    previous_collection is None
+                    or previous_collection.get("status")
+                    not in allowed_entry_statuses
+                    or previous_collection.get("operation") != entry["operation"]
+                )
             ):
+                if constrained_entry:
+                    raise AssistedBrowserError(
+                        "Constrained worksheet entry is available only after "
+                        "the same row reaches its review page."
+                    )
                 raise AssistedBrowserError(
                     "Manual entry is available only after Navigate only "
-                    "completes for the same worksheet row."
+                    "completes for the same worksheet row. Report completion with "
+                    f"`shared-browser-result --operation {entry['operation']} "
+                    "--status navigated`, then retry the entry presentation."
                 )
             if isinstance(visual_help, Mapping):
                 if (
@@ -699,14 +1083,6 @@ class CompanionState:
                     raise AssistedBrowserError(
                         "Visual help is available only after the same worksheet "
                         "row is authorized."
-                    )
-                if not previous_target_pointers or not all(
-                    pointer.get("operation") == visual_help["operation"]
-                    for pointer in previous_target_pointers
-                ):
-                    raise AssistedBrowserError(
-                        "Visual help requires current point-targets guidance "
-                        "for the same worksheet row."
                     )
             self._revision += 1
             self._view = normalized
@@ -745,6 +1121,7 @@ class CompanionState:
                     self._evidence_image_metadata = None
                 if (
                     previous_target_pointers
+                    and not isinstance(visual_help, Mapping)
                     and all(
                         pointer.get("operation") == operation
                         for pointer in previous_target_pointers
@@ -778,6 +1155,13 @@ class CompanionState:
             else:
                 self._entry = None
             if isinstance(visual_help, Mapping):
+                self._target_pointers = []
+                self._target_pointers_status = {
+                    "operation": visual_help["operation"],
+                    "revision": self._revision,
+                    "status": "pending",
+                    "updatedAt": self._published_at,
+                }
                 self._visual_help = {
                     "operation": visual_help["operation"],
                     "label": visual_help["label"],
@@ -786,10 +1170,35 @@ class CompanionState:
                     "availableAt": self._published_at,
                 }
             else:
+                self._target_pointers_status = None
                 self._visual_help = None
             return {
                 "revision": self._revision,
                 "publishedAt": self._published_at,
+            }
+
+    def reset(self) -> dict[str, Any]:
+        """Clear the current worksheet interaction while keeping the companion session connected."""
+        with self._lock:
+            self._revision += 1
+            reset_at = _now_iso()
+            self._view = None
+            self._published_at = None
+            self._fetched_revision = None
+            self._fetched_at = None
+            self._rendered_revision = None
+            self._rendered_at = None
+            self._collection = None
+            self._confirmation = None
+            self._entry = None
+            self._visual_help = None
+            self._evidence_image = None
+            self._evidence_image_metadata = None
+            self._target_pointers = []
+            self._target_pointers_status = None
+            return {
+                "revision": self._revision,
+                "resetAt": reset_at,
             }
 
     def fetch(self) -> dict[str, Any] | None:
@@ -813,6 +1222,7 @@ class CompanionState:
                     else None
                 ),
                 "targetPointers": list(self._target_pointers),
+                "targetPointersStatus": self._target_pointers_status,
             }
 
     def begin_collection(
@@ -876,6 +1286,13 @@ class CompanionState:
                 "Shared browser status must be navigated or failed."
             )
         with self._lock:
+            if (
+                status == "navigated"
+                and self._collection is not None
+                and self._collection.get("operation") == operation
+                and self._collection.get("status") == "navigated"
+            ):
+                return dict(self._collection)
             if (
                 self._collection is None
                 or self._collection.get("operation") != operation
@@ -1024,7 +1441,54 @@ class CompanionState:
                 "status": decision,
                 "decidedAt": _now_iso(),
             }
+            definition = _COLLECTION_OPERATION_DEFINITIONS.get(operation)
+            accepted_values = (
+                entra_capture_instruction(
+                    definition["worksheetRow"]
+                ).get("acceptedValues", [])
+                if definition is not None
+                else []
+            )
+            if decision == "confirmed" and len(accepted_values) == 1:
+                self._confirmation["value"] = accepted_values[0]
             return dict(self._confirmation)
+
+    def _review_interaction_status(
+        self,
+        *,
+        operation: str,
+        revision: int,
+    ) -> str | None:
+        for interaction in (self._confirmation, self._entry):
+            if (
+                interaction is not None
+                and interaction.get("operation") == operation
+                and interaction.get("revision") == revision
+            ):
+                status = interaction.get("status")
+                return status if isinstance(status, str) else None
+        return None
+
+    def _review_revision_allows_pointer(
+        self,
+        *,
+        operation: str,
+        revision: int,
+    ) -> bool:
+        """Bind pointer guidance to the current row interaction, independently of screenshots."""
+        if revision != self._revision:
+            return False
+        view = self._view or {}
+        interaction = view.get("confirmation") or view.get("entry")
+        return (
+            isinstance(interaction, Mapping)
+            and interaction.get("operation") == operation
+            and self._review_interaction_status(
+                operation=operation,
+                revision=revision,
+            )
+            in {"waiting", "confirmed", "submitted"}
+        )
 
     def request_visual_help(
         self,
@@ -1055,6 +1519,31 @@ class CompanionState:
             if self._visual_help is None:
                 raise AssistedBrowserError(
                     "The current guidance is not offering visual help."
+                )
+            if self._review_interaction_status(
+                operation=operation,
+                revision=revision,
+            ) not in {"waiting", "confirmed", "submitted"}:
+                raise AssistedBrowserError(
+                    "The current worksheet review is no longer active."
+                )
+            pointer_status = self._target_pointers_status
+            if (
+                not isinstance(pointer_status, Mapping)
+                or pointer_status.get("operation") != operation
+                or pointer_status.get("revision") != revision
+                or pointer_status.get("status") != "ready"
+                or not self._target_pointers
+            ):
+                if (
+                    isinstance(pointer_status, Mapping)
+                    and pointer_status.get("status") == "failed"
+                ):
+                    raise AssistedBrowserError(
+                        "Visual guidance is unavailable for this candidate."
+                    )
+                raise AssistedBrowserError(
+                    "Visual guidance is still being prepared."
                 )
             current_status = self._visual_help.get("status")
             if current_status in {"requested", "succeeded"}:
@@ -1155,6 +1644,7 @@ class CompanionState:
         self,
         *,
         operation: str,
+        revision: int | None = None,
         metadata: Mapping[str, Any],
         append: bool = False,
     ) -> dict[str, Any]:
@@ -1169,6 +1659,13 @@ class CompanionState:
                 raise AssistedBrowserError(
                     "The target pointer is not authorized by the current row."
                 )
+            if revision is not None and not self._review_revision_allows_pointer(
+                operation=operation,
+                revision=revision,
+            ):
+                raise AssistedBrowserError(
+                    "The target pointer does not match the current review."
+                )
             pointer = {
                 "id": secrets.token_urlsafe(12),
                 "operation": operation,
@@ -1178,12 +1675,23 @@ class CompanionState:
                 self._target_pointers.append(pointer)
             else:
                 self._target_pointers = [pointer]
+            if revision is not None or (
+                self._visual_help is not None
+                and self._visual_help.get("operation") == operation
+            ):
+                self._target_pointers_status = {
+                    "operation": operation,
+                    "revision": self._revision,
+                    "status": "ready",
+                    "updatedAt": _now_iso(),
+                }
             return dict(pointer)
 
     def set_target_pointers(
         self,
         *,
         operation: str,
+        revision: int | None = None,
         metadata: list[Mapping[str, Any]],
     ) -> list[dict[str, Any]]:
         """Atomically replace rail guidance with a coherent target set for the active row."""
@@ -1201,6 +1709,13 @@ class CompanionState:
                 raise AssistedBrowserError(
                     "At least one application target is required."
                 )
+            if revision is not None and not self._review_revision_allows_pointer(
+                operation=operation,
+                revision=revision,
+            ):
+                raise AssistedBrowserError(
+                    "The target pointers do not match the current review."
+                )
             self._target_pointers = [
                 {
                     "id": secrets.token_urlsafe(12),
@@ -1209,7 +1724,48 @@ class CompanionState:
                 }
                 for item in metadata
             ]
+            if revision is not None or (
+                self._visual_help is not None
+                and self._visual_help.get("operation") == operation
+            ):
+                self._target_pointers_status = {
+                    "operation": operation,
+                    "revision": self._revision,
+                    "status": "ready",
+                    "updatedAt": _now_iso(),
+                }
             return [dict(pointer) for pointer in self._target_pointers]
+
+    def fail_target_pointers(
+        self,
+        *,
+        operation: str,
+        revision: int,
+        error: str,
+    ) -> dict[str, Any]:
+        """Mark optional pointer guidance unavailable without blocking confirmation."""
+        normalized_error = _required_text(
+            error,
+            "error",
+            maximum=400,
+        )
+        with self._lock:
+            if not self._review_revision_allows_pointer(
+                operation=operation,
+                revision=revision,
+            ):
+                raise AssistedBrowserError(
+                    "The target pointer failure does not match the current review."
+                )
+            self._target_pointers = []
+            self._target_pointers_status = {
+                "operation": operation,
+                "revision": revision,
+                "status": "failed",
+                "error": normalized_error,
+                "updatedAt": _now_iso(),
+            }
+            return dict(self._target_pointers_status)
 
     def clear_target_pointer(self, *, operation: str) -> None:
         """Discard stale target positions after navigation changes page geometry."""
@@ -1219,24 +1775,27 @@ class CompanionState:
                 for pointer in self._target_pointers
             ):
                 self._target_pointers = []
+                if (
+                    self._target_pointers_status is not None
+                    and self._target_pointers_status.get("operation")
+                    == operation
+                ):
+                    self._target_pointers_status = {
+                        "operation": operation,
+                        "revision": self._revision,
+                        "status": "pending",
+                        "updatedAt": _now_iso(),
+                    }
 
     def submit_entry(
         self,
         *,
         revision: int,
         operation: str,
-        value: str,
+        value: str | None = None,
+        values: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Accept a bounded manual fallback only after navigate-only assistance for the current row."""
-        normalized_value = _required_text(
-            value,
-            "entry value",
-            maximum=500,
-        )
-        if "\n" in normalized_value or "\r" in normalized_value:
-            raise AssistedBrowserError(
-                "Manual worksheet entry must be a single line."
-            )
+        """Accept a bounded row entry or final preservation attestation."""
         with self._lock:
             requested = (self._view or {}).get("entry")
             if (
@@ -1247,22 +1806,87 @@ class CompanionState:
                 raise AssistedBrowserError(
                     "The manual entry does not match the current guidance."
                 )
-            if (
-                self._collection is None
-                or self._collection.get("status") != "navigated"
-                or self._collection.get("operation") != operation
-            ):
-                raise AssistedBrowserError(
-                    "Manual entry requires a completed Navigate only "
-                    "operation for this row."
+            requested_inputs = requested.get("inputs")
+            normalized_value = None
+            normalized_values = None
+            if isinstance(requested_inputs, list):
+                if value is not None or not isinstance(values, Mapping):
+                    raise AssistedBrowserError(
+                        "The Enterprise application overview requires both "
+                        "worksheet values."
+                    )
+                expected_keys = {
+                    entry_input["key"]
+                    for entry_input in requested_inputs
+                }
+                if set(values) != expected_keys:
+                    raise AssistedBrowserError(
+                        "The submitted overview values do not match the "
+                        "displayed worksheet inputs."
+                    )
+                normalized_values = {}
+                for key in expected_keys:
+                    normalized = _required_text(
+                        values.get(key),
+                        f"entry values.{key}",
+                        maximum=500,
+                    )
+                    if "\n" in normalized or "\r" in normalized:
+                        raise AssistedBrowserError(
+                            "Manual worksheet entries must be single lines."
+                        )
+                    normalized_values[key] = normalized
+            else:
+                if values is not None or not isinstance(value, str):
+                    raise AssistedBrowserError(
+                        "Manual worksheet entry value must be text."
+                    )
+                normalized_value = _required_text(
+                    value,
+                    "entry value",
+                    maximum=500,
                 )
+                if "\n" in normalized_value or "\r" in normalized_value:
+                    raise AssistedBrowserError(
+                        "Manual worksheet entry must be a single line."
+                    )
+            options = requested.get("options")
+            constrained_entry = isinstance(options, list)
+            if constrained_entry and normalized_value not in options:
+                raise AssistedBrowserError(
+                    "The worksheet response is not one of the allowed choices."
+                )
+            if operation != _PRESERVATION_OPERATION:
+                allowed_collection_statuses = (
+                    {"authorized", "navigated"}
+                    if constrained_entry
+                    else {"navigated"}
+                )
+                if (
+                    self._collection is None
+                    or self._collection.get("status")
+                    not in allowed_collection_statuses
+                    or self._collection.get("operation") != operation
+                ):
+                    if constrained_entry:
+                        raise AssistedBrowserError(
+                            "Constrained worksheet entry requires the current "
+                            "row's review page."
+                        )
+                    raise AssistedBrowserError(
+                        "Manual entry requires a completed Navigate only "
+                        "operation for this row."
+                    )
             self._entry = {
                 "operation": operation,
                 "status": "submitted",
                 "revision": revision,
-                "value": normalized_value,
                 "submittedAt": _now_iso(),
             }
+            if normalized_values is not None:
+                self._entry["values"] = normalized_values
+            else:
+                self._entry["value"] = normalized_value
             return dict(self._entry)
 
     def event(self, raw: Any) -> None:
@@ -1313,6 +1937,7 @@ class CompanionState:
                     else None
                 ),
                 "targetPointers": list(self._target_pointers),
+                "targetPointersStatus": self._target_pointers_status,
             }
 
 
@@ -1568,7 +2193,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     raise AssistedBrowserError(
                         "Manual entry request must be a JSON object."
                     )
-                if set(raw) != {"operation", "revision", "value"}:
+                valid_fields = (
+                    {"operation", "revision", "value"},
+                    {"operation", "revision", "values"},
+                )
+                if set(raw) not in valid_fields:
                     raise AssistedBrowserError(
                         "Manual entry request fields are invalid."
                     )
@@ -1583,14 +2212,20 @@ class CompanionHandler(BaseHTTPRequestHandler):
                         "Manual entry revision must be a positive integer."
                     )
                 value = raw.get("value")
-                if not isinstance(value, str):
+                values = raw.get("values")
+                if "value" in raw and not isinstance(value, str):
                     raise AssistedBrowserError(
                         "Manual entry value must be text."
+                    )
+                if "values" in raw and not isinstance(values, Mapping):
+                    raise AssistedBrowserError(
+                        "Manual entry values must be an object."
                     )
                 result = self.server.companion_state.submit_entry(
                     revision=revision,
                     operation=operation,
                     value=value,
+                    values=values,
                 )
                 self._send_json(200, {"entry": result})
                 return
@@ -1934,6 +2569,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     "frameIndex",
                     "matchIndex",
                     "operation",
+                    "revision",
                     "selector",
                 }
                 if not required_fields.issubset(raw) or (
@@ -1955,6 +2591,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 )
                 frame_index = raw.get("frameIndex")
                 match_index = raw.get("matchIndex")
+                revision = raw.get("revision")
                 if not isinstance(frame_index, int) or frame_index < 0:
                     raise AssistedBrowserError(
                         "Target pointer frameIndex must be a non-negative integer."
@@ -1962,6 +2599,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 if not isinstance(match_index, int) or match_index < 0:
                     raise AssistedBrowserError(
                         "Target pointer matchIndex must be a non-negative integer."
+                    )
+                if (
+                    isinstance(revision, bool)
+                    or not isinstance(revision, int)
+                    or revision < 1
+                ):
+                    raise AssistedBrowserError(
+                        "Target pointer revision must be a positive integer."
                     )
                 append = raw.get("append", False)
                 if not isinstance(append, bool):
@@ -1980,6 +2625,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 )
                 result = self.server.companion_state.set_target_pointer(
                     operation=operation,
+                    revision=revision,
                     metadata=metadata,
                     append=append,
                 )
@@ -1995,26 +2641,70 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/point-targets":
                 raw = self._read_json()
-                if not isinstance(raw, Mapping) or set(raw) != {
+                if not isinstance(raw, Mapping):
+                    raise AssistedBrowserError(
+                        "Target pointers request must be a JSON object."
+                    )
+                allowed_fields = {"error", "operation", "revision", "targets"}
+                if set(raw) - allowed_fields or not {
                     "operation",
-                    "targets",
-                }:
+                    "revision",
+                }.issubset(raw):
                     raise AssistedBrowserError(
                         "Target pointers request fields are invalid."
+                    )
+                has_targets = "targets" in raw
+                has_error = "error" in raw
+                if has_targets == has_error:
+                    raise AssistedBrowserError(
+                        "Target pointers require either targets or an error."
                     )
                 operation = _required_text(
                     raw.get("operation"),
                     "operation",
                     maximum=80,
                 )
+                revision = raw.get("revision")
+                if (
+                    isinstance(revision, bool)
+                    or not isinstance(revision, int)
+                    or revision < 1
+                ):
+                    raise AssistedBrowserError(
+                        "Target pointers revision must be a positive integer."
+                    )
+                if has_error:
+                    result = self.server.companion_state.fail_target_pointers(
+                        operation=operation,
+                        revision=revision,
+                        error=raw.get("error"),
+                    )
+                    self._send_json(
+                        200,
+                        {"targetPointersStatus": result},
+                    )
+                    return
                 target_specs = raw.get("targets")
                 if self.server.browser_mode == _VSCODE_BROWSER_MODE:
-                    self.server.companion_state.require_navigation_collection(operation)
+                    self.server.companion_state.require_navigation_collection(
+                        operation
+                    )
                     result = self.server.companion_state.set_target_pointers(
                         operation=operation,
+                        revision=revision,
                         metadata=normalize_shared_browser_targets(target_specs),
                     )
-                    self._send_json(200, {"targetPointers": result})
+                    self._send_json(
+                        200,
+                        {
+                            "targetPointers": result,
+                            "targetPointersStatus": (
+                                self.server.companion_state.status()[
+                                    "targetPointersStatus"
+                                ]
+                            ),
+                        },
+                    )
                     return
                 if not isinstance(target_specs, list) or not target_specs:
                     raise AssistedBrowserError(
@@ -2072,9 +2762,20 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 )
                 result = self.server.companion_state.set_target_pointers(
                     operation=operation,
+                    revision=revision,
                     metadata=metadata,
                 )
-                self._send_json(200, {"targetPointers": result})
+                self._send_json(
+                    200,
+                    {
+                        "targetPointers": result,
+                        "targetPointersStatus": (
+                            self.server.companion_state.status()[
+                                "targetPointersStatus"
+                            ]
+                        ),
+                    },
+                )
                 return
             if self.path == "/api/reveal":
                 raw = self._read_json()
@@ -2136,6 +2837,16 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     operation=operation
                 )
                 self._send_json(200, {"reveal": result})
+                return
+            if self.path == "/api/reset":
+                if self._read_json() != {}:
+                    raise AssistedBrowserError(
+                        "Companion reset request must be an empty object."
+                    )
+                self._send_json(
+                    200,
+                    self.server.companion_state.reset(),
+                )
                 return
             if self.path == "/api/stop":
                 self._send_json(200, {"stopping": True})
@@ -3782,6 +4493,688 @@ def _present(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     return {"presented": True, **result}
 
 
+def _worksheet_collection_view(operation: str) -> dict[str, Any]:
+    """Build the canonical action view for one unresolved worksheet row."""
+    definition = _COLLECTION_OPERATION_DEFINITIONS[operation]
+    hints = _ENTRA_NAVIGATION_HINTS[operation]
+    worksheet_row = definition["worksheetRow"]
+    worksheet_rows = definition.get("worksheetRows", [worksheet_row])
+    combined_overview = len(worksheet_rows) > 1
+    capture_instruction = entra_capture_instruction(worksheet_row)
+    accepted_values = capture_instruction.get("acceptedValues", [])
+    portal_path = hints["portalPath"]
+    actions = [
+        {
+            "label": "Navigate only",
+            "operation": operation,
+            "mode": "navigate-only",
+            "disclaimer": (
+                f"Navigate toward {' and '.join(worksheet_rows)} without "
+                "collecting their application values. You remain responsible "
+                "for sign-in and "
+                "all portal changes."
+            ),
+        }
+    ]
+    if not definition["sensitive"]:
+        actions.append(
+            {
+                "label": "Navigate and capture",
+                "operation": operation,
+                "mode": "navigate-and-capture",
+                "disclaimer": (
+                    f"Navigate toward {' and '.join(worksheet_rows)} and "
+                    "inspect only the visible non-sensitive worksheet values. "
+                    "You remain "
+                    "responsible for sign-in and all portal changes."
+                ),
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "phase": "Microsoft Entra",
+        "title": (
+            (
+                "Collect Enterprise application overview"
+                if operation
+                == "entra-enterprise-application-display-name"
+                else "Collect SAML signing and certificate expiration"
+            )
+            if combined_overview
+            else f"Review {worksheet_row}"
+            if accepted_values
+            else f"Collect {worksheet_row}"
+        ),
+        "status": "waiting",
+        "summary": (
+            definition["combinedSummary"]
+            if combined_overview
+            else
+            capture_instruction["instruction"]
+            if accepted_values
+            else (
+                f"Locate and verify {worksheet_row} for the Microsoft Entra "
+                "worksheet."
+            )
+        ),
+        "steps": [
+            f"Open {portal_path}.",
+            *(
+                list(definition["combinedSteps"])
+                if combined_overview
+                else [capture_instruction["instruction"]]
+            ),
+            "Choose how the browser companion should assist with this row.",
+        ],
+        "fields": [
+            {
+                "label": "Portal location",
+                "value": portal_path,
+            }
+        ],
+        "waitingFor": (
+            "Choose Navigate only or Navigate and capture in the browser "
+            "companion."
+        ),
+        "actions": actions,
+    }
+
+
+def _worksheet_confirmation_view(
+    operation: str,
+    *,
+    value: str,
+    target_label: str,
+) -> dict[str, Any]:
+    """Build the canonical review interaction for one worksheet row."""
+    if operation == "entra-enterprise-application-display-name":
+        try:
+            values = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise AssistedBrowserError(
+                "The Enterprise application overview result must be JSON."
+            ) from exc
+        if not isinstance(values, Mapping) or set(values) != {
+            "Enterprise application",
+            "Application ID",
+        }:
+            raise AssistedBrowserError(
+                "The Enterprise application overview result must contain "
+                "Enterprise application and Application ID."
+            )
+        enterprise_application = _required_text(
+            values.get("Enterprise application"),
+            "Enterprise application",
+            maximum=500,
+        )
+        application_id = _required_text(
+            values.get("Application ID"),
+            "Application ID",
+            maximum=500,
+        )
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": "Confirm Enterprise application overview",
+            "status": "waiting",
+            "summary": (
+                "Confirm the two values detected on the Enterprise "
+                "application Overview page."
+            ),
+            "steps": [],
+            "fields": [
+                {
+                    "label": "Detected Enterprise application",
+                    "value": enterprise_application,
+                },
+                {
+                    "label": "Detected Application ID",
+                    "value": application_id,
+                },
+            ],
+            "waitingFor": (
+                "Confirm whether to record both values in the worksheet."
+            ),
+            "confirmation": {
+                "operation": operation,
+                "prompt": (
+                    "Record this Enterprise application name and Application "
+                    "ID in their separate worksheet rows?"
+                ),
+                "confirmLabel": "Record both worksheet values",
+                "rejectLabel": "Search again",
+            },
+            "visualHelp": {
+                "operation": operation,
+                "label": target_label,
+            },
+        }
+    if operation == "entra-saml-signing-option":
+        try:
+            values = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise AssistedBrowserError(
+                "The SAML signing result must be JSON."
+            ) from exc
+        if not isinstance(values, Mapping) or set(values) != {
+            "SAML signing",
+            "Certificate expiration date (active certificate row)",
+        }:
+            raise AssistedBrowserError(
+                "The SAML signing result must contain the signing option and "
+                "certificate expiration."
+            )
+        signing_option = _required_text(
+            values.get("SAML signing"),
+            "SAML signing",
+            maximum=500,
+        )
+        expiration = _required_text(
+            values.get(
+                "Certificate expiration date (active certificate row)"
+            ),
+            "Certificate expiration date",
+            maximum=500,
+        )
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": "Confirm SAML signing and certificate expiration",
+            "status": "waiting",
+            "summary": (
+                "Confirm the signing option and active certificate "
+                "expiration detected on the SAML page."
+            ),
+            "steps": [],
+            "fields": [
+                {
+                    "label": "Detected SAML signing",
+                    "value": signing_option,
+                },
+                {
+                    "label": "Detected certificate expiration",
+                    "value": expiration,
+                },
+            ],
+            "waitingFor": (
+                "Confirm whether to record both values in the worksheet."
+            ),
+            "confirmation": {
+                "operation": operation,
+                "prompt": (
+                    "Record this SAML signing option and certificate "
+                    "expiration in their separate worksheet rows?"
+                ),
+                "confirmLabel": "Record both worksheet values",
+                "rejectLabel": "Review again",
+            },
+            "visualHelp": {
+                "operation": operation,
+                "label": target_label,
+            },
+        }
+    worksheet_row = _COLLECTION_OPERATION_DEFINITIONS[operation][
+        "worksheetRow"
+    ]
+    capture_instruction = entra_capture_instruction(worksheet_row)
+    accepted_values = capture_instruction.get("acceptedValues", [])
+    visual_help = {
+        "operation": operation,
+        "label": target_label,
+    }
+    if accepted_values:
+        fields = [
+            {
+                "label": "Observed evidence",
+                "value": value,
+            }
+        ]
+        if len(accepted_values) == 1:
+            fields.append(
+                {
+                    "label": "Worksheet response",
+                    "value": accepted_values[0],
+                }
+            )
+            return {
+                "schemaVersion": 1,
+                "phase": "Microsoft Entra",
+                "title": f"Confirm {worksheet_row}",
+                "status": "waiting",
+                "summary": capture_instruction["instruction"],
+                "steps": [capture_instruction["instruction"]],
+                "fields": fields,
+                "waitingFor": (
+                    "Confirm the canonical worksheet response after reviewing "
+                    "the visible Microsoft Entra evidence."
+                ),
+                "confirmation": {
+                    "operation": operation,
+                    "prompt": capture_instruction["instruction"],
+                    "confirmLabel": "Confirm and record",
+                    "rejectLabel": "Review again",
+                },
+                "visualHelp": visual_help,
+            }
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": f"Choose {worksheet_row}",
+            "status": "waiting",
+            "summary": capture_instruction["instruction"],
+            "steps": [capture_instruction["instruction"]],
+            "fields": fields,
+            "waitingFor": "Choose the canonical worksheet response.",
+            "entry": {
+                "operation": operation,
+                "label": "Worksheet response",
+                "options": accepted_values,
+            },
+            "visualHelp": visual_help,
+        }
+    return {
+        "schemaVersion": 1,
+        "phase": "Microsoft Entra",
+        "title": f"Confirm {worksheet_row}",
+        "status": "waiting",
+        "summary": (
+            f"Confirm the detected {worksheet_row} value before recording it."
+        ),
+        "steps": [],
+        "fields": [
+            {
+                "label": f"Detected {worksheet_row}",
+                "value": value,
+            }
+        ],
+        "waitingFor": (
+            "Confirm whether to record this value in the worksheet."
+        ),
+        "confirmation": {
+            "operation": operation,
+            "prompt": (
+                f"This is the value detected for {worksheet_row}. "
+                "Record it in the worksheet?"
+            ),
+            "confirmLabel": "Record worksheet value",
+            "rejectLabel": "Search again",
+        },
+        "visualHelp": {
+            "operation": operation,
+            "label": target_label,
+        },
+    }
+
+
+def _worksheet_entry_view(operation: str) -> dict[str, Any]:
+    """Build the canonical manual-entry fallback after Navigate only."""
+    definition = _COLLECTION_OPERATION_DEFINITIONS[operation]
+    worksheet_row = definition["worksheetRow"]
+    capture_instruction = entra_capture_instruction(worksheet_row)
+    accepted_values = capture_instruction.get("acceptedValues", [])
+    portal_path = _ENTRA_NAVIGATION_HINTS[operation]["portalPath"]
+    if operation == "entra-enterprise-application-display-name":
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": "Enter Enterprise application overview",
+            "status": "waiting",
+            "summary": (
+                "Enter the Enterprise application name and Application ID "
+                "shown on the same Overview page."
+            ),
+            "steps": [
+                f"Review {portal_path}.",
+                (
+                    "Enter the read-only Name field as Enterprise "
+                    "application."
+                ),
+                (
+                    "Enter the read-only Application ID field as Application "
+                    "ID."
+                ),
+            ],
+            "fields": [
+                {
+                    "label": "Portal location",
+                    "value": portal_path,
+                }
+            ],
+            "waitingFor": (
+                "Enter both Overview values, then submit them together."
+            ),
+            "entry": {
+                "operation": operation,
+                "label": "Enterprise application Overview values",
+                "inputs": [
+                    {
+                        "key": "Enterprise application",
+                        "label": "Enterprise application",
+                        "placeholder": "Enter the read-only Name field",
+                    },
+                    {
+                        "key": "Application ID",
+                        "label": "Application ID",
+                        "placeholder": (
+                            "00000000-0000-0000-0000-000000000000"
+                        ),
+                    },
+                ],
+                "submitLabel": "Record both worksheet values",
+            },
+        }
+    if operation == "entra-saml-signing-option":
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": "Enter SAML signing and certificate expiration",
+            "status": "waiting",
+            "summary": (
+                "Enter the selected signing option and active certificate "
+                "expiration shown on the SAML page."
+            ),
+            "steps": [
+                f"Review {portal_path}.",
+                "Enter the selected SAML signing option.",
+                "Enter the active certificate expiration date.",
+            ],
+            "fields": [
+                {
+                    "label": "Portal location",
+                    "value": portal_path,
+                }
+            ],
+            "waitingFor": (
+                "Enter both SAML values, then submit them together."
+            ),
+            "entry": {
+                "operation": operation,
+                "label": "SAML signing values",
+                "inputs": [
+                    {
+                        "key": "SAML signing",
+                        "label": "SAML signing",
+                        "placeholder": "Enter the selected signing option",
+                    },
+                    {
+                        "key": (
+                            "Certificate expiration date "
+                            "(active certificate row)"
+                        ),
+                        "label": "Certificate expiration date",
+                        "placeholder": "Enter the active expiration date",
+                    },
+                ],
+                "submitLabel": "Record both worksheet values",
+            },
+        }
+    if accepted_values:
+        fields = [
+            {
+                "label": "Portal location",
+                "value": portal_path,
+            }
+        ]
+        if len(accepted_values) == 1:
+            fields.append(
+                {
+                    "label": "Worksheet response",
+                    "value": accepted_values[0],
+                }
+            )
+            return {
+                "schemaVersion": 1,
+                "phase": "Microsoft Entra",
+                "title": f"Confirm {worksheet_row}",
+                "status": "waiting",
+                "summary": capture_instruction["instruction"],
+                "steps": [
+                    f"Review {portal_path}.",
+                    capture_instruction["instruction"],
+                ],
+                "fields": fields,
+                "waitingFor": (
+                    "Confirm the canonical worksheet response after reviewing "
+                    "the Microsoft Entra configuration."
+                ),
+                "confirmation": {
+                    "operation": operation,
+                    "prompt": capture_instruction["instruction"],
+                    "confirmLabel": "Confirm and record",
+                    "rejectLabel": "Review again",
+                },
+            }
+        return {
+            "schemaVersion": 1,
+            "phase": "Microsoft Entra",
+            "title": f"Choose {worksheet_row}",
+            "status": "waiting",
+            "summary": capture_instruction["instruction"],
+            "steps": [
+                f"Review {portal_path}.",
+                capture_instruction["instruction"],
+            ],
+            "fields": fields,
+            "waitingFor": "Choose the canonical worksheet response.",
+            "entry": {
+                "operation": operation,
+                "label": "Worksheet response",
+                "options": accepted_values,
+            },
+        }
+    return {
+        "schemaVersion": 1,
+        "phase": "Microsoft Entra",
+        "title": f"Enter {worksheet_row}",
+        "status": "waiting",
+        "summary": capture_instruction["instruction"],
+        "steps": [
+            f"Review {portal_path}.",
+            capture_instruction["instruction"],
+        ],
+        "fields": [
+            {
+                "label": "Portal location",
+                "value": portal_path,
+            }
+        ],
+        "waitingFor": (
+            f"Enter the {worksheet_row} value described in What to do."
+        ),
+        "entry": {
+            "operation": operation,
+            "label": worksheet_row,
+            "placeholder": f"Enter {worksheet_row}",
+            "submitLabel": "Record worksheet value",
+        },
+    }
+
+
+def _worksheet_summary_view(root: Path) -> dict[str, Any]:
+    """Build the final 13-row review with the required preservation choices."""
+    draft = _load_worksheet_draft(root)
+    missing_rows = [
+        _COLLECTION_OPERATION_DEFINITIONS[operation]["worksheetRow"]
+        for operation in _WORKSHEET_OPERATION_ORDER
+        if _COLLECTION_OPERATION_DEFINITIONS[operation]["worksheetRow"]
+        not in draft
+    ]
+    if missing_rows:
+        raise AssistedBrowserError(
+            "The final worksheet summary requires all interactive rows: "
+            + ", ".join(missing_rows)
+        )
+    accepted_values = entra_capture_instruction(
+        _PRESERVATION_WORKSHEET_ROW
+    ).get("acceptedValues", [])
+    if len(accepted_values) != 2:
+        raise AssistedBrowserError(
+            "The Existing configuration contract must define two outcomes."
+        )
+    return {
+        "schemaVersion": 1,
+        "phase": "Microsoft Entra",
+        "title": "Review final Microsoft Entra worksheet",
+        "status": "waiting",
+        "summary": (
+            "Review the 13 collected worksheet values, then choose how "
+            "unrelated scopes, authorized clients, and permissions were "
+            "preserved."
+        ),
+        "steps": [
+            "Confirm each displayed value reflects the completed setup.",
+            (
+                "Choose whether existing configuration was preserved without "
+                "changes or remediated without replacing unrelated settings."
+            ),
+        ],
+        "fields": [
+            {
+                "label": _COLLECTION_OPERATION_DEFINITIONS[operation][
+                    "worksheetRow"
+                ],
+                "value": draft[
+                    _COLLECTION_OPERATION_DEFINITIONS[operation][
+                        "worksheetRow"
+                    ]
+                ],
+            }
+            for operation in _WORKSHEET_OPERATION_ORDER
+        ],
+        "waitingFor": (
+            "Choose the Existing configuration outcome to complete the worksheet."
+        ),
+        "entry": {
+            "operation": _PRESERVATION_OPERATION,
+            "label": _PRESERVATION_WORKSHEET_ROW,
+            "options": accepted_values,
+        },
+    }
+
+
+def _worksheet_present(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Build and publish one canonical worksheet interaction."""
+    session = _load_session(root)
+    if session.get("surface") != "entra-configuration":
+        raise AssistedBrowserError(
+            "worksheet-present requires the entra-configuration companion surface."
+        )
+    if args.operation == _PRESERVATION_OPERATION:
+        if args.stage != "summary":
+            raise AssistedBrowserError(
+                "Existing configuration is available only on the final summary."
+            )
+        if args.value_file is not None or args.target_label is not None:
+            raise AssistedBrowserError(
+                "Summary presentation does not accept candidate value arguments."
+            )
+        view = _worksheet_summary_view(root)
+        normalized = validate_view(view)
+        result = _api_request(session, "/api/present", value=normalized)
+        return {
+            "presented": True,
+            "operation": args.operation,
+            "interaction": "entry",
+            **result,
+        }
+    if args.stage == "summary":
+        raise AssistedBrowserError(
+            "Summary presentation requires the Existing configuration operation."
+        )
+    if (
+        args.stage != "collection"
+        and session.get("browserMode") == _VSCODE_BROWSER_MODE
+    ):
+        live = _api_request(session, "/api/status")
+        collection = live.get("collection")
+        if (
+            not isinstance(collection, Mapping)
+            or collection.get("operation") != args.operation
+            or collection.get("status") != "navigated"
+        ):
+            raise AssistedBrowserError(
+                "The row interaction is available only after browser navigation "
+                "completes for the same worksheet row. Report completion with "
+                f"`shared-browser-result --operation {args.operation} "
+                "--status navigated`, then retry the presentation."
+            )
+    if args.stage == "collection":
+        draft = _load_worksheet_draft(root)
+        expected_operation = next(
+            (
+                operation
+                for operation in _WORKSHEET_OPERATION_ORDER
+                if _COLLECTION_OPERATION_DEFINITIONS[operation][
+                    "worksheetRow"
+                ]
+                not in draft
+            ),
+            None,
+        )
+        if args.operation != expected_operation:
+            raise AssistedBrowserError(
+                "Collection presentation must target the first unresolved "
+                "worksheet row."
+            )
+        if args.value_file is not None or args.target_label is not None:
+            raise AssistedBrowserError(
+                "Collection presentation does not accept candidate value arguments."
+            )
+        view = _worksheet_collection_view(args.operation)
+        interaction = "collection"
+    elif args.stage == "confirmation":
+        if args.value_file is None or args.target_label is None:
+            raise AssistedBrowserError(
+                "Confirmation presentation requires --value-file and --target-label."
+            )
+        try:
+            raw_value = (
+                sys.stdin.read()
+                if str(args.value_file) == "-"
+                else args.value_file.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise AssistedBrowserError(
+                "The worksheet candidate value file is unreadable."
+            ) from exc
+        view = _worksheet_confirmation_view(
+            args.operation,
+            value=_required_text(
+                raw_value.strip(),
+                "worksheet candidate value",
+                maximum=500,
+            ),
+            target_label=_required_text(
+                args.target_label,
+                "target label",
+                maximum=120,
+            ),
+        )
+        interaction = (
+            "confirmation" if "confirmation" in view else "entry"
+        )
+    else:
+        if args.value_file is not None or args.target_label is not None:
+            raise AssistedBrowserError(
+                "Entry presentation does not accept candidate value arguments."
+            )
+        view = _worksheet_entry_view(args.operation)
+        interaction = (
+            "confirmation" if "confirmation" in view else "entry"
+        )
+    normalized = validate_view(view)
+    result = _api_request(session, "/api/present", value=normalized)
+    return {
+        "presented": True,
+        "operation": args.operation,
+        "interaction": interaction,
+        **result,
+    }
+
+
 def _load_worksheet_draft(root: Path) -> dict[str, str]:
     """Load the existing session-owned worksheet draft without exposing its values."""
     path = root.resolve() / WORKSHEET_DRAFT_PATH
@@ -3931,6 +5324,38 @@ def _worksheet_stage(
     return "awaiting-action", "action"
 
 
+def _worksheet_row_contract(operation: str) -> dict[str, Any]:
+    """Project one compact row contract without exposing worksheet values."""
+    definition = _COLLECTION_OPERATION_DEFINITIONS[operation]
+    hints = _ENTRA_NAVIGATION_HINTS[operation]
+    return {
+        "operation": operation,
+        "worksheetRow": definition["worksheetRow"],
+        "sensitive": definition["sensitive"],
+        "navigationHints": {
+            "startUrl": definition["url"],
+            "portalPath": hints["portalPath"],
+            **(
+                {"lastKnownUrlTemplate": hints["lastKnownUrlTemplate"]}
+                if hints.get("lastKnownUrlTemplate")
+                else {}
+            ),
+            **(
+                {"baselineScript": hints["baselineScript"]}
+                if hints.get("baselineScript")
+                else {}
+            ),
+            **(
+                {"baselineSupportsNavigateOnly": True}
+                if hints.get("baselineScript")
+                else {}
+            ),
+            "observedHints": list(hints["observedHints"]),
+            "fallbackHints": list(hints["fallbackHints"]),
+        },
+    }
+
+
 def _worksheet_status(
     _args: argparse.Namespace,
     root: Path,
@@ -3960,11 +5385,20 @@ def _worksheet_status(
     operation = _current_view_operation(live)
     active_row = None
     final_review = None
+    preservation_attestation = None
     if operation == _FINAL_WORKSHEET_CONFIRMATION_OPERATION:
         stage, interaction = _worksheet_stage(live, operation)
         final_review = {
             "stage": stage,
             "pendingInteraction": interaction,
+            "viewRevision": live.get("revision"),
+        }
+    elif operation == _PRESERVATION_OPERATION:
+        stage, interaction = _worksheet_stage(live, operation)
+        preservation_attestation = {
+            "stage": stage,
+            "pendingInteraction": interaction,
+            "recorded": _PRESERVATION_WORKSHEET_ROW in draft,
             "viewRevision": live.get("revision"),
         }
     elif operation is not None:
@@ -3983,10 +5417,9 @@ def _worksheet_status(
         )
         visual_help = live.get("visualHelp")
         target_pointers = live.get("targetPointers")
+        target_pointers_status = live.get("targetPointersStatus")
         active_row = {
-            "operation": operation,
-            "worksheetRow": definition["worksheetRow"],
-            "sensitive": definition["sensitive"],
+            **_worksheet_row_contract(operation),
             "stage": stage,
             "pendingInteraction": interaction,
             "viewRevision": live.get("revision"),
@@ -4013,7 +5446,22 @@ def _worksheet_status(
                 and visual_help.get("operation") == operation
                 else None
             ),
+            "targetPointersStatus": (
+                target_pointers_status.get("status")
+                if isinstance(target_pointers_status, Mapping)
+                and target_pointers_status.get("operation") == operation
+                else None
+            ),
         }
+    next_row = (
+        _worksheet_row_contract(next_operation)
+        if next_operation is not None
+        and (
+            active_row is None
+            or active_row["operation"] != next_operation
+        )
+        else None
+    )
     return {
         "schemaVersion": 1,
         "surface": session.get("surface"),
@@ -4023,11 +5471,45 @@ def _worksheet_status(
             "requiredCount": len(_WORKSHEET_OPERATION_ORDER),
             "recordedCount": len(recorded_rows),
             "complete": len(recorded_rows) == len(_WORKSHEET_OPERATION_ORDER),
+            "submissionReady": (
+                len(recorded_rows) == len(_WORKSHEET_OPERATION_ORDER)
+                and _PRESERVATION_WORKSHEET_ROW in draft
+            ),
             "recordedRows": recorded_rows,
             "nextOperation": next_operation,
+            "nextRow": next_row,
         },
         "activeRow": active_row,
         "finalReview": final_review,
+        "preservationAttestation": preservation_attestation,
+    }
+
+
+def _worksheet_reset(
+    _args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Reset only Entra worksheet collection state and preserve lifecycle state."""
+    session = _load_session(root)
+    if session.get("surface") != "entra-configuration":
+        raise AssistedBrowserError(
+            "worksheet-reset requires the entra-configuration companion surface."
+        )
+    reset_result = _api_request(session, "/api/reset", value={})
+    draft_path = root.resolve() / WORKSHEET_DRAFT_PATH
+    draft_cleared = draft_path.exists()
+    try:
+        draft_path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise AssistedBrowserError(
+            "The Entra companion worksheet draft could not be cleared."
+        ) from exc
+    status = _worksheet_status(argparse.Namespace(), root)
+    return {
+        "reset": True,
+        "draftCleared": draft_cleared,
+        "companion": reset_result,
+        "status": status,
     }
 
 
@@ -4286,6 +5768,7 @@ def _point(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         "/api/point",
         value={
             "operation": args.operation,
+            "revision": args.revision,
             "selector": args.selector,
             "frameIndex": args.frame_index,
             "matchIndex": args.match_index,
@@ -4296,20 +5779,23 @@ def _point(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 def _point_targets(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Load a target set and request atomic multi-target rail guidance."""
-    if str(args.targets_file) == "-":
-        targets = json.load(sys.stdin)
+    value: dict[str, Any] = {
+        "operation": args.operation,
+        "revision": args.revision,
+    }
+    if args.error is not None:
+        value["error"] = args.error
+    elif str(args.targets_file) == "-":
+        value["targets"] = json.load(sys.stdin)
     else:
-        targets = json.loads(
+        value["targets"] = json.loads(
             Path(args.targets_file).read_text(encoding="utf-8")
         )
     session = _load_session(root)
     return _api_request(
         session,
         "/api/point-targets",
-        value={
-            "operation": args.operation,
-            "targets": targets,
-        },
+        value=value,
         timeout=30.0,
     )
 
@@ -4460,6 +5946,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("status")
     commands.add_parser("worksheet-status")
+    commands.add_parser("worksheet-reset")
+    worksheet_present = commands.add_parser("worksheet-present")
+    worksheet_present.add_argument(
+        "--operation",
+        choices=sorted(_PRESENT_OPERATIONS),
+        required=True,
+    )
+    worksheet_present.add_argument(
+        "--stage",
+        choices=("collection", "confirmation", "entry", "summary"),
+        required=True,
+    )
+    worksheet_present.add_argument("--value-file", type=Path)
+    worksheet_present.add_argument("--target-label")
     wait = commands.add_parser("wait")
     wait.add_argument(
         "--operation",
@@ -4528,6 +6028,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     point.add_argument("--selector", required=True)
+    point.add_argument("--revision", type=int, required=True)
     point.add_argument("--frame-index", type=int, required=True)
     point.add_argument("--match-index", type=int, required=True)
     point.add_argument("--append", action="store_true")
@@ -4537,7 +6038,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(_COLLECTION_OPERATIONS),
         required=True,
     )
-    point_targets.add_argument("--targets-file", type=Path, required=True)
+    point_targets.add_argument("--revision", type=int, required=True)
+    point_targets_payload = point_targets.add_mutually_exclusive_group(
+        required=True
+    )
+    point_targets_payload.add_argument("--targets-file", type=Path)
+    point_targets_payload.add_argument("--error")
     reveal = commands.add_parser("reveal")
     reveal.add_argument(
         "--operation",
@@ -4571,6 +6077,8 @@ _HANDLERS = {
     "present": _present,
     "status": _status,
     "worksheet-status": _worksheet_status,
+    "worksheet-reset": _worksheet_reset,
+    "worksheet-present": _worksheet_present,
     "wait": _wait,
     "inspect": _inspect,
     "follow": _follow,

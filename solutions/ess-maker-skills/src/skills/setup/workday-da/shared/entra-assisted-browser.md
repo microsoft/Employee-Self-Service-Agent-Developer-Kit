@@ -22,9 +22,11 @@ Store the in-progress draft only at `.local/connect/workday-da/entra-companion-d
 }
 ```
 
-The draft stores confirmed worksheet values only. It does not store row authorization, browser references, pointers, screenshots, pending candidates, or interaction status.
+The draft stores confirmed worksheet values only. It does not store row authorization, browser references, pointers, screenshots, pending candidates, or interaction status. Do not initialize or infer `Existing configuration`; add that downstream-required row only after the administrator selects one of its two canonical outcomes on the final summary.
 
 ## Worksheet operations
+
+A **worksheet row** is one entry in the rendered Microsoft Entra capture table. Its exact label maps to one companion operation and one sensitivity marker. Each row produces one confirmed worksheet value or attestation. A worksheet row is not an HTML table row or another visual element in the Microsoft Entra portal.
 
 | Worksheet row                                        | Companion operation                         | Sensitive |
 | ---------------------------------------------------- | ------------------------------------------- | --------- |
@@ -41,7 +43,6 @@ The draft stores confirmed worksheet values only. It does not store row authoriz
 | Authorized connector                                 | `entra-authorized-connector`                | No        |
 | Permissions and consent                              | `entra-permissions-consent`                 | No        |
 | Employee assignment                                  | `entra-employee-assignment`                 | No        |
-| Existing configuration                               | `entra-existing-configuration`              | No        |
 
 The `Sensitive` column is authoritative. Never infer sensitivity from the row label, the visible value, or browser capabilities. For `No`, offer both actions with these literal labels:
 
@@ -66,40 +67,106 @@ The `Sensitive` column is authoritative. Never infer sensitivity from the row la
 
 For any future row marked `Yes`, offer only **Navigate only**. Do not copy the application value, present a detected-value confirmation, call `point-targets`, or offer a screenshot for that row.
 
+`Existing configuration` is not a browser-navigation row. Its operation, `entra-existing-configuration`, is reserved for the final summary, where the administrator selects the downstream preservation outcome after reviewing the 13 collected values.
+
 ## Run the worksheet session
 
-1. Start the `entra-configuration` surface using `assisted-browser.md`.
-2. Initialize the canonical ephemeral draft from safe values already supplied in the manual worksheet response, if any.
-3. Read the compact worksheet projection:
+Load this guide and `assisted-browser.md` when entering or materially resuming assisted mode. During one uninterrupted worksheet loop, do not reread the root setup skill, phase guide, these shared guides, CLI help, or script source unless a tool reports a contract error that its returned details cannot resolve.
+
+1. Start or reconnect to the `entra-configuration` surface using `assisted-browser.md`. Initialize the canonical draft from safe values already supplied in the manual worksheet response, if any.
+2. Choose the requested worksheet lifecycle:
+   - **Resume:** preserve the draft and current companion interaction, then read current progress:
+
+     ```powershell
+     python scripts/workday_assisted_browser.py worksheet-status
+     ```
+
+     Continue `activeRow` when present. If it has a pending interaction, go directly to the exact `wait`; do not inspect the browser, search files, call `status`, or present a replacement view first. When `preservationAttestation` is present, resume its exact entry wait instead of reopening a browser row.
+
+   - **Reset:** only when the human explicitly asks to restart worksheet value collection, cancel any foreground `wait` using native terminal cancellation, then run:
+
+     ```powershell
+     python scripts/workday_assisted_browser.py worksheet-reset
+     ```
+
+     This clears only worksheet draft and companion interaction state. It preserves the Workday lifecycle and Entra phase boundary. Use the returned `status`; do not stop and manually delete files.
+
+   Otherwise use `worksheet.nextRow`; `worksheet.recordedRows` lists completed rows and `worksheet.nextOperation` retains the compact operation identifier. If neither an active row nor a next row exists, proceed to the final summary. The projection deliberately omits confirmed values and historical views. Do not reconstruct progress from conversation history, old companion views, temporary view files, or browser snapshots.
+
+3. Use the selected row's exact label, sensitivity marker, and `navigationHints`. These are navigation starting points, not current portal facts. Do not run `navigationHints.baselineScript` before the human chooses an assistance mode. The selected mode determines whether the browser operation may read the worksheet value.
+4. For a new row, publish its canonical collection view:
 
    ```powershell
-   python scripts/workday_assisted_browser.py worksheet-status
+   python scripts/workday_assisted_browser.py worksheet-present --operation "{OPERATION}" --stage collection
    ```
 
-   Use `activeRow` for the current revision-bound interaction, `worksheet.recordedRows` for completed rows, and `worksheet.nextOperation` for the first unresolved row. The projection deliberately omits confirmed values and historical views. Do not reconstruct progress by rereading an old companion view or prior browser snapshots.
+   Never manually author, patch, or reuse a row view payload. Use the returned revision for every interaction with that view.
 
-4. Process the unresolved worksheet rows in their original order:
-   - present the row's existing manual location and instruction;
-   - for every current `Sensitive: No` row, present both **Navigate only** and **Navigate and capture** using the canonical actions template;
-   - continue when the human selects the row action;
-   - use bounded inspection and navigation to assist the human;
-   - after **Navigate only**, record navigation completion and present the existing manual-entry fallback;
-   - after **Navigate and capture**, copy only the visible non-sensitive application value;
-   - scroll the application target into view, attempt vertical centering, re-inspect its post-scroll position, and publish it with `point-targets` before asking the human to confirm it;
-   - present one candidate or required attestation for human confirmation using the detected-value template below;
-   - include `visualHelp` so **Show me what to click** is visible before a screenshot exists;
-   - attempt the screenshot only after the human selects **Show me what to click**; on failure report **Screenshot unsuccessful** and allow retry without revoking row authorization;
-   - after local confirmation, update only the canonical ephemeral draft and call `worksheet-status` again;
-   - continue to the next unresolved row.
-5. If the human rejects a row candidate, retain the row authorization and inspect again. Do not invalidate unrelated draft values.
-6. A missing first result is not a completed search. Retain the row authorization, re-read the page, identify the visible search or filter control, and try the exact safe identifiers already available for that row. Inspect every visible result and available result page before concluding that no candidate can be verified.
-7. Do not stop or return to chat because a shared-browser element reference became stale, one search term returned no match, the page refreshed, or the human rejected a candidate. Re-inspect and continue the same row.
-8. When bounded inspection cannot reliably collect or disambiguate a required value after those retries, request manual entry for that row.
-9. Open a row-specific **Edit** control only when the current companion view names that exact control and explains that it will reveal existing values. Do not change or save anything in the revealed panel.
-10. For a worksheet setting that requires administrator attestation, present the worksheet's attestation and continue only after the human selects **Attest**.
-11. Return `blocked` only when the authorized portal surface remains unreachable, every bounded search and manual fallback for the row has been exhausted, or continuing would require an ambiguous selection or prohibited mutation. Return to the existing combined worksheet interaction with a concise reason.
+5. Wait for the exact operation, interaction, and revision using the `wait` command from `assisted-browser.md`.
+6. Perform only the mode selected by the human:
+   - after **Navigate only**, when `navigationHints.baselineSupportsNavigateOnly` is `true`, execute the function in `navigationHints.baselineScript` with `{ capture: false }`. This reuses the exact capture route and targeting logic but must return neither a `value` nor `values` field or evidence. Treat any of those as a contract failure and leave the row pending. The Enterprise application Overview operation may return its exact `applicationUrl` as navigation context; retain it for subsequent Entra baselines. When the flag is absent, navigate through read-only portal controls using `startUrl`, `lastKnownUrlTemplate`, `portalPath`, visible landmarks, and the row's observed or fallback hints. Locate the value-bearing page or control for geometry only. The browser result may include pointer `targets`, but it must not read or return the worksheet value through `innerText`, `textContent`, `inputValue`, value-bearing attributes, or equivalent extraction;
+   - after **Navigate and capture**, execute `navigationHints.baselineScript` with the built-in code runner from the `Browser Pages` entry for the currently shared VS Code Browser Page. If that code runner accepts a workspace filename, pass the returned path directly. Otherwise read that file once and execute its browser function unchanged. A direct-value success contains the detected worksheet `value` and pointer `targets`. The Enterprise application Overview success instead contains a `values` object with the separate `Enterprise application` and `Application ID` worksheet values plus both pointer `targets`. It also returns the exact `applicationUrl`; retain that URL as navigation input for subsequent Entra baselines. An attestation-row success contains a safe evidence summary and may include pointer `targets` when a specific visible control is part of the attestation. The companion supplies the row's canonical choices from the same contract as the administrator handoff and worksheet parser.
 
-Use this canonical detected-value view shape for every current row after **Navigate and capture**:
+   For either mode, use this bounded observation loop:
+   - Observe the current URL, visible landmarks, active blade or frame, loading overlays, target locator count and state, and the filter or tab controlling the visible results.
+   - Treat the row's intended destination as the recovery invariant. Use the navigation hints and visible landmarks to resume the same read-only route a human would follow, and finish on the stated value-bearing page or control.
+   - Select the smallest adjustment supported by that observation that advances or stabilizes the intended route, such as waiting for attachment, waiting for an overlay to clear, selecting the matching frame, refining a selector on the destination page, applying the expected filter, or resuming from the current route landmark.
+   - Repeat the observation and adjustment while the browser-operation budget remains.
+   - On success, keep the target visible while publishing the canonical row interaction and its pointer targets.
+   - At the end of the operation budget, report the final `failedAt`, observed page state, and attempted adjustments through `shared-browser-result --operation "{OPERATION}" --status failed --error "{SAFE_REASON}"`. The worksheet row remains pending.
+
+7. Report successful navigation and publish the canonical post-navigation interaction in one terminal call. This shared ordering prevents either mode from presenting a row interaction before its browser work is complete.
+
+   For **Navigate only**:
+
+   ```powershell
+   python scripts/workday_assisted_browser.py shared-browser-result --operation "{OPERATION}" --status navigated && python scripts/workday_assisted_browser.py worksheet-present --operation "{OPERATION}" --stage entry
+   ```
+
+   Direct-value rows render bounded text entry with the manual table's **What to record** instruction. The Enterprise application Overview operation renders two bounded inputs and submits the application name and Application ID together. Single-choice attestation rows render confirmation with their canonical worksheet response.
+
+   For **Navigate and capture**, use the successful baseline result for the current worksheet row. For a direct-value row, pipe only its detected worksheet `value` through stdin so it does not enter command history. For an attestation row, pipe only the safe baseline evidence summary:
+
+   ```powershell
+   python scripts/workday_assisted_browser.py shared-browser-result --operation "{OPERATION}" --status navigated && $detectedValue | python scripts/workday_assisted_browser.py worksheet-present --operation "{OPERATION}" --stage confirmation --value-file - --target-label "{VISIBLE_TARGET_LABEL}"
+   ```
+
+   For the Enterprise application Overview operation, serialize only the returned `values` object as JSON and pipe that JSON through `--value-file -` instead of `$detectedValue`.
+
+   For either mode, read the returned `interaction` and revision instead of assuming the interaction type. Navigate and capture renders a detected-value confirmation for direct-value rows or the shared instruction and canonical worksheet response for single-choice attestations. Capture evidence renders separately from the worksheet response.
+
+   When the successful browser operation returned `targets`, retain that exact target set in memory and pipe the complete set directly to one revision-bound `point-targets` call:
+
+   ```powershell
+   $targetsJson | python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --revision {INTERACTION_REVISION} --targets-file -
+   ```
+
+   If bounded geometry inspection fails, report the safe reason without blocking or replacing the row interaction:
+
+   ```powershell
+   python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --revision {INTERACTION_REVISION} --error "{SAFE_REASON}"
+   ```
+
+   Pointer enrichment remains optional. The same revision-bound arrow rail is used for both assistance modes, including when the human submits or confirms before pointers arrive. A stale pointer result after a newer revision was published is normal completion. Do not republish the row or repeat navigation. Navigate and capture retains `visualHelp`, so **Show me what to click** becomes available after the pointer set is ready and before a screenshot exists. Navigate only provides arrows without screenshot capture. Wait with `--interaction any`.
+   When a baseline returns multiple targets, publish the complete array in one `point-targets` call. The companion renders one labeled marker per target and separates nearby markers on the rail; do not collapse the set to one representative target.
+
+8. If the result is `visual-help`, attempt the screenshot only after the human selects **Show me what to click**. On failure, report **Screenshot unsuccessful** through `screenshot-result`. Wait again with `--interaction any` for the still-pending row interaction.
+9. After confirmation or accepted entry, open `.local/connect/workday-da/entra-companion-draft.json`. When the file is absent, create it as an empty JSON object and open it. Update only the exact worksheet row in this canonical draft. For direct-value confirmation, use the detected value already submitted to `worksheet-present`. For the Enterprise application Overview operation, update the separate `Enterprise application` and `Application ID` rows from the detected `values` object or `wait.result.values`. For an attestation confirmation or constrained entry, use `wait.result.value`, which is one of the shared canonical choices. Preserve unrelated rows, then run `worksheet-status` to verify the update. `capture`, `screenshot`, and `screenshot-result` are image operations, not worksheet-recording tools.
+10. Continue with the returned `worksheet.nextOperation`. Do not reread the guides between rows. Pass the retained `applicationUrl` in the baseline options for rows that target the same Enterprise application. Each baseline compares the current URL with its expected URL and navigates only when they differ.
+
+### Interruptions
+
+If a new user message interrupts `wait`, cancel that foreground terminal command using the terminal tool's native cancellation. Do not call `workday_assisted_browser.py stop`. Answer the user, run `worksheet-status`, and start a fresh wait only when the same interaction remains pending. An explicit human request to restart collection follows the `worksheet-reset` branch above instead.
+
+### Recovery
+
+Follow the structured error returned by the failed tool. Run `worksheet-status` when progress is uncertain. Inspect CLI help, documentation, or source only when the error indicates a contract mismatch or lacks enough recovery detail.
+
+A missing first result is not a completed search. If the human rejects a candidate or the search is incomplete, retain the row authorization, try the exact safe identifiers already available for the row, and inspect every visible result and available result page. Do not stop or return to chat because an element reference became stale, one search returned no match, the page refreshed, or the human rejected a candidate. Re-inspect the same row or request manual entry when bounded inspection cannot reliably collect or disambiguate the value.
+
+Open a row-specific **Edit** control only when the current companion view names that exact control and explains that it will reveal existing values. Do not change or save anything in the revealed panel. Return `blocked` only when the authorized portal remains unreachable, bounded search and manual fallback are exhausted, or continuing would require an ambiguous selection or prohibited mutation.
+
+For direct-value rows, `worksheet-present --stage confirmation` generates this canonical detected-value shape:
 
 ```json
 {
@@ -122,6 +189,8 @@ Use this canonical detected-value view shape for every current row after **Navig
 }
 ```
 
+For attestation rows, the same command renders the shared administrator instruction and accepted worksheet choice instead of labeling readiness text as a detected value.
+
 ## Protect the worksheet
 
 - Keep the canonical worksheet labels, allowed choices, examples, and validation behavior unchanged.
@@ -133,13 +202,20 @@ Use this canonical detected-value view shape for every current row after **Navig
 
 ## Review and return the worksheet
 
-1. When every required label has a draft value, produce the exact labeled worksheet text accepted by the existing parser.
-2. Present **Review final Microsoft Entra worksheet** with every submitted label and value as fields. Use:
-   - operation: `entra-final-worksheet`;
-   - prompt: **Do these final worksheet values accurately reflect the completed Microsoft Entra setup?**
-   - confirm label: **Send values to ADK**
-   - reject label: **Review worksheet rows**
-3. If the human rejects the review, retain unaffected draft values, reopen only the identified rows, and present a new final review revision.
-4. If the human selects **Send values to ADK**, return `completed` with the exact reviewed worksheet text.
-5. If the human cancels assistance, return `cancelled` without worksheet text.
-6. Stop the assisted-browser session and return control to `provision-entra-app.md`.
+1. When `worksheet.complete` is `true` after all 13 interactive rows, publish the canonical summary:
+
+   ```powershell
+   python scripts/workday_assisted_browser.py worksheet-present --operation entra-existing-configuration --stage summary
+   ```
+
+   The generated **Review final Microsoft Entra worksheet** page renders all 13 collected labels and values as fields. Do not manually author, patch, or reuse the summary payload.
+
+2. The same summary presents exactly two buttons for the downstream-required `Existing configuration` row:
+   - **Preserved without changes**
+   - **Remediated without replacing unrelated configuration**
+3. Wait for the `entra-existing-configuration` entry and the returned summary revision. The selected button submits immediately and is the administrator's final worksheet attestation.
+4. Add `Existing configuration` to the draft using only `wait.result.value`, preserving the 13 reviewed rows. Run `worksheet-status` and require `worksheet.submissionReady` to be `true`.
+5. Produce the exact 14-row labeled worksheet text accepted by the existing parser and return `completed`. Do not infer or default the preservation outcome.
+6. If the human needs to revise a displayed value before selecting a preservation outcome, retain unaffected draft values, reopen only the identified interactive rows, and publish a new summary after the correction.
+7. If the human cancels assistance, return `cancelled` without worksheet text.
+8. Stop the assisted-browser session and return control to `provision-entra-app.md`.
