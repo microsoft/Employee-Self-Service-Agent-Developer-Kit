@@ -38,11 +38,14 @@ async (page, options = {}) => {
     };
   }
 
-  const signingOption = page.getByText("Sign SAML response and assertion", {
+  const signingPanel = page.getByRole("complementary", {
+    name: "SAML Signing Certificate",
     exact: true,
   });
-  let signingOptionCount = await signingOption.count();
-  if (signingOptionCount === 0) {
+  let signingPanelCount = await signingPanel.count();
+  let signingPanelVisible =
+    signingPanelCount === 1 && (await signingPanel.isVisible());
+  if (!signingPanelVisible) {
     const edit = page.getByRole("button", {
       name: "Edit SAML signing certificate",
       exact: true,
@@ -59,7 +62,10 @@ async (page, options = {}) => {
     try {
       await edit.scrollIntoViewIfNeeded();
       await edit.click();
-      await page.waitForTimeout(700);
+      await signingPanel.waitFor({
+        state: "visible",
+        timeout: 10000,
+      });
     } catch (error) {
       return {
         ok: false,
@@ -68,8 +74,26 @@ async (page, options = {}) => {
         error: error.message,
       };
     }
-    signingOptionCount = await signingOption.count();
+    signingPanelCount = await signingPanel.count();
+    signingPanelVisible =
+      signingPanelCount === 1 && (await signingPanel.isVisible());
   }
+  if (!signingPanelVisible) {
+    return {
+      ok: false,
+      failedAt: "locate-signing-panel",
+      url: page.url(),
+      matchCount: signingPanelCount,
+    };
+  }
+
+  const signingOption = signingPanel.getByText(
+    "Sign SAML response and assertion",
+    {
+      exact: true,
+    },
+  );
+  const signingOptionCount = await signingOption.count();
   if (signingOptionCount !== 1) {
     return {
       ok: false,
@@ -79,70 +103,118 @@ async (page, options = {}) => {
     };
   }
 
-  const certificateHeading = page.getByText("SAML Certificates", {
+  const expirationHeader = signingPanel.getByText("Expiration Date", {
     exact: true,
   });
-  if ((await certificateHeading.count()) !== 1) {
+  const expirationHeaderCount = await expirationHeader.count();
+  if (expirationHeaderCount !== 1) {
     return {
       ok: false,
-      failedAt: "locate-certificate-card",
+      failedAt: "locate-expiration-header",
       url: page.url(),
-      matchCount: await certificateHeading.count(),
-    };
-  }
-  const certificateCard = certificateHeading.locator(
-    "xpath=ancestor::*[self::div or self::section][3]",
-  );
-  const expirationLabel = certificateCard.getByText("Expiration", {
-    exact: true,
-  });
-  if ((await expirationLabel.count()) !== 1) {
-    return {
-      ok: false,
-      failedAt: "locate-expiration-label",
-      url: page.url(),
-      matchCount: await expirationLabel.count(),
+      matchCount: expirationHeaderCount,
     };
   }
 
+  const thumbprintHeader = signingPanel.getByText("Thumbprint", {
+    exact: true,
+  });
+  const thumbprintHeaderCount = await thumbprintHeader.count();
+  if (thumbprintHeaderCount !== 1) {
+    return {
+      ok: false,
+      failedAt: "locate-thumbprint-header",
+      url: page.url(),
+      matchCount: thumbprintHeaderCount,
+    };
+  }
+
+  const headerRow = thumbprintHeader.locator(
+    "xpath=ancestor::*[@role='row'][1]",
+  );
+  const headerLines = (await headerRow.innerText())
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (
+    headerLines.length < 3 ||
+    headerLines[0] !== "Status" ||
+    headerLines[1] !== "Expiration Date" ||
+    headerLines[2] !== "Thumbprint"
+  ) {
+    return {
+      ok: false,
+      failedAt: "verify-certificate-columns",
+      url: page.url(),
+    };
+  }
+
+  const activeCell = signingPanel.getByRole("gridcell", {
+    name: "Active",
+    exact: true,
+  });
+  const activeCellCount = await activeCell.count();
+  if (activeCellCount !== 1) {
+    return {
+      ok: false,
+      failedAt: "locate-active-certificate-row",
+      url: page.url(),
+      matchCount: activeCellCount,
+    };
+  }
+  const activeRow = activeCell.locator(
+    "xpath=ancestor::*[@role='row'][1]",
+  );
+  const activeCells = activeRow.getByRole("gridcell");
+  const activeCellValueCount = await activeCells.count();
+  if (activeCellValueCount < 3) {
+    return {
+      ok: false,
+      failedAt: "locate-active-certificate-values",
+      url: page.url(),
+      matchCount: activeCellValueCount,
+    };
+  }
+
+  const expirationTarget = activeCells.nth(1);
+  const thumbprintTarget = activeCells.nth(2);
   let expiration = null;
-  let expirationTarget = expirationLabel;
+  let thumbprint = null;
   if (capture) {
-    const expirationRow = expirationLabel.locator(
-      "xpath=ancestor::*[contains(@class, 'ext-saml-row')][1]",
-    );
-    const lines = (await expirationRow.innerText())
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length !== 2 || lines[0] !== "Expiration") {
+    expiration = (await expirationTarget.innerText()).trim();
+    if (!expiration) {
       return {
         ok: false,
         failedAt: "read-expiration",
         url: page.url(),
       };
     }
-    expiration = lines[1];
-    expirationTarget = expirationRow.getByText(expiration, {
-      exact: true,
-    });
-    if ((await expirationTarget.count()) !== 1) {
+    thumbprint = (await thumbprintTarget.innerText()).trim();
+    if (!thumbprint) {
       return {
         ok: false,
-        failedAt: "locate-expiration-value",
+        failedAt: "read-thumbprint",
         url: page.url(),
-        matchCount: await expirationTarget.count(),
       };
     }
   }
 
   await signingOption.scrollIntoViewIfNeeded();
+  await thumbprintTarget.scrollIntoViewIfNeeded();
   await expirationTarget.scrollIntoViewIfNeeded();
   const signingOptionBox = await signingOption.boundingBox();
   if (!signingOptionBox) {
     return {
       ok: false,
       failedAt: "measure-signing-option",
+      url: page.url(),
+    };
+  }
+  const thumbprintBox = await thumbprintTarget.boundingBox();
+  if (!thumbprintBox) {
+    return {
+      ok: false,
+      failedAt: "measure-thumbprint",
       url: page.url(),
     };
   }
@@ -160,6 +232,8 @@ async (page, options = {}) => {
   }));
   const signingOptionCenter =
     signingOptionBox.y + signingOptionBox.height / 2;
+  const thumbprintCenter =
+    thumbprintBox.y + thumbprintBox.height / 2;
   const expirationCenter =
     expirationBox.y + expirationBox.height / 2;
   const result = {
@@ -179,6 +253,19 @@ async (page, options = {}) => {
           Math.max(24, signingOptionBox.height / 2),
       },
       {
+        label: "Active certificate thumbprint",
+        positionRatio:
+          Math.round(
+            Math.min(
+              Math.max(thumbprintCenter / viewport.height, 0.05),
+              0.95,
+            ) * 10000,
+          ) / 10000,
+        centered:
+          Math.abs(thumbprintCenter - viewport.height / 2) <=
+          Math.max(24, thumbprintBox.height / 2),
+      },
+      {
         label: "Active certificate expiration",
         positionRatio:
           Math.round(
@@ -196,6 +283,7 @@ async (page, options = {}) => {
   if (capture) {
     result.values = {
       "SAML signing": "Sign SAML response and assertion",
+      "Certificate thumbprint (active certificate row)": thumbprint,
       "Certificate expiration date (active certificate row)": expiration,
     };
   }

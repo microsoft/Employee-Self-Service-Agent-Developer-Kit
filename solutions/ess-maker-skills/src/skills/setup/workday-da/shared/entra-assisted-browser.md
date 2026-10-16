@@ -36,8 +36,8 @@ A **worksheet row** is one entry in the rendered Microsoft Entra capture table. 
 | Selected Reply URL                                   | `entra-reply-url`                           | No        |
 | NameID source                                        | `entra-name-id-source`                      | No        |
 | SAML signing                                         | `entra-saml-signing-option`                 | No        |
-| Certificate thumbprint (active certificate row)      | `entra-certificate-thumbprint`              | No        |
-| Certificate expiration date (active certificate row) | `entra-certificate-expiration`              | No        |
+| Certificate thumbprint (active certificate row)      | `entra-saml-signing-option`                 | No        |
+| Certificate expiration date (active certificate row) | `entra-saml-signing-option`                 | No        |
 | SAML configuration                                   | `entra-saml-configuration`                  | No        |
 | Signing certificate                                  | `entra-signing-certificate-check`           | No        |
 | Authorized connector                                 | `entra-authorized-connector`                | No        |
@@ -109,7 +109,7 @@ Load this guide and `assisted-browser.md` when entering or materially resuming a
 6. Perform only the mode selected by the human:
    - execute the row's baseline once before calling `read_page` or otherwise inspecting the current page. The baseline owns the initial URL comparison, direct navigation, readiness waits, target discovery, and structured success or failure result. If it succeeds, publish that result immediately without a page read;
    - after **Navigate only**, when `navigationHints.baselineSupportsNavigateOnly` is `true`, execute the function in `navigationHints.baselineScript` with `{ capture: false }`. This reuses the exact capture route and targeting logic but must return neither a `value` nor `values` field or evidence. Treat any of those as a contract failure and leave the row pending. The Enterprise application Overview operation may return its exact `applicationUrl` as navigation context; retain it for subsequent Entra baselines. When the flag is absent, navigate through read-only portal controls using `startUrl`, `lastKnownUrlTemplate`, `portalPath`, visible landmarks, and the row's observed or fallback hints. Locate the value-bearing page or control for geometry only. The browser result may include pointer `targets`, but it must not read or return the worksheet value through `innerText`, `textContent`, `inputValue`, value-bearing attributes, or equivalent extraction;
-   - after **Navigate and capture**, execute `navigationHints.baselineScript` with the built-in code runner from the `Browser Pages` entry for the currently shared VS Code Browser Page. If that code runner accepts a workspace filename, pass the returned path directly. Otherwise read that file once and execute its browser function unchanged. A direct-value success contains the detected worksheet `value` and pointer `targets`. The Enterprise application Overview success instead contains a `values` object with the separate `Enterprise application` and `Application ID` worksheet values plus both pointer `targets`; it also returns the exact `applicationUrl`, which must be retained as navigation input for subsequent Entra baselines. The SAML signing success contains a `values` object with `SAML signing` and `Certificate expiration date (active certificate row)` plus both pointer `targets`. An attestation-row success contains a safe evidence summary and may include pointer `targets` when a specific visible control is part of the attestation. The companion supplies the row's canonical choices from the same contract as the administrator handoff and worksheet parser.
+   - after **Navigate and capture**, execute `navigationHints.baselineScript` with the built-in code runner from the `Browser Pages` entry for the currently shared VS Code Browser Page. If that code runner accepts a workspace filename, pass the returned path directly. Otherwise read that file once and execute its browser function unchanged. A direct-value success contains the detected worksheet `value` and pointer `targets`. The Enterprise application Overview success instead contains a `values` object with the separate `Enterprise application` and `Application ID` worksheet values plus both pointer `targets`; it also returns the exact `applicationUrl`, which must be retained as navigation input for subsequent Entra baselines. The SAML signing success contains a `values` object with `SAML signing`, `Certificate thumbprint (active certificate row)`, and `Certificate expiration date (active certificate row)` plus all three pointer `targets`. An attestation-row success contains a safe evidence summary and may include pointer `targets` when a specific visible control is part of the attestation. The companion supplies the row's canonical choices from the same contract as the administrator handoff and worksheet parser.
 
    Only when the first baseline execution fails and its structured result does not provide enough state to choose a safe recovery, call `read_page` and use this bounded observation loop:
    - Observe the current URL, visible landmarks, active blade or frame, loading overlays, target locator count and state, and the filter or tab controlling the visible results.
@@ -127,7 +127,7 @@ Load this guide and `assisted-browser.md` when entering or materially resuming a
    python scripts/workday_assisted_browser.py worksheet-browser-complete --operation "{OPERATION}"
    ```
 
-   Direct-value rows render text entry with the manual table's **What to record** instruction. The Enterprise application Overview operation renders two inputs and submits the application name and Application ID together. The SAML signing operation renders two inputs and submits the signing option and active certificate expiration together. Single-choice attestation rows render confirmation with their canonical worksheet response.
+   Direct-value rows render text entry with the manual table's **What to record** instruction. The Enterprise application Overview operation renders two inputs and submits the application name and Application ID together. The SAML signing operation renders three inputs and submits the signing option, active certificate thumbprint, and active certificate expiration together. Single-choice attestation rows render confirmation with their canonical worksheet response.
 
    For **Navigate and capture**, use the successful baseline result for the current worksheet row. For a direct-value row, pipe only its detected worksheet `value` through stdin so it does not enter command history. For an attestation row, pipe only the safe baseline evidence summary:
 
@@ -225,7 +225,7 @@ For attestation rows, the same command renders the shared administrator instruct
 
 ## Review and return the worksheet
 
-1. When `worksheet.complete` is `true` after all 13 interactive rows, publish the canonical summary:
+1. When `worksheet.complete` is `true` after all 13 worksheet rows are recorded, publish the canonical summary:
 
    ```powershell
    python scripts/workday_assisted_browser.py worksheet-present --operation entra-existing-configuration --stage summary

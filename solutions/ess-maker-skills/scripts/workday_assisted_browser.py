@@ -178,14 +178,17 @@ _COLLECTION_OPERATION_DEFINITIONS = {
         "worksheetField": "samlSigningOption",
         "worksheetRows": [
             "SAML signing",
+            "Certificate thumbprint (active certificate row)",
             "Certificate expiration date (active certificate row)",
         ],
         "combinedSummary": (
-            "Collect the SAML signing option and active certificate "
-            "expiration from the same SAML page."
+            "Collect the SAML signing option, active certificate "
+            "thumbprint, and expiration from the same signing certificate "
+            "panel."
         ),
         "combinedSteps": [
             "Record the selected SAML signing option.",
+            "Record the active certificate thumbprint.",
             "Record the active certificate expiration date.",
         ],
         "sensitive": False,
@@ -246,6 +249,7 @@ _MULTI_INPUT_ENTRY_KEYS = {
     },
     "entra-saml-signing-option": {
         "SAML signing",
+        "Certificate thumbprint (active certificate row)",
         "Certificate expiration date (active certificate row)",
     },
 }
@@ -324,7 +328,7 @@ _ENTRA_NAVIGATION_HINTS = {
         "portalPath": (
             "Enterprise applications -> the exact Workday application -> "
             "Single sign-on -> SAML -> SAML Signing Certificate card -> "
-            "Edit pencil -> Signing Option"
+            "Edit pencil -> active certificate row and Signing Option"
         ),
         "baselineScript": (
             "scripts/workday_assisted_browser_playwright/"
@@ -332,7 +336,9 @@ _ENTRA_NAVIGATION_HINTS = {
         ),
         "observedHints": [
             "Sign SAML response and assertion",
-            'getByRole("combobox", { name: "Signing Option", exact: true })',
+            "Active",
+            "Expiration Date",
+            "Thumbprint",
         ],
         "fallbackHints": [],
     },
@@ -852,9 +858,12 @@ def validate_view(raw: Any) -> dict[str, Any]:
                 raise AssistedBrowserError(
                     "A multiple-input entry may not define placeholder."
                 )
-            if not isinstance(inputs_raw, list) or len(inputs_raw) != 2:
+            if (
+                not isinstance(inputs_raw, list)
+                or len(inputs_raw) != len(expected_keys)
+            ):
                 raise AssistedBrowserError(
-                    "entry.inputs must contain the two overview values."
+                    "entry.inputs must contain every grouped worksheet value."
                 )
             inputs = []
             for index, input_raw in enumerate(inputs_raw):
@@ -4505,7 +4514,7 @@ def _worksheet_collection_view(operation: str) -> dict[str, Any]:
                 "Collect Enterprise application overview"
                 if operation
                 == "entra-enterprise-application-display-name"
-                else "Collect SAML signing and certificate expiration"
+                else "Collect SAML signing and certificate details"
             )
             if combined_overview
             else f"Review {worksheet_row}"
@@ -4625,15 +4634,23 @@ def _worksheet_confirmation_view(
             ) from exc
         if not isinstance(values, Mapping) or set(values) != {
             "SAML signing",
+            "Certificate thumbprint (active certificate row)",
             "Certificate expiration date (active certificate row)",
         }:
             raise AssistedBrowserError(
-                "The SAML signing result must contain the signing option and "
-                "certificate expiration."
+                "The SAML signing result must contain the signing option, "
+                "certificate thumbprint, and certificate expiration."
             )
         signing_option = _required_text(
             values.get("SAML signing"),
             "SAML signing",
+            maximum=500,
+        )
+        thumbprint = _required_text(
+            values.get(
+                "Certificate thumbprint (active certificate row)"
+            ),
+            "Certificate thumbprint",
             maximum=500,
         )
         expiration = _required_text(
@@ -4646,11 +4663,11 @@ def _worksheet_confirmation_view(
         return {
             "schemaVersion": 1,
             "phase": "Microsoft Entra",
-            "title": "Confirm SAML signing and certificate expiration",
+            "title": "Confirm SAML signing and certificate details",
             "status": "waiting",
             "summary": (
-                "Confirm the signing option and active certificate "
-                "expiration detected on the SAML page."
+                "Confirm the signing option, active certificate thumbprint, "
+                "and expiration detected in the signing certificate panel."
             ),
             "steps": [],
             "fields": [
@@ -4659,20 +4676,25 @@ def _worksheet_confirmation_view(
                     "value": signing_option,
                 },
                 {
+                    "label": "Detected certificate thumbprint",
+                    "value": thumbprint,
+                },
+                {
                     "label": "Detected certificate expiration",
                     "value": expiration,
                 },
             ],
             "waitingFor": (
-                "Confirm whether to record both values in the worksheet."
+                "Confirm whether to record all three values in the worksheet."
             ),
             "confirmation": {
                 "operation": operation,
                 "prompt": (
-                    "Record this SAML signing option and certificate "
-                    "expiration in their separate worksheet rows?"
+                    "Record this SAML signing option, certificate "
+                    "thumbprint, and certificate expiration in their "
+                    "separate worksheet rows?"
                 ),
-                "confirmLabel": "Record both worksheet values",
+                "confirmLabel": "Record all three worksheet values",
                 "rejectLabel": "Review again",
             },
             "visualHelp": {
@@ -4834,15 +4856,17 @@ def _worksheet_entry_view(operation: str) -> dict[str, Any]:
         return {
             "schemaVersion": 1,
             "phase": "Microsoft Entra",
-            "title": "Enter SAML signing and certificate expiration",
+            "title": "Enter SAML signing and certificate details",
             "status": "waiting",
             "summary": (
-                "Enter the selected signing option and active certificate "
-                "expiration shown on the SAML page."
+                "Enter the selected signing option, active certificate "
+                "thumbprint, and expiration shown in the signing certificate "
+                "panel."
             ),
             "steps": [
                 f"Review {portal_path}.",
                 "Enter the selected SAML signing option.",
+                "Enter the active certificate thumbprint.",
                 "Enter the active certificate expiration date.",
             ],
             "fields": [
@@ -4852,16 +4876,26 @@ def _worksheet_entry_view(operation: str) -> dict[str, Any]:
                 }
             ],
             "waitingFor": (
-                "Enter both SAML values, then submit them together."
+                "Enter all three SAML values, then submit them together."
             ),
             "entry": {
                 "operation": operation,
-                "label": "SAML signing values",
+                "label": "SAML signing and certificate values",
                 "inputs": [
                     {
                         "key": "SAML signing",
                         "label": "SAML signing",
                         "placeholder": "Enter the selected signing option",
+                    },
+                    {
+                        "key": (
+                            "Certificate thumbprint "
+                            "(active certificate row)"
+                        ),
+                        "label": "Certificate thumbprint",
+                        "placeholder": (
+                            "Enter the active certificate thumbprint"
+                        ),
                     },
                     {
                         "key": (
@@ -4872,7 +4906,7 @@ def _worksheet_entry_view(operation: str) -> dict[str, Any]:
                         "placeholder": "Enter the active expiration date",
                     },
                 ],
-                "submitLabel": "Record both worksheet values",
+                "submitLabel": "Record all three worksheet values",
             },
         }
     if accepted_values:
