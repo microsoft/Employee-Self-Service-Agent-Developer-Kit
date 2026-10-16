@@ -509,6 +509,9 @@ and do the per-tier verification.
     explicit selection. Preserve CLI/configured selection when populating
     the runner. Release-line `None` permits fallback; non-None values
     such as `""`, `False`, or `0` do not.
+    An explicit Workday DA profile remains eligible when an agents list
+    has no selected slug. Leave the selected record empty and retain
+    workspace release-line validation; do not borrow a sibling's marker.
 
     The Workday Runtime reference and the domain package's OAuthUser
     reference can coexist. Exactly one of each, with no legacy ISU or

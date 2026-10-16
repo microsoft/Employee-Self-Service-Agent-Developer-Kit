@@ -170,6 +170,10 @@ def test_profile_passes_preferred_account_and_forces_read_only(
 
 
 @pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("profile_name", [
+    "workday-da:post-connection",
+    "workday-legacy:diagnostic",
+])
 @pytest.mark.parametrize("selection,expected", [
     ("none", False),
     ("explicit_da", True),
@@ -177,8 +181,8 @@ def test_profile_passes_preferred_account_and_forces_read_only(
     ("configured_da", True),
     ("compatibility_da", True),
 ])
-def test_legacy_profile_does_not_promote_first_record_to_da_selection(
-    selection, expected, reverse, tmp_path, monkeypatch,
+def test_profile_preserves_explicit_context_without_promoting_first_record(
+    selection, expected, profile_name, reverse, tmp_path, monkeypatch,
 ) -> None:
     # Arrange: keep the real profile and CLI runner, but replace API checks.
     config = _config()
@@ -204,7 +208,11 @@ def test_legacy_profile_does_not_promote_first_record_to_da_selection(
     observed = []
 
     def check(runner):
-        observed.append(is_declarative_agent(runner))
+        observed.append((
+            runner.agent_slug,
+            runner.workday_da_profile,
+            is_declarative_agent(runner),
+        ))
         return []
 
     monkeypatch.setattr(registry, "profile_requirements", lambda _name: SimpleNamespace(
@@ -220,14 +228,25 @@ def test_legacy_profile_does_not_promote_first_record_to_da_selection(
     # Act.
     with pytest.raises(SystemExit) as exc:
         cli._run_profile(_args(
-            profile="workday-legacy:diagnostic",
+            profile=profile_name,
             agent_slug=explicit_slug,
             agent_schema_name=None,
         ))
 
     # Assert: missing evidence remains blocked, but list order never supplies DA identity.
     assert exc.value.code == 1
-    assert observed == [expected]
+    da_profile = profile_name.startswith("workday-da:")
+    selected_slug = (
+        explicit_slug
+        or config.get("activeAgent")
+        or config.get("agent", {}).get("slug")
+        or ""
+    )
+    assert observed == [(
+        selected_slug,
+        da_profile,
+        expected or (selection == "none" and da_profile),
+    )]
 
 
 def test_profile_rejects_mixed_authenticated_accounts_without_hint(
