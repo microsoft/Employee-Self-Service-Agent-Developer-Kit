@@ -75,6 +75,35 @@ Time column on every table: `EventInfo_Time` (UTC).
 | `toolkit_git_branch` / `toolkitGitBranch` | Bounded classification: `main`, `main-ca`, `detached`, `other`, `unknown` |
 | `agent_type` / `agentType` | Derived from branch: `custom_agent` (`main-ca`) / `declarative_agent` (`main`) / `unknown`. Present once PR #336 / #337 are merged. |
 
+## Completed MCP business calls
+
+Schema 1.8 carries optional server and usage fields on the existing `adk.api.call` event (`adk_api_call` in Kusto). Existing emitters omit these fields when they do not supply them and retain their outcome/error semantics. The LPC integration uses native `mcp.server.fastmcp` 1.x (`>=1.29,<2`) and its public `call_tool` boundary, including argument validation, handler execution, and output conversion. It does not observe resources, initialization, transport failures before that boundary, or process uptime.
+
+| Field | Meaning |
+|---|---|
+| `mcp_server` | Code-owned server name; LPC is `ess-landing-page-config`. Filter on this field for the canonical server cohort; untagged historical events remain unattributed. |
+| `api_endpoint` | Canonical registered tool name, or `unknown` for an unregistered name or unavailable registry lookup. No raw requested name or URL. |
+| `server_operation_id` | One generated UUID per invocation, retained by SDK buffering and redelivery. Deduplicate nonempty IDs within the analysis window; retain each row missing an ID rather than dropping it or collapsing all missing IDs together. |
+| `result_kind` | `success`, `tool_error` (returned `CallToolResult.isError`), `invalid_arguments` (Pydantic validation before handler entry), `exception` (including output-conversion failures), `cancelled`, or `unknown_tool`. Exceptions and cancellation propagate unchanged. |
+| `outcome`, `latency_ms` | `success` for successful calls, `failure` otherwise; elapsed monotonic milliseconds across the boundary. `timestamp` is the shared source UTC timestamp; delivery can occur later. |
+| `error_code`, `error_category`, `error_message` | Code-owned classifications from exception types/causes, never backend codes or exception text. Server error messages are empty. Returned tool errors may have no more specific classification. |
+| `http_attempt_count`, `retry_count` | Actual core HTTP request attempts and actual replays, including the one permitted 401 replay; no separate per-attempt events. Multiple HTTP requests in an operation accumulate counts. |
+| `auth_refresh_count`, `retry_exhausted` | Actual credential-refresh attempts (the single-flight lock winner only), and whether a core transient retry budget was exhausted. An unsuccessful refresh still counts as an attempt. |
+| `http_status`, `failure_http_status` | Response-point HTTP status of the final attempted request, and most recent observed failure status respectively. A network failure on the final attempt omits `http_status`; a recovered 401/503 can remain in `failure_http_status` on a successful operation. Absence means no corresponding response was observed, not success. |
+| `write_state` | `confirmed` only after LPC's create/update/delete request succeeds; omitted otherwise. Omission does not prove a write was not committed. |
+| `config_branding_present`, `config_quick_links_present`, `config_pivots_present` | Presence of these specific recognized keys in the measured configuration, including a supplied null value. No arbitrary configuration key list is collected. |
+| `quick_link_count`, `pivot_count`, `category_count`, `prompt_count` | Counts from the configuration being read or submitted. A category is a pivot with a display-name field, not a distinct name or content value. Counts require the recognized structural fields; invalid/missing shapes omit measurements, while explicit empty lists yield zero. |
+| `discovery_result_count` | Actual result-list length for list/search tools, with no search text or result identifiers. |
+| `widget`, `draft_present`, `draft_*_count` | Code-owned widget name, whether a validated draft was supplied, and separate draft quick-link/pivot/category/prompt counts where relevant. Baseline and draft counts are not interchangeable. |
+
+Configuration counts describe the retrieved baseline for read/open/create operations and the submitted sections for updates; they do not assert a confirmed write. Tenant identity is captured from the authenticated client into each request-local context, with a tenant-keyed cached organization name. Pre-authentication failures have unknown tenant identity rather than inheriting a previous call's tenant. Personal account/object IDs are not part of the record.
+
+The shared HTTP hooks are no-ops outside an observed operation and do not emit events themselves. Existing authentication, timeout, retry, idempotency, and exception metadata behavior is unchanged. Org Announcements and its Graph client are not integrated in this slice. The schema-v2 `report_client_events` bridge is registered explicitly on LPC only, retains its app-only visibility and accepted/rejected verdict, and is excluded from business-call telemetry.
+
+Use §11 in [`telemetry_queries.kql`](telemetry_queries.kql) to inspect canonical completions, active installations, and window-local failure counts. Installation IDs measure installations, not unique people or business objects. Caller origin is unknown, so do not split these records into chat/widget cohorts. Client events and server completions are separate populations, not additive operation denominators. No source SHA is needed as a metric dimension.
+
+Emission reuses the SDK's asynchronous fail-open transport, opt-out, and bounded buffer. Normal LPC exit waits at most two seconds for outstanding emission threads; requests and initialization do not flush. Neither an accepted bridge batch nor a completed business call guarantees collector delivery. Missing completions, especially at low traffic, are not evidence of success. All result kinds remain available for analysis; alert eligibility and monitor configuration are separate operational policy.
+
 ---
 
 ## Investigation workflow: "was tenant X on an up-to-date ADK when this happened?"
