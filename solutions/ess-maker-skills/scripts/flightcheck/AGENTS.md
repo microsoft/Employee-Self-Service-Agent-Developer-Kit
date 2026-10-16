@@ -25,6 +25,9 @@ never from the active agent for its siblings. Keep global defaults explicit,
 select configured values by presence (`is not None`), and report missing
 subject identities instead of borrowing another bot. Test different sibling
 pins/realms, unconfigured siblings, missing identities, and falsy overrides.
+Canonicalize revision-pin subjects before reads: agents[] precedes the legacy
+agent copy, an already represented slug is not another subject, and bot IDs
+are deduplicated case-insensitively. Keep each canonical record's own settings.
 
 Scope connection verdicts to the references actually evaluated. Topic-reference
 evidence cannot establish flow-scoped sharing or end-to-end authentication.
@@ -525,14 +528,16 @@ and do the per-tier verification.
     ISU checks applicable to a selected DA. Keep employee permission
     validation manual and retain connection, flow and runtime checks.
     Never infer the selected agent's type from Dataverse presence or a
-    sibling agent. A profile's compatibility-resolved validation context
-    can contain the first agent on file; that inferred slug is not an
-    explicit selection. Preserve CLI/configured selection when populating
-    the runner. Release-line `None` permits fallback; non-None values
+    sibling agent. Profile execution must reject an unselected agents list
+    before authentication or agent reads. Resolve CLI, activeAgent, or the
+    compatibility agent's slug and use that same identity for the validation
+    context and runner. Release-line `None` permits fallback; non-None values
     such as `""`, `False`, or `0` do not.
     An explicit Workday DA profile remains eligible when an agents list
     has no selected slug. Leave the selected record empty and retain
     workspace release-line validation; do not borrow a sibling's marker.
+    This applicability predicate is not permission to execute an unselected
+    agent profile.
 
     The Workday Runtime reference and the domain package's OAuthUser
     reference can coexist. Exactly one of each, with no legacy ISU or

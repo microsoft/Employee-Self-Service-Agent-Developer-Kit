@@ -786,9 +786,16 @@ def _validation_context_from_args(
     env_id: str | None,
 ) -> ValidationContext:
     explicit_slug = str(getattr(args, "agent_slug", "") or "").strip()
-    configured_slug = str(config.get("activeAgent") or "").strip()
-    active = _active_agent_config(config, explicit_slug or None)
+    configured_slug = str(
+        config.get("activeAgent") or (config.get("agent") or {}).get("slug") or ""
+    ).strip()
     selected_slug = explicit_slug or configured_slug
+    if config.get("agents") and not selected_slug:
+        raise ValueError(
+            "Select an agent with --agent-slug or activeAgent before running "
+            "a profile; the first configured agent is not a selected target."
+        )
+    active = _active_agent_config(config, explicit_slug or None)
     if selected_slug and not active:
         raise ValueError(
             f"Selected agent {selected_slug!r} does not resolve to a "
@@ -2519,13 +2526,7 @@ def _run_profile(args):
     runner.execution_targets = profile.checkpoint_ids
     runner.workday_da_profile = profile_name.startswith("workday-da:")
     runner.config = config
-    # ValidationContext may use the legacy first-record fallback, not a selection.
-    runner.agent_slug = (
-        str(getattr(args, "agent_slug", "") or "").strip()
-        or config.get("activeAgent")
-        or (config.get("agent") or {}).get("slug")
-        or ""
-    )
+    runner.agent_slug = validation_context.agent_slug
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
