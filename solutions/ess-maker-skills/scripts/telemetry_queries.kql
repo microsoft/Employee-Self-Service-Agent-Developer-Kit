@@ -36,18 +36,18 @@
 
 
 // -----------------------------------------------------------------------------
-// 1) USAGE — total runs, DAU/WAU/MAU, active tenants (last 30 days)
+// 1) USAGE — total runs, active installations, active tenants (last 30 days)
 // -----------------------------------------------------------------------------
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
 | summarize TotalRuns = count(),
-            ActiveUsers = dcount(instanceId),
+            ActiveInstallations = dcount(instanceId),
             ActiveTenants = dcount(tenantId)
 
-// Daily active users (change 1d -> 7d / 30d for WAU / MAU):
+// Daily active installations (change 1d -> 7d / 30d for weekly / monthly):
 essmakerkit_flightcheck_run
 | where EventInfo_Time > ago(30d)
-| summarize DAU = dcount(instanceId) by bin(EventInfo_Time, 1d)
+| summarize ActiveInstallations = dcount(instanceId) by bin(EventInfo_Time, 1d)
 | order by EventInfo_Time asc
 
 
@@ -433,3 +433,57 @@ essmakerkit_flightcheck_run
 | take 50
 // Take toolkitGitSha + toolkitGitBranch to the GitHub compare API to
 // determine how far behind the event's emitter was.
+
+
+// -----------------------------------------------------------------------------
+// 11) CANONICAL LPC SERVER COMPLETIONS — no caller-origin inference
+// -----------------------------------------------------------------------------
+// Each example is independent. Filter before deduplication so missing IDs remain
+// eligible for window-local counts. Never add adk_client_event to this denominator.
+// Historical rows without mcp_server remain unattributed, not inferred as LPC.
+let Window = materialize(
+    adk_api_call
+    | where EventInfo_Time > ago(30d)
+    | extend mcp_server = tostring(column_ifexists("mcp_server", "")),
+             OperationId = tostring(column_ifexists("server_operation_id", "")),
+             ResultKind = tostring(column_ifexists("result_kind", ""))
+    | where mcp_server == "ess-landing-page-config"
+);
+let Calls = union
+    (Window | where isnotempty(OperationId)
+            | summarize arg_max(EventInfo_Time, *) by mcp_server, OperationId),
+    (Window | where isempty(OperationId));
+Calls
+| summarize Completions = count(),
+            P50LatencyMs = percentile(latency_ms, 50),
+            P95LatencyMs = percentile(latency_ms, 95)
+    by api_endpoint, ResultKind
+| order by Completions desc
+
+// Active installations / tenants / sessions are not unique people or agents.
+adk_api_call
+| where EventInfo_Time > ago(30d)
+| where tostring(column_ifexists("mcp_server", "")) == "ess-landing-page-config"
+| summarize ActiveInstallations = dcountif(instance_id, isnotempty(instance_id)),
+            ActiveTenants = dcountif(tenant_id, isnotempty(tenant_id)),
+            ActiveSessions = dcountif(strcat(instance_id, ":", session_id),
+                isnotempty(instance_id) and isnotempty(session_id))
+    by api_endpoint
+
+// Window-local failure-count input for a K-in-M policy; this sets no monitor or
+// alert eligibility policy. Result kinds (including cancelled) stay explicit.
+// Every ID-less failure contributes; absence of telemetry is not success.
+let Window = materialize(
+    adk_api_call
+    | where EventInfo_Time > ago(15m)
+    | extend mcp_server = tostring(column_ifexists("mcp_server", "")),
+             OperationId = tostring(column_ifexists("server_operation_id", "")),
+             ResultKind = tostring(column_ifexists("result_kind", ""))
+    | where mcp_server == "ess-landing-page-config"
+);
+union
+    (Window | where isnotempty(OperationId)
+            | summarize arg_max(EventInfo_Time, *) by mcp_server, OperationId),
+    (Window | where isempty(OperationId))
+| summarize Completions = count(), Failures = countif(outcome == "failure")
+    by api_endpoint, ResultKind
