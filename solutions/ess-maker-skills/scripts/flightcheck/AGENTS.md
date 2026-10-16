@@ -15,6 +15,10 @@ Client-provisioning regressions must exercise CLI scope dispatch, not only
 checks with pre-injected clients. Cover native-only, hybrid (native plus
 Dataverse), and legacy configurations. Match native environment, tenant,
 and account to the selected Dataverse target; keep import probes opt-in.
+Independently map the Dataverse URL even when an environment ID is supplied.
+A missing admin mapping disables native clients, not independent checks;
+an override or Dataverse OrganizationId is never proof of that mapping.
+Keep `agentBuilderApiVersion` consistent across all provisioning paths.
 
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
