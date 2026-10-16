@@ -275,6 +275,75 @@ class TestConnectionReferences:
 
 
 class TestGrsCommitPin:
+    @pytest.mark.parametrize("compatibility", [
+        {"slug": "hr", "botId": "stale-bot", "expectedGrsCommitSha": "stale"},
+        {"slug": "hr", "expectedGrsCommitSha": "stale"},
+        {"slug": "hr", "botId": "BOT-HR", "expectedGrsCommitSha": "stale"},
+    ])
+    def test_canonical_slug_excludes_stale_compatibility_pin(self, compatibility):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={"bot-hr": ab.configuration(commit_sha="aaaa")},
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [{
+                "slug": "hr", "botId": "bot-hr",
+                "expectedGrsCommitSha": "aaaa", "grsRealm": "Test",
+            }],
+            "agent": compatibility,
+        })
+
+        results = _by_id(_check(runner))
+
+        assert results["ENV-004-GRS"].status == "Passed"
+        assert client.configure_calls == [("bot-hr", 1)]
+        assert "aaaa" in results["ENV-004-GRS"].result
+        assert results["ENV-004-GRS"].remediation == ""
+        assert results["ENV-004"].status == "Passed"
+
+    @pytest.mark.parametrize("duplicate_id", ["bot-hr", "BOT-HR", " bot-hr "])
+    def test_duplicate_bot_ids_are_judged_once_with_canonical_settings(self, duplicate_id):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={"bot-hr": ab.configuration(commit_sha="aaaa")},
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [
+                {"slug": "hr", "botId": "bot-hr",
+                 "expectedGrsCommitSha": "aaaa", "grsRealm": 0},
+                {"botId": duplicate_id, "expectedGrsCommitSha": "stale", "grsRealm": 2},
+            ],
+        })
+
+        grs = _by_id(_check(runner))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [("bot-hr", 0)]
+        assert "aaaa" in grs.result
+        assert grs.remediation == ""
+
+    def test_unrepresented_compatibility_subject_retains_own_pin_and_realm(self):
+        client = _PerBotAgentBuilder(
+            components=ab.components_with_references(references=[_bound()]),
+            configs={
+                "bot-hr": ab.configuration(commit_sha="aaaa"),
+                "bot-it": ab.configuration(commit_sha="bbbb"),
+            },
+        )
+        runner = _runner(agentbuilder=client, config={
+            "agents": [{"slug": "hr", "botId": "bot-hr",
+                        "expectedGrsCommitSha": "aaaa", "grsRealm": 0}],
+            "agent": {"slug": "it", "botId": "bot-it",
+                      "expectedGrsCommitSha": "bbbb", "grsRealm": 2},
+        })
+
+        grs = _by_id(_check(runner))["ENV-004-GRS"]
+
+        assert grs.status == "Passed"
+        assert client.configure_calls == [("bot-hr", 0), ("bot-it", 2)]
+        assert "aaaa" in grs.result and "bbbb" in grs.result
+        assert grs.remediation == ""
+
     @pytest.mark.parametrize("active_slug", ["hr", "it"])
     def test_each_agent_uses_its_own_pin_and_realm(self, active_slug):
         client = _PerBotAgentBuilder(
