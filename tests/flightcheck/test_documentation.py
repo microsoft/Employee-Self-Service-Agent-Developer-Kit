@@ -291,7 +291,7 @@ def test_selected_subject_explicit_non_da_value_vetoes_fallback(release_line):
 
 
 @pytest.mark.parametrize("profile", [False, True])
-def test_known_subject_resolves_without_an_active_agent(profile):
+def test_known_subject_resolves_without_inheriting_unselected_profile(profile):
     runner = FlightCheckRunner()
     runner.config = {"agents": [{"slug": "hr", "releaseLine": "da"}, {"slug": "legacy"}]}
     runner.workday_da_profile = profile
@@ -299,3 +299,4 @@ def test_known_subject_resolves_without_an_active_agent(profile):
     assert is_declarative_agent(runner, subject_slug="hr") is True
     assert is_declarative_agent(runner, subject_slug="legacy") is False
     assert is_declarative_agent(runner) is profile
+    assert not getattr(runner, "agent_slug", None)

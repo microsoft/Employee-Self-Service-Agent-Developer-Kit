@@ -741,13 +741,25 @@ def _create_alm_import_target(
     )
 
 
-def _create_hybrid_scope_clients(args, config, env_id, tenant_id, dv_username):
+def _create_hybrid_scope_clients(
+    args, config, verified_env_id, tenant_id, dv_username,
+):
     """Add native clients without substituting the Dataverse target or account."""
     ring = _resolve_environment_ring(config, explicit_ring=args.ring)
     host = validate_environment_host(config["powerPlatformApiEndpoint"], ring)
     host_env_id = environment_id_from_host(host, ring)
-    if not env_id or not host_env_id or uuid.UUID(host_env_id) != uuid.UUID(env_id):
+    if (
+        not verified_env_id or not host_env_id
+        or uuid.UUID(host_env_id) != uuid.UUID(verified_env_id)
+    ):
         raise ValueError("AgentBuilder host does not match the Dataverse scope environment.")
+    if (
+        args.environment_id
+        and uuid.UUID(args.environment_id) != uuid.UUID(verified_env_id)
+    ):
+        raise ValueError(
+            "--environment-id does not match the verified Dataverse environment."
+        )
     if not dv_username:
         raise ValueError("Dataverse could not verify the authenticated account.")
     preferred = getattr(args, "preferred_username", None)
@@ -767,7 +779,7 @@ def _create_hybrid_scope_clients(args, config, env_id, tenant_id, dv_username):
         raise ValueError("AgentBuilder authenticated a different tenant than Dataverse.")
     if not native_username or native_username.casefold() != dv_username.casefold():
         raise ValueError("AgentBuilder authenticated a different account than Dataverse.")
-    api_version = config.get("powerPlatformApiVersion", DEFAULT_API_VERSION)
+    api_version = config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
     agentbuilder = AgentBuilderClient(
         host, token, ring=ring, tenant_id=native_tenant, api_version=api_version,
     )
@@ -788,9 +800,16 @@ def _validation_context_from_args(
     env_id: str | None,
 ) -> ValidationContext:
     explicit_slug = str(getattr(args, "agent_slug", "") or "").strip()
-    configured_slug = str(config.get("activeAgent") or "").strip()
-    active = _active_agent_config(config, explicit_slug or None)
+    configured_slug = str(
+        config.get("activeAgent") or (config.get("agent") or {}).get("slug") or ""
+    ).strip()
     selected_slug = explicit_slug or configured_slug
+    if config.get("agents") and not selected_slug:
+        raise ValueError(
+            "Select an agent with --agent-slug or activeAgent before running "
+            "a profile; the first configured agent is not a selected target."
+        )
+    active = _active_agent_config(config, explicit_slug or None)
     if selected_slug and not active:
         raise ValueError(
             f"Selected agent {selected_slug!r} does not resolve to a "
@@ -2594,13 +2613,7 @@ def _run_profile(args):
     runner.execution_targets = profile.checkpoint_ids
     runner.workday_da_profile = profile_name.startswith("workday-da:")
     runner.config = config
-    # ValidationContext may use the legacy first-record fallback, not a selection.
-    runner.agent_slug = (
-        str(getattr(args, "agent_slug", "") or "").strip()
-        or config.get("activeAgent")
-        or (config.get("agent") or {}).get("slug")
-        or ""
-    )
+    runner.agent_slug = validation_context.agent_slug
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -3239,11 +3252,21 @@ def main():
         # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
         # knowledge source). Erroring out here would block those.
         print("Deriving Power Platform environment ID...")
+        # An override or WhoAmI fallback cannot authorize combined native/DV evidence.
+        verified_env_id = None
+        if hybrid_native_scope and pp_admin is not None:
+            verified_env_id = derive_environment_id(
+                env_url, dv_token, pp_admin=pp_admin,
+            )
         if args.environment_id:
             env_id = args.environment_id
             print(f"Environment ID: {env_id} (provided via --environment-id)")
         else:
-            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            env_id = (
+                verified_env_id
+                if hybrid_native_scope and pp_admin is not None
+                else derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            )
             if env_id and pp_admin is not None:
                 print(f"Environment ID: {env_id}")
             elif env_id:
@@ -3279,11 +3302,19 @@ def main():
                     "checks will still run."
                 )
 
-    if hybrid_native_scope:
+    if hybrid_native_scope and not verified_env_id:
+        print(
+            "  Native AgentBuilder APIs: WARNING - Could not independently verify "
+            "the Dataverse environment through Power Platform Admin. "
+            "Native clients remain unavailable; --environment-id and Dataverse "
+            "OrganizationId are not mapping evidence."
+        )
+        print("  (Native-dependent checks cannot verify readiness)")
+    elif hybrid_native_scope:
         print("Authenticating to native AgentBuilder APIs...")
         try:
             agentbuilder, alm_import_target, connectivity = _create_hybrid_scope_clients(
-                args, config, env_id, tenant_id, dv_username,
+                args, config, verified_env_id, tenant_id, dv_username,
             )
             connection_account = dv_username
             print("  Native AgentBuilder APIs: OK")
