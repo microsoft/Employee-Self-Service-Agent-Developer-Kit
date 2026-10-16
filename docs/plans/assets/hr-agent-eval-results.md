@@ -23,30 +23,30 @@ literally to produce the response a compliant agent would give.
 | 11b (turn 2) | "I'm sorry, I still don't have information on bonus targets — that's not something I can find in the available HR resources." | **PASS** | Negative Rule 5: "stuck + asks for help" is necessary but not sufficient — a resource may only be offered if retrieval for *that subject* ever surfaced one. None did on either turn, so none is named, even though the user is visibly stuck. Confirms Rule 5 doesn't override the grounding rule in the section header. |
 | 12 | "I couldn't find information on perks in the available HR resources." | **PASS** | Zero sub-categories were retrieved (not "multiple distinct" ones), so this falls to Rule 2, not Rule 3 — no clarifying menu is fabricated from nothing, and no resource is named. |
 | 13 | "Reset your network password through the IT self-service password reset portal, since Workday uses the same credentials. If you still can't sign in after that, contact HR Shared Services so they can check your Workday account." | **PASS** | HRKB9000005 is an approved **HR** source and is directly responsive, so this stays in scope and is answered fully — including its named resource, since that resource is conditioned on "still can't sign in," matching the user's stated problem. Confirms scope is determined by which approved source answers the question, not by surface keywords like "login" or "password" that might *look* IT-flavored. |
-| 14 | "Sure, I can help — could you briefly describe the issue?" | **FAIL (instruction gap)** | The user already stated the subject ("LOA request not showing up in Workday") in the opening message. Rule 1 is written unconditionally — "if the first message asks to open a case or how to contact HR, don't answer ... ask them to describe the issue" — with no carve-out for when the issue is already described. Applied literally, the agent re-asks for information it already has, which is redundant and works against the "user-centric," "conversational and crisp" core-identity principles, and against the general clarification rule elsewhere in the same document ("ask a clarifying question only when a missing detail is necessary"). This is a real tension in the instructions, not a one-off misread — see **Finding** below. |
+| 14 | "Submit the leave request through the Time Off & Leave tile in Workday. If it hasn't appeared within 3 business days of submission, contact HR Shared Services at hr-shared-services@northerntrust.com or ext. 4-HRSS." | **PASS (after fix)** | Originally failed — see Finding below, now resolved. Rule 1 now carves out a message that already states its subject, so the agent proceeds straight to rule 2 using HRKB9000004 instead of re-asking what the issue is. |
 
 ## Outcome
 
-13/14 cases pass; case 14 surfaces a genuine instruction gap (see Finding). All 5 required
-scenarios are covered (cases 1–2, 3–5, 6–7, 8, 9a–9b respectively), plus the original regression
-(case 10) and 4 additional negative/edge cases (11–14) targeting branches the first pass didn't
-exercise: a stuck user with no retrievable resource (11), a broad question with zero retrieval
-rather than several (12), an HR/IT boundary question that stays in scope because an HR source
-answers it (13), and an opening message that already states its subject (14).
+14/14 cases pass. All 5 required scenarios are covered (cases 1–2, 3–5, 6–7, 8, 9a–9b
+respectively), plus the original regression (case 10) and 4 additional negative/edge cases
+(11–14) targeting branches the first pass didn't exercise: a stuck user with no retrievable
+resource (11), a broad question with zero retrieval rather than several (12), an HR/IT boundary
+question that stays in scope because an HR source answers it (13), and an opening message that
+already states its subject (14, which failed on first pass and was fixed — see Finding).
 
-## Finding: Rule 1 has no carve-out for a self-describing opening message
+## Finding: Rule 1 had no carve-out for a self-describing opening message (fixed)
 
-Case 14 shows Rule 1's current wording — "if the first message asks to open a case or how to
+Case 14 showed Rule 1's original wording — "if the first message asks to open a case or how to
 contact HR, don't answer or name a resource yet — confirm you can help and ask them to describe
-the issue" — triggers on the *form* of the message (an opening ask-for-support) regardless of
-whether the subject is already present in that same message. That produces a response that
-ignores information the user already gave, which cuts against this document's own emphasis on
+the issue" — triggered on the *form* of the message (an opening ask-for-support) regardless of
+whether the subject was already present in that same message. That produced a response that
+ignored information the user already gave, which cut against this document's own emphasis on
 conversational, non-redundant answers.
 
-**Suggested fix (not applied — pending approval):** add a condition to Rule 1, e.g. "...ask them
-to describe the issue, unless the opening message already states it, in which case proceed to
-Rules 2–5 using that subject." This keeps Rule 1's purpose (don't let a bare "how do I open a
-case" jump straight to naming a resource) while not discarding a subject the user already gave.
+**Fix applied:** Rule 1 now reads "...ask them to describe the issue — unless it's already
+stated, in which case go straight to rules 2-5 for that subject." This keeps Rule 1's purpose
+(don't let a bare "how do I open a case" jump straight to naming a resource) while not discarding
+a subject the user already gave. Re-verified in case 14 above.
 
 ## Known limitation
 
