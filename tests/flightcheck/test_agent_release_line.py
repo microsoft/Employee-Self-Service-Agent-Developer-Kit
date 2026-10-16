@@ -37,8 +37,45 @@ from flightcheck.agent_scope import is_declarative_agent
     ({"activeAgent": "hr", "releaseLine": "cea", "agents": [{"slug": "hr"}, {"slug": "it", "releaseLine": "da"}]}, "it", False, True),
     ({"activeAgent": "hr", "releaseLine": "da", "agents": [{"slug": "hr"}, {"slug": "it"}]}, "it", True, True),
     ({"releaseLine": "da"}, 0, False, False),
+    ({"agents": [{"slug": "hr", "releaseLine": "cea"}]}, "hr", True, False),
+    ({"agents": [{"slug": "hr", "releaseLine": "da"}]}, "missing", True, False),
+    ({"agents": [{"slug": "hr", "releaseLine": "da"}, {"slug": "hr"}]}, "hr", True, False),
+    ({"releaseLine": "da"}, 0, True, False),
 ])
 def test_da_context_requires_selected_metadata(config, slug, profile, expected):
     runner = SimpleNamespace(config=config, agent_slug=slug, workday_da_profile=profile)
 
     assert is_declarative_agent(runner) is expected
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("profile", [True, False, None, 1, "true"])
+@pytest.mark.parametrize("workspace_metadata,allows_profile", [
+    ({}, True),
+    ({"releaseLine": None}, True),
+    ({"releaseLine": "da"}, True),
+    ({"releaseLine": " DA "}, True),
+    ({"releaseLine": "cea"}, False),
+    ({"releaseLine": ""}, False),
+    ({"releaseLine": False}, False),
+    ({"releaseLine": 0}, False),
+])
+def test_unselected_agents_allow_only_explicit_da_profile(
+    workspace_metadata, allows_profile, profile, reverse,
+):
+    # Arrange.
+    agents = [
+        {"slug": "hr", "releaseLine": "da"},
+        {"slug": "legacy", "releaseLine": "cea"},
+    ]
+    if reverse:
+        agents.reverse()
+    config = {**workspace_metadata, "agents": agents}
+    runner = SimpleNamespace(config=config, agent_slug="", workday_da_profile=profile)
+
+    # Act.
+    actual = is_declarative_agent(runner)
+
+    # Assert.
+    assert actual is (profile is True and allows_profile)
+    assert runner.agent_slug == ""

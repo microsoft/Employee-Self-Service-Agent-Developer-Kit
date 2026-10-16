@@ -116,8 +116,9 @@ def is_declarative_agent(runner: Any, *, subject_slug: str | None = None) -> boo
         if not selected:
             return False
     elif config.get("agents"):
-        # Do not use active_agent's legacy "first record" fallback for type.
-        return False
+        # A requested profile supplies context without selecting the first record.
+        if getattr(runner, "workday_da_profile", False) is not True:
+            return False
     else:
         if isinstance(single, dict):
             selected = single
