@@ -639,6 +639,132 @@ class _RecordingPVA:
         return "pva-token"
 
 
+@pytest.fixture
+def hybrid_scope(tmp_path, monkeypatch):
+    """Exercise CLI dispatch, not HTTP contracts or injected runner clients."""
+    from unittest.mock import Mock
+
+    environment_id = "00000000-0000-4000-8000-000000001111"
+    tenant_id = "00000000-0000-4000-8000-000000002222"
+    config = {
+        "dataverseEndpoint": "https://orgmocktenant.crm.dynamics.com",
+        "environmentId": environment_id,
+        "ring": "test",
+        "powerPlatformApiEndpoint": (
+            "https://0000000000004000800000000000111."
+            "1.environment.api.test.powerplatform.com"
+        ),
+        "activeAgent": "hr",
+        "agent": {"slug": "hr", "releaseLine": "da"},
+    }
+    local = tmp_path / ".local"
+    local.mkdir()
+    monkeypatch.chdir(tmp_path)
+    dv_auth = Mock(side_effect=lambda *_a, **kwargs: (
+        ("dv-token", "maker@example.test")
+        if kwargs.get("return_account_identity") else "dv-token"
+    ))
+    native_auth = Mock(return_value=("native-token", tenant_id, "maker@example.test"))
+    native_client = Mock(return_value=object())
+    monkeypatch.setattr("auth.authenticate", dv_auth)
+    monkeypatch.setattr("auth.discover_tenant", lambda *_a: tenant_id)
+    monkeypatch.setattr(cli, "derive_environment_id", lambda *_a, **_k: environment_id)
+    monkeypatch.setattr(cli, "authenticate_flightcheck", native_auth)
+    monkeypatch.setattr(cli, "AgentBuilderClient", native_client)
+    for name in (
+        "GraphClient", "PPAdminClient", "PVAClient",
+        "PowerPlatformClient", "AzureArmClient",
+    ):
+        monkeypatch.setattr(cli, name, _OkClient)
+    monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+    for name in (
+        "_resolve_target_selection", "_apply_runtime_reachability_consent",
+        "_print_prioritized_summary", "save_results",
+    ):
+        monkeypatch.setattr(cli, name, lambda *_a, **_k: None)
+
+    def run(scope="full"):
+        (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
+        monkeypatch.setattr(
+            "sys.argv", ["cli.py", "--scope", scope, "--no-open", "--no-telemetry"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        return exc.value.code
+
+    return SimpleNamespace(
+        config=config, run=run, dv_auth=dv_auth, native_auth=native_auth,
+        native_client=native_client, tenant_id=tenant_id,
+    )
+
+
+@pytest.mark.parametrize(
+    "scope", ["full", "environment", "solution", "workday", "workdayextension", "publishing"]
+)
+def test_hybrid_scope_provisions_agentbuilder_alongside_dataverse(hybrid_scope, scope):
+    assert hybrid_scope.run(scope) == 0
+    runner = _FakeRunner.last_instance
+    assert runner.agentbuilder is hybrid_scope.native_client.return_value
+    assert runner.dv_token == "dv-token"
+    assert runner.agent_slug == "hr"
+    assert runner.registered == (
+        cli.FULL_SCOPE if scope == "full" else cli.SCOPE_MAP[scope]
+    )
+    assert hybrid_scope.dv_auth.call_args.kwargs["return_account_identity"] is True
+    assert hybrid_scope.native_auth.call_args.kwargs["account_hint"] == "maker@example.test"
+    assert hybrid_scope.native_auth.call_args.kwargs["include_connectivity"] is False
+    assert hybrid_scope.native_auth.call_args.kwargs["allow_write"] is False
+
+
+@pytest.mark.parametrize("scope", ["authentication", "prerequisites", "external"])
+def test_scope_without_native_consumers_does_not_authenticate_native(hybrid_scope, scope):
+    hybrid_scope.dv_auth.return_value = "dv-token"
+    assert hybrid_scope.run(scope) == 0
+    hybrid_scope.native_auth.assert_not_called()
+
+
+def test_legacy_scope_without_native_endpoint_keeps_existing_clients(hybrid_scope):
+    hybrid_scope.config.pop("powerPlatformApiEndpoint")
+    hybrid_scope.dv_auth.return_value = "dv-token"
+    assert hybrid_scope.run() == 0
+    assert _FakeRunner.last_instance.dv_token == "dv-token"
+    hybrid_scope.native_auth.assert_not_called()
+
+
+@pytest.mark.parametrize("mismatch", ["environment", "ring", "tenant", "account", "missing_account"])
+def test_hybrid_scope_rejects_mismatched_native_identity(hybrid_scope, mismatch, capsys):
+    if mismatch == "environment":
+        hybrid_scope.config["powerPlatformApiEndpoint"] = (
+            "https://0000000000004000800000000000222."
+            "2.environment.api.test.powerplatform.com"
+        )
+    elif mismatch == "ring":
+        hybrid_scope.config["ring"] = "prod"
+    elif mismatch == "tenant":
+        hybrid_scope.native_auth.return_value = (
+            "native-token", "00000000-0000-4000-8000-000000003333", "maker@example.test"
+        )
+    elif mismatch == "account":
+        hybrid_scope.native_auth.return_value = (
+            "native-token", hybrid_scope.tenant_id, "other@example.test"
+        )
+    else:
+        hybrid_scope.dv_auth.side_effect = None
+        hybrid_scope.dv_auth.return_value = ("dv-token", None)
+
+    assert hybrid_scope.run() == 1
+    hybrid_scope.native_client.assert_not_called()
+    assert "ERROR:" in capsys.readouterr().out
+
+
+def test_hybrid_scope_auth_failure_is_reported_without_a_partial_client(hybrid_scope, capsys):
+    hybrid_scope.native_auth.side_effect = RuntimeError("Native sign-in unavailable")
+    assert hybrid_scope.run() == 0
+    assert _FakeRunner.last_instance.agentbuilder is None
+    hybrid_scope.native_client.assert_not_called()
+    assert "Native AgentBuilder APIs: WARNING" in capsys.readouterr().out
+
+
 class TestPvaScopeGating:
     """Regression coverage for the ``--scope handoff`` PVA-auth gate.
 

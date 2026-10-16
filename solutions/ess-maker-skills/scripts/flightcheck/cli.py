@@ -731,6 +731,42 @@ def _create_alm_import_target(
     )
 
 
+def _create_hybrid_scope_clients(args, config, env_id, tenant_id, dv_username):
+    """Add native clients without substituting the Dataverse target or account."""
+    ring = _resolve_environment_ring(config, explicit_ring=args.ring)
+    host = validate_environment_host(config["powerPlatformApiEndpoint"], ring)
+    host_env_id = environment_id_from_host(host, ring)
+    if not env_id or not host_env_id or uuid.UUID(host_env_id) != uuid.UUID(env_id):
+        raise ValueError("AgentBuilder host does not match the Dataverse scope environment.")
+    if not dv_username:
+        raise ValueError("Dataverse could not verify the authenticated account.")
+    preferred = getattr(args, "preferred_username", None)
+    if preferred and preferred.casefold() != dv_username.casefold():
+        raise ValueError("Dataverse authenticated a different account than requested.")
+
+    token, native_tenant, native_username = authenticate_flightcheck(
+        ring,
+        account_hint=dv_username,
+        include_connectivity=False,
+        allow_write=bool(args.alm_import_probe),
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+    if uuid.UUID(native_tenant) != uuid.UUID(tenant_id):
+        raise ValueError("AgentBuilder authenticated a different tenant than Dataverse.")
+    if not native_username or native_username.casefold() != dv_username.casefold():
+        raise ValueError("AgentBuilder authenticated a different account than Dataverse.")
+    api_version = config.get("powerPlatformApiVersion", DEFAULT_API_VERSION)
+    agentbuilder = AgentBuilderClient(
+        host, token, ring=ring, tenant_id=native_tenant, api_version=api_version,
+    )
+    target = _create_alm_import_target(
+        args, source_host=host, token=token, tenant_id=native_tenant,
+        ring=ring, api_version=api_version,
+    )
+    return agentbuilder, target
+
+
 def _validation_context_from_args(
     args,
     config: dict,
@@ -2795,6 +2831,20 @@ def main():
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
+    checks = (
+        NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+        if native_remote_scope
+        else SCOPE_MAP.get(args.scope, FULL_SCOPE)
+    )
+    # Hybrid agents still need native evidence even when Dataverse is configured.
+    hybrid_native_scope = (
+        bool(env_url)
+        and bool(config.get("powerPlatformApiEndpoint"))
+        and any(fn in {
+            run_environment_checks, run_solution_checks,
+            run_workday_checks, run_publishing_checks,
+        } for _, fn in checks)
+    )
     resolved_ring = None
     power_platform_admin_origin = None
     if args.scope in {"full", "environment", "prerequisites"}:
@@ -3012,10 +3062,15 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(
-            env_url,
-            preferred_username=getattr(args, "preferred_username", None),
-        )
+        dv_auth_kwargs = {
+            "preferred_username": getattr(args, "preferred_username", None),
+        }
+        if hybrid_native_scope:
+            dv_token, dv_username = authenticate(
+                env_url, **dv_auth_kwargs, return_account_identity=True,
+            )
+        else:
+            dv_token = authenticate(env_url, **dv_auth_kwargs)
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")
@@ -3099,6 +3154,23 @@ def main():
                     "license, auth, Workday env-var, Workday SOAP, and local-file "
                     "checks will still run."
                 )
+
+    if hybrid_native_scope:
+        print("Authenticating to native AgentBuilder APIs...")
+        try:
+            agentbuilder, alm_import_target = _create_hybrid_scope_clients(
+                args, config, env_id, tenant_id, dv_username,
+            )
+            print("  Native AgentBuilder APIs: OK")
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            print(
+                "  Native AgentBuilder APIs: WARNING - "
+                f"{_safe_client_error_reason(exc)}"
+            )
+            print("  (Native-dependent checks cannot verify readiness)")
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
@@ -3197,14 +3269,6 @@ def main():
     # setup gates deterministic.
     if not native_remote_scope:
         _resolve_target_selection(args, runner)
-
-    # Register checks based on scope
-    if native_remote_scope:
-        checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
-    elif args.scope == "full":
-        checks = FULL_SCOPE
-    else:
-        checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
 
     # Resolve consent for the mutating runtime-reachability probe (INFRA-003)
     # before any check runs. This is the only FlightCheck path that writes to

@@ -11,6 +11,11 @@ in `tests/AGENTS.md`. They complement each other; you need both.
 
 ## Architecture overview
 
+Client-provisioning regressions must exercise CLI scope dispatch, not only
+checks with pre-injected clients. Cover native-only, hybrid (native plus
+Dataverse), and legacy configurations. Match native environment, tenant,
+and account to the selected Dataverse target; keep import probes opt-in.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
