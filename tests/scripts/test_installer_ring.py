@@ -296,6 +296,38 @@ def test_retained_ring_is_used_without_discovery(shell, tmp_path, explicit):
     assert calls == []
 
 
+@pytest.mark.parametrize("prompt", ["environment", "agent"])
+@pytest.mark.parametrize("selection", [" 1 ", "\t1\t", "\r 1 \r"])
+def test_numeric_selection_trims_surrounding_whitespace(shell, tmp_path, prompt, selection):
+    answers = ["y", selection, "1"] if prompt == "environment" else ["y", "1", selection]
+
+    state, config, calls, _ = _configure(
+        shell, tmp_path, saved=_saved("test"), answers=answers,
+    )
+
+    assert state["caught"] is None
+    assert config["ring"] == "test"
+    assert config["environmentId"] == "env-test"
+    assert config["agent"]["botId"] == "selected-bot"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("prompt", ["environment", "agent"])
+@pytest.mark.parametrize("selection", ["1 0", "1\t0"])
+def test_numeric_selection_rejects_internal_whitespace_without_replacing_target(
+    shell, tmp_path, prompt, selection,
+):
+    answers = ["y", selection] if prompt == "environment" else ["y", "1", selection]
+
+    state, _, calls, unchanged = _configure(
+        shell, tmp_path, saved=_saved("test"), answers=answers,
+    )
+
+    assert state["caught"] is not None
+    assert unchanged
+    assert len(calls) == (1 if prompt == "environment" else 2)
+
+
 @pytest.mark.parametrize("switch", [True, False])
 def test_conflicting_ring_asks_to_switch_or_keep(shell, tmp_path, switch):
     state, config, calls, _ = _configure(
@@ -329,8 +361,9 @@ def test_invalid_agent_selection_fails_without_replacing_target(shell, tmp_path,
     assert unchanged
 
 
-def test_empty_agent_choice_explicitly_selects_environment_only(shell, tmp_path):
-    state, config, calls, _ = _configure(shell, tmp_path, answers=["1", ""])
+@pytest.mark.parametrize("selection", ["", " \t ", "\r \t\r"])
+def test_empty_agent_choice_explicitly_selects_environment_only(shell, tmp_path, selection):
+    state, config, calls, _ = _configure(shell, tmp_path, answers=["1", selection])
 
     assert state["caught"] is None
     assert config["agent"]["botId"] == ""

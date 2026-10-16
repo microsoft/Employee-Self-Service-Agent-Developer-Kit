@@ -781,6 +781,8 @@ print(ring or inferred)
 
         echo ""
         read -rp "    Select environment number from the list above: " ENV_CHOICE
+        ENV_CHOICE="${ENV_CHOICE#"${ENV_CHOICE%%[![:space:]]*}"}"
+        ENV_CHOICE="${ENV_CHOICE%"${ENV_CHOICE##*[![:space:]]}"}"
         if [[ -z "$ENV_CHOICE" || ! "$ENV_CHOICE" =~ ^[0-9]+$ ]]; then
             err "Invalid selection. Please re-run and pick a number."
             exit 1
@@ -835,6 +837,8 @@ print(json.dumps(selected))
         else
             echo ""
             read -rp "    Select agent number (or press Enter for environment-wide checks only): " AGENT_CHOICE
+            AGENT_CHOICE="${AGENT_CHOICE#"${AGENT_CHOICE%%[![:space:]]*}"}"
+            AGENT_CHOICE="${AGENT_CHOICE%"${AGENT_CHOICE##*[![:space:]]}"}"
 
             if [[ -n "$AGENT_CHOICE" ]]; then
                 if [[ ! "$AGENT_CHOICE" =~ ^[0-9]+$ ]]; then

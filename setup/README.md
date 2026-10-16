@@ -199,6 +199,9 @@ shell and check that those cases execute rather than skip.
 
 ### Changing your environment or agent
 
+Environment and agent number prompts ignore surrounding whitespace.
+Whitespace inside a number is invalid and leaves the saved target unchanged.
+
 Re-run the same command — it will ask if you want to reconfigure:
 
 ```powershell
