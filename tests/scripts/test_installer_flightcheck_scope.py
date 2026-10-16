@@ -6,7 +6,9 @@
 The startup prefixes end before any I/O. The actual resolver functions are also
 executed with controlled terminal status/input, so CI can cover prompts without
 a desktop. Launch tests replace only Python/the downloaded installer, not the
-argument construction. No network, credentials, or live installation is used.
+argument construction. PowerShell prefixes receive a test-only InstallRoot so
+Linux CI does not evaluate the Windows-only USERPROFILE default.
+No network, credentials, or live installation is used.
 """
 
 from __future__ import annotations
@@ -103,7 +105,9 @@ def invoke_preflight(shell, name, *, argument=False, bootstrap_tail=False, extra
             tail = TEXT[name][TEXT[name].index('export ESS_ADK_BRANCH="$BRANCH"'):]
             return args + prefix + '\nbash() { printf "FORWARDED:%s|%s|%s|%s\\n" "$FLIGHTCHECK_SCOPE" "$ESS_ADK_BRANCH" "$RING" "$*"; }\n' + 'TEMP_DIR=unused\n' + tail
         return args + prefix + '\nprintf "SELECTED:%s\\n" "${FLIGHTCHECK_SCOPE:-}"'
-    args = "-FlightCheckOnly " if name == PS_INSTALLER else ""
+    args = "-InstallRoot $PWD "
+    if name == PS_INSTALLER:
+        args += "-FlightCheckOnly "
     if argument:
         args += "-FlightCheckScope $env:TEST_SCOPE "
     args += extra_args
@@ -275,8 +279,25 @@ def test_non_flightcheck_mode_does_not_require_scope(shell):
     if shell[0] == "bash":
         code = preflight(name) + "\necho CONTINUED"
     else:
-        code = "& {\n" + preflight(name) + "\nWrite-Output CONTINUED\n}"
+        code = "& {\n" + preflight(name) + "\nWrite-Output CONTINUED\n} -InstallRoot $PWD"
     result = run(shell, code, env={"FLIGHTCHECK_SCOPE": "not-a-scope"})
     assert result.returncode == 0, result.stderr
     assert "CONTINUED" in result.stdout
     assert "Choose a FlightCheck scope" not in result.stdout
+
+
+@pytest.mark.parametrize("bootstrap_tail", [False, True])
+def test_powershell_preflight_does_not_require_windows_userprofile(
+    shell, monkeypatch, bootstrap_tail,
+):
+    if shell[0] == "bash":
+        pytest.skip("Windows installer parameter defaults are PowerShell-specific")
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    for name in (names(shell)[1:] if bootstrap_tail else names(shell)):
+        result = run(
+            shell, invoke_preflight(shell, name, bootstrap_tail=bootstrap_tail),
+            env={"FLIGHTCHECK_SCOPE": "workday", "CI": "true"},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert ("FORWARDED:" if bootstrap_tail else "SELECTED:workday") in result.stdout
