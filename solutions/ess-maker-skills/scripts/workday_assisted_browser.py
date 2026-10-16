@@ -599,15 +599,15 @@ def _required_text(
     value: Any,
     label: str,
     *,
-    maximum: int,
+    maximum: int | None = None,
 ) -> str:
-    """Centralize strict text validation for all untrusted CLI and loopback inputs."""
+    """Centralize strict nonempty text validation with an optional length cap."""
     if not isinstance(value, str):
         raise AssistedBrowserError(f"{label} must be text.")
     normalized = value.strip()
     if not normalized:
         raise AssistedBrowserError(f"{label} must not be empty.")
-    if len(normalized) > maximum:
+    if maximum is not None and len(normalized) > maximum:
         raise AssistedBrowserError(
             f"{label} must be at most {maximum} characters."
         )
@@ -626,7 +626,7 @@ def validate_view(raw: Any) -> dict[str, Any]:
         )
     if raw.get("schemaVersion") != 1:
         raise AssistedBrowserError("Companion view schemaVersion must be 1.")
-    status = _required_text(raw.get("status"), "status", maximum=20)
+    status = _required_text(raw.get("status"), "status")
     if status not in _STATUSES:
         raise AssistedBrowserError(
             "status must be one of: " + ", ".join(sorted(_STATUSES))
@@ -636,7 +636,7 @@ def validate_view(raw: Any) -> dict[str, Any]:
     if not isinstance(steps_raw, list) or len(steps_raw) > 12:
         raise AssistedBrowserError("steps must be an array with at most 12 items.")
     steps = [
-        _required_text(value, f"steps[{index}]", maximum=300)
+        _required_text(value, f"steps[{index}]")
         for index, value in enumerate(steps_raw)
     ]
 
@@ -660,25 +660,22 @@ def validate_view(raw: Any) -> dict[str, Any]:
                 "label": _required_text(
                     value.get("label"),
                     f"fields[{index}].label",
-                    maximum=100,
                 ),
                 "value": _required_text(
                     value.get("value"),
                     f"fields[{index}].value",
-                    maximum=500,
                 ),
             }
         )
 
     normalized = {
         "schemaVersion": 1,
-        "phase": _required_text(raw.get("phase"), "phase", maximum=80),
-        "title": _required_text(raw.get("title"), "title", maximum=120),
+        "phase": _required_text(raw.get("phase"), "phase"),
+        "title": _required_text(raw.get("title"), "title"),
         "status": status,
         "summary": _required_text(
             raw.get("summary"),
             "summary",
-            maximum=500,
         ),
         "steps": steps,
         "fields": fields,
@@ -688,7 +685,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
         normalized["waitingFor"] = _required_text(
             waiting_for,
             "waitingFor",
-            maximum=250,
         )
     def normalize_action(action_raw: Any, label: str) -> dict[str, str]:
         """Normalize one row-scoped action into the fixed capability shape accepted by the companion."""
@@ -703,7 +699,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
         operation = _required_text(
             action_raw.get("operation"),
             f"{label}.operation",
-            maximum=80,
         )
         if operation not in _COLLECTION_OPERATIONS:
             raise AssistedBrowserError(
@@ -718,7 +713,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "label": _required_text(
                 action_raw.get("label"),
                 f"{label}.label",
-                maximum=80,
             ),
             "operation": operation,
             "mode": mode,
@@ -728,7 +722,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
             normalized_action["disclaimer"] = _required_text(
                 disclaimer,
                 f"{label}.disclaimer",
-                maximum=300,
             )
         return normalized_action
 
@@ -781,7 +774,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
         operation = _required_text(
             confirmation_raw.get("operation"),
             "confirmation.operation",
-            maximum=80,
         )
         if operation not in _CONFIRMATION_OPERATIONS:
             raise AssistedBrowserError(
@@ -792,17 +784,14 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "prompt": _required_text(
                 confirmation_raw.get("prompt"),
                 "confirmation.prompt",
-                maximum=250,
             ),
             "confirmLabel": _required_text(
                 confirmation_raw.get("confirmLabel"),
                 "confirmation.confirmLabel",
-                maximum=80,
             ),
             "rejectLabel": _required_text(
                 confirmation_raw.get("rejectLabel"),
                 "confirmation.rejectLabel",
-                maximum=80,
             ),
         }
     entry_raw = raw.get("entry")
@@ -826,7 +815,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
         operation = _required_text(
             entry_raw.get("operation"),
             "entry.operation",
-            maximum=80,
         )
         if operation not in _ENTRY_OPERATIONS:
             raise AssistedBrowserError(
@@ -837,7 +825,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "label": _required_text(
                 entry_raw.get("label"),
                 "entry.label",
-                maximum=120,
             ),
         }
         options_raw = entry_raw.get("options")
@@ -885,17 +872,14 @@ def validate_view(raw: Any) -> dict[str, Any]:
                         "key": _required_text(
                             input_raw.get("key"),
                             f"entry.inputs[{index}].key",
-                            maximum=80,
                         ),
                         "label": _required_text(
                             input_raw.get("label"),
                             f"entry.inputs[{index}].label",
-                            maximum=120,
                         ),
                         "placeholder": _required_text(
                             input_raw.get("placeholder"),
                             f"entry.inputs[{index}].placeholder",
-                            maximum=160,
                         ),
                     }
                 )
@@ -907,18 +891,15 @@ def validate_view(raw: Any) -> dict[str, Any]:
             normalized_entry["submitLabel"] = _required_text(
                 entry_raw.get("submitLabel"),
                 "entry.submitLabel",
-                maximum=80,
             )
         elif options_raw is None:
             normalized_entry["placeholder"] = _required_text(
                 entry_raw.get("placeholder"),
                 "entry.placeholder",
-                maximum=160,
             )
             normalized_entry["submitLabel"] = _required_text(
                 entry_raw.get("submitLabel"),
                 "entry.submitLabel",
-                maximum=80,
             )
         else:
             if (
@@ -939,7 +920,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
                 _required_text(
                     option,
                     f"entry.options[{index}]",
-                    maximum=160,
                 )
                 for index, option in enumerate(options_raw)
             ]
@@ -980,7 +960,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
         operation = _required_text(
             visual_help_raw.get("operation"),
             "visualHelp.operation",
-            maximum=80,
         )
         if operation not in _COLLECTION_OPERATIONS:
             raise AssistedBrowserError(
@@ -999,7 +978,6 @@ def validate_view(raw: Any) -> dict[str, Any]:
             "label": _required_text(
                 visual_help_raw.get("label"),
                 "visualHelp.label",
-                maximum=120,
             ),
         }
     return normalized
