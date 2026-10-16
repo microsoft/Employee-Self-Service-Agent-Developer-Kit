@@ -5915,11 +5915,17 @@ def _point_targets(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     if args.error is not None:
         value["error"] = args.error
     elif str(args.targets_file) == "-":
-        value["targets"] = json.load(sys.stdin)
+        targets = json.load(sys.stdin)
     else:
-        value["targets"] = json.loads(
+        targets = json.loads(
             Path(args.targets_file).read_text(encoding="utf-8")
         )
+    if args.error is None:
+        if not isinstance(targets, list):
+            raise AssistedBrowserError(
+                "targets-file root must be a JSON array."
+            )
+        value["targets"] = targets
     session = _load_session(root)
     return _api_request(
         session,

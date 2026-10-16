@@ -445,12 +445,7 @@ function renderConfirmation(view, result, revision) {
     nodes.push(actions);
     confirmation.dataset.status = "checking";
   } else if (result.status === "confirmed") {
-    nodes.push(
-      textElement(
-        "p",
-        "Confirmed. The session can now record this worksheet row.",
-      ),
-    );
+    nodes.push(textElement("p", "Confirmed. I'll save this value."));
     confirmation.dataset.status = "success";
   } else {
     nodes.push(
@@ -484,21 +479,8 @@ function renderEntry(view, result, revision) {
     return;
   }
   if (result.status === "submitted") {
-    const submittedMultiple =
-      result.values && typeof result.values === "object";
     entry.replaceChildren(
-      textElement(
-        "h2",
-        submittedMultiple
-          ? "Worksheet values submitted"
-          : "Worksheet value submitted",
-      ),
-      textElement(
-        "p",
-        submittedMultiple
-          ? "The session will record these worksheet values."
-          : "The session will record this worksheet value.",
-      ),
+      textElement("p", "Submitted. I'll save this value."),
     );
     entry.dataset.status = "success";
     entry.hidden = false;

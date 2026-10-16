@@ -142,8 +142,20 @@ Load this guide and `assisted-browser.md` when entering or materially resuming a
    When the successful browser operation returned `targets`, retain that exact target set in memory and pipe the complete set directly to one revision-bound `point-targets` call:
 
    ```powershell
+   $targetsJson = @'
+   [
+     {
+       "label": "{VISIBLE_TARGET_LABEL}",
+       "positionRatio": 0.5,
+       "centered": true
+     }
+   ]
+   '@
+
    $targetsJson | python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --revision {INTERACTION_REVISION} --targets-file -
    ```
+
+   Repeat the target object inside the array for every target returned by the baseline. Do not pass the complete baseline result or wrap the array as `{"targets": [...]}`.
 
    If bounded geometry inspection fails, report the safe reason without blocking or replacing the row interaction:
 
