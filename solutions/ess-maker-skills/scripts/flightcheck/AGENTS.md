@@ -15,6 +15,10 @@ Client-provisioning regressions must exercise CLI scope dispatch, not only
 checks with pre-injected clients. Cover native-only, hybrid (native plus
 Dataverse), and legacy configurations. Match native environment, tenant,
 and account to the selected Dataverse target; keep import probes opt-in.
+Independently map the Dataverse URL even when an environment ID is supplied.
+A missing admin mapping disables native clients, not independent checks;
+an override or Dataverse OrganizationId is never proof of that mapping.
+Keep `agentBuilderApiVersion` consistent across all provisioning paths.
 
 Environment-wide checks must resolve overrides for each inspected botId,
 never from the active agent for its siblings. Keep global defaults explicit,
@@ -520,6 +524,9 @@ and do the per-tier verification.
     explicit selection. Preserve CLI/configured selection when populating
     the runner. Release-line `None` permits fallback; non-None values
     such as `""`, `False`, or `0` do not.
+    An explicit Workday DA profile remains eligible when an agents list
+    has no selected slug. Leave the selected record empty and retain
+    workspace release-line validation; do not borrow a sibling's marker.
 
     The Workday Runtime reference and the domain package's OAuthUser
     reference can coexist. Exactly one of each, with no legacy ISU or
