@@ -55,3 +55,45 @@ flow is an explicit, separate follow-on and is not done here.
 The complete revised trigger description text, provided as a plain-text deliverable the user can
 paste into their Copilot Studio topic configuration — not a code change in this repository, since
 the live topic configuration lives outside this repo.
+
+## Update 2026-10-16 — live testing findings and revision
+
+Live testing (Declarative Agent runtime) surfaced that the first description (dated 2026-10-16,
+pre-update) did not hold: a bare "Create a Hr Case" message triggered the topic immediately, and
+once triggered, the topic's own scripted `askSubject` question captured the next message
+("i am not able to update benefits") and proceeded straight to a ServiceNow case-creation call —
+with no resolvability check in between. The call errored, and only then did a knowledge-grounded
+answer about benefits guidance appear, as an unrelated fallback.
+
+Root-caused as follows:
+
+1. **The resolvability gate cannot be enforced after trigger.** Once a topic fires, its own
+   scripted dialog nodes run deterministically; the orchestrator does not re-consult the topic
+   description, the root agent instructions, or any knowledge source on later turns within that
+   same active dialog. A "check knowledge, then decide" step can only exist as a node inside the
+   topic (or a competing topic that preempts it via `allowInterruption`).
+2. **No DA-compatible retrieval node exists.** The classic `SearchAndSummarizeContent` node is
+   confirmed unsupported for Declarative Agents (per this repo's own migration rule, RULE-007),
+   and the user confirmed the agent is on the DA runtime and that no knowledge/search action node
+   is available in the topic canvas at all. This rules out both an in-topic retrieval node and a
+   new, separate competing topic that would retrieve knowledge as its action — there is currently
+   no node to build either with.
+3. **The only reliable lever left is the initial, single-turn trigger decision.** The orchestrator
+   does make a fresh choice on a turn with no active dialog. The fix is therefore to make the
+   "don't trigger on a bare, subject-less message" condition the primary, unambiguous, first-
+   stated rule (not one bullet among several), so that a bare "create an HR case" falls through to
+   the root agent instructions (which already handle "what's the issue?" per rule 1 of
+   `docs/prompts/2026-10-15-hr-agent-instructions-support-escalation.md`) instead of being
+   captured by this topic's own scripted question. The subject-bearing follow-up then arrives as a
+   fresh turn, giving the orchestrator another real chance to prefer a direct knowledge-grounded
+   answer over invoking this topic.
+
+**Known limitation, stated plainly:** this remains a probabilistic, prose-driven trigger decision,
+not a mechanical gate. The same classifier that previously under-weighted the "wait for subject"
+condition could still occasionally fire early. There is no way to make this airtight without a
+DA-compatible retrieval action becoming available. Re-test against the eval cases in
+`docs/plans/assets/hr-agent-eval-cases.md` after publishing, and treat this as mitigation, not a
+guarantee, until Copilot Studio exposes a supported in-topic knowledge node for DA.
+
+**Final deliverable:** `docs/prompts/2026-10-16-hr-case-topic-trigger-description.txt` (1,015
+chars), revised to lead with the subject-presence requirement.

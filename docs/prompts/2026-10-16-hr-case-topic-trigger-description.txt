@@ -1,13 +1,13 @@
-Use this topic ONLY when the user explicitly asks to create/open/submit an HR case in ServiceNow, has already stated the HR subject (e.g., payroll, benefits, leave), and that subject can't be resolved from HR knowledge sources — or insists on a case after already getting an answer.
+Use this topic ONLY when the message already states a specific HR subject (payroll, benefits, leave, etc.) AND explicitly asks to create/open/submit an HR case. A bare "create an HR case" with no subject must NOT trigger this — let a different response ask the issue first; trigger only once the subject is stated AND it can't already be answered from HR knowledge, or the user insists on a case after an answer.
 
 Do NOT trigger if:
 - IT-related (VPN, email, password, Wi-Fi).
 - General HR info/guidance question, not a case request.
 - Updating, checking, or closing an existing case.
-- Bare request ("create an HR case") with no subject yet — wait for the subject, then trigger on the follow-up turn.
-- Subject is answerable from HR knowledge sources and the user hasn't insisted on a case after that answer.
+- No subject stated yet.
+- Answerable from HR knowledge and user hasn't insisted after that answer.
 
 Valid: "Create an HR case about my benefits enrollment"; "Please just open a case anyway" (after an answer).
-Invalid: "How do I reset my password?"; "Close my HR case"; "How do I update my benefits?" (answerable); "Create an HR case" (no subject yet).
+Invalid: "Create an HR case" (no subject); "How do I update my benefits?" (answerable); "How do I reset my password?"; "Close my HR case".
 
 Note: options vary by client. If unclear, ask the user to describe the issue.
