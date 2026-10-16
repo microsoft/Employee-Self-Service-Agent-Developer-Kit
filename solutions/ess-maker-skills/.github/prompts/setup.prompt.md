@@ -74,3 +74,17 @@ For any command failure, follow the **Command runtime** recovery guidance.
 Do not route to Dataverse foundation or onboarding playbooks.
 Foundation setup owns DA-GA environment and editable Dev-agent selection,
 workspace materialization, and canonical setup completion.
+
+## User profile entry
+
+This prompt owns one eligible entry after the foundation skill's runtime,
+dependency, and applicable product-line admission checks succeed. Follow its
+**Maker communication profile** section and
+`src/skills/shared/user-profile-entry.md` before the next setup operation.
+Use the resolved `{PYTHON}` launcher for every profile command. Setup
+completion is not required for this entry. Offer only claimed optional
+onboarding; save, defer, and quiz replies resume the same setup request with
+its retained target and progress. Pass one frozen context to the foundation
+skill and participating downstream calls only, and finish once with the actual
+setup outcome.
+Preserve all progress render points, exact messages, and required approvals.

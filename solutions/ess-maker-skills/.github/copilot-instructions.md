@@ -32,6 +32,12 @@ environment. Type `/setup` to get started — it only takes a couple minutes.
 
 **Exceptions:**
 
+- If the user invokes `/profile` or clearly asks to manage maker communication
+  style, read `src/skills/user-profile/SKILL.md` after the required setup-state
+  read, even when setup is missing or incomplete. Route this management request
+  before the setup-required stop; it needs no agent, environment, or
+  authentication. This exception never bypasses the separate gates for a
+  mixed or follow-up task.
 - If the user typed `/setup` or explicitly asked to run setup, proceed with
   setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
 - If the user typed `/planner` or asked to **plan a rollout / plan an ESS
@@ -443,6 +449,7 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 
 | User intent                                                                                             | Skill to read                                                                                 |
 | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Review or change maker communication style (`/profile`, “show my style”, “shorter from now on”)          | `src/skills/user-profile/SKILL.md`                                                            |
 | Run common ESS foundation setup (`/setup`)                                                              | `src/skills/foundation-setup/SKILL.md`                                                        |
 | Provision/connect Workday for the active ESS HR agent (`/connect workday` or `/connect-workday`)        | `src/skills/connect/SKILL.md`                                                                 |
 | Connect to Workday                                                                                      | `src/skills/connect/SKILL.md`                                                                 |
@@ -467,6 +474,26 @@ pushed. Run the push pipeline when the maker asks to push local changes.
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md`                                                     |
 | Invoke any tool from the `ess-landing-page-config` MCP server                                           | `src/skills/landing-page-config/SKILL.md`                                                     |
 
+### Maker communication profile entry
+
+Use `src/skills/shared/user-profile-entry.md` for the request-entry lifecycle
+and immutable communication context. Apply branch-specific setup, capability,
+permission, target, and confirmation gates before profile entry. Never run a
+global invitation before the selected branch is admitted. Only FlightCheck,
+Connect, and foundation Setup may own eligible requests and offer automatic
+profile onboarding. All other skills are excluded from profile handling:
+do not resolve, inherit, or apply saved preferences to them. Explicit
+`/profile` management remains available. Only participating nested skills reuse
+the owner's context and do not count or claim again. The profile affects
+flexible maker-facing prose in FlightCheck, Setup, and Connect only and never
+changes ESS employee behavior, authorizes work, or weakens required output.
+
+Profile entry stays within this Maker Kit workspace. Resolve its paths from
+this workspace, not the parent Git repository. Do not consult repository test
+metadata or load parent workspace instructions to determine profile behavior;
+the selected prompt or skill declares its mode. Profile handling never changes
+workspace routing or asks the maker to reopen the folder.
+
 **Trigger phrases for connect:** "connect Workday", "set up Workday".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
@@ -489,10 +516,13 @@ not call an AgentConfiguration MCP tool from a generic flow.
 
 **FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
 of `src/skills/flightcheck/SKILL.md`), read `workspace/flightcheck/results.json`
-with your file-reading tool and format the summary banner and tables **yourself,
-directly in the chat reply**. Do NOT write or execute any script (`.py`, `.js`,
-`.ps1`, shell one-liner, etc.) to parse the JSON, build the tables, or print the
-summary. Generating a helper script here is a bug — it leaks raw terminal output
+with your file-reading tool and format the summary and findings **yourself,
+directly in the chat reply** using the skill's adaptive chat contract. Summary
+and findings layout may follow the resolved profile; verdicts, counts, all
+non-passing evidence, remediation, and required consent remain protected.
+The full HTML report retains every check. Do NOT write or execute any script
+(`.py`, `.js`, `.ps1`, shell one-liner, etc.) to parse the JSON, build the response,
+or print the summary. Generating a helper script here is a bug — it leaks raw terminal output
 and internal process into chat instead of the clean formatted result.
 
 **Quality validation invocation:** When quality validation is requested on

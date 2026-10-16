@@ -1,9 +1,35 @@
 # Repo-root Copilot instructions
 
+## Workspace boundary
+
+Apply this boundary before discovering operations or showing folder-selection
+guidance. This file can be inherited while the Maker Kit workspace is open;
+reading it does not prove that the repository root is the active workspace.
+
+- Prefer the active VS Code workspace-folder information over a shell session's
+  working directory or the Git repository root.
+- If the Maker Kit folder or one of its descendants is the active workspace,
+  do not redirect. Follow that workspace's local Copilot instructions and
+  prompt catalog, resolving operation paths from the Maker Kit folder.
+- If a multi-root workspace includes the Maker Kit folder, do not redirect.
+  Use that folder for Maker Kit operations.
+- If the user confirms that the Maker Kit workspace is already open, do not
+  repeat folder-selection guidance. If workspace evidence conflicts or is
+  unavailable, investigate the mismatch rather than assuming the wrong folder.
+- The presence of `solutions/ess-maker-skills` under the Git repository root
+  is not evidence that the user opened the wrong workspace.
+
+Only show folder-selection guidance when the active workspace is positively
+identified as the repository root and no Maker Kit workspace folder is active.
+Otherwise, skip the repo-root routing below and handle the request normally.
+Reports about incorrect redirects and requests to inspect or edit skill source
+are development requests, not Maker Kit operation invocations.
+
 ## Discover Maker Kit operations
 
-At the beginning of each conversation, check whether both of these nested Maker
-Kit paths are available:
+Only after the workspace boundary permits repo-root routing, check whether
+both of these paths are available relative to the active repository-root
+workspace, not by searching from the Git root of a different active workspace:
 
 - `solutions/ess-maker-skills/.github/prompts/` contains at least one
   `*.prompt.md` file.

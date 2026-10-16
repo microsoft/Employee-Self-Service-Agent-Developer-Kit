@@ -4,6 +4,22 @@ Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling
 or what files you are reading.
 
+## Maker communication profile
+
+For direct entry, use eligible mode only after integration availability,
+materialization, selection, and architecture/package admission gates pass,
+before connection mutations. When invoked by `/connect`, inherit its entry.
+Wait for the selected lifecycle's admission evidence before resolve/begin;
+unsupported integrations, unavailable packages, and terminal stops never count
+or invite. Reuse a caller-supplied immutable profile and never count or claim
+again for a nested call, including when invoked by Setup.
+Read `src/skills/shared/user-profile-entry.md` and
+`src/skills/shared/user-profile-contract.md`. Follow the claimed optional
+onboarding conversation, then resume the same connection request and finish
+once with its actual outcome. Preserve script-executor messages, selections,
+and role/connection consent exactly. The claimed onboarding is the only extra
+interaction permitted here; do not add a style indicator or automatic proposal.
+
 ---
 
 ## Availability

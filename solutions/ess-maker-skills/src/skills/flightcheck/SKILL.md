@@ -5,7 +5,24 @@ against the live environment (licenses, Entra, Power Platform, Workday/
 ServiceNow/SAP integrations) and validates extracted agent files on disk.
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
-Do not rephrase, add commentary, or tell the user what tools you are calling.
+Do not rephrase it or narrate tools. Additional language is permitted only by
+the profile onboarding and adaptive presentation contracts below.
+
+## Maker communication profile
+
+For direct entry, use eligible mode only after the canonical FlightCheck
+entry gate and required scope/target selections pass, before checks execute.
+When invoked by `/flightcheck`, inherit its entry. Reuse a caller-supplied
+immutable profile and never count or claim again for a nested call, including
+when invoked by Setup. Read
+`src/skills/shared/user-profile-entry.md` and
+`src/skills/shared/user-profile-contract.md`. Follow the claimed optional
+onboarding conversation, then resume the same check and finish once with its
+actual outcome. Preserve operational Message blocks and required fix/consent
+turns exactly.
+Step 3 explicitly permits profile-aware summaries, findings layouts, supported
+explanations, and one optional tip. Use the same frozen profile on rechecks.
+Do not add a style indicator or automatic learned-preference proposal.
 
 ---
 
@@ -192,6 +209,13 @@ Keep them in whatever phrasing you use.
 
 ## Step 2b: Run the check
 
+Before the running message, apply `confirmationFrequency` from the frozen
+profile using the adaptive contract below. A `frequent` recap is optional and
+may occur at most once per top-level request, after required selections and
+onboarding. Skip it when a required confirmation already covered this scope
+and target or the caller forbids extra interaction. Never repeat it for quiz
+replies, fix rechecks, or user-assisted validation.
+
 **Message:**
 
 Running readiness checks — this takes 1–3 minutes depending on scope...
@@ -229,68 +253,131 @@ explorer rather than spawning another tab from this skill.
 
 ## Step 3: Read results and present findings
 
-Read `workspace/flightcheck/results.json` and format the output below **yourself,
-directly in your chat reply**. You MUST follow this exact format every time. Do
-not improvise, add prose between sections, or skip any section.
+Read `workspace/flightcheck/results.json` and render the adaptive chat report
+below **yourself, directly in your chat reply** using the frozen execution
+profile. The chat presentation may adapt; the underlying checks, JSON, and full
+HTML report never change because of communication preferences. Without a saved
+profile, use the canonical resolved defaults, not a separate FlightCheck default.
 
 **Do NOT write or run any code to render these results.** Read the JSON with your
-file-reading tool and type the markdown tables inline. Never author a helper
+file-reading tool and write the response inline. Never author a helper
 script (`.py`, `.js`, `.ps1`, a shell one-liner, etc.) to parse `results.json`,
-build the tables, or print the summary, and never execute one. The values you
+build the response, or print the summary, and never execute one. The values you
 need (counts, `overall`, `duration_secs`, and each object in the `results` array)
-are already in the JSON — transcribe them into the tables below by hand. Writing
-a script here is a bug: it dumps raw terminal output into chat instead of the
+are already in the JSON. Writing a script here is a bug: it dumps raw terminal
+output into chat instead of the
 clean formatted result, and it exposes internal process the user should never
 see. If the file is large, read it in ranges — do not shortcut it with code.
 
-### 3a — Summary banner
+### Adaptive presentation contract
 
-Always show this first:
+Classify the output section by section. Verdict wording, source counts, evidence,
+remediation, links, next-step owners, and mandatory choices are protected content.
+Summary layout, findings layout, optional explanation, and optional tips are
+flexible. A table used for adaptive findings is not an exact Message block.
 
-```
-{VERDICT_EMOJI} **{VERDICT_TEXT}**
+Always show every non-passing result individually: Failed, Blocked, Error,
+Warning, Manual, NotConfigured, and Skipped. Do not hide, merge, or downgrade
+these findings, even for concise output, a low word budget, or tips set to off.
+Keep each finding's checkpoint ID, category, priority, status, observed `result`,
+complete `remediation`, `doc_link`, and next-step `roles` when supplied.
+Copy source evidence and remediation faithfully; tone changes apply only to
+surrounding explanation, never to factual values or required remediation wording.
+Missing remediation or ownership is not permission to invent it. Surface missing
+required guidance as a limitation. Never imply a skipped or manual check passed.
 
-| | Count |
+The six independent settings have these FlightCheck-specific effects:
+
+| Setting | Chat behavior |
 |---|---|
-| ✅ Passed | {passed} |
-| ❌ Failed | {failed} |
-| ⚠️ Warnings | {warnings} |
-| ℹ️ Not Configured | {not_configured} |
-| **Total** | **{total}** |
+| `responseFormat` | `auto`: compact counts and a findings table for multiple findings, or one labeled bullet for a single finding. `prose`: counts in a sentence and a short labeled paragraph per finding. `bullets`: flat labeled bullets for counts and findings. `steps`: compact counts followed by numbered remediation/review steps, one per finding; these are proposed actions, not executed actions. `table_first`: counts table followed by a findings table. The protected verdict remains first in every format. |
+| `detailLevel` | `concise`: all non-passing findings, passing count only, and essential next actions. `balanced`: the same non-passing findings, passing counts grouped by category, and brief evidence-grounded reasoning about the next action. `detailed`: every check, including each passing check, plus supported explanation of evidence, limitations, and remediation dependencies. A request for all results always includes every check regardless of the saved level. |
+| `toneOfVoice` | `direct`: short, action-oriented explanatory sentences. `friendly_professional`: collaborative wording. `formal`: reserved, precise wording. `empathetic`: acknowledge the observed blocker or effort without guessing how the maker feels. Do not rewrite the verdict, source findings, remediation, or exact operational messages. |
+| `confirmationFrequency` | `minimal`: no optional check-ins. `standard`: clarify only material ambiguity that remains after required selections. `frequent`: may add at most one scope/target recap before executing checks, with a choice to continue or change scope, unless a required confirmation already covered it. Never ask an extra question solely to report results. Scope/target selections, fix consent, and other mandatory approvals remain unchanged in every mode; a caller's stricter interaction contract wins. |
+| `maximumResponseLength` | A soft word budget for the chat response. Shorten optional explanation and omit an optional tip before exceeding it. Never truncate a finding, remediation, role, link, count, required choice, or any check required by the selected detail level or explicit request. Exceed the budget when protected content does not fit. The HTML report and JSON are never shortened. |
+| `proactiveSuggestions` | `off`: no optional tip. `contextual`: at most one evidence-supported improvement within the inspected scope. `on`: at most one evidence-supported adjacent next step instead. Never invent a finding or offer an unavailable operation. Required fixes, manual actions, warnings, and completion guidance appear in every mode; they are not optional suggestions. |
 
-*Completed in {duration_secs}s — [View full report](workspace/flightcheck/report.html)*
-```
+Settings do not select presets for each other: prose does not mean detailed,
+concise does not imply a word cap, and minimal check-ins never approve fixes.
+Explicit instructions for this request override saved style without changing
+the stored profile. Do not reread the profile during rendering or rechecks.
 
-Where VERDICT_EMOJI and VERDICT_TEXT are:
+If a report is missing, malformed, or contradictory, surface the observed
+report error rather than inventing counts or a successful verdict. If an
+unrecognized status occurs, retain its source label and evidence visibly as a
+limitation; do not silently drop it or translate it into Passed.
+
+### 3a — Verdict and counts
+
+Always show the source verdict first, using this exact wording:
+
 - READY → ✅ and "Your agent is ready for deployment"
 - READY_WITH_WARNINGS → ⚠️ and "Ready with warnings"
 - NOT_READY → ❌ and "Issues found — not ready for deployment"
 
-### 3b — Detailed results table
-
-Show ALL results from the JSON — not just failures. This mirrors the
-HTML report exactly. One row per result. Sort by: Failed first, then
-Warning, then NotConfigured, then Passed.
+Follow it with counts in the selected format. Include `total`, `passed`,
+`failed`, `warnings`, and `not_configured`, plus `blocked`, `errors`, `manual`,
+and `skipped` when nonzero. Copy these values from the source report; do not
+recompute the verdict from the subset of checks shown in chat.
+Always include the duration and this link:
 
 ```
-| Checkpoint | Category | Priority | Status | Result | Remediation |
-|---|---|---|---|---|---|
-| {checkpoint_id} | {category} | {priority} | {status_emoji} {status} | {result} | {remediation or "—"} |
-| ... | | | | | |
+Completed in {duration_secs}s - [View full report](workspace/flightcheck/report.html)
 ```
+
+### 3b — Findings and passing coverage
+
+Render the checks selected by `detailLevel` in the layout selected by
+`responseFormat`. Order findings by Failed, Blocked, Error, Warning, Manual,
+NotConfigured, Skipped, then Passed; preserve source order within each status.
+For prose, bullets, or steps, use labeled fields so every protected value
+remains identifiable. For a table, use:
+
+```
+| Checkpoint | Category | Priority | Status | Result | Remediation | Next-step owner |
+|---|---|---|---|---|---|---|
+| {checkpoint_id} | {category} | {priority} | {status_emoji} {status} | {result} | {remediation and doc_link, when supplied} | {roles, when supplied} |
+```
+
+If no checks qualify for individual display, say so; do not emit an empty
+findings table. When passing rows are omitted, state how many are represented
+by the passing count or category summary and that the full report contains
+every check. No other status may be collapsed into passing coverage.
+
+For example, with the same report, `prose` plus `concise` produces a count
+sentence and paragraphs for non-passing findings only. `table_first` plus
+`detailed` produces a counts table and a row for every check. Both preserve the
+same verdict, counts, non-passing evidence, remediation, owners, and report link.
 
 Status emoji mapping:
 - Passed → ✅
 - Failed → ❌
+- Blocked → ⛔
+- Error → 💥
 - Warning → ⚠️
+- Manual → 🔎
 - NotConfigured → ℹ️
 - Skipped → ⏭️
-- Error → 💥
+
+If permitted by `proactiveSuggestions` and the remaining word budget, place one
+optional tip after the findings and before the required action/terminal block.
+Do not append it after a terminal message or while waiting for a required user
+choice. Optional tips are not automatic learned-preference proposals.
+
+If WD-RUN-001 is NotConfigured, follow Step 3d before choosing a terminal
+completion path below; neither concise output nor tips set to off can suppress
+that required user-assisted validation.
 
 ### 3c — Offer to fix
 
-After the table, analyze the failed and warning results and build a list
+After the findings, analyze every non-passing result and build a list
 of things you CAN fix automatically vs. things that need manual action.
+Use only supported fixes below and the source evidence; a preference never
+adds permission or changes which operations this release supports.
+Classify required action from the evidence, not just the status: a genuinely
+non-applicable Skipped result does not automatically require a repair. If no
+automatic fix or manual action is required, retain the source verdict and
+report that no corrective action is required; do not invent a manual task.
 
 **Auto-fixable** (offer to do these right now):
 - Compile errors in topics → run `/scan` skill
@@ -299,15 +386,17 @@ of things you CAN fix automatically vs. things that need manual action.
 - Workday connections in Error state → run `/connect workday` skill
 - Disabled Workday/ServiceNow flows → enable via Dataverse MCP
 
-**Needs manual action** (the Remediation column already contains direct links):
+**Needs manual action** (the findings already contain the supplied links):
 - License issues → links to M365 admin center
 - Agent instructions/starter prompts/topics → links to Copilot Studio
 - DLP policies → links to Power Platform admin center
 - Publishing items → links to deployment docs
 
-The Remediation column in the detailed results table already contains these
-links. Do NOT repeat them in a separate list. Instead, after the table, just
-show the auto-fixable offer (if any) and a brief note about manual items.
+The findings already contain the complete remediation and supplied links.
+Do not repeat the whole findings list. Show the auto-fixable offer (if any)
+and the required manual-action note. Keep the fix-selection table and consent
+question below contractual, even when `responseFormat` is prose, bullets, or
+steps. Never suppress manual remediation because `proactiveSuggestions` is off.
 
 **If overall is "READY":**
 
@@ -317,7 +406,10 @@ Show:
 No action needed. Run `/flightcheck` again anytime before publishing.
 ```
 
-Stop here.
+Use this terminal message only when no required remediation or user-assisted
+validation remains. Otherwise retain the source verdict, explain the remaining
+action from the findings, and use the appropriate action path below.
+Stop after the terminal message; never append an optional tip afterward.
 
 **If there are auto-fixable issues:**
 
@@ -369,7 +461,8 @@ python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk --sele
 `Start-Process` or `webbrowser.open` yourself**, or the user will end up with
 two tabs of the same report.
 
-Then present the new results using the same format (3a → 3b → 3c).
+Then present the new results using the same frozen profile and adaptive
+contract (3a → 3b → 3c).
 
 **If they say no**, show:
 
@@ -382,7 +475,7 @@ No problem. Run `/flightcheck` again after making fixes.
 Show:
 
 ```
-The issues above need manual action — follow the links in the Remediation column.
+The issues above need manual action — follow the remediation links shown with the findings.
 
 Run `/flightcheck` again after making changes.
 ```
@@ -425,7 +518,8 @@ started with, if broader) within the 60-minute window:
 python scripts/flightcheck/cli.py --scope workday --invocation-source adk --select-targets never {TARGET_FLAGS}
 ```
 
-Then present the new results using the same format (3a → 3b → 3c). If WD-RUN-001
+Then present the new results using the same frozen profile and adaptive
+contract (3a → 3b → 3c). If WD-RUN-001
 is now ✅ Passed, the end-to-end path works. If it still comes back NotConfigured,
 the run likely landed outside the 60-minute window or did not reach Workday — ask
 the user to retry the safe question and re-run right after.

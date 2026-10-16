@@ -27,10 +27,25 @@ Rules:
 2. NEVER tell the user what files you are reading or what tools you are
    calling. The user must never see "Read SKILL.md" or "Calling tool" or
    file names or line numbers. If they see any of that, you have failed.
-3. The ONLY text the user sees is Message blocks and tool output tables.
+3. The ONLY text the user sees is Message blocks and tool output tables, except
+   the claimed optional profile onboarding permitted by the shared entry contract.
 4. Do not compose your own messages. If there is no Message block for a
-   situation, stay silent and proceed to the next action.
+   situation, stay silent and proceed to the next action, except while following
+   the claimed optional profile onboarding conversation.
 
 After reading `SKILL.md`, follow its integration-specific state and routing
 instructions. Do not assume a shared `.local/connect/steps.md` file or a
 generic Fresh Start section.
+
+## User profile entry
+
+Only after the existing materialization and integration-availability gates
+pass, including the selected architecture/package admission, this prompt owns
+one eligible entry before connection mutations. Follow
+`src/skills/shared/user-profile-entry.md` for one resolve/begin, optional
+onboarding, same-request continuation, and one finish with the actual outcome.
+Pass the frozen context to the selected lifecycle. Unsupported integrations,
+unavailable packages, and terminal setup stops never count or invite.
+Do not change exact Message blocks, selection, role/connection consent, tool
+output, or script-executor output. Do not add a style line or automatic
+proposal. The `/connect-workday` alias is never a second entry owner.
