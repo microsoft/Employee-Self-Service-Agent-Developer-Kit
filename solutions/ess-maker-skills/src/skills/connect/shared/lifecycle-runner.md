@@ -12,6 +12,12 @@ Do not rephrase, add commentary, or tell the user what tools you are calling
 or what files you are reading. Never surface a checkpoint ID, phase ID, file
 path, or the word "checkpoint"/"contract"/"state file" to the user.
 
+This nested runner inherits its caller's immutable communication profile. Do
+not resolve, count, invite, claim, or add a style indicator. Preserve every
+required lifecycle turn and exact Message block. See
+`../../shared/user-profile-entry.md` and
+`../../shared/user-profile-contract.md`.
+
 **Inputs from the calling file:**
 - `PROVIDER` — the provider key (e.g. `"workday"`), matching a contract at
   `src/skills/connect/{PROVIDER}/contract.json`.

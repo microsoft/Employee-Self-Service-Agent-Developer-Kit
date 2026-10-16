@@ -9,6 +9,20 @@ does not fall back to the setup orchestrator.
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 
+## Maker communication profile
+
+Reuse a caller-supplied immutable profile and never own a second entry, count,
+invitation, or proposal. If directly invoked, use eligible mode only after
+the existing materialization and Workday package/admission gates pass, before
+lifecycle mutations; do not infer support from profile state. When called by
+Connect, continue its single eligible entry after those gates. Read
+`src/skills/shared/user-profile-entry.md` and
+`src/skills/shared/user-profile-contract.md`. Follow any claimed optional
+onboarding, resume the same lifecycle, and return the actual outcome to the
+entry owner for finish (or finish once for direct entry). Preserve the
+lifecycle's exact messages and required turns; do not append a style indicator
+or automatic proposal.
+
 ---
 
 ## W.1 — Run the lifecycle

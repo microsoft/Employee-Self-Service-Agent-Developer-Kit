@@ -1,0 +1,347 @@
+{
+  "prompts": [
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/analytics.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Analytics"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/connect.prompt.md",
+      "mode": "eligible",
+      "entry_owner": true,
+      "entry_anchor": "## User profile entry",
+      "protected_anchors": ["# Connect", "## User profile entry"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/connect-workday.prompt.md",
+      "mode": "alias",
+      "owner": "connect.prompt.md",
+      "entry_owner": false,
+      "entry_anchor": "Reuse the connect prompt's eligible profile entry",
+      "protected_anchors": ["# Connect Workday", "same setup-state check"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/create.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Create", "## Workflow completion gate"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/update.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Update", "## Workflow completion gate"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/evaluate.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Evaluate", "## Flow"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/run.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Run Evaluation Test Sets"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/review.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Review", "## Topic review"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/scan.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Scan"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/test.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Test", "## Flow"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/landing-page.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Landing Page"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/push.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Push", "## Explicit evaluation push", "## General component push"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/flightcheck.prompt.md",
+      "mode": "eligible",
+      "entry_owner": true,
+      "entry_anchor": "## User profile entry",
+      "protected_anchors": ["# FlightCheck", "## User profile entry"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/menu.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Menu", "| `/profile` |", "Do NOT just repeat the menu."]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/setup.prompt.md",
+      "mode": "eligible",
+      "entry_owner": true,
+      "entry_anchor": "## User profile entry",
+      "protected_anchors": ["# Setup", "At the first interactive setup surface in a turn"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/delete.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Delete", "## Flow"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/troubleshoot.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Troubleshoot", "and STOP."]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/backup-template-configs.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Backup Template Configs", "and STOP."]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/restore-template-configs.prompt.md",
+      "mode": "excluded",
+      "entry_owner": false,
+      "entry_anchor": null,
+      "protected_anchors": ["# Restore Template Configs", "and STOP."]
+    },
+    {
+      "path": "solutions/ess-maker-skills/.github/prompts/profile.prompt.md",
+      "mode": "management",
+      "entry_owner": false,
+      "entry_anchor": "# Profile",
+      "protected_anchors": ["# Profile", "before setup", "do not count an eligible skill run"]
+    }
+  ],
+  "skills": [
+    {
+      "path": "solutions/ess-maker-skills/src/skills/analytics/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Analytics Skill", "## Start", "ONLY output the maker sees"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/connect/SKILL.md",
+      "mode": "eligible_or_inherit",
+      "entry_anchor": "## Maker communication profile",
+      "protected_anchors": ["## Availability", "## Start", "## Routing"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/connect/workday/SKILL.md",
+      "mode": "inherit_or_eligible_direct",
+      "entry_anchor": "## Maker communication profile",
+      "protected_anchors": ["## W.1", "## W.2"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/flightcheck/SKILL.md",
+      "mode": "eligible_or_inherit",
+      "entry_anchor": "## Maker communication profile",
+      "protected_anchors": ["## Start", "## Step 2:", "## Step 3: Read results and present findings"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/cleanup/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 4: Present Summary", "## Step 6: Final Report"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/landing-page-config/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Setup-state check", "## Start a guided configuration"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/workflows/create/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## IMPORTANT: When NOT to Create a New Workflow", "## Step 1: Understand the Request"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/workflows/update/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 3: Checkpoint", "## Step 7: Push to Copilot Studio"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/test/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Rules", "## Classify the topic"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/review/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 9: Present the report", "### Subagent mode"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/dispatcher/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 1: Identify the requested scenario", "## Step 3: Route from the match"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/create/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 2: Detect Existing Sets and Ask User About Scope", "## Step 4: Write, preview, and review quality"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/generate/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 3: Confirm the test set name(s)", "## Step 9: Offer next steps"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/update/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Review-intent routing", "## Step 7: Continue the selected deployment action"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/review/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 2: List before reviewing", "## Step 3: Continue the review workflow"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/run/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["### Mandatory user-selection gate", "## Flow B: List runs and show results"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/validate/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 3 — Present the quality report", "## Step 4 — Triage and gate"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/evaluations/delete/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["## Step 2: Confirm Deletion", "## Step 8: Push"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/foundation-setup/SKILL.md",
+      "mode": "eligible_or_inherit",
+      "entry_anchor": "## Maker communication profile",
+      "protected_anchors": ["# ESS Foundation Setup", "## Shared authorization message"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/setup/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Hybrid Workday Extension Setup"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/setup/workday-da/SKILL.md",
+      "mode": "inherit_or_eligible_direct",
+      "entry_anchor": "## Maker communication profile",
+      "protected_anchors": ["# Connect Workday to the ESS HR agent", "## Safety contract"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/create/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Create Topic Skill", "## Step 6: Checkpoint, Write, Scan, Review, and Push"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/update/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Update Topic Skill", "## Step 7: Push to Copilot Studio"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/create-eval-driven/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Create a Simple Eval-Driven Topic", "## Step 7: Push and report"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/update-eval-driven/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Update a Simple Topic with Evals", "## Step 7: Push and report"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/topics/delete/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Delete Topic Skill", "## Step 2: Confirm Deletion"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/workflows/delete/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Delete Workflow Skill", "## Step 3: Confirm Deletion"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/workflows/test/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Test Workflow Skill", "## Exercise the flow"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/troubleshoot/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Troubleshoot Connectivity and Authentication Issues", "## Step 6: Summary"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/backup-template-configs/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Backup Template Configs Skill", "## Step 3: Show the result"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/restore-template-configs/SKILL.md",
+      "mode": "excluded",
+      "entry_anchor": null,
+      "protected_anchors": ["# Restore Template Configs Skill", "## Step 4: Show the result"]
+    },
+    {
+      "path": "solutions/ess-maker-skills/src/skills/user-profile/SKILL.md",
+      "mode": "management",
+      "entry_anchor": "# Maker communication profile",
+      "protected_anchors": ["## Entry and privacy", "## Route by intent", "## Save and continuation"]
+    }
+  ],
+  "helpers": [
+    {
+      "path": "solutions/ess-maker-skills/src/skills/connect/shared/lifecycle-runner.md",
+      "mode": "inherit_only",
+      "entry_anchor": "This nested runner inherits its caller's immutable communication profile.",
+      "protected_anchors": ["## L.0", "## L.5"]
+    }
+  ]
+}

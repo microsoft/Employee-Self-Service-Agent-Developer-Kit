@@ -14,6 +14,30 @@ Microsoft authorization, encounters denied access, names a Power Platform role,
 or hands an action to an administrator. That file owns the operation-specific
 role language and administrator handoff.
 
+## Maker communication profile
+
+For direct entry, use eligible mode after establishing the working Python
+launcher, validating required dependencies, and passing any applicable
+selected-agent product-line reconciliation, before the next setup operation.
+When invoked by `/setup`, inherit its entry. Reuse a caller-supplied immutable
+profile; do not begin or count again on a resume reply or nested invocation.
+Setup completion is not an admission requirement for profile onboarding.
+Runtime failures, declined command approvals, unsupported-product handoffs,
+and exit-only requests never count or invite.
+
+Read `src/skills/shared/user-profile-entry.md` and
+`src/skills/shared/user-profile-contract.md`. Use the resolved launcher from
+**Command runtime** for every profile command. Follow only the claimed optional
+onboarding conversation, then resume the same setup request with its retained
+target and progress. Preserve the required first-interactive-surface progress
+snapshot before an invitation; onboarding is not an extra setup stage.
+The onboarding conversation is a separate permitted interaction alongside the
+defined setup messages and choices. It never replaces setup approvals, access
+checks, blockers, or recovery. Do not add a style indicator or automatic
+proposal to setup output. Pass the frozen context only to participating
+downstream calls, including FlightCheck and Connect; excluded skills receive
+no profile context. Finish once with the actual outcome.
+
 ## Setup state sources
 
 - **Current setup state:** `.local/setup/config.json`
@@ -34,7 +58,8 @@ the explicit post-enrollment reinspection and maker-requested refreshes.
 
 Maker-visible setup text consists of the defined **Message** blocks and
 questions, their choices, an observed blocker with its supported recovery, and
-the final handoff. Operational sequencing and response-policy prose are
+the final handoff, plus the claimed optional profile onboarding conversation
+permitted above. Operational sequencing and response-policy prose are
 instruction-only. Successful internal operations continue directly to the next
 defined maker interaction.
 
