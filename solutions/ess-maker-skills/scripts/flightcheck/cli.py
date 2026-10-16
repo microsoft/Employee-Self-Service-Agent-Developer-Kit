@@ -2471,7 +2471,13 @@ def _run_profile(args):
     runner.execution_targets = profile.checkpoint_ids
     runner.workday_da_profile = profile_name.startswith("workday-da:")
     runner.config = config
-    runner.agent_slug = validation_context.agent_slug
+    # ValidationContext may use the legacy first-record fallback, not a selection.
+    runner.agent_slug = (
+        str(getattr(args, "agent_slug", "") or "").strip()
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id

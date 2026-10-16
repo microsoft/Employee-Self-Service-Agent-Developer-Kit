@@ -76,6 +76,51 @@ def active_agent_bot_id(
     )
 
 
+def is_declarative_agent(runner: Any) -> bool:
+    """Use explicit workspace/selected-agent metadata, never package presence.
+
+    A missing or ambiguous selected agent must not inherit a sibling's type.
+    Agent metadata takes precedence over the workspace's compatibility marker.
+    An explicitly requested Workday DA profile is also a DA context, unless the
+    selected record declares a different release line.
+    """
+    config = getattr(runner, "config", None)
+    if not isinstance(config, dict):
+        config = {}
+    single = config.get("agent")
+    configured_slug = config.get("activeAgent")
+    if configured_slug in (None, "") and isinstance(single, dict):
+        configured_slug = single.get("slug")
+    selected_slug = getattr(runner, "agent_slug", None)
+    if selected_slug in (None, ""):
+        selected_slug = configured_slug
+    if selected_slug == "":
+        selected_slug = None
+
+    selected = {}
+    if selected_slug is not None:
+        if not isinstance(selected_slug, str):
+            return False
+        selected = active_agent(config, selected_slug)
+        if not selected:
+            return False
+    elif config.get("agents"):
+        # A requested profile supplies context without selecting the first record.
+        if getattr(runner, "workday_da_profile", False) is not True:
+            return False
+    else:
+        if isinstance(single, dict):
+            selected = single
+
+    release_line = selected.get("releaseLine")
+    if release_line is None and configured_slug in (None, "", selected_slug):
+        # A command-line override must not inherit another active agent's marker.
+        release_line = config.get("releaseLine")
+    if release_line is not None:
+        return isinstance(release_line, str) and release_line.strip().casefold() == "da"
+    return getattr(runner, "workday_da_profile", False) is True
+
+
 def _clean_bot_id(value: Any) -> str:
     return str(value or "").strip()
 
