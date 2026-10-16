@@ -4487,12 +4487,6 @@ def _worksheet_collection_view(operation: str) -> dict[str, Any]:
             "label": "Navigate only",
             "operation": operation,
             "mode": "navigate-only",
-            "disclaimer": (
-                f"Navigate toward {' and '.join(worksheet_rows)} without "
-                "collecting their application values. You remain responsible "
-                "for sign-in and "
-                "all portal changes."
-            ),
         }
     ]
     if not definition["sensitive"]:
@@ -4501,12 +4495,6 @@ def _worksheet_collection_view(operation: str) -> dict[str, Any]:
                 "label": "Navigate and capture",
                 "operation": operation,
                 "mode": "navigate-and-capture",
-                "disclaimer": (
-                    f"Navigate toward {' and '.join(worksheet_rows)} and "
-                    "inspect only the visible non-sensitive worksheet values. "
-                    "You remain "
-                    "responsible for sign-in and all portal changes."
-                ),
             }
         )
     return {

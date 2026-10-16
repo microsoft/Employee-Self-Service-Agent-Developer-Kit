@@ -52,18 +52,21 @@ The `Sensitive` column is authoritative. Never infer sensitivity from the row la
     {
       "label": "Navigate only",
       "operation": "{OPERATION}",
-      "mode": "navigate-only",
-      "disclaimer": "{ROW_SPECIFIC_NAVIGATION_DISCLAIMER}"
+      "mode": "navigate-only"
     },
     {
       "label": "Navigate and capture",
       "operation": "{OPERATION}",
-      "mode": "navigate-and-capture",
-      "disclaimer": "{ROW_SPECIFIC_CAPTURE_DISCLAIMER}"
+      "mode": "navigate-and-capture"
     }
   ]
 }
 ```
+
+The companion renders these static explanations below the action group:
+
+- **Navigate only:** Assists without capturing values for ADK. You remain responsible for any authentication.
+- **Navigate and capture:** Assists and captures values for ADK. You remain responsible for any authentication.
 
 For any future row marked `Yes`, offer only **Navigate only**. Do not copy the application value, present a detected-value confirmation, call `point-targets`, or offer a screenshot for that row.
 

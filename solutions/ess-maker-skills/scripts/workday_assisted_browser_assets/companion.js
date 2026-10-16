@@ -8,6 +8,12 @@ const entry = document.getElementById("entry");
 const confirmation = document.getElementById("confirmation");
 const targetRail = document.getElementById("target-rail");
 const targetPointers = document.getElementById("target-pointers");
+const navigationExplanations = {
+  "navigate-only":
+    "Assists without capturing values for ADK. You remain responsible for any authentication.",
+  "navigate-and-capture":
+    "Assists and captures values for ADK. You remain responsible for any authentication.",
+};
 const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
 const vscodeApi =
   typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
@@ -71,6 +77,21 @@ function textElement(tag, text, className) {
     element.className = className;
   }
   return element;
+}
+
+/** Pair each navigation mode with its static explanation without rendering executable markup. */
+function navigationExplanation(action) {
+  const explanation = navigationExplanations[action.mode];
+  if (!explanation) {
+    return null;
+  }
+  const paragraph = document.createElement("p");
+  paragraph.className = "navigation-explanation";
+  paragraph.append(
+    textElement("strong", `${action.label}:`),
+    document.createTextNode(` ${explanation}`),
+  );
+  return paragraph;
 }
 
 /** Render each published revision once while preserving interaction state returned by the server. */
@@ -165,12 +186,11 @@ function render(payload) {
       actionGroup.append(button);
     }
     nodes.push(actionGroup);
-    const disclaimers = [
-      // Present each action disclaimer once even when multiple modes share it.
-      ...new Set(actions.map((action) => action.disclaimer).filter(Boolean)),
-    ];
-    for (const disclaimer of disclaimers) {
-      nodes.push(textElement("p", disclaimer, "navigation-disclaimer"));
+    for (const action of actions) {
+      const explanation = navigationExplanation(action);
+      if (explanation) {
+        nodes.push(explanation);
+      }
     }
   }
   guidance.dataset.status = view.status;
