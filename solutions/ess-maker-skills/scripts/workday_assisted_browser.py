@@ -455,6 +455,7 @@ _CONFIRMATION_OPERATIONS = _COLLECTION_OPERATIONS | {
     _FINAL_WORKSHEET_CONFIRMATION_OPERATION
 }
 _WAIT_OPERATIONS = _CONFIRMATION_OPERATIONS | {_PRESERVATION_OPERATION}
+_RECORD_OPERATIONS = _COLLECTION_OPERATIONS | {_PRESERVATION_OPERATION}
 _EMAIL_PATTERN = re.compile(
     r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
     re.IGNORECASE,
@@ -5194,6 +5195,168 @@ def _load_worksheet_draft(root: Path) -> dict[str, str]:
     }
 
 
+def _worksheet_rows_for_operation(operation: str) -> list[str]:
+    """Return the exact worksheet rows owned by one companion operation."""
+    if operation == _PRESERVATION_OPERATION:
+        return [_PRESERVATION_WORKSHEET_ROW]
+    definition = _COLLECTION_OPERATION_DEFINITIONS.get(operation)
+    if definition is None:
+        raise AssistedBrowserError(
+            "The requested operation does not record worksheet values."
+        )
+    return list(
+        definition.get("worksheetRows", [definition["worksheetRow"]])
+    )
+
+
+def _completed_worksheet_values(
+    live: Mapping[str, Any],
+    *,
+    operation: str,
+    revision: int,
+) -> dict[str, str]:
+    """Read one accepted revision-bound interaction without exposing its values."""
+    if live.get("revision") != revision:
+        raise AssistedBrowserError(
+            "The worksheet interaction revision is stale."
+        )
+    expected_rows = _worksheet_rows_for_operation(operation)
+    confirmation = live.get("confirmation")
+    if (
+        isinstance(confirmation, Mapping)
+        and confirmation.get("operation") == operation
+        and confirmation.get("revision") == revision
+    ):
+        if confirmation.get("status") != "confirmed":
+            raise AssistedBrowserError(
+                "The worksheet confirmation has not been accepted."
+            )
+        canonical_value = confirmation.get("value")
+        if isinstance(canonical_value, str):
+            if len(expected_rows) != 1:
+                raise AssistedBrowserError(
+                    "The confirmed worksheet result is incomplete."
+                )
+            return {
+                expected_rows[0]: _required_text(
+                    canonical_value,
+                    f"worksheet value for {expected_rows[0]}",
+                    maximum=4000,
+                )
+            }
+        view = live.get("view")
+        view_confirmation = (
+            view.get("confirmation")
+            if isinstance(view, Mapping)
+            else None
+        )
+        if (
+            not isinstance(view_confirmation, Mapping)
+            or view_confirmation.get("operation") != operation
+        ):
+            raise AssistedBrowserError(
+                "The confirmed worksheet candidate is unavailable."
+            )
+        fields = view.get("fields")
+        detected_values = [
+            field.get("value")
+            for field in fields
+            if isinstance(field, Mapping)
+            and str(field.get("label", "")).startswith("Detected ")
+        ] if isinstance(fields, list) else []
+        if len(detected_values) != len(expected_rows):
+            raise AssistedBrowserError(
+                "The confirmed worksheet candidate is incomplete."
+            )
+        return {
+            row: _required_text(
+                value,
+                f"worksheet value for {row}",
+                maximum=4000,
+            )
+            for row, value in zip(expected_rows, detected_values, strict=True)
+        }
+    entry = live.get("entry")
+    if (
+        not isinstance(entry, Mapping)
+        or entry.get("operation") != operation
+        or entry.get("revision") != revision
+        or entry.get("status") != "submitted"
+    ):
+        raise AssistedBrowserError(
+            "The worksheet entry has not been submitted."
+        )
+    values = entry.get("values")
+    if isinstance(values, Mapping):
+        if set(values) != set(expected_rows):
+            raise AssistedBrowserError(
+                "The submitted worksheet values are incomplete."
+            )
+        return {
+            row: _required_text(
+                values.get(row),
+                f"worksheet value for {row}",
+                maximum=4000,
+            )
+            for row in expected_rows
+        }
+    value = entry.get("value")
+    if len(expected_rows) != 1 or not isinstance(value, str):
+        raise AssistedBrowserError(
+            "The submitted worksheet value is incomplete."
+        )
+    return {
+        expected_rows[0]: _required_text(
+            value,
+            f"worksheet value for {expected_rows[0]}",
+            maximum=4000,
+        )
+    }
+
+
+def _write_worksheet_values(
+    root: Path,
+    values: Mapping[str, str],
+) -> None:
+    """Atomically merge validated worksheet values while preserving unrelated rows."""
+    draft = _load_worksheet_draft(root)
+    draft.update(values)
+    _write_json(root.resolve() / WORKSHEET_DRAFT_PATH, draft)
+
+
+def _worksheet_record(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Persist one accepted interaction and return the updated worksheet projection."""
+    session = _load_session(root)
+    if session.get("surface") != "entra-configuration":
+        raise AssistedBrowserError(
+            "worksheet-record requires the entra-configuration companion surface."
+        )
+    live = _api_request(session, "/api/view")
+    values = _completed_worksheet_values(
+        live,
+        operation=args.operation,
+        revision=args.revision,
+    )
+    _write_worksheet_values(root, values)
+    try:
+        projection = _worksheet_status(argparse.Namespace(), root)
+    except AssistedBrowserError as exc:
+        raise AssistedBrowserError(
+            "Worksheet values were recorded, but the updated status could "
+            f"not be projected: {exc}"
+        ) from exc
+    return {
+        "recorded": True,
+        "operation": args.operation,
+        "recordedRows": list(values),
+        "revision": args.revision,
+        **projection,
+    }
+
+
 def _load_entra_controller_projection(root: Path) -> dict[str, Any]:
     """Read only the Entra lifecycle fields needed by companion orchestration."""
     try:
@@ -5794,6 +5957,103 @@ def _reveal(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     )
 
 
+def _worksheet_browser_complete(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Record shared-browser success and publish the matching worksheet interaction."""
+    session = _load_session(root)
+    if session.get("surface") != "entra-configuration":
+        raise AssistedBrowserError(
+            "worksheet-browser-complete requires the entra-configuration "
+            "companion surface."
+        )
+    if session.get("browserMode") != _VSCODE_BROWSER_MODE:
+        raise AssistedBrowserError(
+            "worksheet-browser-complete requires a VS Code Integrated Browser session."
+        )
+    live = _api_request(session, "/api/status")
+    collection = live.get("collection")
+    if (
+        not isinstance(collection, Mapping)
+        or collection.get("operation") != args.operation
+        or collection.get("status") not in {"authorized", "navigated"}
+    ):
+        raise AssistedBrowserError(
+            "The browser completion does not match an authorized worksheet operation."
+        )
+    mode = collection.get("mode")
+    if mode == "navigate-only":
+        if args.value_file is not None or args.target_label is not None:
+            raise AssistedBrowserError(
+                "Navigate only completion does not accept candidate value arguments."
+            )
+        view = _worksheet_entry_view(args.operation)
+    elif mode == "navigate-and-capture":
+        if args.value_file is None or args.target_label is None:
+            raise AssistedBrowserError(
+                "Navigate and capture completion requires --value-file and "
+                "--target-label."
+            )
+        try:
+            raw_value = (
+                sys.stdin.read()
+                if str(args.value_file) == "-"
+                else args.value_file.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise AssistedBrowserError(
+                "The worksheet candidate value file is unreadable."
+            ) from exc
+        view = _worksheet_confirmation_view(
+            args.operation,
+            value=_required_text(
+                raw_value.strip(),
+                "worksheet candidate value",
+                maximum=500,
+            ),
+            target_label=_required_text(
+                args.target_label,
+                "target label",
+                maximum=120,
+            ),
+        )
+    else:
+        raise AssistedBrowserError(
+            "The authorized worksheet operation has an unsupported assistance mode."
+        )
+    normalized = validate_view(view)
+    navigation = _api_request(
+        session,
+        "/api/shared-browser-result",
+        value={
+            "operation": args.operation,
+            "status": "navigated",
+        },
+    )
+    try:
+        presented = _api_request(
+            session,
+            "/api/present",
+            value=normalized,
+        )
+    except AssistedBrowserError as exc:
+        raise AssistedBrowserError(
+            "Browser navigation was recorded, but the worksheet interaction "
+            f"could not be published: {exc}"
+        ) from exc
+    return {
+        "completed": True,
+        "operation": args.operation,
+        "mode": mode,
+        "interaction": (
+            "confirmation" if "confirmation" in normalized else "entry"
+        ),
+        "navigationStatus": navigation["collection"]["status"],
+        **presented,
+    }
+
+
 def _shared_browser_result(
     args: argparse.Namespace,
     root: Path,
@@ -5925,6 +6185,13 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("status")
     commands.add_parser("worksheet-status")
     commands.add_parser("worksheet-reset")
+    worksheet_record = commands.add_parser("worksheet-record")
+    worksheet_record.add_argument(
+        "--operation",
+        choices=sorted(_RECORD_OPERATIONS),
+        required=True,
+    )
+    worksheet_record.add_argument("--revision", type=int, required=True)
     worksheet_present = commands.add_parser("worksheet-present")
     worksheet_present.add_argument(
         "--operation",
@@ -6031,6 +6298,16 @@ def build_parser() -> argparse.ArgumentParser:
     reveal.add_argument("--selector", required=True)
     reveal.add_argument("--frame-index", type=int, required=True)
     reveal.add_argument("--match-index", type=int, required=True)
+    worksheet_browser_complete = commands.add_parser(
+        "worksheet-browser-complete"
+    )
+    worksheet_browser_complete.add_argument(
+        "--operation",
+        choices=sorted(_COLLECTION_OPERATIONS),
+        required=True,
+    )
+    worksheet_browser_complete.add_argument("--value-file", type=Path)
+    worksheet_browser_complete.add_argument("--target-label")
     shared_result = commands.add_parser("shared-browser-result")
     shared_result.add_argument(
         "--operation",
@@ -6056,6 +6333,7 @@ _HANDLERS = {
     "status": _status,
     "worksheet-status": _worksheet_status,
     "worksheet-reset": _worksheet_reset,
+    "worksheet-record": _worksheet_record,
     "worksheet-present": _worksheet_present,
     "wait": _wait,
     "inspect": _inspect,
@@ -6067,6 +6345,7 @@ _HANDLERS = {
     "point": _point,
     "point-targets": _point_targets,
     "reveal": _reveal,
+    "worksheet-browser-complete": _worksheet_browser_complete,
     "shared-browser-result": _shared_browser_result,
     "inspect-layout": _inspect_layout,
     "stop": _stop,
