@@ -18,6 +18,7 @@ require_validated_mock(dv)
 
 
 @pytest.mark.parametrize("flavor", [None, "none", "skipped", "full", "partial", "unknown", "simplified"])
+@pytest.mark.parametrize("source", ["selected_da", "unselected_da_profile"])
 @pytest.mark.parametrize("check", [
     workday._check_env_vars,
     workday._check_isu_username_format,
@@ -25,12 +26,18 @@ require_validated_mock(dv)
     workday._check_custom_workflow_inventory,
     workday._check_personal_data_write_permission,
 ])
-def test_explicit_da_never_reads_isu_configuration_or_prompts(check, flavor, monkeypatch):
+def test_explicit_da_never_reads_isu_configuration_or_prompts(
+    check, flavor, source, monkeypatch,
+):
     runner = SimpleNamespace(
-        config={
+        config=({
             "activeAgent": "hr",
             "agents": [{"slug": "hr", "releaseLine": "da"}],
-        },
+        } if source == "selected_da" else {
+            "agents": [{"slug": "legacy", "releaseLine": "cea"}],
+        }),
+        agent_slug="",
+        workday_da_profile=source == "unselected_da_profile",
         _workday_package_flavor=flavor,
     )
 
