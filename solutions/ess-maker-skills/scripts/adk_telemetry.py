@@ -60,7 +60,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 # Reuse the OneCollector transport + helpers from the FlightCheck emitter.
 # Mirror the sibling-import pattern used by the other scripts so this works
@@ -82,7 +82,31 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.6.0: added ``adk.connect.lifecycle`` for provider lifecycle transitions.
 # 1.7.0: added derived ``agent_type`` common dimension (custom_agent |
 #        declarative_agent | unknown) — ADO 7830949.
-SCHEMA_VERSION = "1.7.0"
+SCHEMA_VERSION = "1.8.0"
+
+
+class ApiCallUsage(TypedDict, total=False):
+    """Content-free measurements derived from recognized LPC configuration fields."""
+
+    config_branding_present: bool
+    config_quick_links_present: bool
+    config_pivots_present: bool
+    quick_link_count: int
+    pivot_count: int
+    prompt_count: int
+    category_count: int
+    discovery_result_count: int
+    draft_present: bool
+    draft_quick_link_count: int
+    draft_pivot_count: int
+    draft_prompt_count: int
+    draft_category_count: int
+    widget: Literal["accent-color", "quick-links", "starter-prompts"]
+
+
+McpResultKind = Literal[
+    "success", "tool_error", "invalid_arguments", "exception", "cancelled", "unknown_tool"
+]
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -553,6 +577,19 @@ def initialize_tenant_identity(
         tenant_name=tenant_name or None,
         local_dir=local_dir,
     )
+
+
+def get_tenant_identity(
+    tenant_id: str,
+    *,
+    local_dir: str,
+) -> dict[str, str]:
+    """Snapshot an authenticated tenant without changing process-wide identity."""
+    normalized = _sanitize_tenant_id(tenant_id)
+    return {
+        "tenant_id": normalized,
+        "tenant_name": _fc.get_cached_tenant_name(normalized, local_dir=local_dir) or "",
+    }
 
 
 # --- Consent / opt-out ----------------------------------------------------
@@ -1417,14 +1454,47 @@ def emit_api_call(
     error_category: str = "",
     surface: str = SURFACE_CLI,
     block: bool = False,
+    tenant_id: str | None = None,
+    tenant_name: str | None = None,
+    mcp_server: str | None = None,
+    server_operation_id: str | None = None,
+    result_kind: McpResultKind | None = None,
+    http_attempt_count: int | None = None,
+    retry_count: int | None = None,
+    auth_refresh_count: int | None = None,
+    retry_exhausted: bool | None = None,
+    http_status: int | None = None,
+    failure_http_status: int | None = None,
+    write_state: Literal["confirmed"] | None = None,
+    usage: ApiCallUsage | None = None,
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
-    data = common_dimensions(surface, session_id=sid)
+    data = common_dimensions(
+        surface, session_id=sid, tenant_id=tenant_id, tenant_name=tenant_name,
+    )
     data.update({
         "api_endpoint": api_endpoint,
         "outcome": outcome,
         "latency_ms": int(latency_ms),
     })
+    data.update({
+        key: value for key, value in {
+            "mcp_server": mcp_server,
+            "server_operation_id": server_operation_id,
+            "result_kind": result_kind,
+            "http_attempt_count": http_attempt_count,
+            "retry_count": retry_count,
+            "auth_refresh_count": auth_refresh_count,
+            "retry_exhausted": retry_exhausted,
+            "http_status": http_status,
+            "failure_http_status": failure_http_status,
+            "write_state": write_state,
+        }.items() if value is not None
+    })
+    if usage is not None:
+        data.update({
+            key: value for key, value in usage.items() if key in ApiCallUsage.__annotations__
+        })
     _apply_error_fields(data, outcome, error_code, error_message, error_category)
     return _emit(EVENT_API_CALL, data, block=block)
 
