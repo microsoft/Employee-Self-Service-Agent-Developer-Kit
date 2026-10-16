@@ -688,7 +688,7 @@ function renderTargetPointers(metadata) {
     const pointer = document.createElement("button");
     pointer.className = "target-pointer";
     pointer.type = "button";
-    pointer.textContent = "←";
+    pointer.textContent = "◀";
     pointer.setAttribute("aria-label", guidance);
     pointer.setAttribute("aria-posinset", String(index + 1));
     pointer.setAttribute("aria-setsize", String(pointers.length));
