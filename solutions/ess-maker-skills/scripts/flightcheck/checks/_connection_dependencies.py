@@ -193,6 +193,7 @@ def audit_connections(runner) -> ConnectionAudit:
         return audit
     access = _Access(runner)
     required: dict[tuple[str, str], Reference] = {}
+    flow_details: dict[str, dict | Exception] = {}
     for agent_id in agent_ids:
         try:
             agent = _mapping(runner.agentbuilder.get_agent(agent_id), "Agent lookup")
@@ -218,9 +219,19 @@ def audit_connections(runner) -> ConnectionAudit:
         audit.flow_count += len(flow_ids)
         for flow_id in sorted(flow_ids):
             try:
-                detail = _mapping(
-                    access.admin(flow=True).get_flow(runner.env_id, flow_id), "Flow lookup"
-                )
+                # Flows are environment-local, while every consumer still needs
+                # its own reference and incomplete-read evidence.
+                if flow_id not in flow_details:
+                    try:
+                        flow_details[flow_id] = _mapping(
+                            access.admin(flow=True).get_flow(runner.env_id, flow_id),
+                            "Flow lookup",
+                        )
+                    except READ_ERRORS as exc:
+                        flow_details[flow_id] = exc
+                detail = flow_details[flow_id]
+                if isinstance(detail, Exception):
+                    raise detail
                 properties = _mapping(detail.get("properties"), "Flow properties")
                 refs = properties.get("connectionReferences")
                 if not isinstance(refs, dict):

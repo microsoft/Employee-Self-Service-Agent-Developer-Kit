@@ -256,6 +256,56 @@ def test_agent_local_references_are_never_deduplicated_across_agents(dependency_
     dependency_case.query.assert_not_called()
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("state", ["passed", "denied", "malformed"])
+def test_shared_flow_is_read_once_without_losing_agent_coverage(
+    dependency_case, reverse, state,
+):
+    ids = [dependency_case.agent_id, SECOND_AGENT]
+    dependency_case.runner.connection_agent_ids = tuple(reversed(ids)) if reverse else tuple(ids)
+    shared_flow = sorted(dependency_case.flows)[0]
+    if state == "malformed":
+        dependency_case.flows[shared_flow]["properties"]["connectionReferences"] = []
+    elif state == "denied":
+        def read_flow(_env, flow_id):
+            if flow_id == shared_flow:
+                raise RuntimeError("Shared flow read denied")
+            return dependency_case.flows[flow_id]
+        dependency_case.runner.pp_admin.get_flow.side_effect = read_flow
+
+    row = _summary(dependency_case)
+
+    reads = dependency_case.runner.pp_admin.get_flow.call_args_list
+    assert len(reads) == len(dependency_case.flows)
+    assert {call.args[1] for call in reads} == set(dependency_case.flows)
+    assert "6 active flow call(s)" in row.result
+    assert dependency_case.native.fetch_components.call_count == 2
+    if state == "passed":
+        assert row.status == "Passed"
+        assert "4 required reference(s)" in row.result
+        assert row.remediation == ""
+    else:
+        assert row.status == "Warning"
+        assert all(f"Agent {agent_id}, flow {shared_flow}" in row.result for agent_id in ids)
+        assert ("Shared flow read denied" if state == "denied" else
+                "Flow detail omitted its connection-reference map") in row.result
+        assert "Restore read access" in row.remediation
+
+
+def test_shared_flow_cache_is_limited_to_one_audit(dependency_case):
+    first = _summary(dependency_case)
+    dependency_case.runner.pp_admin.get_flow.reset_mock()
+    _workday_row(dependency_case)["connectionid"] = None
+
+    second = _summary(dependency_case)
+
+    assert first.status == "Passed"
+    assert second.status == "Failed"
+    assert "unbound" in second.result
+    assert "bind" in second.remediation
+    assert dependency_case.runner.pp_admin.get_flow.call_count == len(dependency_case.flows)
+
+
 def test_different_agent_response_is_not_substituted(dependency_case):
     dependency_case.native.get_agent.side_effect = None
     dependency_case.native.get_agent.return_value = {"botId": SECOND_AGENT}

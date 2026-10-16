@@ -735,8 +735,13 @@ def test_hybrid_scope_provisions_agentbuilder_alongside_dataverse(hybrid_scope, 
 
 
 @pytest.mark.parametrize("scope", ["full", "environment"])
-def test_hybrid_connection_audit_reuses_verified_native_identity(hybrid_scope, scope):
+@pytest.mark.parametrize("api_version", [None, "2024-10-01"])
+def test_hybrid_connection_audit_reuses_verified_native_identity(
+    hybrid_scope, scope, api_version,
+):
     hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
+    if api_version is not None:
+        hybrid_scope.config["agentBuilderApiVersion"] = api_version
 
     assert hybrid_scope.run(scope) == 0
 
@@ -746,6 +751,9 @@ def test_hybrid_connection_audit_reuses_verified_native_identity(hybrid_scope, s
     assert runner.connectivity is hybrid_scope.connectivity_client.return_value
     assert runner.connection_dependency_token.keywords["account_hint"] == "maker@example.test"
     assert runner.connection_dependency_token.keywords["tenant_id"] == hybrid_scope.tenant_id
+    expected_version = cli.DEFAULT_API_VERSION if api_version is None else api_version
+    assert hybrid_scope.native_client.call_args.kwargs["api_version"] == expected_version
+    assert hybrid_scope.connectivity_client.call_args.kwargs["api_version"] == expected_version
 
 
 @pytest.mark.parametrize("scope", ["authentication", "prerequisites", "external"])

@@ -788,7 +788,8 @@ def _create_hybrid_scope_clients(
         ring=ring, api_version=api_version,
     )
     connectivity = (
-        ConnectivityClient(token, ring=ring) if needs_connection_inventory else None
+        ConnectivityClient(token, ring=ring, api_version=api_version)
+        if needs_connection_inventory else None
     )
     return agentbuilder, target, connectivity
 
