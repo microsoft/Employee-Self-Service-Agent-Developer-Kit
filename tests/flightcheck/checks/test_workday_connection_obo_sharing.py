@@ -3,7 +3,7 @@
 
 """Tests for WD-CONN-013 (Agent connection OBO parameter sharing).
 
-The check verifies that every connection the selected *agent* uses has
+The check verifies that the selected agent's topic connection references have
 "Allow permission to share parameters" enabled. That setting is persisted on the
 agent's own ``connectionreference`` rows in column
 ``connectionparametersetconfig`` (populated = shared, null = not shared) —
@@ -117,7 +117,8 @@ def test_all_agent_connections_shared_passes(monkeypatch):
     ])
     r = _run(_runner())
     assert r.status == "Passed"
-    assert "All 2 connection(s) the agent uses" in r.result
+    assert "All 2 evaluated topic connection reference(s)" in r.result
+    assert r.remediation == ""
 
 
 def test_one_unshared_connection_fails(monkeypatch):
@@ -159,7 +160,7 @@ def test_solution_refs_are_excluded(monkeypatch):
     ])
     r = _run(_runner())
     assert r.status == "Passed"
-    assert "All 1 connection(s) the agent uses" in r.result
+    assert "All 1 evaluated topic connection reference(s)" in r.result
 
 
 def test_sibling_agent_refs_cannot_fail_selected_agent(monkeypatch):
@@ -170,7 +171,30 @@ def test_sibling_agent_refs_cannot_fail_selected_agent(monkeypatch):
     r = _run(_runner())
 
     assert r.status == "Passed"
-    assert "All 1 connection(s) the agent uses" in r.result
+    assert "All 1 evaluated topic connection reference(s)" in r.result
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_topic_result_does_not_claim_flow_scoped_workday_coverage(monkeypatch, shared):
+    selected = _agent_ref(
+        G1, connector="shared_service-now", shared=shared, display="Selected ServiceNow",
+    )
+    runtime = _solution_ref("msdyn_sharedworkdaysoap_workdayruntime")
+    runtime["connectionid"] = None
+    _stub(monkeypatch, [selected, runtime], selected_refs=[selected])
+
+    result = _run(_runner())
+
+    assert result.status == ("Passed" if shared else "Failed")
+    assert "evaluated topic connection reference(s)" in result.result
+    assert "Selected ServiceNow" in result.result
+    assert "Flow-scoped Workday references are not evaluated" in result.result
+    assert "connection(s) the agent uses" not in result.result
+    assert "backing services without" not in result.result
+    if shared:
+        assert result.remediation == ""
+    else:
+        assert "Allow permission to share parameters" in result.remediation
 
 
 def test_sharing_via_parameters_config_column_also_counts(monkeypatch):
