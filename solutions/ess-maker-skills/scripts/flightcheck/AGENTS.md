@@ -20,6 +20,15 @@ A missing admin mapping disables native clients, not independent checks;
 an override or Dataverse OrganizationId is never proof of that mapping.
 Keep `agentBuilderApiVersion` consistent across all provisioning paths.
 
+Environment-wide checks must resolve overrides for each inspected botId,
+never from the active agent for its siblings. Keep global defaults explicit,
+select configured values by presence (`is not None`), and report missing
+subject identities instead of borrowing another bot. Test different sibling
+pins/realms, unconfigured siblings, missing identities, and falsy overrides.
+Canonicalize revision-pin subjects before reads: agents[] precedes the legacy
+agent copy, an already represented slug is not another subject, and bot IDs
+are deduplicated case-insensitively. Keep each canonical record's own settings.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
