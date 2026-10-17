@@ -1,0 +1,44 @@
+# DuPont IT agent eval results — support resources & escalation
+
+Manual walkthrough of [`dupont-it-eval-cases.md`](dupont-it-eval-cases.md) against
+[`dupont-ess-it-agent-prompt.md`](dupont-ess-it-agent-prompt.md) as it stands after the escalation
+section was added and the redundant clarify-first restatements were removed. No live agent is
+wired up in this repo, so each case is resolved by hand: simulate what retrieval would return from
+the cited KB sandbox article(s), then apply the instructions literally.
+
+| # | Simulated response | Verdict | Notes |
+|---|---|---|---|
+| 1 | "Sure, I can help — could you briefly describe the issue?" | **PASS** | Rule 1: no troubleshooting, no resource yet. |
+| 2 | "Sure, I can help — what do you need from IT?" | **PASS** | Same as #1 for "contact IT" phrasing. |
+| 3 | "Is this a sign-in/credentials error, or a certificate error message?" | **PASS** | Rule 1's "unless they already stated it" carve-out skips straight to retrieval since the subject (VPN) was given; retrieval then spans 2 distinct sub-categories (KB9000004 vs KB9000005), triggering Rule 3's clarification — no resource at this step. Confirms the two rules compose correctly. |
+| 4 | "Are you trying to reset your Windows password, or your SAP password?" | **PASS** | 3 sub-categories retrieved (2 Windows variants collapse to one "Windows password" option plus SAP) — clarifies using only retrieved categories, no resource. |
+| 5 | "Press Ctrl+Alt+Delete, select 'Change a password', enter your old password, then your new password twice. It must meet DuPont's complexity requirements (12+ characters, mixed case, number, symbol)." | **PASS** | Single cluster (KB9000001) — answered directly. |
+| 6 | "I couldn't find information on standing desks in our IT resources. You can submit a request through the ServiceNow portal." | **PASS** | No article retrieved — says so, offers only the standing portal (no specific contact, since none was retrieved for this subject). |
+| 7 | "Submit the Information Security Reporting Form for Lost or Stolen Device(s) in ServiceNow immediately — IT Security will remotely lock and wipe the device. File a police report if it was stolen outside a DuPont facility." | **PASS** | KB9000022 is fully responsive and names its own resource/process — answered directly, resource included because retrieval for *this* subject named it. |
+| 8 | "That's a question about your health benefits, which is outside what I can help with — I handle IT questions, not HR. You'll want to check with HR for that." | **PASS** | Rule 4: out of scope, stops there — importantly, does **not** also suggest the ServiceNow (IT) portal, since that's an IT destination and the rule explicitly forbids offering any resource here. |
+| 9a (turn 1) | "Check the display panel for the jam location code (tray, fuser, or output area) — don't force the printer to continue. Then open the indicated tray or rear panel gently and pull the jammed paper in the direction of the paper path, never against it. Close the panels and press Resume." | **PASS** | Diagnosis + resolution steps from KB9000023, no resource yet. |
+| 9b (turn 2) | "Since it's still jammed after two attempts, please submit a ServiceNow hardware ticket so IT can take a closer look." | **PASS** | Rule 5: the source's own named condition ("if the jam error persists after two attempts, submit a ServiceNow hardware ticket") is met, and the employee made a reasonable attempt and explicitly asked for more help — resource offered. |
+| 10 | "I couldn't find a definition for 'SSL' in our IT resources." | **PASS** | Regression check: KB9000005 is retrieved as topically nearest but doesn't define the acronym and isn't responsive to this specific question, so its "open a ServiceNow ticket for certificate reissue" line (which answers a different problem — certificate errors, not acronym definitions) must not leak in — and it doesn't. This is the exact mechanism the new section's opening grounding sentence was written to enforce. |
+| 11a (turn 1) | "I couldn't find information on noise-canceling headphones in our IT resources. You can submit a request through the ServiceNow portal." | **PASS** | No resource retrieved for this subject. |
+| 11b (turn 2) | "I'm sorry, I still don't have specific guidance on that — you're welcome to submit a request through the ServiceNow portal and a specialist can look into it." | **PASS** | Negative Rule 5: no specific contact is invented even though the employee is stuck and asking for help — but unlike HR, the standing ServiceNow portal remains a legitimate thing to point to, since it never required retrieval. Confirms the designed asymmetry holds in practice. |
+| 12 | "I couldn't find information on changing your desktop background color in our IT resources. You can submit a request through the ServiceNow portal." | **PASS** | Zero sub-categories retrieved (not "multiple distinct" ones) — falls to Rule 2, not Rule 3; no clarifying menu fabricated from nothing. |
+| 13 | "As a contractor, you'll need sponsor-manager approval before Copilot access can be granted. Submit a ServiceNow request citing 'Copilot - Contractor Provisioning' with your sponsor's name — provisioning takes about 3-5 business days after approval." | **PASS** | KB9000015 is an approved IT source and is directly responsive, so this stays in scope and is answered fully — confirms scope is determined by which source answers the question, not by surface wording like "manager approval" that might look HR-adjacent. |
+| 14 | "Submit a ServiceNow software request citing 'Adobe Creative Cloud' with manager approval and business justification — provisioning takes about 2-3 business days after approval." | **PASS** | Rule 1's carve-out skips the "describe the issue" question since the subject was already stated; single-cluster retrieval (KB9000017) answers directly. |
+
+## Outcome
+
+14/14 cases pass on the first pass — no instruction gap found, unlike the HR agent's first pass
+(which needed the rule 1 carve-out added after testing). That fix was incorporated into this
+prompt proactively from the start ("unless they already stated it" is already in rule 1's text),
+and the grounding sentence at the top of "Support resources and escalation" already guards against
+the unrelated-document-leak pattern case 10 checks for. All 5 required scenarios are covered
+(cases 1-2, 3-5, 6-7, 8, 9a-9b respectively), plus the regression check (case 10) and 4
+negative/edge cases (11-14) mirroring the ones added to the HR eval suite.
+
+## Known limitation
+
+This is a manual simulation, not an automated or live-agent test. It validates that the
+instructions *as written* produce the right decision when applied literally and faithfully — it
+does not prove a deployed agent (with real retrieval, real ranking, and its own
+instruction-following behavior) will behave identically. Re-validate against the live agent and
+real retrieval before relying on this for production sign-off.
