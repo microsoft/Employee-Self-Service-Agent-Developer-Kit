@@ -93,6 +93,84 @@ def _env004_workday_configured(runner) -> bool:
 
 
 def _env004_grs_commit_pin_result(runner) -> CheckResult:
+    """Judge each configured agent against its own pin and realm, then fold."""
+    config = getattr(runner, "config", None) or {}
+    candidates = [
+        agent for agent in config.get("agents", []) or []
+        if isinstance(agent, dict)
+    ]
+    single = config.get("agent")
+    if isinstance(single, dict):
+        candidates.append(single)
+    # Canonical records precede the compatibility copy. A stale copy of the
+    # same logical subject must not add another pin, even when its botId changed.
+    agents: list[dict] = []
+    known_slugs: set[str] = set()
+    known_ids: set[str] = set()
+    for agent in candidates:
+        raw_slug = agent.get("slug")
+        slug = raw_slug.strip() if isinstance(raw_slug, str) else ""
+        bot_ids = agent_bot_ids({"agent": agent})
+        bot_id = bot_ids[0].casefold() if bot_ids else ""
+        if (slug and slug in known_slugs) or (bot_id and bot_id in known_ids):
+            continue
+        agents.append(agent)
+        if slug:
+            known_slugs.add(slug)
+        if bot_id:
+            known_ids.add(bot_id)
+
+    results: list[CheckResult] = []
+    details: list[str] = []
+    for agent in agents or [{}]:
+        scoped_config = {**config, "agent": agent, "agents": []}
+        result = _env004_grs_commit_pin_for_agent(
+            scoped_config, getattr(runner, "agentbuilder", None)
+        )
+        expected = _env004_pin_value(scoped_config, _ENV004_GRS_EXPECTED_COMMIT_KEYS)
+        if (
+            result.status == Status.SKIPPED.value
+            and expected is not None
+            and expected != ""
+            and not agent_bot_ids(scoped_config)
+        ):
+            result.status = Status.WARNING.value
+        results.append(result)
+        subject = agent.get("botId") or agent.get("slug") or "unidentified agent"
+        details.append(f"{subject}: {result.status}: {result.result}")
+
+    if len(results) == 1:
+        return results[0]
+    status = next(
+        candidate for candidate in (
+            Status.FAILED.value, Status.WARNING.value,
+            Status.PASSED.value, Status.SKIPPED.value,
+        )
+        if any(result.status == candidate for result in results)
+    )
+    return CheckResult(
+        roles=[Role.ESS_MAKER.value],
+        checkpoint_id="ENV-004-GRS", category="Environment",
+        priority=Priority.HIGH.value, status=status,
+        description=_ENV004_GRS_DESCRIPTION,
+        result="\n".join(details),
+        remediation="" if status == Status.PASSED.value else "\n".join(dict.fromkeys(
+            result.remediation for result in results if result.remediation
+        )),
+    )
+
+
+def _env004_pin_value(config: dict, keys: tuple[str, ...]) -> object:
+    """Resolve only this subject's settings; explicit falsy values are present."""
+    for source in (config["agent"], config):
+        for key in keys:
+            value = source.get(key)
+            if value is not None:
+                return value.strip() if isinstance(value, str) else value
+    return None
+
+
+def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
     """Validate the minimalBots ALM commit pin (ENV-004-GRS).
 
     Opt-in component-layer check: verifies the deployed Declarative Agent's ALM
@@ -102,18 +180,19 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
     configured (the pin is inert until an operator records the intended release
     commit), so this never blocks a run that does not use pinning.
     """
-    config = getattr(runner, "config", None) or {}
-    expected_commit = _env004_config_value(
+    expected_commit = _env004_pin_value(
         config, _ENV004_GRS_EXPECTED_COMMIT_KEYS
     )
-    realm_raw = (
-        _env004_config_value(config, _ENV004_GRS_REALM_KEYS)
-        or _ENV004_GRS_DEFAULT_REALM
-    )
-    # 0 (Dev) is a valid realm and falsy, so test membership explicitly.
-    realm = _ENV004_GRS_REALMS.get(realm_raw.lower())
+    realm_raw = _env004_pin_value(config, _ENV004_GRS_REALM_KEYS)
+    if realm_raw is None:
+        realm_raw = _ENV004_GRS_DEFAULT_REALM
+    realm = None
+    if isinstance(realm_raw, str):
+        realm = _ENV004_GRS_REALMS.get(realm_raw.lower())
+    elif type(realm_raw) is int and realm_raw in _ENV004_REALM_DISPLAY:
+        realm = realm_raw
 
-    if not expected_commit:
+    if expected_commit is None or expected_commit == "":
         return CheckResult(
             roles=[Role.ESS_MAKER.value],
             checkpoint_id="ENV-004-GRS",
@@ -128,7 +207,20 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
             remediation=(
                 "Record the expected ESS solution commit SHA in "
                 ".local/config.json using expectedGrsCommitSha (top-level or on "
-                "the active agent), then re-run FlightCheck."
+                "the specific agent), then re-run FlightCheck."
+            ),
+        )
+
+    if not isinstance(expected_commit, str):
+        return CheckResult(
+            roles=[Role.ESS_MAKER.value],
+            checkpoint_id="ENV-004-GRS", category="Environment",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_ENV004_GRS_DESCRIPTION,
+            result="Configured GRS commit SHA must be a string.",
+            remediation=(
+                "Set expectedGrsCommitSha on the specific agent to the intended "
+                "release commit, or an empty string to leave its pin unjudged."
             ),
         )
 
@@ -151,7 +243,6 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
         )
 
     realm_name = _ENV004_REALM_DISPLAY[realm]
-    client = getattr(runner, "agentbuilder", None)
     bot_ids = agent_bot_ids(config)
     if client is None or not bot_ids:
         return CheckResult(
