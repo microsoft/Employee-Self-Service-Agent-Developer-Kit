@@ -448,10 +448,11 @@ def get_flow_token(env_url):
     return result["access_token"]
 
 
-def query_all(env_url, token, entity_set, select, filter_expr=None):
+def query_all(env_url, token, entity_set, select, filter_expr=None, *, strict_collection=False):
     """Query a Dataverse table with automatic @odata.nextLink pagination.
 
-    Returns all records across all pages.
+    Returns all records across all pages. With strict_collection, malformed
+    collection responses raise ValueError rather than implying absence.
     """
     _validate_https_url(env_url)
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
@@ -474,6 +475,10 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
             _emit_api_call(entity_set, "read", _start, status=resp.status_code)
         raise_api_error(resp, resource_name=entity_set, operation="read")
         data = resp.json()
+        if strict_collection and (
+            not isinstance(data, dict) or not isinstance(data.get("value"), list)
+        ):
+            raise ValueError(f"{entity_set} returned an invalid collection.")
         records = data.get("value", [])
         all_records.extend(records)
         url = data.get("@odata.nextLink")

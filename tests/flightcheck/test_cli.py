@@ -423,12 +423,12 @@ class TestAgentBuilderNativeScopes:
         [
             (
                 "full",
-                ["Native Agent", "Environment", "Local Files", "Publishing"],
+                ["Native Agent", "Environment", "Connections", "Local Files", "Publishing"],
                 True,
                 True,
                 None,
             ),
-            ("environment", ["Environment"], False, True, None),
+            ("environment", ["Environment", "Connections"], True, True, None),
             (
                 "servicenow",
                 ["Native Agent"],
@@ -506,6 +506,8 @@ class TestAgentBuilderNativeScopes:
 
         def _authenticate_native(ring, **kwargs):
             auth_calls.append((ring, kwargs))
+            if kwargs.get("return_account_identity"):
+                return "native-token", "tenant-id", "maker@example.com"
             return "native-token", "tenant-id"
 
         created_agent_clients = []
@@ -550,14 +552,20 @@ class TestAgentBuilderNativeScopes:
             cli.main()
 
         assert exc.value.code == 0
+        expected_auth = {"include_connectivity": True, "allow_write": False}
+        if scope == "full":
+            expected_auth.update(return_account_identity=True, emit_account_identity=False)
+        elif scope == "environment":
+            expected_auth = {
+                "include_connectivity": True, "return_account_identity": True,
+                "emit_account_identity": False, "account_hint": None,
+                "cache_path": cli.DEFAULT_TOKEN_CACHE,
+            }
         assert auth_calls == (
             [
                 (
                     "test",
-                    {
-                        "include_connectivity": True,
-                        "allow_write": False,
-                    },
+                    expected_auth,
                 )
             ]
             if expects_agent_clients
@@ -666,12 +674,14 @@ def hybrid_scope(tmp_path, monkeypatch):
     ))
     native_auth = Mock(return_value=("native-token", tenant_id, "maker@example.test"))
     native_client = Mock(return_value=object())
+    connectivity_client = Mock(return_value=object())
     monkeypatch.setattr("auth.authenticate", dv_auth)
     monkeypatch.setattr("auth.discover_tenant", lambda *_a: tenant_id)
     resolve_environment = Mock(return_value=environment_id)
     monkeypatch.setattr(cli, "derive_environment_id", resolve_environment)
     monkeypatch.setattr(cli, "authenticate_flightcheck", native_auth)
     monkeypatch.setattr(cli, "AgentBuilderClient", native_client)
+    monkeypatch.setattr(cli, "ConnectivityClient", connectivity_client)
     for name in (
         "GraphClient", "PPAdminClient", "PVAClient",
         "PowerPlatformClient", "AzureArmClient",
@@ -697,7 +707,8 @@ def hybrid_scope(tmp_path, monkeypatch):
 
     return SimpleNamespace(
         config=config, run=run, dv_auth=dv_auth, native_auth=native_auth,
-        native_client=native_client, tenant_id=tenant_id,
+        native_client=native_client, connectivity_client=connectivity_client,
+        tenant_id=tenant_id,
         resolve_environment=resolve_environment,
     )
 
@@ -715,9 +726,34 @@ def test_hybrid_scope_provisions_agentbuilder_alongside_dataverse(hybrid_scope, 
         cli.FULL_SCOPE if scope == "full" else cli.SCOPE_MAP[scope]
     )
     assert hybrid_scope.dv_auth.call_args.kwargs["return_account_identity"] is True
+    hybrid_scope.native_auth.assert_called_once()
     assert hybrid_scope.native_auth.call_args.kwargs["account_hint"] == "maker@example.test"
-    assert hybrid_scope.native_auth.call_args.kwargs["include_connectivity"] is False
+    assert hybrid_scope.native_auth.call_args.kwargs["include_connectivity"] is (
+        scope in {"full", "environment"}
+    )
     assert hybrid_scope.native_auth.call_args.kwargs["allow_write"] is False
+
+
+@pytest.mark.parametrize("scope", ["full", "environment"])
+@pytest.mark.parametrize("api_version", [None, "2024-10-01"])
+def test_hybrid_connection_audit_reuses_verified_native_identity(
+    hybrid_scope, scope, api_version,
+):
+    hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
+    if api_version is not None:
+        hybrid_scope.config["agentBuilderApiVersion"] = api_version
+
+    assert hybrid_scope.run(scope) == 0
+
+    runner = _FakeRunner.last_instance
+    hybrid_scope.native_auth.assert_called_once()
+    assert runner.agentbuilder is hybrid_scope.native_client.return_value
+    assert runner.connectivity is hybrid_scope.connectivity_client.return_value
+    assert runner.connection_dependency_token.keywords["account_hint"] == "maker@example.test"
+    assert runner.connection_dependency_token.keywords["tenant_id"] == hybrid_scope.tenant_id
+    expected_version = cli.DEFAULT_API_VERSION if api_version is None else api_version
+    assert hybrid_scope.native_client.call_args.kwargs["api_version"] == expected_version
+    assert hybrid_scope.connectivity_client.call_args.kwargs["api_version"] == expected_version
 
 
 @pytest.mark.parametrize("scope", ["authentication", "prerequisites", "external"])
@@ -761,10 +797,14 @@ def test_hybrid_scope_rejects_mismatched_native_identity(hybrid_scope, mismatch,
     assert "ERROR:" in capsys.readouterr().out
 
 
-def test_hybrid_scope_auth_failure_is_reported_without_a_partial_client(hybrid_scope, capsys):
+@pytest.mark.parametrize("scope", ["full", "environment"])
+def test_hybrid_scope_auth_failure_is_reported_without_a_partial_client(hybrid_scope, capsys, scope):
+    hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
     hybrid_scope.native_auth.side_effect = RuntimeError("Native sign-in unavailable")
-    assert hybrid_scope.run() == 0
+    assert hybrid_scope.run(scope) == 0
     assert _FakeRunner.last_instance.agentbuilder is None
+    assert _FakeRunner.last_instance.connection_validation_error == "RuntimeError"
+    hybrid_scope.native_auth.assert_called_once()
     hybrid_scope.native_client.assert_not_called()
     assert "Native AgentBuilder APIs: WARNING" in capsys.readouterr().out
 

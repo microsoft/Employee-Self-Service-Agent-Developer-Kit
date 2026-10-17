@@ -31,6 +31,30 @@ require_validated_mock(pp)
 
 
 class TestAuthenticationScope:
+    def test_delegated_read_tokens_are_added_without_clearing_other_audiences(self):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+        assert not client.has_flow_token and not client.has_powerapps_token
+
+        client.set_read_tokens(flow_token="flow-read-token")
+        client.set_read_tokens(powerapps_token="powerapps-read-token")
+
+        assert client.has_flow_token and client.has_powerapps_token
+        assert client._flow_token == "flow-read-token"
+        assert client._token == "powerapps-read-token"
+
+    @pytest.mark.parametrize("value", ["", "   ", False, 0])
+    def test_invalid_delegated_token_is_rejected(self, value):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient("tenant")
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            client.set_read_tokens(flow_token=value)
+
+        assert not client.has_flow_token
+
     def test_bap_only_auth_skips_flow_token(
         self,
         monkeypatch: pytest.MonkeyPatch,
