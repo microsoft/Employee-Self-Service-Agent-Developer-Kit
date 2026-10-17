@@ -29,6 +29,12 @@ Canonicalize revision-pin subjects before reads: agents[] precedes the legacy
 agent copy, an already represented slug is not another subject, and bot IDs
 are deduplicated case-insensitively. Keep each canonical record's own settings.
 
+Scope connection verdicts to the references actually evaluated. Topic-reference
+evidence cannot establish flow-scoped sharing or end-to-end authentication.
+Coexisting package references are not proof of obsolete resources; require
+consumer and owner verification before recommending replacement or retirement.
+Pin evidence boundaries and non-destructive guidance in report-text tests.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
