@@ -11,6 +11,15 @@ in `tests/AGENTS.md`. They complement each other; you need both.
 
 ## Architecture overview
 
+Client-provisioning regressions must exercise CLI scope dispatch, not only
+checks with pre-injected clients. Cover native-only, hybrid (native plus
+Dataverse), and legacy configurations. Match native environment, tenant,
+and account to the selected Dataverse target; keep import probes opt-in.
+Independently map the Dataverse URL even when an environment ID is supplied.
+A missing admin mapping disables native clients, not independent checks;
+an override or Dataverse OrganizationId is never proof of that mapping.
+Keep `agentBuilderApiVersion` consistent across all provisioning paths.
+
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data
 available:
@@ -504,14 +513,16 @@ and do the per-tier verification.
     ISU checks applicable to a selected DA. Keep employee permission
     validation manual and retain connection, flow and runtime checks.
     Never infer the selected agent's type from Dataverse presence or a
-    sibling agent. A profile's compatibility-resolved validation context
-    can contain the first agent on file; that inferred slug is not an
-    explicit selection. Preserve CLI/configured selection when populating
-    the runner. Release-line `None` permits fallback; non-None values
+    sibling agent. Profile execution must reject an unselected agents list
+    before authentication or agent reads. Resolve CLI, activeAgent, or the
+    compatibility agent's slug and use that same identity for the validation
+    context and runner. Release-line `None` permits fallback; non-None values
     such as `""`, `False`, or `0` do not.
     An explicit Workday DA profile remains eligible when an agents list
     has no selected slug. Leave the selected record empty and retain
     workspace release-line validation; do not borrow a sibling's marker.
+    This applicability predicate is not permission to execute an unselected
+    agent profile.
 
     The Workday Runtime reference and the domain package's OAuthUser
     reference can coexist. Exactly one of each, with no legacy ISU or
