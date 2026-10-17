@@ -8,9 +8,8 @@ Intended consumers (this reader ships ahead of them; the wiring lands in the
 stacked DA re-point PRs, so nothing in this branch imports it yet):
   * ``DV-CONN-001`` (checks/workday_extension.py) -> the single active agent's
     Workday SOAP reference, via ``read_active_agent_connection_references``.
-  * ``ENV-004`` (checks/environment.py) -> every configured agent's references,
-    environment-wide and de-duped by logical name, via
-    ``read_all_agents_connection_references``.
+  * ``ENV-004`` now uses ``_connection_dependencies.py`` instead: active
+    target-scoped native and flow references, with agent-local identity.
   * The Workday shared-parameter checks (checks/workday.py) -> per-agent Workday
     ``sharedConnectionParameters`` via ``workday_shared_connection_parameters``.
 

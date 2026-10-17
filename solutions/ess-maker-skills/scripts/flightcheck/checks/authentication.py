@@ -16,7 +16,7 @@ from ._saml_utils import (
 )
 from ._workday_app_assignment import build_assignment_results, _workday_hints
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 
 def run_authentication_checks(runner) -> list[CheckResult]:

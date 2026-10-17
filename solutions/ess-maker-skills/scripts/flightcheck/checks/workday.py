@@ -51,8 +51,7 @@ from ._saml_utils import (
 from .connections import check_connector_connections, filter_connections_by_connector, get_connection_status
 
 from ..agent_scope import is_declarative_agent
-
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 # The 3 critical Dataverse environment variables for Workday
 ENV_VARS = {
@@ -248,8 +247,7 @@ CERT_EXPIRY_WARN_DAYS = 30
 # src/reference/ess-docs/integrations/workday.md (lines 77-104) which
 # is the vendored snapshot of this MS Learn page.
 _WORKDAY_SSO_DOC_LINK = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service/workday#task-1-create-the-x509-public-key"
+    f"{DOC_BASE}/workday#task-1-create-the-x509-public-key"
 )
 
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
@@ -758,10 +756,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results.extend(_check_connections(runner))
     results.extend(_check_connection_token_health(runner))
 
-    # WD-CONN-013 — Agent connection OBO parameter sharing. Verifies every
-    # connection the agent uses has "Allow permission to share parameters"
-    # enabled (read from the connectionreference config columns) so end users
-    # invoke the backing services without a first-use connection prompt.
+    # WD-CONN-013 covers topic-declared references, not flow-scoped references.
     results.extend(_check_workday_connection_obo_sharing(runner))
 
     # --- Flow Status ---
@@ -1640,12 +1635,13 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
 #   "Prompt on import / Skip" choice. The connection ``/permissions`` role
 #   assignments are a different, unrelated sharing surface.)
 #
-# Which references count as "the agent's connections":
-#   The selected agent's minimalBots components payload is authoritative. Its
+# Which references this checkpoint evaluates:
+#   The selected agent's minimalBots components payload declares topic refs. Its
 #   ``connectionReferenceChanges`` rows provide the exact logical names for
 #   that bot. The check joins those names to Dataverse rather than scanning for
 #   every agent-shaped reference in the environment, so sibling agents cannot
 #   satisfy or fail this checkpoint.
+#   Flow-scoped Workday references are absent from this payload and not covered.
 #
 # Data source: the same documented-tier Dataverse ``connectionreferences`` query
 # WD-PKG-001 already makes, with two extra columns
@@ -1662,14 +1658,12 @@ def _connection_label(ref: dict) -> str:
 
 
 def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
-    """WD-CONN-013 — every connection the agent uses has OBO parameter sharing
-    ("Allow permission to share parameters") enabled, so end users invoke the
-    backing services without a first-use connection prompt.
+    """WD-CONN-013 checks OBO sharing on selected-agent topic references.
 
     Scopes to the exact selected-agent references returned by the validated
     minimalBots components API and requires ``connectionparametersetconfig`` to
-    be populated on each. See the module comment for why this column / scoping
-    is correct.
+    be populated on each. Flow-scoped Workday references are not evaluated;
+    this is not an end-to-end authentication or first-use prompt test.
     """
     cp_id = "WD-CONN-013"
     desc = "Agent connection OBO parameter sharing"
@@ -1817,9 +1811,10 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=desc,
             result=(
-                f"All {len(agent_refs)} connection(s) the agent uses have OBO "
-                "parameter sharing enabled — end users invoke the backing "
-                "services without a first-use connection prompt."
+                f"All {len(agent_refs)} evaluated topic connection reference(s) "
+                "have OBO parameter sharing enabled: "
+                + ", ".join(sorted(_connection_label(r) for r in agent_refs))
+                + ". Flow-scoped Workday references are not evaluated."
             ),
             doc_link=doc_link,
         )]
@@ -1830,10 +1825,9 @@ def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.FAILED.value,
         description=desc,
         result=(
-            f"{len(unshared)} of {len(agent_refs)} connection(s) the agent uses "
-            f"do NOT have OBO parameter sharing enabled: {names}. End users will "
-            "be prompted to establish their own connection the first time the "
-            "agent uses the backing service."
+            f"{len(unshared)} of {len(agent_refs)} evaluated topic connection reference(s) "
+            f"do NOT have OBO parameter sharing enabled: {names}. "
+            "Flow-scoped Workday references are not evaluated."
         ),
         remediation=(
             f"In Copilot Studio, open {studio} → Settings → Connection Settings → "
@@ -1901,10 +1895,7 @@ def _simplified_install_skip(
                 "Workday path. This legacy ISU/RaaS check does not apply; "
                 "DA does not require an integration system user."
             ),
-            doc_link=(
-                "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
-                "employee-self-service/declarative-agent-workday"
-            ),
+            doc_link=f"{DOC_BASE}/declarative-agent-workday",
         )
 
     return CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
@@ -4496,10 +4487,7 @@ def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
 #   used by WD-WF-016 / WD-WF-017. Per the AGENTS.md "same endpoint =
 #   method + path" rule, no new cassette is required for this check.
 
-WD_SEC_003_DOC_LINK = (
-    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
-    "employee-self-service/workday"
-)
+WD_SEC_003_DOC_LINK = f"{DOC_BASE}/workday"
 
 # Faultstring substrings the probe matches against. Lowercased for
 # resilience to Workday version differences. Source: the customer
