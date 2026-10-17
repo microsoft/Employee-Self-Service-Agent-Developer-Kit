@@ -34,6 +34,10 @@ evidence cannot establish flow-scoped sharing or end-to-end authentication.
 Coexisting package references are not proof of obsolete resources; require
 consumer and owner verification before recommending replacement or retirement.
 Pin evidence boundaries and non-destructive guidance in report-text tests.
+Within one connection audit, read each environment-local invoked flow once,
+including failed reads, but preserve dependency and warning evidence for every
+agent that invokes it. Native and connectivity clients must use the same
+configured AgentBuilder API version.
 
 FlightCheck validates customer deployments by querying multiple APIs.
 Each API requires its own authentication and has different data

@@ -184,6 +184,22 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
 
+**Standalone connection validation without setup:**
+
+From this solution's directory, supply the exact Power Platform environment and agent:
+
+```powershell
+python scripts\flightcheck\cli.py --checkpoint ENV-004 --environment-id "<environment GUID>" --agent-id "<agent GUID>" --ring prod --no-open
+```
+
+No setup skill or `.local/config.json` is required. Repeat `--agent-id` to validate multiple agents in the same environment. These explicit targets ignore any local setup config, including its optional release-commit policy. Add `--preferred-username "<Microsoft work account>"` to select a cached account, or `--token-cache "<original native authentication cache path>"` to reuse an existing native cache without copying it. The default cache is the native AgentBuilder cache under the kit's `.local` directory.
+
+ENV-004 follows active topics to their direct connector references and invoked Power Automate flows, then checks only the logical references those flows require. Inactive topics and references belonging to unrelated applications are excluded. Missing or unbound required references, wrong connectors, and admin-confirmed missing physical connections fail. Incomplete reads warn, and a missing exact target blocks the checkpoint. Additional connections for the same connectors are advisory, not proof that those connections are unused.
+
+Native reads support the selected service ring. Flow administration and Dataverse environment discovery are currently verified only on the `prod` service ring; an affected dependency on another ring is reported as incomplete, never passed. The service ring is distinct from the agent's Dev/Test/Prod deployment realm. All calls are read-only. This checkpoint validates bindings and connection existence, not Workday credentials or business operations.
+
+`--scope environment` also accepts these standalone target flags. Other scope checks retain their own prerequisites. Configured runs without explicit agent IDs remain supported, including their existing optional release-commit comparison.
+
 **What it checks (41+ automated checks across 8 categories):**
 
 | Category | What's validated |
