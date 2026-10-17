@@ -126,9 +126,10 @@ class TestConnectionAuth:
         assert "entraIntegrated" in r.result
         assert "maker@contoso.com" in r.result
         assert "Microsoft Entra ID Integrated" in r.result
-        # Remediation names the exact auth type + the re-create path.
+        # Remediation names the auth type without unsafe delete-first advice.
         assert "Microsoft Entra ID Integrated" in r.remediation
-        assert "re-create" in r.remediation.lower()
+        assert "replacement connection" in r.remediation
+        assert "before retiring" in r.remediation
 
     def test_ref_present_but_connection_not_found_still_manual(self):
         runner = _Runner(
@@ -175,7 +176,8 @@ class TestConnectionAuth:
         assert "entraIntegrated" in r.result
         assert "maker@contoso.com" in r.result
 
-    def test_mixed_runtime_and_legacy_auth_refs_do_not_select_by_order(self):
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_coexisting_auth_refs_do_not_select_by_order_or_prescribe_removal(self, reverse):
         runner = _Runner(
             _workday_connection_refs=[
                 dv.connection_ref(
@@ -188,6 +190,8 @@ class TestConnectionAuth:
                 | {"connectionid": "runtime-conn"},
             ],
         )
+        if reverse:
+            runner._workday_connection_refs.reverse()
 
         r = _by_id(
             wx.run_workday_extension_checks(runner)
@@ -195,7 +199,14 @@ class TestConnectionAuth:
 
         assert r.status == Status.MANUAL.value
         assert "multiple Workday connection references" in r.result
-        assert "cannot determine which connection is active" in r.result
+        assert "does not establish that either reference is obsolete" in r.result
+        assert "new_sharedworkdaysoap_ff0df" in r.result
+        assert "msdyn_sharedworkdaysoap_workdayruntime" in r.result
+        assert "Show dependencies" in r.remediation
+        assert "each bound connection" in r.remediation
+        assert "Microsoft Entra ID Integrated" in r.remediation
+        assert "Remove the obsolete" not in r.result + r.remediation
+        assert "delete the connection" not in r.result + r.remediation
 
     def test_no_cached_ref_still_manual(self):
         runner = _Runner(_workday_connection_refs=[])
