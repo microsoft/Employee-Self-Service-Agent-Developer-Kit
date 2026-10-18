@@ -33,8 +33,8 @@ tested — would have avoided each real failure.
 | # | Simulated response | Verdict | Notes |
 |---|---|---|---|
 | 15a (turn 1) | "To make sure I guide you to the right steps, could you let me know which account or system you need to reset the password for? For example, is it your Windows login or SAP?" | **PASS** | 3 categories retrieved (Windows-known, Windows-locked, SAP) — clarifies first. |
-| 15b (turn 2) | "Do you know your current Windows password, or is your account locked or forgotten?" | **PREDICTED PASS** | Retrieval narrowed to "Windows password reset" still spans 2 distinct sub-categories (KB9000001 vs. KB9000002). Applying the Core principle and the Authoritative knowledge source bullet literally — both of which fire per retrieval event, not just once per conversation — this *should* trigger a second clarifying question. This directly addresses what the Gold Prompt missed in row 1. Marked "predicted" rather than a flat pass: it depends on the live model re-applying the rule on a second, narrower retrieval, which is exactly the kind of multi-step condition that didn't hold reliably in the Copilot Studio trigger-description testing earlier in this project — worth confirming against the live agent, not just this manual walkthrough. |
-| 16 | "Is this a sign-in/authentication error, or a certificate error message?" | **PREDICTED PASS** | 2 distinct sub-categories retrieved (KB9000004, KB9000005) — the rule as written should produce one clarifying question here, not the long combined script the Gold Prompt actually gave. Flagged "predicted" for the same reason as 15b: this is precisely the failure mode observed in production, so it's worth live re-verification rather than assuming the rule holds just because it reads correctly on paper. |
+| 15b (turn 2) | "Do you know your current Windows password, or is your account locked or forgotten?" | **PASS** (upgraded from PREDICTED PASS on 2026-10-18) | Re-checked against the consolidated "Clarifying questions" section, which now states this exact scenario as a worked example in its own text: "if a narrowed request still spans distinct sub-categories (e.g., after 'Windows' narrows a password reset, known-password vs. locked/forgotten may still both apply), ask again rather than guessing." This is no longer an inference from a general rule firing twice — it's now the literal example in the prompt. Still worth confirming against the live agent (text support isn't the same as observed model behavior, per the Copilot Studio trigger-description lesson earlier in this project), but the instruction-level gap that made this "predicted" is now closed. |
+| 16 | "Is this a sign-in/authentication error, or a certificate error message?" | **PREDICTED PASS** | 2 distinct sub-categories retrieved (KB9000004, KB9000005) — the rule, now stated once in the consolidated "Clarifying questions" section rather than split across two sections, should produce one clarifying question here, not the long combined script the Gold Prompt actually gave. Still flagged "predicted" rather than upgraded like 15b: this exact VPN scenario isn't one of the prompt's own worked examples (unlike the password case), so it still depends on the model generalizing the rule rather than following a literal example — worth live re-verification. |
 | 17 | "Are you trying to access P23 (Production - Americas) or P80 (Production - EMEA)?" | **PASS** | 2 distinct sub-categories (KB9000008, KB9000009) — clarifies, matching what the Gold Prompt failed to do in row 7. |
 | 18 | "Are you looking for self-paced training or a live session?" | **PASS** | 2 distinct sub-categories (KB9000012, KB9000013) — clarifies instead of describing both tracks, matching what the Gold Prompt failed to do in row 14 (confirmed by the transcript showing a combined answer). |
 | 19 | "I can help — which region are you in (Americas, EMEA, or APAC)? That determines the approved models and delivery timeline." | **PASS, with a caveat** | Only one article (KB9000018) is retrieved — there's no second competing article, so this isn't the "multiple distinct sub-categories" trigger the other cases rely on. The correct behavior here comes from a different source: KB9000018's own content instructs selecting a region as part of the catalog item, so the agent should surface that as part of answering, not withhold an answer pending a separate clarification turn. The *outcome* the tester wants (region gets asked) is still achieved, but through "answer faithfully from the one retrieved article" rather than through Rule 3's clustering logic — worth knowing these are different mechanisms producing the same visible behavior. |
@@ -74,3 +74,39 @@ instructions *as written* produce the right decision when applied literally and 
 does not prove a deployed agent (with real retrieval, real ranking, and its own
 instruction-following behavior) will behave identically. Re-validate against the live agent and
 real retrieval before relying on this for production sign-off.
+
+## Re-verification — 2026-10-18 clarify-first consolidation
+
+The prompt was edited again after this suite was first written (see
+`docs/plans/2026-10-18-dupont-it-prompt-clarify-consolidation-design.md`): "Conversational
+interaction style" and "Clarifying questions" were merged into one section, absorbing the
+retrieval-cluster bullet from "Authoritative knowledge source" and the generic-request template
+from "Answer format." Re-ran all 26 cases above against the new text.
+
+**Diff-based check against the design doc's "no requirement dropped" claim:** mostly holds, with
+two minor findings, neither of which changes any case's expected behavior:
+
+- Two of the five original "when to ask" criteria ("the request is generic or broad," "multiple
+  support paths could apply") are no longer stated as their own bullets — they're now implicitly
+  covered by the merged paragraph's retrieval-cluster trigger and the Core principle's "two or
+  more distinct sub-categories" language, rather than kept as independent, literal criteria. The
+  *effect* should be the same (both are subsumed by the broader trigger), but they are a looser
+  textual match to the original wording than "every criterion survives" implies.
+- The old "Clarifying questions" section had one fully worked example modeling the "briefly
+  reflect what you understood" lead-in and a "something else" catch-all in a complete sentence.
+  The merged section states both of those as rules but no longer demonstrates them together in a
+  worked example — the new examples list is terser (topic -> options only). Worth knowing that a
+  concrete worked example was traded for brevity, since this project's own findings elsewhere
+  (e.g., the Copilot Studio trigger-description testing) suggest concrete examples can matter more
+  for reliable model behavior than an abstractly-stated rule.
+
+**Case-level re-check:** only cases 15b and 16 changed in substance. 15b is upgraded from
+"predicted pass" to "pass" because the consolidated text now states that exact password
+known-vs-locked scenario as its own worked example, not just an inference from a general rule.
+Case 16 (VPN) stays "predicted pass" since no VPN-specific example exists in the prompt text —
+it still depends on the model generalizing the rule rather than following a literal example. All
+other 24 cases: verdicts unchanged: the grounding rule, the 5 escalation scenarios, the
+out-of-scope rule, and the regression check are all textually identical to before this edit
+(confirmed via `git diff` against commit bc500acb, which touched only the clarify-first
+sections).
+
