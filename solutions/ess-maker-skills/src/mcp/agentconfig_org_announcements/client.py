@@ -39,8 +39,7 @@ from _odata import (  # noqa: E402
     _require_odata_id,
     _validate_https_base_url,
 )
-from agent_discovery import AgentDiscoveryClient  # noqa: E402
-from base_client import AgentConfigApiError  # noqa: E402
+from base_client import AgentConfigApiError, AgentConfigBaseClient  # noqa: E402
 from validation import validate_bulletin_id, validate_title_id  # noqa: E402
 
 
@@ -293,7 +292,7 @@ def is_archived_item(config: dict[str, Any], now: datetime) -> bool:
     return end is not None and end < now
 
 
-class OrgAnnouncementsClient(AgentDiscoveryClient):
+class OrgAnnouncementsClient(AgentConfigBaseClient):
     """Async client for the tenant-and-agent-scoped ``EssBulletins`` routes.
 
     Inherits auth, the token decode, the httpx session, and the retrying

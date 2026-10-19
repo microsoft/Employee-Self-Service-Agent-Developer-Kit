@@ -76,10 +76,26 @@ agent's `titleId`**, not shared across agents. The current 100 limit and latest
 50 archive window apply per tenant-and-agent pair. There is no cross-agent or
 legacy tenant-only API fallback. Within the selected agent, `audience: []`
 applies no additional Security Group filtering, so the announcement reaches
-everyone who uses that agent. The title is resolved using `list_agent_configs`
-and `search_agents` on the `ess-org-announcements` provider. Discovery shares
-neutral Python code with the landing-page provider, but does not require its MCP
-process or initialize its configuration.
+everyone who uses that agent. An explicit or stored `titleId` is reused.
+Otherwise, `resolve_agent_title_id` on the `ess-org-announcements` provider
+uses the selected configured `botId` and environment with
+`AgentBuilderClient.fetch_components`, reading
+`bot.teamsAppInformation.microsoft365.titleId` and checking `bot.cdsBotId`.
+Older setup configs with only a Dataverse URL resolve its exact environment
+through Power Platform's user-scoped environment list. The skill persists the
+resolved title only to that agent's local entry and, when active, its mirror.
+There is no agent-name search fallback, synthesized ID, landing-page MCP
+dependency, or landing-page configuration creation.
+
+Component discovery uses a separate Power Platform resource token for the same
+authoring tenant and account, reusing the shared AgentConfiguration MSAL cache.
+It requests `CopilotStudio.MinimalBot.Read`; URL-only environment discovery
+separately requests the documented Power Platform `.default` scope. A missing
+Microsoft 365 registration title is an explicit `RegistrationRequired` error;
+sign-in, access, and API failures are not treated as empty discovery.
+The narrowly backported client retains its component API version
+`2022-03-01-preview` (environment listing uses `2024-10-01`); a title-bearing
+response captured at `2024-10-01` does not establish version equivalence.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`

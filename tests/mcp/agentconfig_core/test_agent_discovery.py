@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Shared deployed-agent discovery with separate feature-owned MCP entry points."""
+"""Landing-page discovery remains separate from announcement agent identity."""
 
 from __future__ import annotations
 
@@ -30,7 +30,6 @@ from base_client import AgentConfigApiError  # noqa: E402
 TENANT = "00000000-0000-0000-0000-000000001111"
 CLIENTS = [
     LANDING["client"].AgentConfigClient,
-    ANNOUNCEMENTS["client"].OrgAnnouncementsClient,
 ]
 
 
@@ -40,10 +39,20 @@ def token(monkeypatch):
     monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", f"header.{encoded}.signature")
 
 
-def test_both_features_inherit_the_same_discovery_implementation():
+def test_only_landing_page_uses_wevenova_agent_discovery():
     for client_type in CLIENTS:
         assert client_type.list_agent_configs is AgentDiscoveryClient.list_agent_configs
         assert client_type.search_agents is AgentDiscoveryClient.search_agents
+    announcement_client = ANNOUNCEMENTS["client"].OrgAnnouncementsClient
+    assert not issubclass(announcement_client, AgentDiscoveryClient)
+    assert not hasattr(announcement_client, "list_agent_configs")
+    assert not hasattr(announcement_client, "search_agents")
+
+    tools = {
+        tool.name for tool in asyncio.run(ANNOUNCEMENTS["server"].mcp.list_tools())
+    }
+    assert "resolve_agent_title_id" in tools
+    assert not tools.intersection({"list_agent_configs", "search_agents"})
 
 
 @pytest.mark.parametrize("client_type", CLIENTS)
@@ -107,8 +116,7 @@ def test_malformed_collections_do_not_become_empty_successes(token, client_type,
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("modules", [LANDING, ANNOUNCEMENTS])
-def test_feature_owned_tools_delegate_without_initializing_configuration(monkeypatch, modules):
+def test_landing_page_tools_delegate_without_initializing_configuration(monkeypatch):
     calls = []
 
     class DiscoveryOnly:
@@ -120,14 +128,8 @@ def test_feature_owned_tools_delegate_without_initializing_configuration(monkeyp
             calls.append(("search", query))
             return [{"titleId": "deployed-title"}]
 
-    async def get_async_client():
-        return DiscoveryOnly()
-
-    server = modules["server"]
-    monkeypatch.setattr(
-        server, "get_client",
-        get_async_client if modules is ANNOUNCEMENTS else lambda: DiscoveryOnly(),
-    )
+    server = LANDING["server"]
+    monkeypatch.setattr(server, "get_client", lambda: DiscoveryOnly())
 
     async def run():
         assert json.loads(await server.list_agent_configs()) == [{"titleId": "deployed-title"}]
@@ -135,12 +137,9 @@ def test_feature_owned_tools_delegate_without_initializing_configuration(monkeyp
         tools = {tool.name: tool for tool in await server.mcp.list_tools()}
         for name, properties in [("list_agent_configs", set()), ("search_agents", {"searchString"})]:
             assert set(tools[name].inputSchema["properties"]) == properties
-            if modules is ANNOUNCEMENTS:
-                assert tools[name].annotations.readOnlyHint is True
-            else:
-                # Preserve the sibling's existing tool metadata as well as its
-                # wire arguments; request-level tests establish read-only behavior.
-                assert tools[name].annotations is None
+            # Preserve landing-page tool metadata as well as wire arguments;
+            # request-level tests establish read-only behavior.
+            assert tools[name].annotations is None
             assert not (tools[name].meta or {}).get("ui", {}).get("resourceUri")
 
     asyncio.run(run())

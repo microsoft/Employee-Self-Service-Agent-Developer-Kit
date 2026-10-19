@@ -156,10 +156,9 @@ def test_the_endpoint_dimension_is_the_tool_name_not_a_url(emitted) -> None:
 @pytest.mark.parametrize(
     "operation",
     [
-        "list_agent_configs",
+        "resolve_agent_title_id",
         "open_org_announcements",
         "save_bulletin",
-        "search_agents",
         "transition_bulletin",
         "duplicate_bulletin",
         "search_audience_groups",
@@ -203,6 +202,7 @@ def test_an_unknown_error_source_is_bucketed(emitted) -> None:
     [
         ("AuthenticationRequired", "AuthenticationRequired"),
         ("CommittedRefreshFailed", "CommittedRefreshFailed"),
+        ("RegistrationRequired", "RegistrationRequired"),
         ("", ""),
         # A message masquerading as a code is replaced, not truncated: a
         # truncated message is still content.
@@ -318,12 +318,6 @@ class _FakeClient:
     def __init__(self, *, save_error: Exception | None = None) -> None:
         self.save_error = save_error
 
-    async def list_agent_configs(self) -> list[dict]:
-        return [{"titleId": TITLE_ID, "displayName": "Secret agent"}]
-
-    async def search_agents(self, search_string: str) -> list[dict]:
-        return [{"titleId": TITLE_ID, "displayName": "Secret agent"}]
-
     async def list_bulletins(self, title_id: str) -> list[dict]:
         return [_config()]
 
@@ -376,8 +370,7 @@ def _install_fakes(monkeypatch, *, client=None) -> None:
 
 def _call(tool: str, arguments: dict) -> dict:
     if tool not in {
-        "list_agent_configs",
-        "search_agents",
+        "resolve_agent_title_id",
         "search_audience_groups",
     }:
         arguments = {"titleId": TITLE_ID, **arguments}
@@ -492,23 +485,27 @@ def test_search_telemetry_never_carries_the_query(monkeypatch, emitted) -> None:
         assert SECRET_TITLE not in _flatten(event)
 
 
-@pytest.mark.parametrize(
-    ("tool", "arguments"),
-    [
-        ("list_agent_configs", {}),
-        ("search_agents", {"searchString": SECRET_TITLE}),
-    ],
-)
 def test_discovery_telemetry_records_success_without_input(
-    monkeypatch, emitted, tool, arguments
+    monkeypatch, emitted
 ) -> None:
     _install_fakes(monkeypatch)
+    monkeypatch.setattr(org_server, "load_configured_target", lambda bot_id: object())
+    monkeypatch.setattr(
+        org_server, "resolve_configured_agent_title",
+        lambda target, tenant_id, object_id: {
+            "botId": OBJECT_ID,
+            "environmentId": TENANT_ID,
+            "titleId": TITLE_ID,
+        },
+    )
 
-    _call(tool, arguments)
+    _call("resolve_agent_title_id", {"botId": OBJECT_ID})
 
-    assert emitted[-1]["api_endpoint"] == tool
+    assert emitted[-1]["api_endpoint"] == "resolve_agent_title_id"
     assert emitted[-1]["outcome"] == "success"
     assert SECRET_TITLE not in _flatten(emitted[-1])
+    assert OBJECT_ID not in _flatten(emitted[-1])
+    assert TITLE_ID not in _flatten(emitted[-1])
 
 
 def test_a_transition_emits_no_identifier(monkeypatch, emitted) -> None:

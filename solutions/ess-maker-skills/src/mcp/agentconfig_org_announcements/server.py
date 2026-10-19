@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-import json
 import logging
 import os
 import time
@@ -54,6 +53,11 @@ from client import (
     is_deleted_item,
 )
 from base_client import LocalCredentialError
+from agent_title import (
+    AgentTitleResolutionError,
+    load_configured_target,
+    resolve_configured_agent_title,
+)
 from drafts import (
     AnnouncementEditorDraft,
     AudienceGroup,
@@ -169,7 +173,7 @@ _MODEL_VISIBLE_BACKEND_MESSAGES = {
     "ServiceError": "The Org Announcements service could not complete the request.",
 }
 _BACKEND_DIAGNOSTIC_CODES = frozenset(
-    {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed"}
+    {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed", "RegistrationRequired"}
 )
 
 # Closed authored-content projection accepted by WeveNova's EssBulletinContent
@@ -914,7 +918,11 @@ async def _discovery_tool_error(
     started: float,
     client: Optional[OrgAnnouncementsClient],
 ) -> ToolError:
-    failure = _model_visible_failure(await _failure_from(error, client))
+    failure = (
+        _FailureResult(error.code, str(error), source=error.source)
+        if isinstance(error, AgentTitleResolutionError)
+        else _model_visible_failure(await _failure_from(error, client))
+    )
     diagnostic_code = _diagnostic_code(failure)
     _LOGGER.warning("%s failed: %s", operation, diagnostic_code)
     record_operation(
@@ -924,7 +932,7 @@ async def _discovery_tool_error(
         error_code=diagnostic_code,
         error_source=failure.source,
     )
-    return ToolError(failure.message)
+    return ToolError(f"{failure.code}: {failure.message}")
 
 
 @mcp.resource(
@@ -940,47 +948,40 @@ def org_announcements_widget() -> str:
 
 
 @mcp.tool(
+    meta=_shared_tool_meta(),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def list_agent_configs() -> str:
-    """List configured deployed ESS agents; never initialize configuration."""
+async def resolve_agent_title_id(botId: str) -> dict[str, str]:
+    """Resolve a configured bot's Microsoft 365 titleId from its components.
+
+    Pass the selected local agent's botId, not a name or a titleId. The server
+    binds its environment from .local/config.json and uses the current authoring
+    tenant/account. Missing registration and API/auth failures are errors.
+    This read-only tool does not persist configuration or initialize a landing page.
+    """
     started = time.monotonic()
     client = None
     try:
+        target = await asyncio.to_thread(load_configured_target, botId)
         async with get_client_lease() as client:
-            result = await client.list_agent_configs()
-    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
+            result = await asyncio.to_thread(
+                resolve_configured_agent_title,
+                target,
+                client.tenant_id,
+                client.object_id,
+            )
+    except (
+        AgentTitleResolutionError, _FailureResult, AgentConfigApiError, httpx.RequestError
+    ) as error:
         raise await _discovery_tool_error(
-            "list_agent_configs", error, started, client
+            "resolve_agent_title_id", error, started, client
         ) from None
     record_operation(
-        "list_agent_configs",
+        "resolve_agent_title_id",
         outcome="success",
         latency_ms=_elapsed_ms(started),
     )
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool(
-    annotations=_READ_ONLY_ANNOTATIONS,
-)
-async def search_agents(searchString: str) -> str:
-    """Find deployed ESS agents by name to resolve their titleId."""
-    started = time.monotonic()
-    client = None
-    try:
-        async with get_client_lease() as client:
-            result = await client.search_agents(searchString)
-    except (_FailureResult, AgentConfigApiError, httpx.RequestError) as error:
-        raise await _discovery_tool_error(
-            "search_agents", error, started, client
-        ) from None
-    record_operation(
-        "search_agents",
-        outcome="success",
-        latency_ms=_elapsed_ms(started),
-    )
-    return json.dumps(result, indent=2)
+    return result
 
 
 @mcp.tool(

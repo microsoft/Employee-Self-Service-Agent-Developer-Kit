@@ -105,16 +105,26 @@ use announcement content to decide which agent owns it.
 2. Use the maker's explicit `titleId`, otherwise the selected entry's stored
    `titleId`. A verified target can be reused for this conversation; do not
    force `get_agent_config` before each opener.
-3. If the title is missing, use this provider's read-only discovery tools:
-   `list_agent_configs`, then `search_agents` with a distinctive agent-name
-   substring when the list has no unambiguous match. These discover deployed,
-   tenant-visible agents; a `botId` is never a substitute for `titleId`.
-   Both tools belong to `ess-org-announcements`. No landing-page MCP process
-   is needed; follow this skill's availability check if they are unavailable.
-4. Ask the maker to choose among ambiguous candidates. If no candidate matches,
-   stop and ask them to confirm the agent name and have the published agent
-   approved and deployed to the organization. Never fall back to tenant-wide
-   announcements.
+3. If the title is missing, call the read-only `resolve_agent_title_id` tool on
+   `ess-org-announcements` with `{"botId": "<selected configured botId>"}`.
+   The server reads the selected entry's environment from `.local/config.json`
+   (falling back to workspace environment settings only when the entry has none).
+   For older setup configs with only a Dataverse URL, it resolves that exact
+   environment through Power Platform's user-scoped environment listing.
+   It then calls `AgentBuilderClient.fetch_components(botId)` and reads only
+   `bot.teamsAppInformation.microsoft365.titleId`, after checking `bot.cdsBotId`
+   matches the selected bot. Use the returned `titleId`, never the input `botId`
+   as a substitute. No landing-page MCP process is needed; follow this skill's
+   availability check if the tool is unavailable.
+4. Resolve any ambiguity among local configured agents before calling the tool.
+   If the selected entry has no `botId` or environment, stop and have the maker
+   complete `/setup` for that agent. Missing Microsoft 365 registration metadata
+   is an explicit `RegistrationRequired` error: have the maker publish/register
+   that agent for Microsoft 365, then retry. Authentication, authorization,
+   network, and API errors are failures, not empty discovery; report the tool's
+   error and stop. Do not search by agent name, fall back to tenant-wide
+   announcements, or synthesize a title as `T_{botId}`. Never substitute a
+   Dataverse bot ID, Teams app ID, Microsoft 365 app ID, or share link.
 5. Persist a discovered, verified `titleId` using the existing local-agent
    convention: reread the complete config, find the selected `agents` entry by
    `botId` then `slug` (name only if unambiguous), and change only its `titleId`.
@@ -122,12 +132,12 @@ use announcement content to decide which agent owns it.
    `agents` first. Also update `agent.titleId` when the target matches
    `activeAgent` or the active object's botId/slug. Preserve all other fields
    and agents. Reread to verify both copies before calling another tool.
-   With no matching local entry, use the discovered title for this request
-   without fabricating a partial local agent.
+   With no matching local entry for an explicitly supplied title, use that
+   explicit title for this request without fabricating a partial local agent.
 
 Discovery does **not** initialize landing-page configuration. Never call
 `create_agent_config` or `update_agent_config` as part of this flow, including
-when a target was found only through search. No landing-page existence check
+when a target was resolved through components. No landing-page existence check
 or creation is needed to open announcements.
 
 ## Hard rules
@@ -385,10 +395,10 @@ The server never retries against the old tenant-only endpoint.
 Ordinary announcement-tool failures return coded structured errors. Match these
 on their stable `code`, never on message text.
 
-The read-only agent-discovery tools `list_agent_configs` and `search_agents`
-preserve the sibling provider's wire contract: their failures may be SDK tool
-errors without a coded structured envelope. Malformed opener arguments also
-produce SDK tool errors before any widget payload or retry state is produced.
+The read-only `resolve_agent_title_id` tool reports failures as SDK tool errors
+with a local diagnostic prefix, not a coded structured envelope. Report the
+error as returned and stop; do not try another discovery API. Malformed opener
+arguments also produce SDK tool errors before any widget payload or retry state is produced.
 Do not expect a structured code from these SDK errors or infer a code or
 retryability from arbitrary message text. Stop and explain the failure; never
 treat failed discovery as an empty result. Correct malformed opener arguments
@@ -407,6 +417,7 @@ before calling again.
 | `SearchUnavailable` | Audience search is temporarily unavailable. Offer to open the editor so they can search there. |
 | `AudienceMetadataUnavailable` | Group names could not be loaded. Note that `Directory.Read.All` needs tenant consent and can be blocked by Conditional Access, then offer to retry. |
 | `InvalidRequest` | Something in the request did not fit the contract. Explain what to change; do not retry the same call. |
+| `RegistrationRequired` | The selected agent has no Microsoft 365 registration titleId. Have the maker publish/register that agent for Microsoft 365, then retry discovery. Never synthesize an identifier. |
 | Any backend validation code | Show the backend's own message. Codes such as `AudienceRequired`, `AudienceGroupInvalid`, and `BulletinLimitExceeded` are the authoritative explanation. |
 
 A `retryable` value of `false` means do not retry. Never infer retryability from
