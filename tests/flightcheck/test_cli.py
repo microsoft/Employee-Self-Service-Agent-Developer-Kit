@@ -412,6 +412,7 @@ class TestAgentBuilderLocalScope:
 
 
 class TestAgentBuilderNativeScopes:
+    @pytest.mark.parametrize("api_version", [None, "2099-01-01", ""])
     @pytest.mark.parametrize(
         (
             "scope",
@@ -449,6 +450,7 @@ class TestAgentBuilderNativeScopes:
     def test_native_no_dataverse_scope_uses_only_native_clients(
         self,
         scope: str,
+        api_version: str | None,
         expected_categories: list[str],
         expects_agent_clients: bool,
         expects_capacity_client: bool,
@@ -469,6 +471,8 @@ class TestAgentBuilderNativeScopes:
             },
             "activeAgent": "mock-agent",
         }
+        if api_version is not None:
+            config["agentBuilderApiVersion"] = api_version
         if expects_agent_clients:
             config["powerPlatformApiEndpoint"] = (
                 "https://0000000000004000800000000000111."
@@ -574,6 +578,14 @@ class TestAgentBuilderNativeScopes:
         assert bool(created_agent_clients) is expects_agent_clients
         assert bool(created_connectivity_clients) is expects_agent_clients
         assert bool(created_capacity_clients) is expects_capacity_client
+        if expects_agent_clients:
+            expected_version = cli.DEFAULT_API_VERSION if api_version is None else api_version
+            assert [kwargs["api_version"] for _, kwargs in created_agent_clients] == [
+                expected_version
+            ]
+            assert [kwargs["api_version"] for _, kwargs in created_connectivity_clients] == [
+                expected_version
+            ]
         if expects_capacity_client:
             assert created_capacity_clients[0][1] == {"ring": "test"}
         runner = _FakeRunner.last_instance
@@ -735,7 +747,7 @@ def test_hybrid_scope_provisions_agentbuilder_alongside_dataverse(hybrid_scope, 
 
 
 @pytest.mark.parametrize("scope", ["full", "environment"])
-@pytest.mark.parametrize("api_version", [None, "2024-10-01"])
+@pytest.mark.parametrize("api_version", [None, "2099-01-01"])
 def test_hybrid_connection_audit_reuses_verified_native_identity(
     hybrid_scope, scope, api_version,
 ):
