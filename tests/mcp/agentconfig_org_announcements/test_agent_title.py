@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import msal
 import requests
 from mcp.server.fastmcp.exceptions import ToolError
 from portalocker.exceptions import LockException
@@ -27,6 +28,9 @@ from _mcp_modules import load_org_announcements_modules  # noqa: E402
 MODULES = load_org_announcements_modules()
 agent_title = MODULES["agent_title"]
 server = MODULES["server"]
+
+import base_client  # noqa: E402
+
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 BOT_ID = "aaaaaaaa-0000-4000-8000-000000004444"
@@ -53,13 +57,17 @@ def config(monkeypatch, tmp_path):
         "setup": "complete",
         "configVersion": 1,
         "activeAgent": "other",
-        "agent": {"botId": OTHER_BOT_ID, "slug": "other", "titleId": "other-title"},
+        "agent": {
+            "botId": OTHER_BOT_ID, "slug": "other", "titleId": "other-title",
+            "dataverseEndpoint": OTHER_DATAVERSE_URL,
+        },
         "agents": [
             {"botId": OTHER_BOT_ID, "slug": "other", "name": "Same name",
-             "titleId": "other-title"},
-            {"botId": BOT_ID, "slug": "selected", "name": "Same name"},
+             "titleId": "other-title", "dataverseEndpoint": OTHER_DATAVERSE_URL},
+            {"botId": BOT_ID, "slug": "selected", "name": "Same name",
+             "dataverseEndpoint": DATAVERSE_URL},
         ],
-        "dataverseEndpoint": DATAVERSE_URL,
+        "dataverseEndpoint": OTHER_DATAVERSE_URL,
         "unrelated": {"preserved": True},
     }
 
@@ -150,7 +158,7 @@ def msal_auth(monkeypatch, api):
 
     class App:
         def __init__(self, client_id, *, authority, token_cache):
-            assert client_id == agent_title.DATAVERSE_CLIENT_ID
+            assert client_id == base_client._CLIENT_ID
             assert authority == f"https://login.microsoftonline.com/{TENANT_ID}"
             assert token_cache is cache
 
@@ -167,11 +175,11 @@ def msal_auth(monkeypatch, api):
         return account
 
     def shared_cache(path):
-        assert Path(path) == agent_title.DATAVERSE_TOKEN_CACHE_PATH
+        assert Path(path) == Path(base_client._TOKEN_CACHE_PATH)
         return cache
 
-    monkeypatch.setattr(agent_title.msal, "PublicClientApplication", App)
-    monkeypatch.setattr(agent_title, "create_token_cache", shared_cache)
+    monkeypatch.setattr(msal, "PublicClientApplication", App)
+    monkeypatch.setattr(base_client, "create_token_cache", shared_cache)
     monkeypatch.setattr(agent_title, "account_for_identity", matching_account)
     return App, calls, account
 
@@ -182,6 +190,10 @@ def _call(bot_id=BOT_ID):
 
     result = asyncio.run(run())
     return result[1] if isinstance(result, tuple) else result.structuredContent
+
+
+def test_dataverse_auth_uses_the_shared_authoring_msal_factory():
+    assert agent_title._create_msal_app is base_client._create_msal_app
 
 
 def test_mcp_reads_exact_non_active_bot_without_name_search_or_writes(
@@ -209,6 +221,9 @@ def test_url_only_setup_uses_the_configured_endpoint_without_environment_invento
     config, authoring_identity, msal_auth, api, endpoint
 ):
     value, write = config
+    value["agents"][1].pop("dataverseEndpoint")
+    value["agent"] = dict(value["agents"][1])
+    value["activeAgent"] = "selected"
     value["dataverseEndpoint"] = endpoint
     write()
     api.endpoint = endpoint.rstrip("/")
@@ -240,7 +255,10 @@ def test_separate_environment_without_its_own_dataverse_endpoint_cannot_inherit(
     config, monkeypatch, field, value
 ):
     cfg, write = config
+    cfg["agents"][1].pop("dataverseEndpoint")
     cfg["agents"][1][field] = value
+    cfg["agent"] = dict(cfg["agents"][1])
+    cfg["activeAgent"] = "selected"
     write()
     monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
 
@@ -251,12 +269,81 @@ def test_separate_environment_without_its_own_dataverse_endpoint_cannot_inherit(
 def test_legacy_active_agent_only_config_is_supported(config):
     value, write = config
     value["agent"] = value.pop("agents")[1]
+    value["agent"].pop("dataverseEndpoint")
     value["activeAgent"] = "selected"
+    value["dataverseEndpoint"] = DATAVERSE_URL
     write()
 
     target = agent_title.load_configured_target(BOT_ID)
     assert target.bot_id == BOT_ID
     assert target.dataverse_endpoint == DATAVERSE_URL
+
+
+def test_non_active_legacy_agent_cannot_use_the_active_agents_workspace_endpoint(
+    config, monkeypatch
+):
+    value, write = config
+    value["agents"][1].pop("dataverseEndpoint")
+    write()
+    monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
+
+    with pytest.raises(ToolError, match="no recorded Dataverse endpoint.*ambiguous"):
+        _call()
+
+
+@pytest.mark.parametrize("variant", ["slug-only", "single-agent"])
+def test_unambiguous_legacy_active_binding_can_use_workspace_endpoint(config, variant):
+    value, write = config
+    value["agents"][1].pop("dataverseEndpoint")
+    value.pop("agent")
+    value["dataverseEndpoint"] = DATAVERSE_URL
+    if variant == "slug-only":
+        value["activeAgent"] = "selected"
+    else:
+        value.pop("activeAgent")
+        value["agents"] = [value["agents"][1]]
+    write()
+
+    assert agent_title.load_configured_target(BOT_ID).dataverse_endpoint == DATAVERSE_URL
+
+
+def test_conflicting_legacy_active_markers_are_not_a_binding(config):
+    value, write = config
+    value["agents"][1].pop("dataverseEndpoint")
+    value["agent"] = dict(value["agents"][1])
+    write()
+
+    with pytest.raises(agent_title.AgentTitleResolutionError, match="ambiguous"):
+        agent_title.load_configured_target(BOT_ID)
+
+
+def test_non_active_agent_resolves_its_original_environment_after_consecutive_setup(
+    tmp_path, monkeypatch, authoring_identity, msal_auth, api
+):
+    from tests.scripts.test_setup_preserves_title_id import setup as maker_setup
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(agent_title, "CONFIG_PATH", tmp_path / ".local" / "config.json")
+    for bot_id, name, slug, endpoint in [
+        (BOT_ID, "Agent A", "selected", DATAVERSE_URL),
+        (OTHER_BOT_ID, "Agent B", "other", OTHER_DATAVERSE_URL),
+    ]:
+        maker_setup.write_config(
+            {"botId": bot_id, "name": name, "schema": "mock_schema",
+             "managed": True, "url": endpoint},
+            slug, f"workspace/agents/{slug}", False,
+        )
+    config = json.loads(agent_title.CONFIG_PATH.read_text(encoding="utf-8"))
+    entries = {entry["botId"]: entry for entry in config["agents"]}
+    assert entries[BOT_ID]["dataverseEndpoint"] == DATAVERSE_URL
+    assert entries[OTHER_BOT_ID]["dataverseEndpoint"] == OTHER_DATAVERSE_URL
+    assert config["agent"]["botId"] == OTHER_BOT_ID
+    assert config["dataverseEndpoint"] == OTHER_DATAVERSE_URL
+
+    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID}
+    assert len(api.calls) == 1
+    assert api.calls[0]["url"].startswith(DATAVERSE_URL)
+    assert msal_auth[1][0][1] == [SCOPE]
 
 
 @pytest.mark.parametrize("endpoint", [
@@ -266,7 +353,7 @@ def test_legacy_active_agent_only_config_is_supported(config):
 ])
 def test_invalid_endpoints_fail_before_any_auth(config, monkeypatch, endpoint):
     value, write = config
-    value["dataverseEndpoint"] = endpoint
+    value["agents"][1]["dataverseEndpoint"] = endpoint
     write()
     monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
 
@@ -310,6 +397,7 @@ def test_bad_or_ambiguous_config_is_an_explicit_error(config, variant):
         value["agents"] = [None]
         write()
     else:
+        value["agents"][1].pop("dataverseEndpoint")
         value.pop("dataverseEndpoint")
         write()
 
@@ -447,7 +535,7 @@ def test_dataverse_token_must_match_the_authoring_tenant_and_account(
 
 def test_missing_authoring_object_id_cannot_start_unbound_sign_in(monkeypatch):
     monkeypatch.setattr(
-        agent_title.msal, "PublicClientApplication",
+        agent_title, "_create_msal_app",
         lambda *args, **kwargs: pytest.fail("Must not open unbound sign-in"),
     )
 

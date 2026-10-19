@@ -93,6 +93,8 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
     assert "`applicationmanifestinformation` JSON string" in skill
     assert "`microsoft365.titleId`" in skill
     assert "returned `botid` matches the selected bot" in skill
+    assert "legacy fallback only for the unambiguous active agent" in skill
+    assert "never an unbound non-active agent" in skill
     assert "AgentBuilderClient" not in skill
     assert "list_agent_configs" not in skill
     assert "search_agents" not in skill

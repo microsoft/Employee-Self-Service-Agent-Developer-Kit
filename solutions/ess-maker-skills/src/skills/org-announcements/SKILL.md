@@ -108,8 +108,10 @@ use announcement content to decide which agent owns it.
 3. If the title is missing, call the read-only `resolve_agent_title_id` tool on
    `ess-org-announcements` with `{"botId": "<selected configured botId>"}`.
    The server reads the selected entry's `dataverseEndpoint` from
-   `.local/config.json` (falling back to the workspace endpoint only when the
-   entry has no separate environment settings). It issues a read-only Dataverse
+   `.local/config.json`. Setup records this endpoint per agent and preserves the
+   previous active agent's legacy endpoint before switching environments.
+   The workspace endpoint is a legacy fallback only for the unambiguous active
+   agent, never an unbound non-active agent. It issues a read-only Dataverse
    `GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`,
    checks that the returned `botid` matches the selected bot, parses the
    `applicationmanifestinformation` JSON string, and reads only
@@ -122,7 +124,9 @@ use announcement content to decide which agent owns it.
    If the selected entry has no `botId` or usable Dataverse endpoint, stop and
    have the maker complete `/setup` for that agent. An entry with its own
    environment settings must supply its own Dataverse endpoint; never inherit
-   another agent's endpoint. Missing Microsoft 365 registration metadata
+   another agent's endpoint. For an unbound non-active legacy entry, re-run
+   `/setup` for that agent to record its environment instead of guessing from
+   the current workspace endpoint. Missing Microsoft 365 registration metadata
    is an explicit `RegistrationRequired` error: have the maker publish/register
    that agent for Microsoft 365, then retry. Authentication, authorization,
    network, and API errors are failures, not empty discovery; report the tool's

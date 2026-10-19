@@ -84,8 +84,12 @@ the Dataverse Web API:
 It validates the returned `botid`, parses the `applicationmanifestinformation`
 JSON string, and reads `microsoft365.titleId`. The selected entry's
 `dataverseEndpoint` takes precedence; the workspace endpoint is used only when
-that entry has no separate environment settings. The skill persists the
-resolved title only to that agent's local entry and, when active, its mirror.
+the legacy entry is the unambiguous active agent with no separate environment
+settings. Setup records an endpoint on each agent and preserves the previous
+active agent's legacy binding before switching environments. Unbound non-active
+legacy agents must be set up again; discovery does not guess their environment.
+The skill persists the resolved title only to that agent's local entry and,
+when active, its mirror.
 There is no agent-name search fallback, synthesized ID, landing-page MCP
 dependency, or landing-page configuration creation.
 

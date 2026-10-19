@@ -14,7 +14,6 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
-import msal
 import requests
 from portalocker.exceptions import LockException
 
@@ -27,16 +26,13 @@ sys.path.insert(0, str(_SOLUTION_ROOT / "scripts"))
 
 from auth import dataverse_get  # noqa: E402
 from base_client import (  # noqa: E402
-    _CLIENT_ID as DATAVERSE_CLIENT_ID,
-    _TOKEN_CACHE_PATH,
+    _create_msal_app,
     account_for_identity,
     validate_token_identity,
 )
 from _odata import _validate_https_base_url  # noqa: E402
-from _token_cache import create_token_cache  # noqa: E402
 
 
-DATAVERSE_TOKEN_CACHE_PATH = Path(_TOKEN_CACHE_PATH)
 _LOGGER = logging.getLogger("ess-org-announcements.agent-title")
 
 
@@ -120,7 +116,29 @@ def load_configured_target(bot_id: str) -> ConfiguredAgentTarget:
         selected.get(key) is not None
         for key in ("environmentId", "powerPlatformApiEndpoint", "dataverseEndpoint")
     )
-    environment = selected if has_own_environment else config
+    environment = selected
+    if not has_own_environment:
+        active = config.get("agent")
+        active_slug = config.get("activeAgent")
+        if isinstance(active, dict) and active.get("botId") is not None:
+            is_active = _matches_bot(active, bot_id)
+        elif active_slug is not None:
+            is_active = (
+                selected.get("slug") == active_slug
+                and sum(entry.get("slug") == active_slug for entry in agents) == 1
+            )
+        else:
+            is_active = len(agents) == 1
+        if active_slug is not None and active_slug != selected.get("slug"):
+            is_active = False
+        if not is_active:
+            raise AgentTitleResolutionError(
+                "The selected agent has no recorded Dataverse endpoint and its "
+                "legacy workspace binding is ambiguous. Re-run /setup for this "
+                "agent to record its environment.",
+                code="InvalidRequest",
+            )
+        environment = config
     endpoint = environment.get("dataverseEndpoint")
     if endpoint is None:
         raise AgentTitleResolutionError(
@@ -156,11 +174,7 @@ def acquire_dataverse_token(
         )
     try:
         scopes = [f"{endpoint}/user_impersonation"]
-        app = msal.PublicClientApplication(
-            DATAVERSE_CLIENT_ID,
-            authority=f"https://login.microsoftonline.com/{UUID(tenant_id)}",
-            token_cache=create_token_cache(str(DATAVERSE_TOKEN_CACHE_PATH)),
-        )
+        app = _create_msal_app(str(UUID(tenant_id)))
         account = account_for_identity(app, tenant_id, object_id)
         result = (
             app.acquire_token_silent(scopes, account=account)
