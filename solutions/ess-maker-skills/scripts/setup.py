@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 from datetime import date
+from pathlib import Path
 
 from auth import EXPECTED_CONFIG_VERSION
 
@@ -513,12 +514,28 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     local_dir = ".local"
     config_path = os.path.join(local_dir, "config.json")
     existing = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            existing = {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+    except FileNotFoundError:
+        pass
+    if not isinstance(existing, dict):
+        raise ValueError("Existing .local/config.json must be a JSON object; it was not overwritten.")
+
+    endpoint = agent_info["url"].rstrip("/")
+    environment_id = agent_info.get("environmentId")
+    if not environment_id and str(existing.get("dataverseEndpoint", "")).rstrip("/").casefold() == endpoint.casefold():
+        environment_id = existing.get("environmentId")
+    foundation_path = Path(local_dir) / "setup" / "config.json"
+    if not environment_id and foundation_path.is_file():
+        from setup_state import JsonSetupStateRepository
+
+        environment = JsonSetupStateRepository(foundation_path).load().environment
+        if (
+            environment.get("locked") and environment.get("verified_at")
+            and str(environment.get("tenant_endpoint", "")).rstrip("/").casefold() == endpoint.casefold()
+        ):
+            environment_id = environment.get("id")
 
     # Detect schema migration. write_config always stamps the current
     # EXPECTED_CONFIG_VERSION; if the existing file was on an older
@@ -548,12 +565,22 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "agent": agent_entry,             # backward compat: active agent
         "activeAgent": slug,              # slug of the active agent
         "agents": agents,                 # all discovered agents
-        "dataverseEndpoint": agent_info["url"],
+        "dataverseEndpoint": endpoint,
         "templateConfigsDiscovered": template_configs_discovered,
         "templateConfigCount": template_config_count,
         "workflowCount": workflow_count,
         "evaluationCount": evaluation_count,
     }
+    if environment_id:
+        if not isinstance(environment_id, str) or not environment_id.strip():
+            raise ValueError("The verified environment ID must be a non-empty string.")
+        config["environmentId"] = environment_id.strip()
+    else:
+        print(
+            "NOTE: The environment URL is saved, but its ID has not been verified. "
+            "Confirm the environment ID before sharing setup completion.",
+            file=sys.stderr,
+        )
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):
@@ -669,6 +696,8 @@ def main():
         description="ESS Maker Kit — one-shot setup")
     parser.add_argument("--url", required=True,
                         help="Power Platform environment URL")
+    parser.add_argument("--environment-id",
+                        help="Verified Power Platform environment ID for this URL")
     parser.add_argument("--bot-id", required=True,
                         help="Selected bot ID from Dataverse")
     parser.add_argument("--name", required=True,
@@ -697,6 +726,7 @@ def main():
         "schema": args.schema,
         "managed": args.managed,
         "url": args.url,
+        "environmentId": args.environment_id,
     }
 
     # --- Idempotency gate: refuse silent overwrite of existing agent dir ---

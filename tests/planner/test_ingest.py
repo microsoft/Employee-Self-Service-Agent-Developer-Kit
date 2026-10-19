@@ -215,14 +215,14 @@ def test_missing_slots_is_read_only_and_shrinks():
 
 def test_missing_slots_flags_unmapped_task_owner():
     # An uploaded task whose role isn't attestable and that names no person is
-    # unowned — the gap must surface so the interview can ask. Previously the
-    # unmappedRole breadcrumb was never read, so this reported "nothing missing".
+    # unowned — surface a pending decision without blocking the rest of planning.
     plan = Plan.new(objective="Do ESS")
     plan.ingest_upload({
         "tasks": [{"id": "T1", "title": "Wire something", "role": "Power Platform Admin"}],
     })
     required = {g["slot"] for g in plan.missing_slots()["required"]}
-    assert "task-role.T1" in required
+    assert "task-role.T1" not in required
+    assert "task-role.T1" in {g["slot"] for g in plan.missing_slots()["pending"]}
 
 
 def test_missing_slots_skips_unmapped_role_once_task_has_owner():

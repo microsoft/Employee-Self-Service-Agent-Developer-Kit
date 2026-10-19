@@ -25,6 +25,9 @@ attestable-role tasks with nobody attested for them.
      person** — handle them in step 4.
 2. Check who's already attested with `list_plan_role_assignments` — only nudge for
    attestable roles with **no active** holder.
+    If `owner.<role-id>` is already recorded as a pending decision, include it in
+    the status summary but do not repeat the assignment question. Nudge again only
+    when the maker asks or that vacancy now blocks the work they want to start.
 3. Nudge in plain language, naming the role and the work waiting on it, and offer
    to do it right there:
 
@@ -34,7 +37,8 @@ attestable-role tasks with nobody attested for them.
    If the maker names someone, run the assignment flow
    (`src/skills/roles/resolve-person.md` → `src/skills/roles/attest.md`). If they'd
    rather leave it, that's fine — the task stays open to the role and they can assign it
-   later.
+   later. Persist that choice as `pendingDecision` per `planner/assign.md`, with
+   the affected work and how to resolve it. Other roles' ready work can continue.
 4. **Non-attestable role work still needs a face.** For tasks assigned to a role
    that isn't attestable, there is no attestation that can surface them — they
    stall silently until someone is named. Nudge the maker to hand each one to a

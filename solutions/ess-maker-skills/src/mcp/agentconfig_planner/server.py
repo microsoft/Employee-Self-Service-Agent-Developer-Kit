@@ -74,8 +74,10 @@ _SYNC_INVENTORY_ANNOTATIONS = ToolAnnotations(
 mcp = FastMCP(
     "ess-planner",
     instructions=(
-        "Drive AgentConfiguration projects, plans, tasks, and plan "
-        "role attestation. Identity and tenant come from the access token and "
+        "ESS Planner reads and updates shared implementation plans, tasks, and "
+        "role assignments. Explain this purpose before a host trust prompt; "
+        "tool approval does not grant environment-admin permissions. "
+        "Identity and tenant come from the access token and "
         "are never tool arguments. For any PATCH/DELETE, read the exact entity "
         "first and pass its current ETag as ``etag`` (sent as If-Match). The "
         "server turns the two conflicts this surface produces into actionable "
@@ -83,7 +85,11 @@ mcp = FastMCP(
         "you read it and to re-read and reapply — it never silently replays "
         "your write over another edit — and when a task mutation is blocked "
         "because its parent plan is not Active it returns an actionable message "
-        "telling you to activate the plan first. Projects and plans have no "
+        "telling you to activate the plan first. Activation requires explicit "
+        "user consent; never activate just to bypass an error. Before starting "
+        "or completing work, verify its prerequisites and pending decisions. "
+        "A local completion is not shared until readback confirms state and outputs. "
+        "Projects and plans have no "
         "DELETE route — archive them instead; only tasks can be deleted."
     ),
 )
@@ -377,6 +383,7 @@ async def set_project_plan_task_state(
     InProgress, Completed, Cancelled). A task must be InProgress before it can
     be Completed, and the parent plan must be Active. Use
     complete_project_plan_task when completion must capture outputs. Requires
+    the caller to check task prerequisites before starting/completing work and
     the task's current ETag; a stale ETag fails with an actionable 412 to
     re-read and reapply (never silently replayed), and a non-Active parent plan
     yields an actionable "activate the plan first" message."""
@@ -401,7 +408,8 @@ async def complete_project_plan_task(
     outputs require a non-empty environmentId attribute. Requires the task's
     current ETag; a stale ETag fails with an actionable 412 to re-read and
     reapply (never silently replayed), and a non-Active parent plan yields an
-    actionable "activate the plan first" message."""
+    actionable "activate the plan first" message. Do not fake completion to
+    share partial outputs; confirm state and outputs by reading the plan back."""
     return _format(
         await get_client().complete_project_plan_task(
             projectId, planId, taskId, outputs, etag

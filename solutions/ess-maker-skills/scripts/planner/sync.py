@@ -222,9 +222,13 @@ def to_remote_output(artifact: dict[str, Any]) -> dict[str, Any]:
     ``producedByTaskId``, ``state``) is dropped; the service stamps its own.
     """
     attributes = artifact.get("attributes") or {}
+    kind = artifact.get("kind", "Custom")
+    if kind in ("Agent", "EntraApp"):
+        attributes = {**attributes, "artifactType": kind}
+        kind = "Custom"
     wire: dict[str, Any] = {
         "key": artifact.get("key", ""),
-        "kind": artifact.get("kind", "Custom"),
+        "kind": kind,
         "attributes": [{"key": k, "value": v} for k, v in attributes.items()],
     }
     inventory_ref = artifact.get("inventoryRef")
@@ -369,11 +373,10 @@ def _as_entities(payload: Any) -> list[dict[str, Any]]:
     if payload is None:
         return []
     if isinstance(payload, dict):
-        value = payload.get("value")
-        return value if isinstance(value, list) else []
-    if isinstance(payload, list):
+        payload = payload.get("value")
+    if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
         return payload
-    return []
+    raise ValueError("task payload must be a list of task objects or an OData value collection")
 
 
 def _principal_from_remote(task: dict[str, Any]) -> dict[str, Any]:
@@ -603,8 +606,8 @@ def preserve_local_pending(
     matching hydrated task (matched by ``remoteId`` then ``id``) and re-pins the
     outputs it produced when the pull didn't carry them, so the completion — and the
     invariant that a Completed task's produces resolve — survives until a push lands.
-    Once the service confirms the task ``Completed``, the pull carries it with no
-    ``pendingSync`` and nothing is re-applied: the flag clears naturally.
+    Only matching completion state AND the expected output values acknowledge a
+    completion. Partial outputs are retained without completing their task.
 
     Returns ``hydrated`` (mutated in place); a missing/empty ``local`` is a no-op.
     """
@@ -612,10 +615,15 @@ def preserve_local_pending(
         return hydrated
     local_tasks = [
         t for t in local.get("tasks", [])
-        if isinstance(t, dict) and t.get("pendingSync")
+        if isinstance(t, dict) and (t.get("pendingSync") or t.get("pendingOutputs"))
     ]
     if not local_tasks:
         return hydrated
+    if local.get("planId") and (
+        local.get("planId") != hydrated.get("planId")
+        or (local.get("projectId") and hydrated.get("projectId") and local["projectId"] != hydrated["projectId"])
+    ):
+        raise ValueError("pending changes belong to a different shared plan; sync them before switching")
 
     hydrated_tasks = hydrated.setdefault("tasks", [])
     by_remote = {t.get("remoteId"): t for t in hydrated_tasks if t.get("remoteId")}
@@ -627,38 +635,73 @@ def preserve_local_pending(
 
     for lt in local_tasks:
         match = by_remote.get(lt.get("remoteId")) or by_id.get(lt.get("id"))
+        if match is None and not local.get("planId"):
+            # The first share assigns new ids. Only an unambiguous title can
+            # associate an offline completion with its newly created task.
+            candidates = [t for t in hydrated_tasks if t.get("title") == lt.get("title")]
+            if len(candidates) == 1:
+                match = candidates[0]
+        expected = [
+            a for a in local_outputs
+            if a.get("producedByTaskId") == lt.get("id") and a.get("state") == "Active"
+        ]
+        outputs_confirmed = all(
+            any(
+                a.get("state") == "Active"
+                and a.get("producedByTaskId") == (match or {}).get("id")
+                and _output_confirmed(artifact, a)
+                for a in hydrated_outputs
+            )
+            for artifact in expected
+        )
         if match is None:
             # The completion was never pushed, so the service doesn't know this
             # task at all — keep the local copy wholesale rather than drop it.
             match = copy.deepcopy(lt)
+            match["syncConflict"] = "This task is absent from the shared plan; reconcile it before retrying."
             hydrated_tasks.append(match)
-        elif match.get("state") != "Completed":
-            # Service still shows it open -> the push hasn't landed; re-apply.
-            match["state"] = "Completed"
-            match["pendingSync"] = True
-        else:
-            # Service confirms Completed -> the push landed; let the flag clear.
+        elif outputs_confirmed and (not lt.get("pendingSync") or match.get("state") == "Completed"):
             match.pop("pendingSync", None)
+            match.pop("pendingOutputs", None)
+            continue
+        else:
+            if lt.get("pendingSync"):
+                match["state"] = "Completed"
+                match["pendingSync"] = True
+            if lt.get("pendingOutputs"):
+                match["pendingOutputs"] = True
+            # Keep the original write precondition: a newer ETag must not turn
+            # an offline write into an unconditional overwrite of another edit.
+            if lt.get("etag"):
+                match["etag"] = lt["etag"]
 
-        if not match.get("pendingSync"):
+        if not (match.get("pendingSync") or match.get("pendingOutputs")):
             continue
         # Re-pin the outputs this unpushed completion produced that the pull didn't
         # carry, so the Completed task's declared produces still resolve locally.
         target_id = match.get("id")
-        active_keys = {
-            a.get("key") for a in hydrated_outputs if a.get("state") == "Active"
-        }
-        for art in local_outputs:
-            if (
-                art.get("producedByTaskId") == lt.get("id")
-                and art.get("state") == "Active"
-                and art.get("key") not in active_keys
-            ):
-                carried = copy.deepcopy(art)
-                carried["producedByTaskId"] = target_id
-                hydrated_outputs.append(carried)
-                active_keys.add(carried.get("key"))
+        for art in expected:
+            existing = [a for a in hydrated_outputs if a.get("key") == art.get("key") and a.get("state") == "Active"]
+            if any(_output_confirmed(art, a) and a.get("producedByTaskId") == target_id for a in existing):
+                continue
+            for a in existing:
+                a["state"] = "Superseded"
+                match["syncConflict"] = "Shared outputs differ from the local result; review before retrying."
+            carried = copy.deepcopy(art)
+            carried["producedByTaskId"] = target_id
+            hydrated_outputs.append(carried)
     return hydrated
+
+
+def _output_confirmed(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+    wanted, received = to_remote_output(expected), to_remote_output(actual)
+    attributes = {a["key"]: a.get("value") for a in received["attributes"]}
+    return (
+        wanted["key"] == received["key"]
+        and wanted["kind"] == received["kind"]
+        and (not wanted.get("inventoryRef") or wanted["inventoryRef"] == received.get("inventoryRef"))
+        and all(a.get("value") == attributes.get(a["key"]) and a["key"] in attributes for a in wanted["attributes"])
+    )
 
 
 def pending_sync_payload(plan: Plan) -> dict[str, Any]:
@@ -671,7 +714,9 @@ def pending_sync_payload(plan: Plan) -> dict[str, Any]:
     (:func:`to_remote_output`). An empty ``tasks`` list means nothing is pending.
     """
     tasks: list[dict[str, Any]] = []
-    for task in plan.pending_sync_tasks():
+    for task in plan.ordered_tasks():
+        if not task.get("pendingSync"):
+            continue
         outputs = [
             to_remote_output(art)
             for art in plan.outputs_of_task(task.get("id", ""))
@@ -684,11 +729,17 @@ def pending_sync_payload(plan: Plan) -> dict[str, Any]:
             "etag": task.get("etag", ""),
             "state": task.get("state", ""),
             "outputs": outputs,
+            "operation": "complete_project_plan_task" if outputs else "set_project_plan_task_state",
+            "conflict": task.get("syncConflict", ""),
         })
     return {
         "projectId": plan.data.get("projectId", ""),
         "planId": plan.data.get("planId", ""),
         "tasks": tasks,
+        "pendingOutputs": [
+            {"taskId": t.get("remoteId") or t["id"], "title": t.get("title", "")}
+            for t in plan.tasks if t.get("pendingOutputs")
+        ],
     }
 
 

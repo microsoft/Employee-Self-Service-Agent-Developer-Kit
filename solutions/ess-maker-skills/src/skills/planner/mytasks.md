@@ -116,6 +116,13 @@ plan — e.g. the environment id to use), the outputs to **capture** when done, 
 the `/setup`-into-the-pinned-environment nudge. On top of that, render the "how"
 by the task's kind:
 
+**Check readiness before handing off.** A non-empty `blockedBy` means assignment
+is allowed but execution must wait. Name the missing input or pending decision,
+the role/task that supplies it, and any unrelated ready work the caller can do.
+If the user says "start setup" in natural language, enter the setup skill now;
+do not ask them to type `/setup` again. Keep the original task and return to it
+after this person's workspace is bound.
+
 1. **The task is done by running a kit skill** (its description says run `/setup`,
    `/connect`, `/create`, `/evaluate`): **hand off to that skill** — it owns the
    detailed, current, per-tenant steps (that's exactly why `/connect` and `/setup`

@@ -29,7 +29,7 @@ _ONBOARDING_STEP2 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step2.md"
 )
 _ONBOARDING_TASKS = (
-    _SOLUTION / "src" / "skills" / "onboarding" / "tasks.md"
+    _SOLUTION / "src" / "skills" / "onboarding" / "steps.md"
 )
 _ONBOARDING_STEP3 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step3-flightcheck.md"
@@ -89,8 +89,10 @@ def test_first_run_gate_is_fre_aware_for_the_environment_owner() -> None:
         assert "environmentPinned" in gate
         # The owner of the open setup task proceeds instead of being bounced.
         assert "owns environment creation" in gate
-        # The bounce is still reachable when the environment already exists.
-        assert "plan-in-progress message" in gate
+        # A shared environment does not initialize another person's workspace.
+        assert "src/skills/onboarding/step1.md" in gate
+        assert "Do not redirect to Planner" in gate
+        assert "plan-in-progress message" not in gate
 
 
 def test_workday_routing_remains_unchanged() -> None:
@@ -151,7 +153,7 @@ def test_alm_step_reuses_env009_as_an_optional_step_checkpoint() -> None:
         _SOLUTION / "src" / "skills" / "foundation-setup" / "alm-baseline.md"
     ).read_text(encoding="utf-8")
     tasks = (
-        _SOLUTION / "src" / "skills" / "foundation-setup" / "tasks.md"
+        _SOLUTION / "src" / "skills" / "foundation-setup" / "steps.md"
     ).read_text(encoding="utf-8")
 
     assert "--checkpoint ENV-009" in alm
@@ -172,6 +174,31 @@ def test_foundation_router_paths_resolve() -> None:
     ]
 
     assert not missing
+
+
+def test_workspace_bootstrap_merges_all_mcp_servers() -> None:
+    for path in (_FOUNDATION_BOOTSTRAP, _ONBOARDING_STEP1):
+        text = path.read_text(encoding="utf-8")
+        assert "python scripts/mcp_config.py materialize-defaults" in text
+        assert 'python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"' in text
+        assert '"servers": {' not in text
+        assert "ess-planner" in text
+
+
+def test_setup_retains_task_context_and_accepts_natural_language() -> None:
+    text = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    assert "natural-language setup request" in text
+    assert "never ask the maker to rewrite the request as a command" in text
+    assert "A plan nomination is not proof of administrative access" in text
+    assert "return to its brief" in text
+    scope = " ".join(_SCOPE.read_text(encoding="utf-8").split())
+    assert "Do not restart persona detection" in scope
+
+
+def test_setup_passes_verified_environment_id_to_extraction() -> None:
+    text = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+    assert '--environment-id "{ENVIRONMENT_ID}"' in text
+    assert "return to that" in text and "task with the verified environment ID/URL" in text
 
 
 def test_foundation_does_not_prompt_for_non_decisions() -> None:

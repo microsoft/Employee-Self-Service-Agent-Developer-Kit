@@ -168,12 +168,16 @@ never listed**. Close both.
 **(a) Ask only the missing answers.** Drive from the gap report — not the whole
 question bank:
 
-- **`required` gaps block the build** — a missing objective, no scenarios, or a
-  scenario with no backing system (the Phase-3 mandatory set). Ask these, in the
-  gap report's own words (each gap carries a ready-to-ask `prompt`).
+- **`required` gaps identify unanswered questions**, not a reason to trap the
+  maker in an interview. Ask only what is not already known. "Not sure yet" is
+  recorded as `pendingDecision` (use `add-system --pending` for systems), not a
+  guessed system or a scope change.
+- **`pending` gaps are explicitly deferred.** Keep them visible on the plan,
+  continue modelling the known work, and block only the affected execution.
+  Do not re-ask them each time `gaps` is run.
 - **`recommended` gaps sharpen the plan** — persona, market, business goals,
-  acceptance criteria, and each scenario's enabled capabilities. Ask as scope
-  warrants; don't force them.
+  acceptance criteria, and each scenario's enabled capabilities. Reuse the
+  interview's labeled defaults rather than adding another questionnaire.
 
 Apply each answer through the **same** interview commands as a from-scratch plan
 (`set-context`, `add-scenario`, `add-system`, `add-scenario-dependency`,

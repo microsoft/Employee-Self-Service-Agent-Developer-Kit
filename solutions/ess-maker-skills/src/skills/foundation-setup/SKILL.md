@@ -20,6 +20,14 @@ This is the single integration-neutral `/setup` entry point. It owns only:
 Workday, ServiceNow, SAP SuccessFactors, authentication, extension packs, and topics
 are explicitly outside this skill.
 
+Treat a clear natural-language setup request ("set up the environment",
+"install ESS", or "I'm the admin; start my setup task") exactly like `/setup`.
+Enter this flow directly; never ask the maker to rewrite the request as a command.
+Retain the assigned task, plan role, chosen HR/IT agent, and pinned environment
+through the handoff. A plan nomination is not proof of administrative access:
+keep the real environment-access checks, and explain the specific missing
+permission rather than repeatedly asking which persona the maker is.
+
 ---
 
 ## Start
@@ -33,6 +41,7 @@ python scripts/emit_capability.py setup
 Initialize or load state:
 
 ```text
+python scripts/mcp_config.py materialize-defaults
 python scripts/setup_state.py init
 ```
 
@@ -43,7 +52,7 @@ overwrite corrupt state silently.
 **First run only — decide silently, then ask once.** Work through this gate in a
 single pass with **no narration** (do not say "reading state", "no plan found",
 "this is a first run"): the maker's first visible output is either the
-plan-in-progress message or the opening question.
+workspace-binding explanation or the opening question.
 
 - If `init` above shows any completed step or an advanced active step, this is a
   **resume** — go straight to dispatch, no question; `/setup` is never asked again
@@ -54,24 +63,40 @@ plan-in-progress message or the opening question.
   - **No plan** (`hasPlan` false) — ask the opening question below.
   - **Plan, but the environment still needs creating** (`hasPlan` true **and**
     `setupTaskOpen` true **and** `environmentPinned` false) — the plan's "run
-    `/setup`" task is still open and no environment is pinned yet, so **this
+    `/setup`" task is still open. Check `environment` as well: an ID without a
+    URL is an existing environment whose URL must be resolved through environment
+    discovery, not permission to create a replacement. If no environment is
+    recorded, **this
     `/setup` IS that task**: the maker running it is the admin who owns
-    environment creation. Do **not** show the plan-in-progress message — go
-    straight to the opening question below and set the environment up.
-  - **Plan, and the environment already exists** (`hasPlan` true **and**
-    (`environmentPinned` true **or** `setupTaskOpen` false)) — the environment the
-    plan runs on is already set up, so a separate `/setup` is not required. Show
-    the **plan-in-progress message**, then read `src/skills/planner/SKILL.md` and
-    resume their plan — unless they explicitly ask to reconfigure the environment
-    now.
+    environment creation. Continue setup directly when this is their assigned
+    task or they already asked to set up; otherwise show the opening question.
+  - **Environment exists, but no installed agent is recorded** (`environmentPinned`
+    true, `agentPinned` false) — reuse the environment and continue foundation
+    setup to discover/install ESS. A pinned environment alone does not prove an
+    agent is ready for workspace binding. Do not create another environment.
+  - **Plan with an existing environment and agent** (`environmentPinned` and
+    `agentPinned` true) — distinguish
+    the shared rollout from **this person's workspace**. If `.local/config.json`
+    is absent, incomplete, or targets a different environment, enter
+    `src/skills/onboarding/step1.md` to reuse the plan's environment and bind this
+    workspace. Preserve the assigned task; after binding, return to its brief.
+    Do not redirect to Planner or provision a second environment. Shared setup
+    proves resources exist, not that this caller has permissions.
+    If the local workspace already targets that environment, return to the
+    assigned task without restarting setup.
+  - **Plan without a pinned environment, but no open setup task** — this does
+    not prove setup is complete. Follow the explicit setup request or opening
+    question; do not loop back to Planner.
 
-**Message — a plan is already in progress:**
+If the user already asked to configure/install ESS, or arrived from an assigned
+admin setup task, skip the opening question and continue setup. When only workspace
+binding is needed, say: "The shared environment is ready. I'll connect your
+workspace to it, then return to your assigned task."
 
-You already have an ESS plan going, so you don't need to run setup as a separate
-step — your plan includes the environment setup when it's needed. I'll pick your
-plan back up. If you'd rather configure the environment right now, just say so.
-
-**End message.**
+`firstRunSetupTaskId` identifies a ready provisioning task even when a separate
+later workspace-binding task produces `primaryEnvironment`. Prefer that task
+for the admin's handoff; never start a blocked binding task just because its
+title says setup.
 
 Use the `vscode_askQuestions` tool:
 

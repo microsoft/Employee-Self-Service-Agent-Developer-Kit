@@ -14,6 +14,17 @@ and build:
 2. **Scenarios** — the jobs employees self-serve, and (lightly) what's off the table.
 3. **The system behind each scenario area.**
 
+This is a ceiling, not three mandatory questions. Read the request and existing
+plan first; acknowledge already-clear choices instead of reconfirming them.
+For example, "Plan ESS HR with Workday profile updates" already supplies HR, a
+scenario, and its system. Set `set-agent-name --name EmployeeSelfServiceHRDA`
+without asking HR or IT again. Use `EmployeeSelfServiceITDA` for an explicit IT
+target; ask only if the target agent really is ambiguous.
+
+Before Q1, give the short plan definition and journey in `SKILL.md`. For every
+offered choice, explain the employee outcome, what it needs, and what work it
+adds. Offer peer scenarios, not a base bundle beside an unexplained "add ticketing."
+
 **Everything else is assumed, not asked.** Persona, market/wave, the success
 *measure*, the acceptance bar, and the *per-scenario detail within a category*
 (e.g. which Workday fields an employee can view or update) are **defaulted** from
@@ -87,14 +98,15 @@ normal), adding anything missing via freeform:
     "question": "Which of these do employees ask about most? Select all that apply — you can add more in your own words.",
     "multiSelect": true,
     "options": [
-      { "label": "HR Knowledge", "description": "Answer policy & benefits questions, e.g. 'How many vacation days do I have?'", "recommended": true },
-      { "label": "HR Profile — view", "description": "Let employees see their own details — job title, manager, address, pay" },
-      { "label": "HR Profile — update", "description": "Let employees change their own details, e.g. phone number or emergency contact" },
-      { "label": "HR Ticketing", "description": "Raise & track HR requests, e.g. 'I need a letter for my visa'" },
-      { "label": "IT (knowledge + ticketing)", "description": "Answer IT questions and raise IT tickets, e.g. 'Reset my password'" },
-      { "label": "Manager", "description": "Tools for people managers (approvals, team info) — usually added later, not a first pilot" },
-      { "label": "Handoff", "description": "Hand the conversation to a live agent when the bot can't help" },
-      { "label": "Something else", "description": "Anything not listed, e.g. 'Request time off' — type it in your own words" }
+      { "label": "HR Knowledge", "description": "Answer policy and benefits questions from approved HR documents; needs a knowledge source, not personal HR records.", "recommended": true },
+      { "label": "HR Profile — view", "description": "Show an employee their own HR details or leave balance; adds an HR-system connection and identity/access configuration." },
+      { "label": "HR Profile — update", "description": "Let employees change supported personal details; needs profile access plus approved write-back permissions and testing." },
+      { "label": "HR Ticketing", "description": "Create and track HR requests; adds a case-management connection. This is a separate scenario, not an unexplained add-on bundle." },
+      { "label": "IT (knowledge + ticketing)", "description": "Answer IT questions and create or track IT tickets; needs approved IT content and an IT service-management system." },
+      { "label": "Manager", "description": "Support managers with approved team information or actions; needs manager authorization and additional governance." },
+      { "label": "Handoff", "description": "Escalate an unresolved conversation to a live agent; needs ticketing and a supported handoff channel." },
+      { "label": "Not sure yet", "description": "Save the scope decision as pending and show a suggested starting point; you can refine it later." },
+      { "label": "Something else", "description": "Describe another employee outcome; we'll check support and call out any custom work before committing to it." }
     ],
     "allowFreeformInput": true
   }
@@ -115,12 +127,13 @@ a knowledge source, and anything with no native connector needs a custom flow vi
     "question": "For {scenario/area}, which systems hold the data? Select all that apply.",
     "multiSelect": true,
     "options": [
-      { "label": "Workday", "description": "Pick this if your HR data lives in Workday (works out of the box)" },
-      { "label": "ServiceNow HRSD", "description": "Pick this if HR cases/requests run on ServiceNow (works out of the box)" },
-      { "label": "ServiceNow ITSM", "description": "Pick this if IT tickets run on ServiceNow (works out of the box)" },
-      { "label": "SAP SuccessFactors", "description": "Pick this if your HR data lives in SAP SuccessFactors (works out of the box)" },
-      { "label": "SharePoint / M365", "description": "Pick this for answers from documents or intranet pages (a knowledge source)" },
-      { "label": "Something else", "description": "Another system with no built-in connector — we'll build a custom link via /create" }
+      { "label": "Workday", "description": "HR profile data or supported HR actions; a supported integration that needs Workday, identity, and Power Platform setup." },
+      { "label": "ServiceNow HRSD", "description": "HR case/request management; needs the HRSD integration and a ServiceNow administrator." },
+      { "label": "ServiceNow ITSM", "description": "IT ticket management; needs the ITSM integration and a ServiceNow administrator." },
+      { "label": "SAP SuccessFactors", "description": "HR data or supported HR actions; needs the SuccessFactors integration and system-admin configuration." },
+      { "label": "SharePoint / M365", "description": "Approved documents or intranet pages for knowledge answers; not a connector for personal HR records or write-backs." },
+      { "label": "Not sure yet", "description": "Keep the scenario in scope and record the system as pending. Only its system-specific work needs to wait." },
+      { "label": "Something else", "description": "Name the system if known; we'll check support. A system without a native integration needs a scoped custom flow." }
     ],
     "allowFreeformInput": true
   }
@@ -133,26 +146,33 @@ changes *how* you ask, not what you capture or how you ground it. Several scenar
 systems in one answer is expected; capture every one (systems are still recorded per
 area, never overwriting each other).
 
-### If the sponsor isn't sure — take the grounded default, don't re-ask
+### If the sponsor isn't sure — record a pending decision, don't guess
 
-"Not sure", "you decide", or silence is a **valid answer**, not a reason to
-interrogate. This flow already runs on defaults — so when the sponsor can't answer,
-pick the grounded default, **name it in one line**, mark it `--source Agent`, and
-move on. They see it on the plan and change it there.
+"Not sure", "I don't know yet", or "we haven't decided" is a **valid answer**.
+Save it, acknowledge it once, and continue. Silence is not consent to a system
+choice. A recommendation is not a confirmed customer fact.
 
-- **Not sure which scenarios (Q2)** → start with the catalogue's default focus,
-  **HR Knowledge** plus its OOB named-scenario set (the recommended option), and say
-  so: *"I'll start you with HR Knowledge; you can add IT, profile, or ticketing on
-  the plan."* Never leave the scope empty.
-- **Not sure which system (Q3)** → use the candidate system Phase-1 research already
-  proposed for that area if there is one. If there genuinely isn't, **default that
-  area to knowledge-first** (a SharePoint/M365 knowledge task — no connector needed)
-  and record the data-system connection as a **to-confirm** edit: *"I'll set {area}
-  up as a knowledge task for now; tell me the system later and I'll add the
-  connection."* Never stall waiting for the answer.
+- **Uncertain scope (Q2)** → keep any already-selected scenarios. Record
+  `set-context --key scope --value "Scenario selection pending" --group pendingDecision`
+  and present a clearly labeled catalogue-based suggestion, not a silently
+  confirmed scope. Build the common foundation and review work now.
+- **Unknown system (Q3)** → run
+  `add-system --area <scenario-id> --pending`. This persists a `pendingDecision`
+  entry with the same `system.<area>` key used when resolved. Keep the requested
+  scenario: do not substitute SharePoint, guess Workday from research, or turn a
+  profile update into a knowledge-only experience. Say: "I'll leave the system
+  pending. We can finish the plan now; that integration waits until it is known."
+- **Some systems known, others uncertain** → record all confirmed selections in
+  one `add-system` call with repeated `--system` arguments. Save a separate
+  `pendingDecision` for the missing area/additional system. Never include "Not sure"
+  as a system name or overwrite confirmed selections with that choice.
+- **Unknown owner** → keep the grounded role and record `owner.<role-id>` in
+  `pendingDecision`. Explain what they own and that independent work can continue.
 
-Never block the build on an unanswered question — a defaulted, clearly-labelled plan
-the sponsor edits beats a stalled interview.
+Do not re-ask deferred questions on resume or block drafting, sharing, or activation
+of unrelated ready work. Use the dependency gates in `model.md` for affected
+execution only. When the maker supplies a system later, `add-system --area ...`
+replaces that pending entry; refine only the affected tasks and evals.
 
 ### Assume these — never ask them up front
 
@@ -207,6 +227,8 @@ they never overwrite each other:
 python scripts/planner/cli.py add-system --area hr-knowledge --system "SharePoint (knowledge source)"
 python scripts/planner/cli.py add-system --area hr-ticketing --system "ServiceNow HRSD"
 python scripts/planner/cli.py add-system --area it-ticketing --system "ServiceNow ITSM"
+python scripts/planner/cli.py add-system --area hr-profile-read --system "Workday" --system "SAP SuccessFactors"
+python scripts/planner/cli.py add-system --area hr-profile-write --pending
 ```
 
 **Scenarios are the maker's goal mapped to the catalogue categories.** Take the
@@ -214,14 +236,13 @@ scenarios from what the maker describes, map them to `scenario_catalogue.md`
 categories, and confirm; ground each category's per‑scenario detail against
 Microsoft Learn (Phase 1).
 
-**Required before Phase 3, in this order.** (1) objective, (2) **the scenarios**
+**Capture before Phase 3, in this order.** (1) objective, (2) **the scenarios**
 (the catalogue categories the maker wants — HR Knowledge, HR/IT Ticketing, Profile
 read/write, Manager, Handoff, or an extensible one), then (3) **the system for
-each scenario** are **mandatory**. Capture scenarios *before* systems — never let
+each scenario or an explicit pending decision**. Capture scenarios *before* systems — never let
 a system choice narrow the scenario set. These determine the connect tasks, the
 authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
-not end the interview (or jump to sponsor/timeframe) until scenarios and their
-systems are captured. Everything beyond these three (persona, market, success
+not keep interviewing after the maker defers a decision. Everything beyond these three (persona, market, success
 measure, acceptance bar, and the per-category detail) is **defaulted, not asked** —
 see *Assume these* above; the sponsor edits it on the generated plan.
 
@@ -332,10 +353,12 @@ sponsor sees the acceptance bar up front — exactly what "good" looks like, the
 the finished agent will be judged. Read `src/skills/planner/evaluate.md` and render
 the golden prompts grouped by scenario category.
 
-This preview **renders only — it generates nothing**: it displays the golden prompts
-in chat but writes no file, creates no eval records, and pushes nothing. Actual eval
-generation stays with the *Generate evaluation tests* task (topic-driven, later).
-It is **non-blocking**: after rendering, continue to the stop condition and Phase 3.
+Generate and persist draft scenario cases using `evaluate.md`; show only a few
+representative examples with their expected behavior, not a wall of prompts.
+Native test generation runs within the guided flow once topics and permissions
+are available. Do not require the maker to discover a separate `/evaluate` command.
+This is **non-blocking**: continue to Phase 3 without demanding an extra approval
+turn for the planning draft. Approval is still required before topic/push mutations.
 
 This is the **golden-prompts-in-the-first-couple-of-turns** moment the flow is
 built around: goals first, the bar rendered early, then systems and dependencies
@@ -389,8 +412,8 @@ them.
 
 ## Stop condition — enough to generate, then edit
 
-You have enough to **generate** the plan as soon as **objective + scenarios + a
-system per scenario** are captured. Don't keep interviewing for the defaulted slots —
+You have enough to **generate** the plan as soon as the objective and known scope
+are captured, with missing scope/systems explicitly marked **pending**. Don't keep interviewing for the defaulted slots —
 generate the plan, render the eval preview, and present both; the sponsor then
 assigns roles or **edits** from there (the follow-ups above).
 
@@ -402,6 +425,6 @@ assigns roles or **edits** from there (the follow-ups above).
   fields) via a follow-up — acceptance is the edit loop, not a pre-build
   questionnaire.
 
-If a requested scenario isn't ESS-supported, or a prerequisite has no owner, surface
-it and resolve it with the sponsor rather than emitting an unbuildable Plan. When the
+If support is unknown or an owner is missing, record a pending decision and identify
+the affected work; do not assert unsupported capabilities or stop the whole plan. When the
 ADK-satisfied bar holds, show the summary + eval preview and go to Phase 3.

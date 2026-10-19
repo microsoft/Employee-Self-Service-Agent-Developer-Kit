@@ -36,6 +36,14 @@ It asks the directory for **only** a least-privilege, self-grantable
 read permission, so in a normal tenant the maker can approve the one-time
 sign-in themselves — no directory admin needed.
 
+Say a first name or partial name is fine; do not require a remembered surname or
+email address. Before the first lookup consent, explain that directory read access
+is used to find the colleague to assign, not to grant them admin permissions.
+For candidate selection, use selectable options labeled by **display name +
+initials**, with mail/UPN as disambiguating detail when returned. Include
+**Leave unassigned for now** and return that decision to the caller. Do not invent
+photos, job titles, or role holdings, or broaden Graph permissions for avatars.
+
 Branch on `status`:
 
 - **`ok` with one candidate** — use its `oid`. Confirm the person by name before
@@ -44,8 +52,8 @@ Branch on `status`:
 - **`ok` with several candidates** — **disambiguate.** Show the candidates in
   plain language (name, email — never the raw JSON) and ask which one
   they mean. Use only the `oid` of the person they pick.
-- **`no_match`** — nobody matched. Ask for a more specific name, or their email /
-  user principal name, and resolve again. Never guess an id.
+- **`no_match`** — nobody matched. Offer a more specific name or optional email,
+  and **Leave unassigned for now**. Never guess an id or trap the maker in retries.
 - **`auth_required`** — the directory needs sign-in. Ask the maker to sign in
   once ("I need you to sign in so I can look up people in your directory") and
   run the same command again. **If it still returns `auth_required` after a real

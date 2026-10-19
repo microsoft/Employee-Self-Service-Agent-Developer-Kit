@@ -706,8 +706,12 @@ def test_preserve_carries_unpushed_completion_across_pull():
 def test_preserve_clears_flag_when_service_confirms_completed():
     tasks = _remote_tasks()
     tasks["value"][0]["state"] = "Completed"  # service now agrees it's done
-    hydrated = sync.hydrate_from_remote(_remote_plan(), tasks)
     local = _local_pending().data
+    confirmed_output = {
+        **sync.to_remote_output(local["outputs"][0]),
+        "producedByTaskId": "rt-1", "state": "Active",
+    }
+    hydrated = sync.hydrate_from_remote(_remote_plan(outputs=[confirmed_output]), tasks)
 
     merged = sync.preserve_local_pending(hydrated, local)
     rt1 = {t["id"]: t for t in merged["tasks"]}["rt-1"]
@@ -749,4 +753,3 @@ def test_pending_sync_payload_is_tool_ready():
 
 def test_pending_sync_payload_empty_when_nothing_pending():
     assert sync.pending_sync_payload(_plan())["tasks"] == []
-

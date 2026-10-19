@@ -378,7 +378,9 @@ def test_setup_status_no_plan_is_safe_noop(tmp_path, capsys):
         "setupTaskId": None,
         "setupTaskState": None,
         "setupTaskOpen": False,
+        "firstRunSetupTaskId": None,
         "environmentPinned": False,
+        "agentPinned": False,
         "environment": None,
     }
 

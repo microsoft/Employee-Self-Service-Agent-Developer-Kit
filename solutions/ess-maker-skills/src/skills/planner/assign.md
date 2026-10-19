@@ -16,7 +16,10 @@ When the sponsor asks to assign (now or later), the role for each Task is alread
 grounded from the Learn docs (Phase 3) — their only job is to pick **who**. For each
 role they want to name:
 
-1. **State the role** (don't ask for it): "This task is a `{role}` task."
+1. **Explain the role and why it needs an owner.** Name its responsibilities and
+   affected tasks, e.g. "The Power Platform administrator prepares the environment
+   and access; the Workday administrator configures HR-system access." Nominations
+   route work to people; they do not grant tenant or application permissions.
 2. **List the people who hold that role.** The roles source is a separate,
    currently-unbuilt system, so this is best-effort:
    - If a roles source is wired, show its holders of `{role}` and let the
@@ -38,6 +41,13 @@ role they want to name:
    python scripts/planner/cli.py assign --task <T#> --role <role>
    ```
 
+   For "not sure yet" or "leave unassigned", also save
+   `set-context --key owner.<role-id> --value "Owner not yet nominated" --group pendingDecision`
+   with a description naming the affected work. Say that planning, sharing,
+   activation, and other owners' ready work can continue; this role's work waits
+   until an authorized holder picks it up. Do not re-ask a deferred nomination on
+   every turn. When a holder is confirmed, remove that pending entry.
+
 The person is stored *acting as* the role — both facts are kept, so the Task
 still shows up under that role in Flow 2, and provenance survives.
 
@@ -50,8 +60,7 @@ same result and the same capture (Phase 6).
 
 Assign every Task to its grounded role, then **show the summary**. (The eval
 **preview** was already rendered eagerly during the interview — Phase 5,
-`src/skills/planner/evaluate.md`; re-render it here if the scope changed. It is
-render-only and generates nothing.)
+`src/skills/planner/evaluate.md`; update the saved scenario cases if scope changed.)
 
 **Show the plan locally — don't store it to the shared space on your own.** Storing
 the plan for the first time is an **explicit step the sponsor asks for**, not a

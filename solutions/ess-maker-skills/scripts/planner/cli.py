@@ -35,7 +35,7 @@ import textwrap
 # file is run directly (mirrors scripts/flightcheck/cli.py).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from planner import research, setup_tasks
+from planner import research, review, setup_tasks
 from planner.capture import (
     INVENTORY_MIRROR_PATH,
     detect_config_artifacts,
@@ -107,16 +107,22 @@ def _emit_sync_progress(plan: Plan, task_ids: list[str]) -> None:
     the sponsor know plainly."""
     if not task_ids:
         return
+    if not plan.data.get("projectId") or not plan.data.get("planId"):
+        print(
+            "Progress saved locally. This plan has not been shared; keep the "
+            "completion and outputs for the first explicit share.",
+            file=sys.stderr,
+        )
+        return
     ids = ", ".join(task_ids)
     print(
         "Syncing progress to the shared plan — " + ids + " is complete locally and "
         "will now be saved to the shared plan (flagged pendingSync until confirmed). "
         "In this same flow, without waiting to be asked:\n"
-        "  1. run `pending-sync` for the exact complete_project_plan_task arguments "
+        "  1. run `pending-sync` for the completion operation and arguments "
         "(projectId, planId, taskId, outputs, etag),\n"
-        "  2. call complete_project_plan_task for each pending task,\n"
-        "  3. on success, re-hydrate with `import-remote-plan` (or `mark-synced "
-        "--task <id>`) to confirm.\n"
+        "  2. check the Active plan, task state, dependencies and ETag; apply its operation,\n"
+        "  3. on success, re-hydrate with `import-remote-plan` to confirm state AND outputs.\n"
         "If the shared plan can't be reached: the completion stays saved locally and "
         "syncs automatically on the next successful connection — let the sponsor know "
         "plainly that it is saved locally and not yet on the shared plan.",
@@ -143,7 +149,8 @@ def _print_gaps(gaps: dict) -> None:
     skill still needs to ask. Printed to stdout so the skill can read it back."""
     required = gaps.get("required") or []
     recommended = gaps.get("recommended") or []
-    if not required and not recommended:
+    pending = gaps.get("pending") or []
+    if not required and not recommended and not pending:
         print("Nothing missing — the plan has the objective, scenarios, and a system for each.")
         return
     if required:
@@ -155,6 +162,10 @@ def _print_gaps(gaps: dict) -> None:
             print()
         print("Nice to confirm (improves the plan, not blocking):")
         for gap in recommended:
+            print(f"  - [{gap['slot']}] {gap['prompt']}")
+    if pending:
+        print("\nPending decisions (saved for later; do not block planning):")
+        for gap in pending:
             print(f"  - [{gap['slot']}] {gap['prompt']}")
 
 
@@ -291,9 +302,10 @@ def cmd_check_deps(args: argparse.Namespace) -> int:
 
 def cmd_add_system(args: argparse.Namespace) -> int:
     plan = _load(args)
-    plan.set_system(args.area, args.system, source=args.source)
+    system = "; ".join(dict.fromkeys(args.system or []))
+    plan.set_system(args.area, system, source=args.source, pending=args.pending)
     _save(plan, args)
-    print(f"Set system for {args.area!r} = {args.system!r}")
+    print(f"Recorded system decision for {args.area!r}: {system or 'Pending — not known yet'}")
     return 0
 
 
@@ -379,6 +391,8 @@ def cmd_set_state(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     _save(plan, args)
+    if args.state == "Completed" and plan.task(args.task).get("pendingSync"):
+        _emit_sync_progress(plan, [args.task])
     print(f"Task {args.task!r} -> {args.state}")
     return 0
 
@@ -427,18 +441,9 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     for artifact in pinned:
         plan.add_output(artifact)
     complete_ok = True
+    also_completed: list[str] = []
     if args.complete:
-        missing = plan.unresolved_produces(task_id)
-        if missing:
-            complete_ok = False
-            print(
-                f"Pinned; NOT completing {task_id} — unresolved produces {missing}. "
-                "Pin the rest, then complete.",
-                file=sys.stderr,
-            )
-        else:
-            plan.set_task_state(task_id, "Completed")
-            plan.mark_task_pending_sync(task_id)
+        complete_ok = _complete_captured_task(plan, task_id)
         # One skill run can satisfy several plan tasks — e.g. /setup both records
         # the environment (primaryEnvironment) AND clones the agent (essAgent). If
         # the plan splits those into separate tasks, close every OTHER task this
@@ -446,7 +451,6 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
         # covers, not just the one that triggered the capture.
         pinned_keys = {a["key"] for a in pinned}
         pinned_by_key = {a["key"]: a for a in pinned}
-        also_completed: list[str] = []
         for t in plan.tasks:
             tid = t["id"]
             if tid == task_id or t.get("state") == "Completed":
@@ -462,19 +466,24 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
             # belongs to the setup task — and removing that setup task later
             # cascade-deletes the artifact, leaving the completed task unresolved.
             if produces and all(k in pinned_keys for k in produces):
+                if plan.blocking_inputs(tid, require_shared_confirmation=False):
+                    print(f"Not completing {tid}: waiting on {plan.blocking_reason(tid)}.", file=sys.stderr)
+                    complete_ok = False
+                    continue
                 for key in produces:
                     pinned_by_key[key]["producedByTaskId"] = tid
-                plan.set_task_state(tid, "Completed")
-                plan.mark_task_pending_sync(tid)
-                also_completed.append(tid)
+                if _complete_captured_task(plan, tid):
+                    also_completed.append(tid)
+                else:
+                    complete_ok = False
         if also_completed:
             print(
                 "Also completed (produced by this run): " + ", ".join(also_completed),
                 file=sys.stderr,
             )
-        if complete_ok:
-            _emit_sync_progress(plan, [task_id, *also_completed])
     _save(plan, args)
+    completed = [tid for tid in [task_id, *also_completed] if plan.task(tid).get("pendingSync")]
+    _emit_sync_progress(plan, completed)
     print(json.dumps(pinned, indent=2))
     return 0 if complete_ok else 1
 
@@ -544,19 +553,10 @@ def cmd_capture_discover(args: argparse.Namespace) -> int:
     plan.add_output(artifact)
     complete_ok = True
     if args.complete:
-        missing = plan.unresolved_produces(task_id)
-        if missing:
-            complete_ok = False
-            print(
-                f"Pinned; NOT completing {task_id} — unresolved produces {missing}. "
-                "Pin the rest, then complete.",
-                file=sys.stderr,
-            )
-        else:
-            plan.set_task_state(task_id, "Completed")
-            plan.mark_task_pending_sync(task_id)
-            _emit_sync_progress(plan, [task_id])
+        complete_ok = _complete_captured_task(plan, task_id)
     _save(plan, args)
+    if args.complete and complete_ok:
+        _emit_sync_progress(plan, [task_id])
     print(json.dumps(artifact, indent=2))
     return 0 if complete_ok else 1
 
@@ -585,19 +585,21 @@ def cmd_pin_output(args: argparse.Namespace) -> int:
     plan.add_output(art)
     complete_ok = True
     if args.complete:
-        missing = plan.unresolved_produces(args.task)
-        if missing:
-            complete_ok = False
-            print(
-                f"Pinned; NOT completing {args.task} — unresolved produces {missing}. "
-                "Pin the rest, then complete.",
-                file=sys.stderr,
-            )
-        else:
-            plan.set_task_state(args.task, "Completed")
+        complete_ok = _complete_captured_task(plan, args.task)
     _save(plan, args)
+    if args.complete and complete_ok:
+        _emit_sync_progress(plan, [args.task])
     print(json.dumps(art, indent=2))
     return 0 if complete_ok else 1
+
+
+def _complete_captured_task(plan: Plan, task_id: str) -> bool:
+    try:
+        plan.set_task_state(task_id, "Completed")
+    except ValueError as exc:
+        print(f"Outputs retained; NOT completing {task_id}: {exc}", file=sys.stderr)
+        return False
+    return True
 
 
 def cmd_snapshot_config(args: argparse.Namespace) -> int:
@@ -621,6 +623,8 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     if brief.get("description"):
         print(f"  {brief['description']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    if brief.get("blockingReason"):
+        print(f"  Not ready to start — waiting on {brief['blockingReason']}")
     if brief.get("firstRunSetup"):
         print(
             "  First-run setup: this plan needs its Power Platform environment "
@@ -769,19 +773,16 @@ def cmd_summary(args: argparse.Namespace) -> int:
         checklist = plan.render_task_checklist()
         if checklist:
             print(
-                "readback: immediately AFTER the download link, render this grouped "
-                "task checklist inline in chat verbatim — it is the breakdown the "
-                "maker expects to see. Do NOT collapse it to a bare count like 'N "
-                "tasks across M workstreams'; render every line:\n"
+                "readback: use this dependency-ordered checklist for the initial plan "
+                "or an explicit full-plan request. After an edit, summarize the changes "
+                "and blockers instead of repeating every unchanged task:\n"
                 + textwrap.indent(checklist, "    "),
                 file=sys.stderr,
             )
-    # A built plan that isn't on the shared planner yet must be published now —
-    # see src/skills/planner/sync.md -> Push.
     if plan.tasks and not plan.data.get("planId"):
         print(
-            "reminder: this plan is not yet saved to the shared planner — publish "
-            "it now (src/skills/planner/sync.md -> Push).",
+            "reminder: this draft is saved in this workspace. Share only when the "
+            "maker asks; do not publish or activate automatically.",
             file=sys.stderr,
         )
     return 0
@@ -814,6 +815,8 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
     setup_task = plan.task(setup_tid) if (plan and setup_tid) else None
     setup_state = setup_task.get("state") if setup_task else None
     env = plan.output(args.key) if plan else None
+    if plan and env is None and args.key == "primaryEnvironment":
+        env = plan.output("provisionedEnvironment")
     env_attrs = (env.get("attributes") or {}) if env else {}
     # An Environment artifact may carry only an environmentId and no org URL
     # (e.g. a plan synced from the planner service). The /setup reuse path feeds
@@ -829,7 +832,12 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
         # setup task is still open; once Completed, skip so repeated resumes never
         # re-pin the environment (churn-free idempotency).
         "setupTaskOpen": bool(setup_tid) and setup_state != "Completed",
+        "firstRunSetupTaskId": next(
+            (task["id"] for task in plan.ordered_tasks() if plan.first_run_setup_pending(task["id"])),
+            None,
+        ) if plan else None,
         "environmentPinned": bool(env_url),
+        "agentPinned": bool(plan and (plan.output("essAgent") or plan.output("deployedEssAgent"))),
         "environment": {
             "environmentId": env_attrs.get("environmentId", ""),
             "environmentUrl": env_url,
@@ -850,6 +858,17 @@ def cmd_validate(args: argparse.Namespace) -> int:
     for err in errors:
         print(f"  - {err}", file=sys.stderr)
     return 1
+
+
+def cmd_export_review(args: argparse.Namespace) -> int:
+    review.export_review(_load(args), args.output)
+    print(f"Saved spreadsheet review copy: {args.output}")
+    return 0
+
+
+def cmd_review_changes(args: argparse.Namespace) -> int:
+    print(json.dumps(review.review_changes(_load(args), args.input), indent=2))
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -931,6 +950,8 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
 
     try:
         data = hydrate_from_remote(plan_entity, tasks)
+        if not data.get("planId") or any(not task.get("id") for task in data["tasks"]):
+            raise ValueError("A shared plan ID and task IDs are required; refusing to replace the local plan.")
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -943,15 +964,20 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
     if os.path.exists(args.plan):
         try:
             local_data = Plan.load(args.plan).data
-        except (OSError, ValueError, json.JSONDecodeError):
-            local_data = None
+        except (OSError, ValueError) as exc:
+            print(f"Local plan could not be read; refusing to overwrite it: {exc}", file=sys.stderr)
+            return 1
         if local_data:
             before = {
                 t.get("remoteId") or t.get("id")
                 for t in local_data.get("tasks", [])
                 if isinstance(t, dict) and t.get("pendingSync")
             }
-            data = preserve_local_pending(data, local_data)
+            try:
+                data = preserve_local_pending(data, local_data)
+            except ValueError as exc:
+                print(f"Local changes kept; cannot replace this plan: {exc}", file=sys.stderr)
+                return 1
             preserved = [
                 t.get("id", "")
                 for t in data.get("tasks", [])
@@ -969,6 +995,13 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
             "Preserved unpushed local completion(s): " + ", ".join(preserved)
             + " — still pendingSync; sync them to the shared plan with "
             "complete_project_plan_task (run `pending-sync` for the arguments).",
+            file=sys.stderr,
+        )
+    partial = [task["id"] for task in plan.tasks if task.get("pendingOutputs")]
+    if partial:
+        print(
+            "Partial outputs retained locally, not yet shared: " + ", ".join(partial)
+            + ". Finish the task or approve a genuine milestone split; do not fake completion.",
             file=sys.stderr,
         )
     warnings = plan.validate()
@@ -1102,7 +1135,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("add-system", help="record the target system for one scenario/area (scoped key)")
     p.add_argument("--area", required=True, help="scenario id or area slug, e.g. hr-knowledge")
-    p.add_argument("--system", required=True, help="system name, e.g. 'Workday' or 'ServiceNow ITSM'")
+    choice = p.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--system", action="append", help="system name; repeat for multiple systems in this area")
+    choice.add_argument("--pending", action="store_true", help="record that this system is not known yet; keep planning")
     p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_add_system)
 
@@ -1280,6 +1315,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="clear every pending-sync task")
     p.set_defaults(func=cmd_mark_synced)
 
+    p = sub.add_parser("export-review", help="write a new CSV review copy for Excel or other spreadsheets")
+    p.add_argument("--output", required=True, help="new review CSV path (existing reviews are not overwritten)")
+    p.set_defaults(func=cmd_export_review)
+
+    p = sub.add_parser("review-changes", help="preview CSV review proposals; never apply them automatically")
+    p.add_argument("--input", required=True, help="edited review CSV path")
+    p.set_defaults(func=cmd_review_changes)
+
     return parser
 
 
@@ -1303,6 +1346,9 @@ def main(argv: list[str] | None = None) -> int:
         print("Refusing to save — the plan would be invalid:", file=sys.stderr)
         for err in exc.errors:
             print(f"  - {err}", file=sys.stderr)
+        return 1
+    except (ValueError, KeyError, OSError) as exc:
+        print(f"Could not update the plan: {exc}", file=sys.stderr)
         return 1
 
 

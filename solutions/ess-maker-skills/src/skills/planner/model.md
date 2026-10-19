@@ -63,7 +63,30 @@ pick it up, Flow 2); Phase 4 assigns the actual person.
 > can then be assigned a **user together with the role** (`assign --role R
 > --person <oid>`). Do not hardcode people; keep the role Learn-grounded.
 
-## A Task is not a skill's steps — but split on every role boundary
+## Pending decisions are not a global planning gate
+
+Keep an unknown system/owner in `pendingDecision` context and retain the selected
+scenario. Build the known foundation and independent review work now. Describe
+system-specific work as pending, not as a fabricated connector or a knowledge-only
+replacement. For a task that needs an unknown system, include the matching
+`system.<scenario-id>` decision key in `consumes`; the local readiness check keeps
+it waiting until `add-system` confirms that choice. Once resolved, research and
+replace/refine the affected placeholders with the real role-split integration
+tasks and their artifact dependencies. A resolved system name alone is not a
+configured connection.
+
+The CLI rejects starting/completing a task with unresolved inputs. Run
+`task-brief` before the corresponding MCP state/completion call as well; do not
+bypass the local guard by writing straight to the shared service. A task may be
+assigned before its dependencies are ready. Missing people do not block drafting
+or unrelated work, but a qualified owner must perform the affected work.
+
+Do not invent execution prerequisites to force visual order: independent firewall
+preparation may run in parallel with environment setup. The view puts foundation
+work first when ready and preserves topological order across stream boundaries;
+a stream can appear in more than one contiguous section.
+
+## Split on role boundaries
 
 A kit skill (e.g. `connect`) is itself a multi-step procedure with its own
 checklist. Those individual steps stay **inside the skill** — they do NOT each
@@ -155,21 +178,23 @@ The "how" is the **description** (say which command to run in prose); `produces`
 
 | Task (title) | Description (what & how) | Produces | Consumes | Role (attestable) |
 |------|--------|----------|----------|-----------------|
-| Set up the environment | Onboard the ADK to the deployed agent — records the environment **and clones the agent** into the workspace (run `/setup`) | `primaryEnvironment, essAgent` | — | `EntraPowerPlatformAdministrator` |
+| Set up the environment | Run guided foundation setup to provision/select the environment and verify its ID, URL, access, and prerequisites | `primaryEnvironment` | — | `EntraPowerPlatformAdministrator` |
+| Install and bind the ESS base agent | Continue setup to install/select ESS and bind the workspace; capture the actual agent identity | `essAgent` | `primaryEnvironment` | `PowerPlatformEnvironmentMaker` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `EntraPowerPlatformAdministrator` |
 | Discover the tenant inventory | Run `/discover` to crawl the configured environment and record what already exists | `tenantInventory` | `primaryEnvironment` | `EntraPowerPlatformAdministrator` |
 | Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `EntraCloudApplicationAdministrator` |
 | Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `WorkdayAdmin` |
-| Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `workdayEntraApp, workdayTenantConfig` | `PowerPlatformEnvironmentMaker` |
+| Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `primaryEnvironment, essAgent, workdayEntraApp, workdayTenantConfig, workdayNetworkAllowlist` | `PowerPlatformEnvironmentMaker` |
 | Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `EntraNetworkAdministrator` |
 | Connect ServiceNow | Run `/connect` — decompose per its own checklist `role:` items (read `setup/servicenow/tasks.md`) | `servicenowConnection` | `primaryEnvironment` | `ServiceNowAdmin` *(+ `PowerPlatformEnvironmentMaker` per its checklist)* |
 | Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `PowerPlatformEnvironmentMaker` |
-| Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `PowerPlatformEnvironmentMaker` |
-| Publish the agent | In the Power Platform admin center, publish the agent (see the Learn publish doc) | — | built agent | `EntraPowerPlatformAdministrator` |
+| Generate evals | Automatically continue to the existing evaluation-generation flow for the selected scope; retain review and push approval | `evalSuite` | environment, agent, actual scenario topic outputs | `PowerPlatformEnvironmentMaker` |
+| Run evaluations | Execute the generated suite using the supported runtime and record observed results | `evaluationResults` | `evalSuite`, required topic/connection outputs | `PowerPlatformEnvironmentMaker` |
+| Publish the agent | Publish after the agreed evaluation bar is met and the maker approves (see the Learn publish doc) | — | built agent, `evaluationResults` | `EntraPowerPlatformAdministrator` |
 
 `produces`/`consumes` keys are the **expected** outputs, and drive ordering
 ("blocked until produced"). Phase 6 capture is **generic** — the setup task lists
-`--produces primaryEnvironment,essAgent`, but `capture-setup` diffs the whole
+can capture `primaryEnvironment` and `essAgent` for separate milestones, while `capture-setup` diffs the whole
 `.local/config.json` and pins **every** id + name (and any other artifact a skill
 recorded) — the environment, the cloned agent, and anything else the run wrote
 (a connection, an app…) — even outputs the task didn't pre-declare (see
@@ -212,12 +237,13 @@ the topics/knowledge task, not a connect task.
 ## First step for a first-time / greenfield rollout
 
 The first task is almost always the **Power Platform admin running `/setup`**.
-Be accurate about what `/setup` (onboarding) does: it **connects the kit to an
-ESS agent that is already deployed in a Power Platform environment and records
-its details** — it does *not* create the environment or install ESS. For a
-brand-new tenant, provisioning the environment and installing the ESS agent are
-**portal/admin prerequisites**; add a task described as a portal/admin step before
-`/setup` if they don't exist yet.
+Foundation setup owns provisioning guidance, prerequisites, installation, and
+workspace binding; it delegates manual/admin operations when required. Do not
+describe `/setup` as only connecting to an already-installed agent.
+Keep environment and agent-install milestones separate, with the appropriate
+roles, so verified environment metadata can reach the shared plan while an
+installation is still pending. An existing combined task should only be split
+with approval; partial metadata must not falsely complete it.
 
 ## Back-propagation — how the admin's setup details flow to later tasks
 
@@ -248,13 +274,14 @@ not just setup. For *"file HR tickets + get HR knowledge, on Workday + ServiceNo
 that is:
 
 ```
-# 1. PP admin onboards the ADK (records the environment AND clones the agent)
-python scripts/planner/cli.py add-task --id T1 --stream "Setup" --title "Set up the environment" --description "Onboard the ADK to the deployed agent — record the environment and the cloned agent (run /setup)" --role EntraPowerPlatformAdministrator --produces "primaryEnvironment,essAgent"
+# 1. Separate environment and installed-agent milestones by role.
+python scripts/planner/cli.py add-task --id T1 --stream "Setup" --title "Set up the environment" --description "Run /setup to provision/select the environment and verify its ID, URL, access, and prerequisites" --role EntraPowerPlatformAdministrator --produces primaryEnvironment
+python scripts/planner/cli.py add-task --id T-agent --stream "Setup" --title "Install and bind ESS" --description "Continue guided setup to install/select ESS and bind the workspace" --role PowerPlatformEnvironmentMaker --produces essAgent --consumes primaryEnvironment
 # 2. PP admin takes stock of the tenant BEFORE any connect work is planned
 python scripts/planner/cli.py add-task --id T2 --stream "Setup" --title "Discover the tenant inventory" --description "Run /discover to crawl the environment configured during /setup and record the tenant's existing agent resources (environments, app registrations, connectors, connections, SharePoint sites, knowledge sources, extension packs, scenario templates)" --role EntraPowerPlatformAdministrator --produces tenantInventory --consumes primaryEnvironment
 # 3. Workday is MULTI-ROLE and ships a checklist — DON'T hand-write it. Emit the
-#    grounded, attestable rows straight from setup/workday/tasks.md (T1 already
-#    produced the env + base agent, so skip the two foundation groups):
+#    grounded, attestable rows straight from setup/workday/tasks.md (the backbone
+#    already covers environment + agent, so skip the two foundation groups):
 python scripts/planner/cli.py setup-tasks --system workday --commands --skip-foundation
 #    -> paste the printed add-task lines verbatim. They map correctly:
 #       SSO -> EntraCloudApplicationAdministrator (NOT Global Administrator),
@@ -267,13 +294,14 @@ python scripts/planner/cli.py setup-tasks --system workday --commands --skip-fou
 #    along the same role boundaries as Workday (config is a ServiceNow Administrator
 #    task; the pack install an Environment Maker one).
 python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per the connect research for ServiceNow — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-sn-connect --stream "ServiceNow" --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,servicenowConfig"
+python scripts/planner/cli.py add-task --id T-sn-connect --stream "ServiceNow" --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,essAgent,servicenowConfig"
 # 5. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T-know --stream "Authoring" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-tick --stream "Authoring" --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+python scripts/planner/cli.py add-task --id T-know --stream "Authoring" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes "primaryEnvironment,essAgent"
+python scripts/planner/cli.py add-task --id T-tick --stream "Authoring" --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,essAgent,servicenowConnection"
 # 6. evals + publish
-python scripts/planner/cli.py add-task --id T-eval --stream "Evaluation" --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role PowerPlatformEnvironmentMaker --produces evalSuite --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-pub --stream "Publish" --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role EntraPowerPlatformAdministrator --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T-eval --stream "Evaluation" --title "Generate evals" --description "Continue the guided evaluation flow using saved scenario cases and built topics; preserve review and push approval" --role PowerPlatformEnvironmentMaker --produces evalSuite --consumes "primaryEnvironment,essAgent,topic:hr-knowledge,topic:hr-ticketing"
+python scripts/planner/cli.py add-task --id T-eval-run --stream "Evaluation" --title "Run evaluations" --description "Run the approved suite and record actual results against the agreed acceptance criteria" --role PowerPlatformEnvironmentMaker --produces evaluationResults --consumes "evalSuite,servicenowConnection"
+python scripts/planner/cli.py add-task --id T-pub --stream "Publish" --title "Publish the agent" --description "After the evaluation bar is met and publishing is approved, publish the agent using the grounded Learn steps" --role EntraPowerPlatformAdministrator --consumes "primaryEnvironment,essAgent,evaluationResults"
 ```
 
 **Give every task a `--stream` (workstream/theme) so the plan reads by workstream.**
@@ -319,8 +347,9 @@ the keys don't encode; if two tasks must be ordered, wire the key.
   so the sponsor can staff a second holder when it sits on the long pole.
 - **Blocked = waiting on a producer.** A task can't start until **every** key it
   consumes has been produced. The Workday connect task
-  (`consumes workdayEntraApp, workdayTenantConfig`) is a **cross-role join** — it
-  waits for both the Cloud App Admin's SSO task and the Workday Admin's tenant task.
+  is a **cross-role join**: it waits for the verified environment, installed ESS
+  agent, SSO, tenant configuration, and firewall output. Name every actual missing
+  input, not just the number of dependencies.
 - **Critical path = the long pole.** The longest `produces`→`consumes` chain sets
   the minimum end-to-end time; tasks off it have slack. Surface it so the sponsor
   optimizes the right thing. For a knowledge→read→write rollout the **scenario

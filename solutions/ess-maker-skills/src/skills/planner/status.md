@@ -34,6 +34,14 @@ task has **produced** so far. `check-deps` shows which scenario prerequisites ar
 met vs missing. (If the shared planner is reachable, pull first — `sync.md` — so
 you're reporting the shared truth, not a stale local cache.)
 
+Keep local completion and shared confirmation separate. Do not count a
+`pendingSync` task as confirmed shared completion; label it "Complete locally -
+awaiting shared confirmation." Name `pendingOutputs` as saved partial work, not
+completed work. If refresh failed, label the report as the last retrieved copy.
+For every blocked task, use `task-brief` to name the missing input/decision and
+the owner or role that can resolve it. Include deferred systems and nominations
+without asking the maker the same questions again.
+
 ## Step 2 — Report it in plain language
 
 Summarise, don't dump the table. Cover three things:

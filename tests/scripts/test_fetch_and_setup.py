@@ -37,6 +37,20 @@ def _config(**overrides):
     return cfg
 
 
+def test_run_setup_forwards_verified_environment_id(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        fetch_and_setup.subprocess, "run",
+        lambda command: calls.append(command) or SimpleNamespace(returncode=0),
+    )
+    assert fetch_and_setup.run_setup(
+        "https://test.crm.dynamics.com", "bot", "ESS HR", "test_ess", False,
+        {"components": "components.json"}, extra_flags=["--environment-id", "verified-env"],
+    ) == 0
+    command = calls[0]
+    assert command[command.index("--environment-id") + 1] == "verified-env"
+
+
 class TestResolveRefreshTarget:
     def test_falls_back_to_config_when_no_overrides(self):
         env, bot, name, schema, managed = \

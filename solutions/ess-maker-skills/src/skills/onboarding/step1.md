@@ -7,7 +7,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## 0.9 — Reuse the foundation environment
 
-Run:
+If `.local/setup/config.json` exists, run:
 
 ```text
 python scripts/setup_state.py show --view report
@@ -17,13 +17,16 @@ Parse the printed state. If `connect_ready` is true and `environment.locked` is
 true:
 
 1. Set ENV_URL to `environment.tenant_endpoint`, stripping any trailing slash.
+   Retain ENVIRONMENT_ID from `environment.id`.
 2. Do not list environments, ask how to provide an environment, or ask the
    maker to select it again.
 3. Set FOUNDATION_REUSED to true.
 4. Continue directly to section 1.2.
 
-Only continue to section 1.0 when no completed foundation state with a locked
-environment exists.
+An absent foundation state is expected on a new colleague's workspace.
+Continue to section 0.95 when no completed foundation state with a locked
+environment exists; do not turn a missing file into an unexplained failure.
+Stop on corrupt/unreadable existing state instead of silently recreating it.
 
 ## 0.95 — Reuse the ESS deployment's environment
 
@@ -54,7 +57,8 @@ reuse it:
 ```
 
 - **Yes, use this environment** → set ENV_URL to `environment.environmentUrl`
-  (strip any trailing slash) and continue directly to section 1.2. Leave
+  (strip any trailing slash), retain `environment.environmentId` as
+  ENVIRONMENT_ID, and continue directly to section 1.2. Leave
   FOUNDATION_REUSED false.
 - **No, choose a different one** → continue to section 1.0.
 
@@ -136,6 +140,7 @@ Map the selected URL to the unique matching `instanceUrl` in
 ## 1.1b — Use selection
 
 Read the selected object's `instanceUrl` field. Save it as ENV_URL.
+Retain its verified environment ID as ENVIRONMENT_ID.
 **Strip any trailing slash** from ENV_URL before using it (e.g.,
 `https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
 
@@ -160,25 +165,34 @@ Save their answer as ENV_URL. **Strip any trailing
 slash** from ENV_URL before using it (e.g., `https://org.crm.dynamics.com/`
 becomes `https://org.crm.dynamics.com`).
 
+Resolve the ID for that URL with
+`python scripts/discover.py --resolve-environment-url "{ENV_URL}"` and use
+`SELECTED_ENV_JSON:`. Never substitute a tenant ID or Dataverse organization ID.
+If resolution fails, report the error rather than inventing an ID.
+
 ## 1.2 — Write the MCP config file
 
-Build the MCP URL by appending `/api/mcp` to ENV_URL. Double-check the
-result has exactly ONE slash between the domain and `api` — for example
-`https://org.crm.dynamics.com/api/mcp`, NOT `https://org.crm.dynamics.com//api/mcp`.
+If ENVIRONMENT_ID is still missing (for example, an older plan saved only a URL),
+resolve that URL with `discover.py --resolve-environment-url` and retain the
+verified ID before extraction. Report a resolution error rather than claiming
+the metadata is complete.
 
-Create `.vscode/mcp.json` with this exact content (replace the entire
-`url` value with the MCP URL you just built):
+Merge the committed defaults, then configure the environment-specific server:
 
-```json
-{
-  "servers": {
-    "Dataverse": {
-      "type": "http",
-      "url": "https://org.crm.dynamics.com/api/mcp"
-    }
-  }
-}
+```text
+python scripts/mcp_config.py materialize-defaults
+python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"
 ```
+
+These commands normalize the URL and preserve existing server settings. Never
+replace `.vscode/mcp.json` with a Dataverse-only object: `ess-planner` and the
+other defaults must remain registered. Report a failed command before continuing.
+
+If the host requests trust for `ess-planner`, explain once: "ESS Planner reads
+and updates your team's implementation plan and its assignments. Approve this
+server if you want shared planning; you can keep drafting locally without it."
+Host tool approval is separate from Microsoft sign-in, directory lookup consent,
+and permission to administer the environment. Do not imply any one grants the others.
 
 If FOUNDATION_REUSED is true, do not rerun the Allowed MCP Client prerequisite;
 it already passed in foundation `SETUP-02.2`. Continue directly to section 1.3.

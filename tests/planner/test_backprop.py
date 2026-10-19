@@ -315,9 +315,9 @@ def _plan_with_completed_discover(tmp_path, capsys):
 def test_capture_discover_complete_flags_pending_and_prompts_sync(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
     err = capsys.readouterr().err
-    # Softened, sync-progress language — not a hard "push required".
-    assert "Syncing progress to the shared plan" in err
-    assert "pendingSync" in err
+    assert "Progress saved locally" in err
+    assert "not been shared" in err
+    assert "Syncing progress to the shared plan" not in err
     plan = Plan.load(plan_path)
     assert plan.task("T2")["state"] == "Completed"
     assert plan.task("T2")["pendingSync"] is True
@@ -383,15 +383,19 @@ def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
 def test_cli_import_remote_plan_clears_pending_when_service_confirms(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
     capsys.readouterr()
+    from planner.sync import to_remote_output
+
+    confirmed_output = {
+        **to_remote_output(Plan.load(plan_path).output("tenantInventory")),
+        "producedByTaskId": "T2", "state": "Active",
+    }
     # The service now agrees the task is Completed (the push landed) -> flag clears.
     remote = {
         "plan": {
             "planId": "plan-1", "projectId": "proj-1",
             "configuringAgentName": "EmployeeSelfServiceHRDA",
             "status": "Active",
-            "outputs": [{"key": "tenantInventory", "kind": "Custom",
-                         "producedByTaskId": "T2", "state": "Active",
-                         "attributes": [{"key": "resourceCount", "value": "3"}]}],
+            "outputs": [confirmed_output],
         },
         "tasks": {"value": [
             {"taskId": "T2", "title": "Discover the tenant inventory",

@@ -210,8 +210,8 @@ def test_pending_sync_markers_round_trip():
     plan = _plan_with_tasks()
     plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
     plan.set_task_state("T1", "Completed")
-    # Not pending until explicitly flagged — set_task_state stays pure.
-    assert plan.pending_sync_tasks() == []
+    # Every completion path is durably queued, including a direct state change.
+    assert [t["id"] for t in plan.pending_sync_tasks()] == ["T1"]
 
     plan.mark_task_pending_sync("T1")
     assert plan.task("T1")["pendingSync"] is True
@@ -525,7 +525,7 @@ def test_render_task_checklist_flat_without_streams():
     plan.add_task(new_task("T1", "lonely"))
     checklist = plan.render_task_checklist()
     # No stream on any task -> a single flat list, no workstream headers.
-    assert checklist == "- ⬜ lonely — unassigned"
+    assert checklist == "- ⬜ lonely — unassigned — Not started — ready"
     assert "**" not in checklist
 
 

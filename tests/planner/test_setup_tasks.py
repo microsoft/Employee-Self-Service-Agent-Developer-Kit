@@ -196,8 +196,9 @@ class TestWorkdayDecomposition:
         # pack + connect also consumes the firewall allowlist, so Workday
         # connectivity stays locked until InfoSec/IT has opened the network path.
         assert by_id["workday-pack-connect"].consumes == [
-            "workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"
+            "primaryEnvironment", "essAgent", "workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"
         ]
+        assert by_id["workday-firewall-allowlist"].consumes == []
         assert by_id["workday-firewall-allowlist"].produces == ["workdayNetworkAllowlist"]
         assert by_id["workday-first-topic"].produces == ["topic:workday"]
 

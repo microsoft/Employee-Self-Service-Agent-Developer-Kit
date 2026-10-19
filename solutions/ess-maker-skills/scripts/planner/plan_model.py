@@ -39,6 +39,9 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from graphlib import CycleError, TopologicalSorter
+from html import escape
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -127,6 +130,7 @@ BUSINESS_GOALS_GROUP = "businessGoals"
 SCENARIO_CONTEXT_GROUP = "scenarioContext"
 CAPABILITY_GROUP = "scenarioCapability"
 SYSTEM_GROUP = "system"
+PENDING_DECISION_GROUP = "pendingDecision"
 
 # A per-task workstream label (``task["stream"]``) is a local-only rendering hint,
 # but the service task schema has no field for it. So the sync seam round-trips it
@@ -154,6 +158,7 @@ _STRUCTURED_GROUPS = frozenset(
         SCENARIO_GROUP,
         CAPABILITY_GROUP,
         SYSTEM_GROUP,
+        PENDING_DECISION_GROUP,
         DEPENDS_ON_GROUP,
         STREAM_GROUP,
     }
@@ -676,7 +681,9 @@ class Plan:
         self.context.append(entry)
         return entry
 
-    def set_system(self, area: str, system: str, *, source: str = "User") -> dict[str, Any]:
+    def set_system(
+        self, area: str, system: str, *, source: str = "User", pending: bool = False,
+    ) -> dict[str, Any]:
         """Record the target system for one scenario/area under a scoped key.
 
         Systems are captured per area (``system.<area>``) so two areas never
@@ -685,10 +692,51 @@ class Plan:
         scenario id or a short slug; the value is the system name the maker gave.
         """
         slug = area.strip().lower().replace(" ", "-")
+        if not slug:
+            raise ValueError("a system decision needs a scenario area")
+        unknown_answers = {
+            "", "unknown", "not known", "not sure", "not sure yet", "tbd", "pending",
+            "don't know", "don't know yet", "i don't know", "i don't know yet",
+            "i do not know", "i do not know yet", "i'm not sure", "i'm not sure yet",
+        }
+        uncertain = [
+            part.strip().casefold().replace("\u2019", "'").rstrip(".?!") in unknown_answers
+            for part in system.split(";")
+        ]
+        if not pending and any(uncertain) and not all(uncertain):
+            raise ValueError(
+                "Record confirmed systems and the pending decision separately; "
+                "planning can continue. Do not use 'Not sure yet' as a system name."
+            )
+        pending = pending or all(uncertain)
         return self.set_context(
-            f"system.{slug}", system, group=SYSTEM_GROUP,
-            description=f"Target system for {area}", source=source,
+            f"system.{slug}", system.strip() or "Not known yet",
+            group=PENDING_DECISION_GROUP if pending else SYSTEM_GROUP,
+            description=(
+                f"Confirm the system for {area} before its integration work starts; "
+                "planning and unrelated work can continue."
+                if pending else f"Target system for {area}"
+            ),
+            source=source,
         )
+
+    def pending_decisions(self) -> list[dict[str, Any]]:
+        return self._context_group(PENDING_DECISION_GROUP)
+
+    def _system_input(self, key: str) -> dict[str, Any] | None:
+        for entry in self._context_group(SYSTEM_GROUP):
+            if entry.get("key") == key and entry.get("value"):
+                return {"system": entry["value"]}
+        return None
+
+    def _resolved_input(self, key: str) -> dict[str, Any] | None:
+        artifact = self.output(key)
+        if artifact is None:
+            return self._system_input(key)
+        attributes = artifact.get("attributes") or {}
+        if artifact.get("kind") == "Environment" and not str(attributes.get("environmentId") or "").strip():
+            return None
+        return attributes
 
     def remove_context(self, key: str) -> dict[str, Any]:
         """Remove a context entry by key and return it — the primitive for moving
@@ -759,6 +807,17 @@ class Plan:
         if state not in TASK_STATES:
             raise ValueError(f"invalid task state: {state!r}")
         task = self._require_task(task_id)
+        if task.get("pendingSync") and state != "Completed" and self.data.get("planId"):
+            raise ValueError("Confirm the pending completion on the shared plan before reopening it.")
+        if state in ("InProgress", "Completed"):
+            # Record work already completed offline, but do not start downstream
+            # work on a shared plan until its input metadata is shared too.
+            missing_inputs = self.blocking_inputs(task_id, require_shared_confirmation=state == "InProgress")
+            if missing_inputs:
+                raise ValueError(
+                    f"task {task_id!r} cannot be {state} — waiting on "
+                    + self.blocking_reason(task_id)
+                )
         # Invariant enforced for EVERY caller (not just the capture CLI): a task
         # cannot be Completed while its declared `produces` have no Active
         # artifact — that would leave a completed producer with blocked consumers.
@@ -769,7 +828,25 @@ class Plan:
                     f"task {task_id!r} cannot be Completed — unresolved produces {missing}; "
                     "pin those outputs first (capture-setup / pin-output)"
                 )
+            for artifact in self.outputs_of_task(task_id):
+                if (
+                    artifact.get("state") == "Active" and artifact.get("kind") == "Environment"
+                    and not str(artifact.get("attributes", {}).get("environmentId") or "").strip()
+                ):
+                    raise ValueError(
+                        f"task {task_id!r} cannot be Completed — verify environmentId for "
+                        f"{artifact['key']} before sharing setup completion"
+                    )
+        changed = task.get("state") != state
         task["state"] = state
+        if state == "Completed":
+            task.pop("pendingOutputs", None)
+            if changed:
+                self.mark_task_pending_sync(task_id)
+        elif not self.data.get("planId"):
+            task.pop("pendingSync", None)
+            if self.outputs_of_task(task_id):
+                task["pendingOutputs"] = True
         return task
 
     def set_checklist(self, task_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -786,9 +863,7 @@ class Plan:
     # marks a task Completed-locally-but-not-yet-confirmed-on-the-service so the
     # completion can be pushed in the same flow, surfaced if the push fails, and
     # NOT silently reverted by a later pull (see ``sync.preserve_local_pending``).
-    # It is an internal durable flag, not a task state — the task reads
-    # ``Completed`` to the sponsor throughout; the flag only lingers (and the
-    # agent auto-retries the push) until the service confirms.
+    # Completion and shared confirmation are separate user-visible facts.
 
     def mark_task_pending_sync(self, task_id: str) -> dict[str, Any]:
         """Flag a task whose completion is saved locally but not yet confirmed on
@@ -864,6 +939,9 @@ class Plan:
             if existing.get("key") == key and existing.get("state") == "Active":
                 existing["state"] = "Superseded"
         self.outputs.append(artifact)
+        task = self.task(artifact.get("producedByTaskId", ""))
+        if task is not None:
+            task["pendingSync" if task.get("state") == "Completed" else "pendingOutputs"] = True
         return artifact
 
     def output(self, key: str) -> dict[str, Any] | None:
@@ -895,26 +973,34 @@ class Plan:
         task = self._require_task(task_id)
         resolved: dict[str, Any] = {}
         for key in task.get("consumes", []):
-            art = self.output(key)
-            resolved[key] = art.get("attributes", {}) if art else None
+            resolved[key] = self._resolved_input(key)
         return resolved
 
-    def blocking_inputs(self, task_id: str) -> dict[str, list[str]]:
-        """The task's consumed keys that have **no Active artifact yet**, each
-        mapped to the task ids declared to produce them.
+    def _input_awaits_sync(self, key: str) -> bool:
+        artifact = self.output(key)
+        producer = self.task(artifact.get("producedByTaskId", "")) if artifact else None
+        return bool(
+            self.data.get("planId") and producer
+            and (producer.get("pendingSync") or producer.get("pendingOutputs"))
+        )
 
-        This is the produces/consumes readiness signal: a task cannot truly
-        start (nor be legitimately ``Completed``) while it consumes an artifact
-        nothing has produced. Returns ``{key: [producerTaskId, ...]}`` for every
-        unmet key — the producer list is empty for an external input no task in
-        the plan produces. A task with no entry here is ready on the artifact
-        model. Pure/read-only: reflects the current ledger, never mutates it."""
+    def blocking_inputs(
+        self, task_id: str, *, require_shared_confirmation: bool = True,
+    ) -> dict[str, list[str]]:
+        """Unresolved inputs mapped to their declared producer task ids.
+
+        Starting shared work also requires input metadata to be confirmed shared.
+        Retrospective completion capture can waive that confirmation, but never
+        the actual evidence or required decisions. Pure/read-only.
+        """
         task = self.task(task_id)
         if not task:
             return {}
         unmet: dict[str, list[str]] = {}
         for key in (task.get("consumes") or []):
-            if self.output(key) is not None:
+            if self._resolved_input(key) is not None and not (
+                require_shared_confirmation and self._input_awaits_sync(key)
+            ):
                 continue  # satisfied by an Active artifact
             producers = [
                 t.get("id")
@@ -923,6 +1009,23 @@ class Plan:
             ]
             unmet[key] = [p for p in producers if p]
         return unmet
+
+    def blocking_reason(self, task_id: str) -> str:
+        reasons: list[str] = []
+        pending = {e["key"]: e for e in self.pending_decisions()}
+        for key, producers in self.blocking_inputs(task_id).items():
+            artifact = self.output(key)
+            if self._input_awaits_sync(key):
+                reasons.append(f"shared confirmation of {humanize(key)}")
+            elif artifact is not None and artifact.get("kind") == "Environment":
+                reasons.append(f"verified environment ID for {humanize(key)}")
+            elif key in pending:
+                reasons.append(pending[key].get("description") or f"decision: {key}")
+            elif producers:
+                reasons.extend(self._require_task(tid).get("title", tid) for tid in producers)
+            else:
+                reasons.append(f"{humanize(key)} (not recorded yet)")
+        return "; ".join(dict.fromkeys(reasons))
 
     def waiting_on(self, task_id: str) -> list[str]:
         """Flattened, de-duplicated, sorted list of what a task is blocked on:
@@ -994,7 +1097,8 @@ class Plan:
           plan already has an environment pinned — nudge this persona to run
           ``/setup`` and connect to that env.
         - Returns ``None`` for the setup task itself (it produces the env), for
-          tasks that don't need the env, or when no environment is pinned yet.
+          tasks that don't need the env, or when the environment is absent or
+          still awaiting shared confirmation.
         """
         task = self._require_task(task_id)
         produces = task.get("produces") or []
@@ -1004,7 +1108,7 @@ class Plan:
         if PRIMARY_ENVIRONMENT_KEY not in consumes:
             return None  # doesn't need the connected environment
         env = self.output(PRIMARY_ENVIRONMENT_KEY)
-        if not env:
+        if not env or self._input_awaits_sync(PRIMARY_ENVIRONMENT_KEY):
             return None
         attrs = env.get("attributes", {})
         return {
@@ -1015,8 +1119,8 @@ class Plan:
     def first_run_setup_pending(self, task_id: str) -> bool:
         """Whether this task is the plan's **first-run setup** still waiting to run.
 
-        True only for the ``/setup`` task (the one that **produces**
-        `primaryEnvironment`) while it is not yet Completed **and no environment
+        True only for a ready ``/setup`` task (one that **produces**
+        `primaryEnvironment` or `provisionedEnvironment`) while it is not yet Completed **and no environment
         is pinned on the plan yet**. This is the deterministic first-run-experience
         (FRE) signal: when the Power Platform admin asks "what are my tasks?" and
         their setup task is still open with no environment decided, nudge them to
@@ -1031,11 +1135,15 @@ class Plan:
         they cover both sides of the environment handshake without overlapping.
         """
         task = self._require_task(task_id)
-        if PRIMARY_ENVIRONMENT_KEY not in (task.get("produces") or []):
+        if not {PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment"}.intersection(task.get("produces") or []):
             return False
         if task.get("state") == "Completed":
             return False
-        return self.output(PRIMARY_ENVIRONMENT_KEY) is None
+        return (
+            self.output(PRIMARY_ENVIRONMENT_KEY) is None
+            and self.output("provisionedEnvironment") is None
+            and not self.blocking_inputs(task_id)
+        )
 
     def task_brief(self, task_id: str) -> dict[str, Any]:
         """A briefing for a task's assignee: what to do (title + description), the
@@ -1053,6 +1161,7 @@ class Plan:
             "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
             "blockedBy": self.blocking_inputs(task_id),
+            "blockingReason": self.blocking_reason(task_id),
             "produces": list(task.get("produces", [])),
         }
 
@@ -1173,10 +1282,11 @@ class Plan:
         when no task produces the (still-unpinned) key — that empty list is the
         dangling-consume signal."""
         gaps: list[dict[str, Any]] = []
+        pending = {entry["key"] for entry in self.pending_decisions()}
         for task in self.tasks:
             tid = task.get("id", "")
             for key, producers in self.blocking_inputs(tid).items():
-                if not producers:
+                if not producers and key not in pending:
                     gaps.append(
                         {"task": tid, "title": task.get("title", ""), "missing": key}
                     )
@@ -1378,9 +1488,9 @@ class Plan:
         ask after an upload (or an under-specified interview), and nothing it has
         already captured.
 
-        ``required`` blocks Phase 3 — objective, at least one scenario, and a
-        backing system for **every** in-scope scenario (interview.md's mandatory
-        set). ``recommended`` sharpens the plan but never blocks: audience,
+        ``required`` contains unanswered objective, scope, and system questions.
+        Explicitly deferred decisions move to ``pending`` and do not block
+        drafting. ``recommended`` sharpens the plan but never blocks: audience,
         market, business goals, definition of done, and the per-scenario enabled
         capabilities the eval reads off the plan. Each gap carries a ready-to-ask
         ``prompt``. Pure/read-only — re-running after the skill fills a slot
@@ -1389,6 +1499,10 @@ class Plan:
         """
         required: list[dict[str, str]] = []
         recommended: list[dict[str, str]] = []
+        pending = [
+            {"slot": entry["key"], "prompt": entry.get("description") or str(entry["value"])}
+            for entry in self.pending_decisions()
+        ]
 
         if not str(self.output_value_or_context("objective") or "").strip():
             required.append({
@@ -1397,16 +1511,23 @@ class Plan:
             })
 
         scenarios = self.in_scope_scenarios()
-        if not scenarios:
+        if not scenarios and not any(entry["key"] == "scope" for entry in self.pending_decisions()):
             required.append({
                 "slot": "scenarios",
                 "prompt": "What should your team be able to self-serve? Think in outcomes, not systems.",
             })
         else:
             systems = self._systems_by_area()
+            deferred_systems = {
+                entry["key"].removeprefix("system."): entry["value"]
+                for entry in self.pending_decisions() if entry["key"].startswith("system.")
+            }
             for sid, label in scenarios.items():
                 name = label or sid
-                if self._system_for_scenario(sid, systems) is None:
+                if (
+                    self._system_for_scenario(sid, systems) is None
+                    and self._system_for_scenario(sid, deferred_systems) is None
+                ):
                     required.append({
                         "slot": f"system:{sid}",
                         "prompt": f"For {name}, which system holds the data (e.g. Workday, ServiceNow, SharePoint)?",
@@ -1440,7 +1561,7 @@ class Plan:
 
         # Uploaded task owners that didn't map to a recognized attestable role are
         # recorded under UNMAPPED_ROLE_GROUP during ingest. Surface each as a
-        # required gap — but only while the task still has no owner — so an
+        # pending decision — but only while the task still has no owner — so an
         # otherwise-complete upload with an unrecognized role can't report "nothing
         # missing" and skip asking who owns that task. Once the task is assigned
         # (a person was named, or the interview picks an owner) the gap clears, so
@@ -1458,9 +1579,9 @@ class Plan:
                 f"The uploaded owner {role_label!r} isn't a recognized role — "
                 "who should own this task?"
             )
-            required.append({"slot": key or "task-role", "prompt": prompt})
+            pending.append({"slot": key or "task-role", "prompt": prompt})
 
-        return {"required": required, "recommended": recommended}
+        return {"required": required, "recommended": recommended, "pending": pending}
 
     # ---- Flow 2: discovery ---------------------------------------------- #
 
@@ -1581,6 +1702,18 @@ class Plan:
             if count > 1:
                 errors.append(f"output key {key!r} has {count} Active artifacts (max 1)")
 
+        graph = {
+            task["id"]: {
+                producer["id"] for producer in self.tasks
+                if producer.get("id") != task.get("id")
+                and set(producer.get("produces") or []).intersection(task.get("consumes") or [])
+            }
+            for task in self.tasks if task.get("id")
+        }
+        try:
+            tuple(TopologicalSorter(graph).static_order())
+        except CycleError as exc:
+            errors.append("task dependency cycle: " + " -> ".join(exc.args[1]))
         return errors
 
     @staticmethod
@@ -1641,16 +1774,23 @@ class Plan:
                     indegree[i] += 1
         # Kahn's algorithm; original position as a stable tie-break so
         # independent tasks never shuffle.
-        ready = [i for i in range(n) if indegree[i] == 0]
+        def priority(i: int) -> tuple[int, int]:
+            foundation = (
+                (tasks[i].get("stream") or "").casefold() == "setup"
+                or bool({PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment"}.intersection(tasks[i].get("produces") or []))
+            )
+            return (0 if foundation else 1, i)
+
+        ready = [priority(i) for i in range(n) if indegree[i] == 0]
         heapq.heapify(ready)
         order: list[int] = []
         while ready:
-            i = heapq.heappop(ready)
+            _, i = heapq.heappop(ready)
             order.append(i)
             for j in sorted(successors[i]):
                 indegree[j] -= 1
                 if indegree[j] == 0:
-                    heapq.heappush(ready, j)
+                    heapq.heappush(ready, priority(j))
         if len(order) < n:  # produces/consumes cycle — keep the rest as-is.
             placed = set(order)
             order.extend(i for i in range(n) if i not in placed)
@@ -1679,6 +1819,7 @@ class Plan:
         self._render_overview(lines)
         self._render_scenarios(lines, research)
         self._render_systems(lines)
+        self._render_pending_decisions(lines)
         self._render_scenario_deps(lines)
         self._render_tasks(lines)
         self._render_outputs(lines)
@@ -1716,15 +1857,19 @@ class Plan:
         lines.append(f"# ESS scenario plan — {objective}")
         lines.append("")
         agent = d.get("configuringAgentName") or self._agent_display()
-        plan_state = (
-            f"synced (plan `{d['planId']}`)" if d.get("planId") else "local, not synced"
-        )
+        pending = any(t.get("pendingSync") or t.get("pendingOutputs") for t in self.tasks)
+        plan_state = "Local draft — saved in this workspace; not shared"
+        if d.get("planId"):
+            plan_state = (
+                "Saved locally — awaiting shared confirmation"
+                if pending else "Shared plan — last retrieved copy"
+            )
         header = (
             f"**Status:** {d.get('status') or 'Draft'} | "
             f"**Agent:** {agent} | **Plan:** {plan_state}"
         )
         if d.get("syncedAt"):
-            header += f" | **Synced:** {d.get('syncedAt')}"
+            header += f" | **Last retrieved:** {d.get('syncedAt')}"
         lines.append(header)
         lines.append("")
 
@@ -1846,6 +1991,20 @@ class Plan:
             lines.append(f"| {humanize(area)} | {name} |")
         lines.append("")
 
+    def _render_pending_decisions(self, lines: list[str]) -> None:
+        pending = self.pending_decisions()
+        if not pending:
+            return
+        lines.extend([
+            "## Pending decisions", "",
+            "These do not block planning, sharing, or unrelated work. "
+            "Only tasks that need a decision must wait.", "",
+        ])
+        for entry in pending:
+            label = humanize(entry["key"].replace("system.", "").replace("owner.", ""))
+            lines.append(f"- **{label}:** {entry['value']}. {entry.get('description') or ''}".rstrip())
+        lines.append("")
+
     def _render_scenario_deps(self, lines: list[str]) -> None:
         # Show BOTH satisfied and unmet edges (whose dependent scenario is in
         # scope) so a met dependency doesn't silently disappear from the view
@@ -1882,18 +2041,10 @@ class Plan:
         # them, and tasks keep execution order within a stream. A plan whose tasks
         # carry no stream renders as a single flat table (unchanged).
         if any((t.get("stream") or "").strip() for t in ordered):
-            buckets: dict[str, list[dict[str, Any]]] = {}
-            stream_order: list[str] = []
-            for task in ordered:
-                label = (task.get("stream") or "").strip() or "Other"
-                if label not in buckets:
-                    buckets[label] = []
-                    stream_order.append(label)
-                buckets[label].append(task)
-            for label in stream_order:
+            for label, tasks in groupby(ordered, key=lambda t: (t.get("stream") or "").strip() or "Other"):
                 lines.append(f"### {label}")
                 lines.append("")
-                self._render_task_table(lines, buckets[label])
+                self._render_task_table(lines, list(tasks))
                 lines.append("")
         else:
             self._render_task_table(lines, ordered)
@@ -1911,7 +2062,7 @@ class Plan:
         lines.append("|------|------|--------------|-------|")
         for step, task in enumerate(tasks, start=1):
             lines.append(
-                f"| {step} | {task.get('title')} | "
+                f"| {step} <!-- task-id: {escape(task['id'])} --> | {task.get('title')} | "
                 f"{_render_assignee(task.get('assignedTo'))} | "
                 f"{self._task_state_label(task)} |"
             )
@@ -1925,21 +2076,27 @@ class Plan:
         reflects the current produces/consumes ledger, never mutates it or the
         stored task state."""
         state = task.get("state") or "NotStarted"
+        if task.get("syncConflict"):
+            return "🔒 Needs review — " + task["syncConflict"]
         if state == "Completed":
+            if task.get("pendingSync"):
+                return "✅ Complete locally — awaiting shared confirmation" if self.data.get("planId") else "✅ Complete locally — not shared"
             return "✅ Complete"
         if state == "InProgress":
             return "🔄 In progress"
         if state == "Blocked":
             return "🔒 Blocked"
         if self.waiting_on(task.get("id")):
-            return "🔒 Not started"
-        return "⬜ Not started"
+            return "🔒 Not started — waiting on " + self.blocking_reason(task["id"])
+        return "⬜ Not started — ready"
 
     def _task_state_icon(self, task: dict[str, Any]) -> str:
         """Just the state glyph behind :meth:`_task_state_label` — ``✅`` complete,
         ``🔄`` in progress, ``🔒`` blocked or dependency-locked, ``⬜`` ready/not
         started. Shared by the plan table and the chat task checklist so both
         views speak one icon vocabulary. Pure/read-only."""
+        if task.get("syncConflict"):
+            return "🔒"
         state = task.get("state") or "NotStarted"
         if state == "Completed":
             return "✅"
@@ -1970,23 +2127,18 @@ class Plan:
             for task in tasks:
                 lines.append(
                     f"- {self._task_state_icon(task)} {task.get('title')} "
-                    f"— {_render_assignee(task.get('assignedTo'))}"
+                    f"— {_render_assignee(task.get('assignedTo'))} "
+                    f"— {self._task_state_label(task).split(' ', 1)[1]}"
                 )
 
         if any((t.get("stream") or "").strip() for t in ordered):
-            buckets: dict[str, list[dict[str, Any]]] = {}
-            stream_order: list[str] = []
-            for task in ordered:
-                label = (task.get("stream") or "").strip() or "Other"
-                if label not in buckets:
-                    buckets[label] = []
-                    stream_order.append(label)
-                buckets[label].append(task)
-            for index, label in enumerate(stream_order):
+            for index, (label, tasks) in enumerate(groupby(
+                ordered, key=lambda t: (t.get("stream") or "").strip() or "Other",
+            )):
                 if index:
                     lines.append("")
                 lines.append(f"**{label}**")
-                emit(buckets[label])
+                emit(list(tasks))
         else:
             emit(ordered)
         return "\n".join(lines)
