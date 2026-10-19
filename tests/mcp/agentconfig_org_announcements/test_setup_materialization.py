@@ -47,6 +47,47 @@ def test_defaults_register_the_org_announcements_server() -> None:
     assert "env" not in server
 
 
+def test_stdio_server_starts_in_its_runtime_directory_with_the_new_tool() -> None:
+    """Initialize the real server without calling any tenant/authentication tool."""
+    server_dir = SOLUTION / "src/mcp/agentconfig_org_announcements"
+    probe = (
+        "import asyncio, json, sys\n"
+        "from mcp import ClientSession, StdioServerParameters\n"
+        "from mcp.client.stdio import stdio_client\n"
+        "async def run():\n"
+        "    parameters = StdioServerParameters(\n"
+        "        command=sys.executable, args=['server.py'],\n"
+        f"        cwd={str(server_dir)!r}, env={{'ESS_ADK_TELEMETRY': 'off'}})\n"
+        "    async with stdio_client(parameters) as (reader, writer):\n"
+        "        async with ClientSession(reader, writer) as session:\n"
+        "            await session.initialize()\n"
+        "            result = await session.list_tools()\n"
+        "            resolver = next(tool for tool in result.tools\n"
+        "                            if tool.name == 'resolve_agent_title_id')\n"
+        "            print(json.dumps({\n"
+        "                'tools': sorted(tool.name for tool in result.tools),\n"
+        "                'schema': resolver.inputSchema,\n"
+        "                'readOnly': resolver.annotations.readOnlyHint,\n"
+        "                'visibility': resolver.meta['ui']['visibility']}))\n"
+        "asyncio.run(run())\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False, timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    runtime = json.loads(result.stdout)
+    assert runtime["tools"] == sorted({
+        "resolve_agent_title_id", "open_org_announcements", "save_bulletin",
+        "transition_bulletin", "duplicate_bulletin", "search_audience_groups",
+    })
+    assert runtime["schema"]["required"] == ["botId"]
+    assert set(runtime["schema"]["properties"]) == {"botId"}
+    assert runtime["readOnly"] is True
+    assert runtime["visibility"] == ["model", "app"]
+
+
 def test_defaults_carry_no_tenant_or_environment_specific_values() -> None:
     serialized = MCP_DEFAULTS_PATH.read_text(encoding="utf-8").lower()
 
@@ -253,7 +294,11 @@ def test_the_announcements_server_introduces_no_third_token_cache() -> None:
         if candidate.__name__ == "AgentConfigBaseClient"
     )
     cache = Path(base_class.__init__.__globals__["_TOKEN_CACHE_PATH"])
-    locations = {Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH), cache}
+    factory = modules["agent_title"]._create_msal_app
+    title_cache = Path(factory.__globals__["_TOKEN_CACHE_PATH"])
+    assert factory.__globals__["_CLIENT_ID"] == base_class.__init__.__globals__["_CLIENT_ID"]
+    locations = {Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH), cache, title_cache}
+    assert title_cache == cache
 
     assert locations == {
         SOLUTION / ".local" / ".token_cache.bin",
