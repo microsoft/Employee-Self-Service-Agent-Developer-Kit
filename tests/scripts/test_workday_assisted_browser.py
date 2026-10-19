@@ -115,6 +115,15 @@ def _write_worksheet_draft(
     )
 
 
+def _interactive_worksheet_draft() -> dict[str, str]:
+    return {
+        definition["worksheetRow"]: f"value-{index}"
+        for index, definition in enumerate(
+            workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
+        )
+    }
+
+
 def test_view_contract_accepts_only_constrained_content() -> None:
     assert validate_view(_view()) == _view()
 
@@ -123,19 +132,110 @@ def test_view_contract_accepts_only_constrained_content() -> None:
         validate_view(invalid)
 
 
+def test_final_worksheet_confirmation_has_no_row_value() -> None:
+    state = CompanionState()
+    revision = state.publish(
+        _view()
+        | {
+            "confirmation": {
+                "operation": "entra-final-worksheet",
+                "prompt": (
+                    "Do these final worksheet values accurately reflect the "
+                    "completed Microsoft Entra setup?"
+                ),
+                "confirmLabel": "Send values to ADK",
+                "rejectLabel": "Review worksheet rows",
+            }
+        }
+    )["revision"]
+
+    result = state.decide_confirmation(
+        revision=revision,
+        operation="entra-final-worksheet",
+        decision="confirmed",
+    )
+
+    assert result["status"] == "confirmed"
+    assert "value" not in result
+
+
 def test_worksheet_operations_match_canonical_entra_labels() -> None:
     assert tuple(
         definition["worksheetRow"]
         for definition in (
             workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
         )
-    ) == workday_assisted_browser.ENTRA_WORKSHEET_LABELS
+    ) == workday_assisted_browser.ENTRA_WORKSHEET_LABELS[:-1]
+    assert workday_assisted_browser.ENTRA_WORKSHEET_LABELS[-1] == (
+        "Existing configuration"
+    )
     assert all(
         definition["sensitive"] is False
         for definition in (
             workday_assisted_browser._COLLECTION_OPERATION_DEFINITIONS.values()
         )
     )
+
+
+def test_attestation_views_reuse_shared_instructions_and_choices(
+    tmp_path: Path,
+) -> None:
+    confirmation = workday_assisted_browser._worksheet_confirmation_view(
+        "entra-saml-configuration",
+        value="Identifier is visible on the SAML page.",
+        target_label="Identifier (Entity ID)",
+    )
+
+    assert confirmation["summary"] == "Confirm the Login URL is configured."
+    assert confirmation["fields"] == [
+        {
+            "label": "Observed evidence",
+            "value": "Identifier is visible on the SAML page.",
+        },
+        {
+            "label": "Worksheet response",
+            "value": "Yes, confirmed",
+        },
+    ]
+    assert confirmation["confirmation"]["confirmLabel"] == (
+        "Confirm and record"
+    )
+    assert validate_view(confirmation) == confirmation
+
+    _write_worksheet_draft(tmp_path, _interactive_worksheet_draft())
+    existing = workday_assisted_browser._worksheet_summary_view(tmp_path)
+
+    assert existing["entry"]["options"] == [
+        "Preserved without changes",
+        "Remediated without replacing unrelated configuration",
+    ]
+    assert existing["title"] == "Review final Microsoft Entra worksheet"
+    assert len(existing["fields"]) == 13
+    assert all(
+        field["label"] != "Existing configuration"
+        for field in existing["fields"]
+    )
+    assert validate_view(existing) == existing
+
+
+def test_direct_value_views_keep_detected_value_and_text_entry() -> None:
+    confirmation = workday_assisted_browser._worksheet_confirmation_view(
+        "entra-reply-url",
+        value="https://example.test/login-saml.htmld",
+        target_label="Reply URL",
+    )
+    entry = workday_assisted_browser._worksheet_entry_view(
+        "entra-reply-url"
+    )
+
+    assert confirmation["fields"] == [
+        {
+            "label": "Detected Selected Reply URL",
+            "value": "https://example.test/login-saml.htmld",
+        }
+    ]
+    assert "options" not in entry["entry"]
+    assert entry["entry"]["placeholder"] == "Enter Selected Reply URL"
 
 
 def test_view_contract_rejects_unknown_nested_field() -> None:
@@ -202,6 +302,48 @@ def test_view_contract_accepts_row_confirmation_without_collection_action() -> N
                 "action": {
                     "label": "Navigate and collect",
                     "operation": "entra-reply-url",
+                }
+            }
+        )
+
+
+def test_view_contract_accepts_constrained_worksheet_entry() -> None:
+    entry = {
+        "operation": "entra-existing-configuration",
+        "label": "Worksheet response",
+        "options": [
+            "Preserved without changes",
+            "Remediated without replacing unrelated configuration",
+        ],
+    }
+    view = _view() | {"entry": entry}
+
+    assert validate_view(view) == view
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="must match the worksheet contract",
+    ):
+        validate_view(
+            _view()
+            | {
+                "entry": {
+                    **entry,
+                    "options": ["Preserved", "Remediated"],
+                }
+            }
+        )
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="may not define placeholder or submitLabel",
+    ):
+        validate_view(
+            _view()
+            | {
+                "entry": {
+                    **entry,
+                    "placeholder": "Do not allow free text",
                 }
             }
         )
@@ -378,14 +520,19 @@ def test_worksheet_status_projects_existing_authorities_without_values(
         "administratorSubstage": "administrator-engaged",
         "updatedAt": "2026-10-14T18:56:53Z",
     }
-    assert result["worksheet"] == {
-        "requiredCount": 14,
+    worksheet = dict(result["worksheet"])
+    worksheet.pop("nextRow")
+    assert worksheet == {
+        "requiredCount": 13,
         "recordedCount": 1,
         "complete": False,
+        "submissionReady": False,
         "recordedRows": ["entra-directory-display-name"],
         "nextOperation": "entra-enterprise-application-display-name",
     }
-    assert result["activeRow"] == {
+    active_row = dict(result["activeRow"])
+    active_row.pop("navigationHints")
+    assert active_row == {
         "operation": "entra-enterprise-application-display-name",
         "worksheetRow": "Enterprise application",
         "sensitive": False,
@@ -397,6 +544,7 @@ def test_worksheet_status_projects_existing_authorities_without_values(
         "recorded": False,
         "targetPointed": True,
         "visualHelpStatus": "waiting",
+        "targetPointersStatus": None,
     }
     assert "EmployeeHub" not in json.dumps(result)
 
@@ -522,6 +670,7 @@ def test_worksheet_status_projects_final_review_without_draft_values(
     )
 
     assert result["worksheet"]["complete"] is True
+    assert result["worksheet"]["submissionReady"] is False
     assert result["worksheet"]["nextOperation"] is None
     assert result["activeRow"] is None
     assert result["finalReview"] == {
@@ -531,6 +680,112 @@ def test_worksheet_status_projects_final_review_without_draft_values(
     }
     for value in draft.values():
         assert value not in json.dumps(result)
+
+
+def test_worksheet_status_projects_preservation_summary_without_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_entra_controller_state(monkeypatch)
+    draft = _interactive_worksheet_draft()
+    _write_worksheet_draft(tmp_path, draft)
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "entra-configuration",
+            "browserMode": "vscode",
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        lambda _session, _path: {
+            "revision": 21,
+            "view": {
+                "entry": {
+                    "operation": "entra-existing-configuration",
+                }
+            },
+            "entry": {
+                "operation": "entra-existing-configuration",
+                "revision": 21,
+                "status": "waiting",
+            },
+        },
+    )
+
+    result = workday_assisted_browser._worksheet_status(
+        argparse.Namespace(),
+        tmp_path,
+    )
+
+    assert result["worksheet"]["complete"] is True
+    assert result["worksheet"]["submissionReady"] is False
+    assert result["activeRow"] is None
+    assert result["preservationAttestation"] == {
+        "stage": "awaiting-entry",
+        "pendingInteraction": "entry",
+        "recorded": False,
+        "viewRevision": 21,
+    }
+    for value in draft.values():
+        assert value not in json.dumps(result)
+
+
+def test_worksheet_present_publishes_final_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _write_worksheet_draft(tmp_path, _interactive_worksheet_draft())
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {
+            "surface": "entra-configuration",
+            "browserMode": "vscode",
+        },
+    )
+    presented = {}
+
+    def fake_api_request(
+        _session: dict,
+        path: str,
+        *,
+        value: dict | None = None,
+    ) -> dict:
+        assert path == "/api/present"
+        presented.update(value or {})
+        return {"revision": 22}
+
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_api_request",
+        fake_api_request,
+    )
+
+    result = workday_assisted_browser._worksheet_present(
+        argparse.Namespace(
+            operation="entra-existing-configuration",
+            stage="summary",
+            value_file=None,
+            target_label=None,
+        ),
+        tmp_path,
+    )
+
+    assert result == {
+        "presented": True,
+        "operation": "entra-existing-configuration",
+        "interaction": "entry",
+        "revision": 22,
+    }
+    assert presented["title"] == "Review final Microsoft Entra worksheet"
+    assert len(presented["fields"]) == 13
+    assert presented["entry"]["options"] == [
+        "Preserved without changes",
+        "Remediated without replacing unrelated configuration",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1246,15 +1501,6 @@ def test_search_navigation_is_available_in_either_assistance_mode() -> None:
             "Employee assignment",
             "entraChecks.userAssignment",
         ),
-        (
-            "entra-existing-configuration",
-            "Existing configuration",
-            (
-                "entraChecks.existingScopesPreserved,"
-                "entraChecks.authorizedClientsPreserved,"
-                "entraChecks.permissionsPreserved"
-            ),
-        ),
     ],
 )
 def test_remaining_entra_check_operations_are_row_scoped(
@@ -1446,6 +1692,80 @@ def test_confirmation_rejects_stale_revision() -> None:
             operation="entra-reply-url",
             decision="confirmed",
         )
+
+
+def test_attestation_confirmation_returns_canonical_worksheet_value() -> None:
+    state = CompanionState()
+    action_revision = state.publish(
+        _view()
+        | {
+            "action": {
+                "label": "Navigate and capture",
+                "operation": "entra-saml-configuration",
+                "mode": "navigate-and-capture",
+            }
+        }
+    )["revision"]
+    state.begin_collection(
+        revision=action_revision,
+        operation="entra-saml-configuration",
+        mode="navigate-and-capture",
+    )
+    state.complete_collection(
+        {
+            "operation": "entra-saml-configuration",
+            "mode": "navigate-and-capture",
+            "status": "authorized",
+        }
+    )
+    review_revision = state.publish(
+        workday_assisted_browser._worksheet_confirmation_view(
+            "entra-saml-configuration",
+            value="Identifier is visible on the SAML page.",
+            target_label="Identifier (Entity ID)",
+        )
+    )["revision"]
+
+    result = state.decide_confirmation(
+        revision=review_revision,
+        operation="entra-saml-configuration",
+        decision="confirmed",
+    )
+
+    assert result["status"] == "confirmed"
+    assert result["value"] == "Yes, confirmed"
+
+
+def test_existing_configuration_accepts_only_shared_choices(
+    tmp_path: Path,
+) -> None:
+    _write_worksheet_draft(tmp_path, _interactive_worksheet_draft())
+    state = CompanionState()
+    review_revision = state.publish(
+        workday_assisted_browser._worksheet_summary_view(tmp_path)
+    )["revision"]
+
+    with pytest.raises(
+        AssistedBrowserError,
+        match="not one of the allowed choices",
+    ):
+        state.submit_entry(
+            revision=review_revision,
+            operation="entra-existing-configuration",
+            value="Everything looks fine",
+        )
+
+    result = state.submit_entry(
+        revision=review_revision,
+        operation="entra-existing-configuration",
+        value="Remediated without replacing unrelated configuration",
+    )
+
+    assert result["status"] == "submitted"
+    assert result["value"] == (
+        "Remediated without replacing unrelated configuration"
+    )
+    assert state.status()["targetPointers"] == []
 
 
 def test_context_screenshot_is_row_scoped_and_preserved_for_same_operation() -> None:
@@ -2005,6 +2325,165 @@ def test_wait_any_returns_visual_help_request(
     assert result["completed"] is True
     assert result["interaction"] == "visual-help"
     assert result["result"] == status["visualHelp"]
+
+
+def test_combined_browser_completion_defaults_to_max_wait_timeout() -> None:
+    args = workday_assisted_browser.build_parser().parse_args(
+        [
+            "worksheet-browser-complete-and-record",
+            "--operation",
+            "entra-directory-display-name",
+            "--result-file",
+            "-",
+        ]
+    )
+
+    assert args.timeout == 600
+
+
+def test_combined_browser_completion_renders_before_pointer_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_browser_completion_payload",
+        lambda _path: {
+            "candidateValue": "example",
+            "pointerError": None,
+            "pointerPayloadError": None,
+            "targets": [
+                {
+                    "label": "Directory name",
+                    "positionRatio": 0.5,
+                    "centered": True,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_complete_worksheet_browser_interaction",
+        lambda **_kwargs: (
+            calls.append("complete")
+            or {
+                "completed": True,
+                "interaction": "confirmation",
+                "revision": 7,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {"surface": "entra-configuration"},
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_publish_target_pointers",
+        lambda *_args, **_kwargs: (
+            calls.append("pointers")
+            or {"targetPointersStatus": {"status": "ready"}}
+        ),
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_wait",
+        lambda _args, _root: (
+            calls.append("wait")
+            or {
+                "completed": True,
+                "result": {"status": "confirmed"},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_worksheet_record",
+        lambda _args, _root: (
+            calls.append("record")
+            or {"recorded": True, "worksheet": {"nextOperation": None}}
+        ),
+    )
+
+    result = workday_assisted_browser._worksheet_browser_complete_and_record(
+        argparse.Namespace(
+            operation="entra-directory-display-name",
+            result_file=Path("-"),
+            timeout=600,
+        ),
+        tmp_path,
+    )
+
+    assert calls == ["complete", "pointers", "wait", "record"]
+    assert result["stage"] == "recorded"
+    assert result["pointerPublication"]["status"] == "published"
+
+
+def test_combined_browser_completion_keeps_review_actionable_after_pointer_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_browser_completion_payload",
+        lambda _path: {
+            "candidateValue": None,
+            "pointerError": None,
+            "pointerPayloadError": None,
+            "targets": [{"label": "Directory name"}],
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_complete_worksheet_browser_interaction",
+        lambda **_kwargs: {
+            "completed": True,
+            "interaction": "entry",
+            "revision": 8,
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_load_session",
+        lambda _root: {"surface": "entra-configuration"},
+    )
+
+    def fail_pointer_publication(*_args: object, **_kwargs: object) -> None:
+        raise AssistedBrowserError("pointer unavailable")
+
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_publish_target_pointers",
+        fail_pointer_publication,
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_wait",
+        lambda _args, _root: {
+            "completed": True,
+            "result": {"status": "submitted"},
+        },
+    )
+    monkeypatch.setattr(
+        workday_assisted_browser,
+        "_worksheet_record",
+        lambda _args, _root: {"recorded": True},
+    )
+
+    result = workday_assisted_browser._worksheet_browser_complete_and_record(
+        argparse.Namespace(
+            operation="entra-directory-display-name",
+            result_file=Path("-"),
+            timeout=600,
+        ),
+        tmp_path,
+    )
+
+    assert result["stage"] == "recorded"
+    assert result["pointerPublication"]["status"] == "failed"
+    assert "pointer unavailable" in result["pointerPublication"]["error"]
 
 
 def test_layout_requires_same_visible_window_and_split_sizing() -> None:

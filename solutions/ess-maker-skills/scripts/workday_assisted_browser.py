@@ -5942,25 +5942,49 @@ def _point(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 
 def _point_targets(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Load a target set and request atomic multi-target rail guidance."""
-    value: dict[str, Any] = {
-        "operation": args.operation,
-        "revision": args.revision,
-    }
     if args.error is not None:
-        value["error"] = args.error
+        targets = None
     elif str(args.targets_file) == "-":
         targets = json.load(sys.stdin)
     else:
         targets = json.loads(
             Path(args.targets_file).read_text(encoding="utf-8")
         )
-    if args.error is None:
-        if not isinstance(targets, list):
+    if args.error is None and not isinstance(targets, list):
+        raise AssistedBrowserError(
+            "targets-file root must be a JSON array."
+        )
+    session = _load_session(root)
+    return _publish_target_pointers(
+        session,
+        operation=args.operation,
+        revision=args.revision,
+        targets=targets,
+        error=args.error,
+    )
+
+
+def _publish_target_pointers(
+    session: Mapping[str, Any],
+    *,
+    operation: str,
+    revision: int,
+    targets: list[Any] | None,
+    error: str | None,
+) -> dict[str, Any]:
+    """Publish pointer guidance or a safe unavailable status for one view revision."""
+    value: dict[str, Any] = {
+        "operation": operation,
+        "revision": revision,
+    }
+    if error is not None:
+        value["error"] = error
+    else:
+        if targets is None:
             raise AssistedBrowserError(
-                "targets-file root must be a JSON array."
+                "Pointer publication requires targets or an error."
             )
         value["targets"] = targets
-    session = _load_session(root)
     return _api_request(
         session,
         "/api/point-targets",
@@ -5985,8 +6009,11 @@ def _reveal(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     )
 
 
-def _worksheet_browser_complete(
-    args: argparse.Namespace,
+def _complete_worksheet_browser_interaction(
+    *,
+    operation: str,
+    candidate_value: str | None,
+    target_label: str | None,
     root: Path,
 ) -> dict[str, Any]:
     """Record shared-browser success and publish the matching worksheet interaction."""
@@ -6004,7 +6031,7 @@ def _worksheet_browser_complete(
     collection = live.get("collection")
     if (
         not isinstance(collection, Mapping)
-        or collection.get("operation") != args.operation
+        or collection.get("operation") != operation
         or collection.get("status") not in {"authorized", "navigated"}
     ):
         raise AssistedBrowserError(
@@ -6012,36 +6039,26 @@ def _worksheet_browser_complete(
         )
     mode = collection.get("mode")
     if mode == "navigate-only":
-        if args.value_file is not None or args.target_label is not None:
+        if candidate_value is not None or target_label is not None:
             raise AssistedBrowserError(
                 "Navigate only completion does not accept candidate value arguments."
             )
-        view = _worksheet_entry_view(args.operation)
+        view = _worksheet_entry_view(operation)
     elif mode == "navigate-and-capture":
-        if args.value_file is None or args.target_label is None:
+        if candidate_value is None or target_label is None:
             raise AssistedBrowserError(
-                "Navigate and capture completion requires --value-file and "
-                "--target-label."
+                "Navigate and capture completion requires a candidate value "
+                "and target label."
             )
-        try:
-            raw_value = (
-                sys.stdin.read()
-                if str(args.value_file) == "-"
-                else args.value_file.read_text(encoding="utf-8")
-            )
-        except OSError as exc:
-            raise AssistedBrowserError(
-                "The worksheet candidate value file is unreadable."
-            ) from exc
         view = _worksheet_confirmation_view(
-            args.operation,
+            operation,
             value=_required_text(
-                raw_value.strip(),
+                candidate_value.strip(),
                 "worksheet candidate value",
                 maximum=500,
             ),
             target_label=_required_text(
-                args.target_label,
+                target_label,
                 "target label",
                 maximum=120,
             ),
@@ -6055,7 +6072,7 @@ def _worksheet_browser_complete(
         session,
         "/api/shared-browser-result",
         value={
-            "operation": args.operation,
+            "operation": operation,
             "status": "navigated",
         },
     )
@@ -6072,13 +6089,242 @@ def _worksheet_browser_complete(
         ) from exc
     return {
         "completed": True,
-        "operation": args.operation,
+        "operation": operation,
         "mode": mode,
         "interaction": (
             "confirmation" if "confirmation" in normalized else "entry"
         ),
         "navigationStatus": navigation["collection"]["status"],
         **presented,
+    }
+
+
+def _worksheet_browser_complete(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Record shared-browser success and publish the matching worksheet interaction."""
+    candidate_value = None
+    if args.value_file is not None:
+        try:
+            candidate_value = (
+                sys.stdin.read()
+                if str(args.value_file) == "-"
+                else args.value_file.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise AssistedBrowserError(
+                "The worksheet candidate value file is unreadable."
+            ) from exc
+    return _complete_worksheet_browser_interaction(
+        operation=args.operation,
+        candidate_value=candidate_value,
+        target_label=args.target_label,
+        root=root,
+    )
+
+
+def _load_browser_completion_payload(path: Path) -> dict[str, Any]:
+    """Load the bounded browser result fields used by combined row finalization."""
+    try:
+        raw = (
+            json.load(sys.stdin)
+            if str(path) == "-"
+            else json.loads(path.read_text(encoding="utf-8"))
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AssistedBrowserError(
+            "The browser result file must contain readable JSON."
+        ) from exc
+    if not isinstance(raw, Mapping):
+        raise AssistedBrowserError(
+            "The browser result file root must be a JSON object."
+        )
+    allowed_fields = {"pointerError", "targets", "value", "values"}
+    if set(raw) - allowed_fields:
+        raise AssistedBrowserError(
+            "The browser result file contains unsupported fields."
+        )
+    has_value = raw.get("value") is not None
+    has_values = raw.get("values") is not None
+    if has_value and has_values:
+        raise AssistedBrowserError(
+            "The browser result file cannot contain both value and values."
+        )
+    targets = raw.get("targets")
+    pointer_error = raw.get("pointerError")
+    pointer_payload_error = None
+    if targets is not None and pointer_error is not None:
+        pointer_payload_error = (
+            "The browser result file cannot contain both targets and pointerError."
+        )
+    candidate_value = None
+    if has_values:
+        values = raw.get("values")
+        if not isinstance(values, Mapping):
+            raise AssistedBrowserError(
+                "The browser result values field must be a JSON object."
+            )
+        candidate_value = json.dumps(
+            values,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    elif has_value:
+        candidate_value = _required_text(
+            raw.get("value"),
+            "browser result value",
+            maximum=500,
+        )
+    return {
+        "candidateValue": candidate_value,
+        "pointerError": pointer_error,
+        "pointerPayloadError": pointer_payload_error,
+        "targets": targets,
+    }
+
+
+def _worksheet_browser_complete_and_record(
+    args: argparse.Namespace,
+    root: Path,
+) -> dict[str, Any]:
+    """Publish, enrich, await, and record one completed worksheet browser row."""
+    payload = _load_browser_completion_payload(args.result_file)
+    target_label = None
+    if payload["candidateValue"] is not None:
+        target_label = _COLLECTION_OPERATION_DEFINITIONS[
+            args.operation
+        ]["worksheetRow"]
+    try:
+        completion = _complete_worksheet_browser_interaction(
+            operation=args.operation,
+            candidate_value=payload["candidateValue"],
+            target_label=target_label,
+            root=root,
+        )
+    except AssistedBrowserError as exc:
+        raise AssistedBrowserError(
+            f"Browser completion failed: {exc}"
+        ) from exc
+
+    revision = completion.get("revision")
+    if not isinstance(revision, int):
+        raise AssistedBrowserError(
+            "Browser completion published an invalid view revision."
+        )
+
+    session = _load_session(root)
+    if payload["pointerPayloadError"] is not None:
+        pointer_result = {
+            "status": "failed",
+            "error": payload["pointerPayloadError"],
+        }
+        try:
+            _publish_target_pointers(
+                session,
+                operation=args.operation,
+                revision=revision,
+                targets=None,
+                error=payload["pointerPayloadError"],
+            )
+        except AssistedBrowserError:
+            pass
+    elif payload["targets"] is None and payload["pointerError"] is None:
+        pointer_result = {
+            "status": "skipped",
+        }
+    else:
+        try:
+            published = _publish_target_pointers(
+                session,
+                operation=args.operation,
+                revision=revision,
+                targets=payload["targets"],
+                error=payload["pointerError"],
+            )
+            pointer_result = {
+                "status": (
+                    "unavailable"
+                    if payload["pointerError"] is not None
+                    else "published"
+                ),
+                "details": published.get("targetPointersStatus"),
+            }
+        except AssistedBrowserError as exc:
+            pointer_error = f"Pointer publication failed: {exc}"
+            pointer_result = {
+                "status": "failed",
+                "error": pointer_error,
+            }
+            try:
+                _publish_target_pointers(
+                    session,
+                    operation=args.operation,
+                    revision=revision,
+                    targets=None,
+                    error=pointer_error,
+                )
+            except AssistedBrowserError:
+                pass
+
+    try:
+        interaction = _wait(
+            argparse.Namespace(
+                operation=args.operation,
+                interaction=completion["interaction"],
+                revision=revision,
+                timeout=args.timeout,
+            ),
+            root,
+        )
+    except AssistedBrowserError as exc:
+        raise AssistedBrowserError(
+            "The worksheet interaction was published, but waiting for the "
+            f"administrator response failed: {exc}"
+        ) from exc
+
+    if not interaction.get("completed"):
+        return {
+            **completion,
+            "completed": False,
+            "recorded": False,
+            "stage": "awaiting-review",
+            "pointerPublication": pointer_result,
+            "review": interaction,
+        }
+    result = interaction.get("result")
+    if (
+        completion["interaction"] == "confirmation"
+        and isinstance(result, Mapping)
+        and result.get("status") == "rejected"
+    ):
+        return {
+            **completion,
+            "recorded": False,
+            "stage": "review-again",
+            "pointerPublication": pointer_result,
+            "review": interaction,
+        }
+
+    try:
+        recorded = _worksheet_record(
+            argparse.Namespace(
+                operation=args.operation,
+                revision=revision,
+            ),
+            root,
+        )
+    except AssistedBrowserError as exc:
+        raise AssistedBrowserError(
+            "The administrator response was received, but worksheet "
+            f"recording failed: {exc}"
+        ) from exc
+    return {
+        **completion,
+        **recorded,
+        "stage": "recorded",
+        "pointerPublication": pointer_result,
+        "review": interaction,
     }
 
 
@@ -6336,6 +6582,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worksheet_browser_complete.add_argument("--value-file", type=Path)
     worksheet_browser_complete.add_argument("--target-label")
+    worksheet_browser_complete_and_record = commands.add_parser(
+        "worksheet-browser-complete-and-record"
+    )
+    worksheet_browser_complete_and_record.add_argument(
+        "--operation",
+        choices=sorted(_COLLECTION_OPERATIONS),
+        required=True,
+    )
+    worksheet_browser_complete_and_record.add_argument(
+        "--result-file",
+        type=Path,
+        required=True,
+    )
+    worksheet_browser_complete_and_record.add_argument(
+        "--timeout",
+        type=float,
+        default=600,
+    )
     shared_result = commands.add_parser("shared-browser-result")
     shared_result.add_argument(
         "--operation",
@@ -6374,6 +6638,9 @@ _HANDLERS = {
     "point-targets": _point_targets,
     "reveal": _reveal,
     "worksheet-browser-complete": _worksheet_browser_complete,
+    "worksheet-browser-complete-and-record": (
+        _worksheet_browser_complete_and_record
+    ),
     "shared-browser-result": _shared_browser_result,
     "inspect-layout": _inspect_layout,
     "stop": _stop,

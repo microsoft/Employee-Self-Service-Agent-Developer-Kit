@@ -110,7 +110,7 @@ python scripts/workday_assisted_browser.py wait `
 
 The wait command observes local companion state only. It does not choose an action, enter a value, decide a confirmation, or write lifecycle state.
 
-Use `--interaction any` when a candidate confirmation also offers visual help. If the result reports `visual-help`, attempt the screenshot and then wait again for `any` so the still-pending confirmation remains actionable. Continue from the returned result without requiring a duplicate chat message. A timeout leaves the displayed view valid and does not imply rejection.
+In the Edge companion, use `--interaction any` when a candidate confirmation also offers visual help. If the result reports `visual-help`, attempt the screenshot and then wait again for `any` so the still-pending confirmation remains actionable. In the Integrated Browser companion, wait for the row's exact `confirmation` or `entry`; screenshot controls are not rendered there. Continue from the returned result without requiring a duplicate chat message. A timeout leaves the displayed view valid and does not imply rejection.
 
 ## Use the shared Integrated Browser
 
@@ -134,18 +134,9 @@ The shared-browser adapter must preserve the Edge companion's interaction model:
 - never select an ambiguous application for the human;
 - offer the row's existing manual-entry fallback only after bounded inspection cannot reliably collect or disambiguate the value.
 
-For a non-sensitive detected value, publish the confirmation view before calculating pointer geometry. Retain the returned revision. The companion renders the candidate and confirmation immediately while target positioning remains pending:
+For a non-sensitive detected value, the phase-specific orchestration must publish the entry or confirmation before it attempts pointer publication. The companion renders the review interaction immediately while target positioning remains pending. Pointer publication is optional enrichment and must not delay, replace, or revoke the review interaction.
 
-```json
-{
-  "visualHelp": {
-    "operation": "{OPERATION}",
-    "label": "{VISIBLE_TARGET_LABEL}"
-  }
-}
-```
-
-If the phase-specific baseline returned pointer `targets`, retain that exact set in memory and submit it after the confirmation is published. For rows without baseline targets, scroll the current row's inspected targets into view after confirmation and re-inspect all post-scroll geometry in one browser call. Build `positionRatio` from the post-scroll geometry for each target. Set `centered` to `true` when the reinspection shows that centering succeeded. Publish every target required by the current row together:
+If the phase-specific baseline returned pointer `targets`, retain that exact set in memory. For rows without baseline targets, scroll the current row's inspected targets into view and re-inspect all post-scroll geometry in one browser call. Build `positionRatio` from the post-scroll geometry for each target. Set `centered` to `true` when the reinspection shows that centering succeeded. The phase-specific combined command should receive every required target together. Use the standalone revision-bound command below only when recovering after the review interaction was already published:
 
 ```json
 [
@@ -173,27 +164,9 @@ python scripts/workday_assisted_browser.py point-targets `
   --error "{SAFE_REASON}"
 ```
 
-Pointer failure is non-blocking: the confirmation remains actionable and the companion reports that visual guidance is unavailable. If `point-targets` rejects a stale update because the human already decided the confirmation or a newer revision exists, treat that as normal completion and do not republish the candidate. Wait for the human to select **Show me what to click** only after the pointer set is ready. Only after `wait` reports `interaction: visual-help`, use the browser tool surface to attempt a bounded PNG around the already-pointed target and publish it:
+Pointer failure is non-blocking: the entry or confirmation remains actionable and the companion reports that visual guidance is unavailable. If `point-targets` rejects a stale update because the human already decided the interaction or a newer revision exists, treat that as normal completion and do not republish the row. The Integrated Browser companion does not render screenshot controls or captured images. Continue waiting for the row's entry or confirmation.
 
-```powershell
-python scripts/workday_assisted_browser.py screenshot `
-  --operation "{OPERATION}" `
-  --image-file "{PNG_FILE}" `
-  --label "{VISIBLE_TARGET_LABEL}"
-```
-
-If the screenshot attempt fails, report a safe reason and permit retry:
-
-```powershell
-python scripts/workday_assisted_browser.py screenshot-result `
-  --operation "{OPERATION}" `
-  --status failed `
-  --error "{SAFE_REASON}"
-```
-
-The companion changes the control to **Screenshot unsuccessful** and keeps it actionable. Screenshot failure does not revoke row authorization or decide the candidate confirmation.
-
-After the authorized browser operation reaches the intended page state, record navigation completion before publishing any post-navigation row interaction or moving to another row:
+After the authorized browser operation reaches the intended page state, the phase-specific combined command should record navigation completion and publish the post-navigation interaction in that order. Use the standalone result command below only during manual recovery:
 
 ```powershell
 python scripts/workday_assisted_browser.py shared-browser-result `

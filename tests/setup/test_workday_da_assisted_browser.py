@@ -90,8 +90,11 @@ def test_companion_renderer_never_uses_html_injection() -> None:
     assert 'id="target-rail"' in markup
     assert 'id="target-pointers"' in markup
     assert 'tooltip.className = "target-tooltip"' in script
-    assert 'pointer.textContent = "←"' in script
-    assert "navigation-disclaimer" in script
+    assert 'pointer.textContent = "◀"' in script
+    assert "navigation-explanation" in script
+    assert "Assists without capturing values for ADK." in script
+    assert "Assists and captures values for ADK." in script
+    assert 'textElement("strong", `${action.label}:`)' in script
     assert '"Authorizing..."' not in script
     assert '"Navigating..."' in script
     assert '"Navigation complete"' not in script
@@ -114,9 +117,9 @@ def test_companion_uses_user_opened_shared_integrated_browser() -> None:
     assert "built-in browser tools" in protocol
     assert "shared-browser-result" in protocol
     assert "point-targets" in protocol
-    assert "--image-file" in protocol
-    assert "--interaction any" in protocol
-    assert "screenshot-result" in protocol
+    assert "wait for the row's exact `confirmation` or `entry`" in protocol
+    assert "screenshot controls are not rendered there" in protocol
+    assert "does not render screenshot controls or captured images" in protocol
     assert "only in the active companion session" in protocol
     assert "A search with no matching candidate is not a browser failure" in protocol
     assert "start --surface \"{SURFACE}\" --launch" not in protocol
@@ -153,7 +156,7 @@ def test_entra_companion_has_explicit_capture_and_visual_help_contract() -> None
     )
 
     assert "| Sensitive |" in entra
-    assert entra.count("| No        |") == 14
+    assert entra.count("| No        |") == 13
     assert '"label": "Navigate only"' in entra
     assert '"label": "Navigate and capture"' in entra
     assert '"mode": "navigate-only"' in entra
@@ -164,12 +167,11 @@ def test_entra_companion_has_explicit_capture_and_visual_help_contract() -> None
         'Record it in the worksheet?"'
     ) in entra
     assert '"label": "{VISIBLE_TARGET_LABEL}"' in entra
-    assert "attempt vertical centering" in entra
-    assert "re-inspect its post-scroll position" in entra
-    assert "before a screenshot exists" in entra
-    assert "only after the human selects **Show me what to click**" in entra
+    assert "`pointerError`" in entra
+    assert "pointer positioning never blocks the initial render" in entra
+    assert "complete `targets` array" in entra
     assert "Build `positionRatio` from the post-scroll geometry" in protocol
-    assert "Set `centered` to `true` only" in protocol
+    assert "Set `centered` to `true` when" in protocol
 
 
 def test_entra_companion_uses_compact_authoritative_worksheet_projection() -> None:
@@ -191,3 +193,19 @@ def test_entra_companion_uses_compact_authoritative_worksheet_projection() -> No
     assert "`worksheet.nextOperation`" in entra
     assert "deliberately omits confirmed values and historical views" in entra
     assert "Do not reconstruct progress" in entra
+    assert "A **worksheet row** is one entry" in entra
+    assert "do not reread the root setup skill" in entra
+    assert "worksheet-browser-complete-and-record" in entra
+    assert "records only an accepted result" in entra
+    assert "pointer positioning never blocks the initial render" in entra
+    assert "A `stage` of `recorded`" in entra
+    assert "standalone revision-bound `wait` and `worksheet-record`" in entra
+    assert "worksheet-record" in entra
+    assert "screenshot controls are not rendered there" in protocol
+    assert "native cancellation" in entra
+    assert "Do not call `workday_assisted_browser.py stop`" in entra
+    assert "worksheet-reset" in entra
+    assert "clears only worksheet draft and companion interaction state" in entra
+    assert "worksheet-present" in entra
+    assert "Never manually author, patch, or reuse a row view payload" in entra
+    assert "lastKnownUrlTemplate" in entra

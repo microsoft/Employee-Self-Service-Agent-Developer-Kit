@@ -270,7 +270,8 @@ async function renderVisualHelp(
   revision,
   pointerStatus,
 ) {
-  if (!view?.visualHelp || !visualHelp) {
+  // The Integrated Browser keeps pointer guidance but does not render screenshots.
+  if (vscodeApi || !view?.visualHelp || !visualHelp) {
     evidence.hidden = true;
     evidence.replaceChildren();
     renderedVisualHelpKey = null;

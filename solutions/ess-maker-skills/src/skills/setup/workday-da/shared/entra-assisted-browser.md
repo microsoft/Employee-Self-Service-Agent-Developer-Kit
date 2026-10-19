@@ -119,63 +119,32 @@ Load this guide and `assisted-browser.md` when entering or materially resuming a
    - On success, keep the target visible while publishing the canonical row interaction and its pointer targets.
    - At the end of the operation budget, report the final `failedAt`, observed page state, and attempted adjustments through `shared-browser-result --operation "{OPERATION}" --status failed --error "{SAFE_REASON}"`. The worksheet row remains pending.
 
-7. Report successful navigation and publish the canonical post-navigation interaction in one terminal call. This shared ordering prevents either mode from presenting a row interaction before its browser work is complete.
-
-   For **Navigate only**:
+7. Finalize the successful browser result with one terminal call. Build a small JSON object from the baseline result, not the complete baseline result. Include `value` for a direct-value or attestation row, `values` for the Enterprise application Overview or SAML signing row, and the complete `targets` array when geometry is available. If geometry failed, use `pointerError` with the safe reason instead of `targets`. Omit both pointer fields for a row where pointer guidance is prohibited or unnecessary.
 
    ```powershell
-   python scripts/workday_assisted_browser.py worksheet-browser-complete --operation "{OPERATION}"
-   ```
-
-   Direct-value rows render text entry with the manual table's **What to record** instruction. The Enterprise application Overview operation renders two inputs and submits the application name and Application ID together. The SAML signing operation renders three inputs and submits the signing option, active certificate thumbprint, and active certificate expiration together. Single-choice attestation rows render confirmation with their canonical worksheet response.
-
-   For **Navigate and capture**, use the successful baseline result for the current worksheet row. For a direct-value row, pipe only its detected worksheet `value` through stdin so it does not enter command history. For an attestation row, pipe only the safe baseline evidence summary:
-
-   ```powershell
-   $detectedValue | python scripts/workday_assisted_browser.py worksheet-browser-complete --operation "{OPERATION}" --value-file - --target-label "{VISIBLE_TARGET_LABEL}"
-   ```
-
-   For the Enterprise application Overview and SAML signing operations, serialize only the returned `values` object as JSON and pipe that JSON through `--value-file -` instead of `$detectedValue`.
-
-   `worksheet-browser-complete` validates the authorized mode, records navigation completion, and publishes the matching entry or confirmation in one bounded companion transition. For either mode, read its returned `interaction` and revision instead of assuming the interaction type. If navigation is recorded but presentation fails, the command reports that partial outcome explicitly; retry the same command to publish the interaction without repeating browser navigation. Navigate and capture renders a detected-value confirmation for direct-value rows or the shared instruction and canonical worksheet response for single-choice attestations. Capture evidence renders separately from the worksheet response.
-
-   When the successful browser operation returned `targets`, retain that exact target set in memory and pipe the complete set directly to one revision-bound `point-targets` call:
-
-   ```powershell
-   $targetsJson = @'
-   [
-     {
-       "label": "{VISIBLE_TARGET_LABEL}",
-       "positionRatio": 0.5,
-       "centered": true
-     }
-   ]
+   $browserResult = @'
+   {
+     "value": "{DETECTED_VALUE_OR_SAFE_EVIDENCE}",
+     "targets": [
+       {
+         "label": "{VISIBLE_TARGET_LABEL}",
+         "positionRatio": 0.5,
+         "centered": true
+       }
+     ]
+   }
    '@
 
-   $targetsJson | python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --revision {INTERACTION_REVISION} --targets-file -
+   $browserResult | python scripts/workday_assisted_browser.py worksheet-browser-complete-and-record --operation "{OPERATION}" --result-file -
    ```
 
-   Repeat the target object inside the array for every target returned by the baseline. Do not pass the complete baseline result or wrap the array as `{"targets": [...]}`.
+   For **Navigate only**, omit `value` and `values`. For a combined-value row, replace `value` with the exact `values` object returned by the baseline. Do not include baseline metadata such as `ok`, `url`, or `applicationUrl` in the command payload. Retain `applicationUrl` separately for later baselines.
 
-   If bounded geometry inspection fails, report the safe reason without blocking or replacing the row interaction:
+   `worksheet-browser-complete-and-record` preserves the already proven operation order: it records navigation completion, publishes the canonical entry or confirmation, attempts revision-bound pointer publication, waits for that entry or confirmation, and records only an accepted result. The entry or confirmation is published before pointer work begins, so pointer positioning never blocks the initial render. Pointer failure is returned as `pointerPublication.status: failed` and does not prevent review or recording.
 
-   ```powershell
-   python scripts/workday_assisted_browser.py point-targets --operation "{OPERATION}" --revision {INTERACTION_REVISION} --error "{SAFE_REASON}"
-   ```
+   A `stage` of `recorded` includes the updated worksheet projection. A `stage` of `review-again` records nothing; keep the row authorization, re-inspect or rerun the same baseline, and submit a new compact result. A `stage` of `awaiting-review` records nothing because the wait timed out; resume with the standalone revision-bound `wait` and `worksheet-record` commands. If the combined command stops with an error after publishing the interaction, use `worksheet-status` and the standalone `point-targets`, `wait`, and `worksheet-record` commands as recovery paths rather than repeating completed work.
 
-   Pointer enrichment remains optional. The same revision-bound arrow rail is used for both assistance modes, including when the human submits or confirms before pointers arrive. A stale pointer result after a newer revision was published is normal completion. Do not republish the row or repeat navigation. Navigate and capture retains `visualHelp`, so **Show me what to click** becomes available after the pointer set is ready and before a screenshot exists. Navigate only provides arrows without screenshot capture. Wait with `--interaction any`.
-   When a baseline returns multiple targets, publish the complete array in one `point-targets` call. The companion renders one labeled marker per target and separates nearby markers on the rail; do not collapse the set to one representative target.
-
-8. If the result is `visual-help`, attempt the screenshot only after the human selects **Show me what to click**. On failure, report **Screenshot unsuccessful** through `screenshot-result`. Wait again with `--interaction any` for the still-pending row interaction.
-9. After confirmation or accepted entry, record the exact revision-bound interaction:
-
-   ```powershell
-   python scripts/workday_assisted_browser.py worksheet-record --operation "{OPERATION}" --revision {INTERACTION_REVISION}
-   ```
-
-   `worksheet-record` reads the accepted interaction from companion state, maps combined results to their separate worksheet rows, preserves unrelated rows, writes the draft atomically, and returns the updated worksheet status. Do not pass the worksheet value again, open the draft, or run a separate `worksheet-status` after a successful record. `capture`, `screenshot`, and `screenshot-result` are image operations, not worksheet-recording tools.
-
-10. Continue with the returned `worksheet.nextOperation`. Do not reread the guides between rows. Pass the retained `applicationUrl` in the baseline options for rows that target the same Enterprise application. Each baseline compares the current URL with its expected URL and navigates only when they differ.
+8. Continue with the returned `worksheet.nextOperation`. Do not reread the guides between rows. Pass the retained `applicationUrl` in the baseline options for rows that target the same Enterprise application. Each baseline compares the current URL with its expected URL and navigates only when they differ.
 
 ### Interruptions
 
