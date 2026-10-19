@@ -110,3 +110,29 @@ out-of-scope rule, and the regression check are all textually identical to befor
 (confirmed via `git diff` against commit bc500acb, which touched only the clarify-first
 sections).
 
+## Re-verification — 2026-10-18 8000-character trim
+
+The prompt was trimmed to fit an 8000-character limit (commit 1951a879): removed the
+revision-history blockquote and tightened the identity paragraph and the escalation-info list
+intro. Diffed the entire rule-bearing body of the file (every section from "Clarifying questions"
+through "Emotional intelligence" — i.e., everything any of the 26 cases above actually test)
+between the pre-trim and post-trim versions.
+
+**Result: only one line differs**, and it is not referenced by any case's expected behavior:
+
+```
+- When escalating, be concise and helpful. Explain what information the employee should include...
++ When escalating, be concise: list what to include...
+```
+
+This is a wording-only change to the "Escalation behavior" section's closing sentence (what
+information to collect when escalating) — no case tests that exact phrasing. Everything the
+blockquote removal and identity-paragraph tightening touched sits entirely outside the
+rule-bearing body and is likewise untested by any case.
+
+**Conclusion: no regression.** All 26 cases (1-14 original, 15-26 UAT-sourced) retain their prior
+verdicts unchanged — 24 PASS, 1 PASS (case 15b, upgraded in the prior re-verification pass), 1
+PREDICTED PASS (case 16), plus the 2 sandbox-fidelity gaps (23, 25) and 1 out-of-scope platform
+item (26) carried forward as-is, since none of those are affected by the trim either.
+
+
