@@ -4,8 +4,8 @@
 """Independent Workday readiness checks for the selected ESS HR DA.
 
 Shared Workday checks remain reusable diagnostics. This module owns the
-DA-specific package, runtime-flow, delegated-authorization, topic, wiring, and
-employee-test evidence contracts used by the Workday DA profiles.
+DA-specific package, runtime-flow, delegated-authorization, topic, and wiring
+contracts used by the Workday DA profiles.
 """
 
 from __future__ import annotations
@@ -80,7 +80,6 @@ def run_workday_da_checks(runner) -> list[CheckResult]:
         ("WD-DA-TOPIC-001", _check_reviewed_workday_topics),
         ("WD-DA-WIRING-001", _check_runtime_template_wiring),
         ("WD-DA-ATTACH-001", _check_agent_flow_attachment),
-        ("WD-DA-RUN-001", _check_correlated_runtime_evidence),
     )
     results: list[CheckResult] = []
     should_execute = getattr(runner, "should_execute", lambda _id: True)
@@ -1068,21 +1067,4 @@ def _check_agent_flow_attachment(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value,
         automation_type="manual",
         evidence={"expectedFlowNames": flow_names},
-    )]
-
-
-def _check_correlated_runtime_evidence(_runner) -> list[CheckResult]:
-    return [_da_result(
-        "WD-DA-RUN-001",
-        Status.NOT_CONFIGURED.value,
-        "Retired employee runtime-evidence correlation",
-        "Bounded Power Automate run-history windows cannot prove which "
-        "conversation initiated a run and are no longer accepted as Workday "
-        "scenario evidence.",
-        remediation=(
-            "Complete the guided lifecycle with a successful maker scenario "
-            "in the Copilot Studio Test pane. Publishing and non-maker "
-            "validation are post-skill activities."
-        ),
-        automation_type="passive",
     )]

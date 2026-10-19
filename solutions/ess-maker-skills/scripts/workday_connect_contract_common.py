@@ -69,6 +69,7 @@ def _parse_markdown_worksheet(
     labels: tuple[str, ...],
     label: str,
     multiline_labels: frozenset[str],
+    optional_labels: frozenset[str],
 ) -> dict[str, str]:
     if len(lines) < 2:
         raise WorkdayConnectContractError(
@@ -121,7 +122,11 @@ def _parse_markdown_worksheet(
             flags=re.IGNORECASE,
         ).strip()
 
-    missing = [candidate for candidate in labels if candidate not in values]
+    missing = [
+        candidate
+        for candidate in labels
+        if candidate not in values and candidate not in optional_labels
+    ]
     if missing:
         raise WorkdayConnectContractError(
             f"{label} is missing labels: " + ", ".join(missing) + "."
@@ -170,8 +175,11 @@ def _parse_labeled_worksheet(
     labels: tuple[str, ...],
     label: str,
     multiline_labels: frozenset[str] = frozenset(),
+    optional_labels: frozenset[str] = frozenset(),
     label_aliases: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
+    if not optional_labels <= frozenset(labels):
+        raise ValueError("Optional worksheet labels must be canonical labels.")
     if not isinstance(worksheet, str) or not worksheet.strip():
         raise WorkdayConnectContractError(f"{label} is required.")
     if len(worksheet) > 16384 or "\x00" in worksheet:
@@ -188,6 +196,7 @@ def _parse_labeled_worksheet(
             labels=labels,
             label=label,
             multiline_labels=multiline_labels,
+            optional_labels=optional_labels,
         )
     normalized_labels = {
         re.sub(r"[^a-z0-9]+", " ", candidate.casefold()).strip(): candidate
@@ -236,7 +245,11 @@ def _parse_labeled_worksheet(
         raise WorkdayConnectContractError(
             f"{label} line {line_number} does not use a recognized label."
         )
-    missing = [candidate for candidate in labels if candidate not in values]
+    missing = [
+        candidate
+        for candidate in labels
+        if candidate not in values and candidate not in optional_labels
+    ]
     if missing:
         raise WorkdayConnectContractError(
             f"{label} is missing labels: " + ", ".join(missing) + "."

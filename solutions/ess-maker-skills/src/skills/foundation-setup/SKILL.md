@@ -124,7 +124,7 @@ Setup does not automatically:
 - publish the agent;
 - make it available to employees;
 - promote it to another environment;
-- configure an HR or IT system integration;
+- configure an external HR or IT system;
 - allocate capacity or grant permissions; or
 - perform administrator actions on your behalf.
 
@@ -433,11 +433,11 @@ continuation:
    `/landing-page` at its first decision surface. Do not render the setup
    terminal choice control.
 2. When the current request explicitly states `/connect` as the supported next
-   goal, recommend **Add or change an integration**.
+   goal, recommend **Add or change an external HR or IT system**.
 3. Otherwise, when authoritative product-specific evidence shows that an
    applicable supported integration is configured, render the setup terminal
    choice control without a recommended action.
-4. Otherwise, recommend **Add or change an integration**.
+4. Otherwise, recommend **Add or change an external HR or IT system**.
 
 Do not treat **Connections: Not required**, an aggregate diagnostic row, or the
 presence or absence of native logical connector references as authoritative
@@ -449,28 +449,28 @@ recommendation reflects the absence of completion evidence; it does not claim
 that an integration is missing or broken.
 
 Before the choice control, render the applicable maker-facing recommendation
-only when **Add or change an integration** is recommended:
+only when **Add or change an external HR or IT system** is recommended:
 
 - For the default integration recommendation, say: **I recommend Add or change
-  an integration so this agent can communicate with your HR or IT systems.
-  Setup did not find authoritative evidence that an applicable integration is
+  an external HR or IT system so this agent can communicate with the system
+  your organization uses. Setup did not find authoritative evidence that an applicable external system is
   configured.**
 - For an explicitly requested `/connect` action, state that it matches what the
-  maker asked to do next and explain that integrations let the agent
-  communicate with HR or IT systems.
+  maker asked to do next and explain that this connects the agent to the
+  external HR or IT system it needs to use.
 
 Then present these choices in one host interactive single-selection control:
 
-- **Add or change an integration{CONNECT_RECOMMENDATION_SUFFIX}**
+- **Add or change an external HR or IT system{CONNECT_RECOMMENDATION_SUFFIX}**
 - **Switch to another configured agent** -- when the latest live agent list contains at least one selectable identity other than the active agent.
 - **Set up another agent in this environment**
 - **Exit setup**
 
 Set `{CONNECT_RECOMMENDATION_SUFFIX}` to ` (Recommended)` only when **Add or
-change an integration** is recommended; otherwise set it to an empty string.
+change an external HR or IT system** is recommended; otherwise set it to an empty string.
 Omit **Switch to another configured agent** when it is unavailable. Leave every
 choice initially unselected, and always render **Exit
-setup** after every static and dynamic choice. **Add or change an integration**
+setup** after every static and dynamic choice. **Add or change an external HR or IT system**
 begins `/connect` at its first decision surface. **Exit setup** acknowledges the
 displayed results and renders a durable completion snapshot as the final chat
 message without rerunning checks. Reuse the exact agent link, final readiness
@@ -531,17 +531,17 @@ used for the ready choice control. Render exactly one of these non-interactive
 command lists, with the recommended command first:
 
 - For the default integration recommendation:
-  - Run `/connect` **(Recommended)** to add or change an integration so this agent can communicate with your HR or IT systems. Setup did not find authoritative evidence that an applicable integration is configured.
+  - Run `/connect` **(Recommended)** to add or change an external HR or IT system. Setup did not find authoritative evidence that an applicable external system is configured.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
   - Type `/menu` to see all available capabilities.
 - For the evidence-based landing-page recommendation:
-  - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable integration is already configured, so this is the next useful customization step.
-  - Run `/connect` to add or change an integration.
+  - Run `/landing-page` **(Recommended)** to configure the branding and content employees see. An applicable external HR or IT system is already configured, so this is the next useful customization step.
+  - Run `/connect` to add or change an external HR or IT system.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Type `/menu` to see all available capabilities.
 - For an explicitly requested `/connect` action:
-  - Run `/connect` **(Recommended)** to add or change an integration. This matches what you asked to do next, and integrations let this agent communicate with your HR or IT systems.
+  - Run `/connect` **(Recommended)** to add or change an external HR or IT system. This matches what you asked to do next.
     {SUPPORTED_INTEGRATION_SHORTCUTS}
   - Run `/landing-page` to configure the branding and content employees see.
   - Type `/menu` to see all available capabilities.

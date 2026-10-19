@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,31 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
     )
 
 
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--runtime-evidence-attempt-id",
+        "--runtime-evidence-start",
+        "--runtime-evidence-end",
+        "--runtime-evidence-flow-id",
+        "--runtime-evidence-migration-baseline",
+    ),
+)
+def test_retired_runtime_evidence_options_are_rejected(
+    option: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    argv = ["flightcheck", option]
+    if option != "--runtime-evidence-migration-baseline":
+        argv.append("value")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
 class _FakeRunResult:
     """Minimal stand-in exposing only the counts ``_run_exit_code`` reads."""
 
@@ -104,21 +130,6 @@ def test_run_exit_code_treats_blocked_as_not_ready(
     # previously omitted result.blocked.
     result = _FakeRunResult(failed=failed, blocked=blocked, errors=errors)
     assert cli._run_exit_code(result) == expected
-
-
-@pytest.mark.parametrize(
-    "label",
-    ["employee@example.com", "attempt label", "../attempt", "x" * 129],
-)
-def test_runtime_evidence_label_rejects_free_form_or_sensitive_text(
-    tmp_path: Path,
-    label: str,
-) -> None:
-    args = _args("WD-DA-RUN-001", tmp_path)
-    args.runtime_evidence_attempt_id = label
-
-    with pytest.raises(ValueError, match="opaque label"):
-        cli._runtime_evidence_values(args)
 
 
 @pytest.mark.parametrize(
@@ -878,56 +889,6 @@ class TestHermeticRun:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
 
         assert exc.value.code == 1
-
-    def test_runtime_evidence_arguments_reach_single_checkpoint_runner(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        _silence_output: None,
-    ) -> None:
-        captured = {}
-
-        def _check(runner):
-            captured["label"] = runner.runtime_evidence_attempt_id
-            captured["start"] = runner.runtime_evidence_start
-            captured["end"] = runner.runtime_evidence_end
-            captured["flow_ids"] = runner.runtime_evidence_flow_ids
-            return [_row("WD-DA-RUN-001", Status.PASSED.value)]
-
-        class _Spec:
-            category_label = "Fake"
-            is_family = False
-
-        class _Plan:
-            clients = frozenset()
-            requires_config = False
-            requires_dataverse_endpoint = False
-
-            ordered_fns = [("Fake", _check)]
-
-        monkeypatch.setattr(registry, "resolve", lambda _target: _Spec())
-        monkeypatch.setattr(
-            registry,
-            "transitive_requirements",
-            lambda _target: _Plan(),
-        )
-        monkeypatch.chdir(tmp_path)
-        args = _args("WD-DA-RUN-001", tmp_path)
-        args.runtime_evidence_attempt_id = "attempt-001"
-        args.runtime_evidence_start = "2026-01-01T00:00:00Z"
-        args.runtime_evidence_end = "2026-01-01T00:05:00Z"
-        args.runtime_evidence_flow_id = ["flow-1", "flow-2"]
-
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(args)
-
-        assert exc.value.code == 0
-        assert captured == {
-            "label": "attempt-001",
-            "start": "2026-01-01T00:00:00Z",
-            "end": "2026-01-01T00:05:00Z",
-            "flow_ids": ("flow-1", "flow-2"),
-        }
 
     def test_failed_row_exits_1(
         self,

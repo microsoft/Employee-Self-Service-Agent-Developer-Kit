@@ -367,18 +367,6 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.ESS_MAKER.value,),
     ),
     CheckpointSpec(
-        key="WD-DA-RUN-001",
-        category_fn=run_workday_da_checks,
-        category_label="Workday DA",
-        clients=frozenset({PP_ADMIN}),
-        requires_config=True,
-        requires_dataverse_endpoint=False,
-        prereqs=("WD-DA-FLOW-001",),
-        pp_admin_flow_required=True,
-        priority=Priority.CRITICAL.value,
-        roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
-    ),
-    CheckpointSpec(
         key="WD-SEC-003",
         category_fn=run_workday_checks,
         category_label="Workday",

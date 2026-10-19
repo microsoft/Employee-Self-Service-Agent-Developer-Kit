@@ -301,9 +301,12 @@ CONNECT_LIFECYCLE_PHASES = (
     "workday_admin",
     "connections",
     "runtime",
-    "employee_validation",
+    "maker_validation",
 )
 _CONNECT_LIFECYCLE_PHASE_SET = frozenset(CONNECT_LIFECYCLE_PHASES)
+_CONNECT_LIFECYCLE_PHASE_ALIASES = {
+    "employee_validation": "maker_validation",
+}
 CONNECT_LIFECYCLE_PHASE_UNKNOWN = "unknown"
 CONNECT_LIFECYCLE_BLOCKER_CATEGORIES = (
     "auth",
@@ -366,6 +369,10 @@ def normalize_connect_lifecycle_phase(phase: str) -> str:
     normalized = str(phase or "").strip().lower().replace("-", "_")
     if not normalized:
         return ""
+    normalized = _CONNECT_LIFECYCLE_PHASE_ALIASES.get(
+        normalized,
+        normalized,
+    )
     if normalized in _CONNECT_LIFECYCLE_PHASE_SET:
         return normalized
     return CONNECT_LIFECYCLE_PHASE_UNKNOWN

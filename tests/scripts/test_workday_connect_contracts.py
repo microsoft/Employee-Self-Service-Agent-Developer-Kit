@@ -20,12 +20,18 @@ from workday_connect_contracts import (  # noqa: E402
     parse_workday_admin_return_worksheet,
     validate_agent_binding_evidence,
     validate_administrator_partial_evidence,
-    validate_employee_evidence,
-    validate_employee_failure_evidence,
+    validate_maker_evidence,
+    validate_maker_failure_evidence,
     validate_entra_verification,
     validate_workday_admin_response,
 )
 import workday_connect_contracts as contracts  # noqa: E402
+from workday_connect_entra_contracts import (  # noqa: E402
+    ENTRA_ADMIN_COMPLETION_QUESTION,
+    ENTRA_ADMIN_CONSENT_NOTE,
+    ENTRA_ADMIN_ENGAGEMENT_QUESTION,
+    ENTRA_APP_ADMIN_ROLE,
+)
 from workday_connect_model import (  # noqa: E402
     ADMINISTRATOR_REQUIRED_FIELDS,
     default_state,
@@ -203,7 +209,6 @@ def _workday_response(**overrides):
             "Time Off and Leave",
         ],
         "optionalDomains": [],
-        "authorizationOutcome": "verified",
     }
     response.update(overrides)
     return response
@@ -233,23 +238,15 @@ Certificate: The certificate transferred from the completed Entra handoff
 Certificate expiration: Yes, the expiration date matches exactly
 OAuth client ID: safe-client-id
 API client: An existing approved client was verified
-Client grant type: SAML Bearer
-Workday owned scope: Yes
 OAuth token URL: https://example.workday.com/ccx/oauth2/contoso_impl/token
 REST base URL: https://example.workday.com/ccx/api
 SOAP base URL: https://example.workday.com/ccx/service
 Authentication policy: An existing active policy allows SAML
 Network readiness: Both Workday hosts are allowed
 Rollout: Entire workforce - All Employees access is configured
-Public worker reports: Yes, Get permission is verified
-Integration permissions: Yes, Get permission is verified
-Functional-area scopes: Yes, all four required functional areas are present
-Optional domains: No additional domains are required
-Additional domain mappings:
-Authorization: Verified without an authorization error
-Remediated domain:
-Remediation scenario:
-Authorization retest:
+API client access: Yes, SAML Bearer, Workday Owned Scope, and all four required functional areas are configured
+Required employee access: Yes, Get permission is verified for Public Worker Reports and Integration Permissions
+Additional scenario domains: No additional scenario domains are required
 """
 
 
@@ -271,7 +268,7 @@ def _worksheet_table(packet: dict, worksheet: str) -> str:
         if matched is not None:
             values[matched] = raw_line[len(matched) + 1 :].strip()
             current_label = matched
-        elif current_label == "Additional domain mappings":
+        elif current_label == "Additional scenario domains":
             values[current_label] += "\n" + raw_line.strip()
         else:
             raise AssertionError(f"Unexpected worksheet line: {raw_line}")
@@ -379,8 +376,10 @@ def test_entra_handoff_can_request_explicit_creation():
     assert handoff["identifiers"]["entraAppIdUri"] is None
     assert handoff["requiresRediscovery"] is True
     assert handoff["scope"]["directoryDisplayName"] == "Contoso"
-    assert handoff["engagementQuestion"].startswith("Have you looped in")
-    assert handoff["completionQuestion"].startswith("Has the Microsoft Entra")
+    assert handoff["administratorRole"] == ENTRA_APP_ADMIN_ROLE
+    assert handoff["consentNote"] == ENTRA_ADMIN_CONSENT_NOTE
+    assert handoff["engagementQuestion"] == ENTRA_ADMIN_ENGAGEMENT_QUESTION
+    assert handoff["completionQuestion"] == ENTRA_ADMIN_COMPLETION_QUESTION
     assert any("NameID" in item for item in handoff["informationToReturn"])
     capture_by_field = {
         field: instruction
@@ -936,26 +935,37 @@ def test_workday_labeled_worksheet_parses_to_validated_evidence() -> None:
     assert result["evidence"]["optionalDomains"] == []
 
 
+def test_workday_phase_three_worksheet_excludes_runtime_authorization() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    labels = packet["responseForm"]["collection"]["labels"]
+    required = packet["responseForm"]["required"]
+
+    assert "API client access" in labels
+    assert "Required employee access" in labels
+    assert "Additional scenario domains" in labels
+    assert "optionalDomains" not in required
+    assert "optionalDomains" not in ADMINISTRATOR_REQUIRED_FIELDS[
+        "workday-admin"
+    ]
+    assert not any("authorization" in label.casefold() for label in labels)
+    assert not any("retest" in label.casefold() for label in labels)
+
+
 def test_workday_customer_labeled_response_accepts_common_labels() -> None:
     worksheet = _workday_worksheet()
     for canonical, customer_label in {
         "SAML row settings": "SAML configuration",
         "Certificate expiration": "Certificate expiry date",
         "OAuth client ID": "Client ID",
-        "Client grant type": "Grant type",
-        "Workday owned scope": "Include Workday Owned Scope",
         "OAuth token URL": "Token URL",
         "REST base URL": "REST URL",
         "SOAP base URL": "SOAP URL",
         "Authentication policy": "Auth policy",
         "Network readiness": "Network access",
         "Rollout": "Employee population",
-        "Functional-area scopes": "Functional areas",
-        "Additional domain mappings": "Domain mappings",
-        "Authorization": "Authorization result",
-        "Remediated domain": "Affected domain",
-        "Remediation scenario": "Affected scenario",
-        "Authorization retest": "Retest result",
+        "API client access": "API access",
+        "Required employee access": "Employee access",
+        "Additional scenario domains": "Additional domains",
     }.items():
         worksheet = worksheet.replace(
             f"{canonical}:",
@@ -989,10 +999,8 @@ def test_workday_completed_capture_table_parses_to_validated_evidence() -> None:
 
 def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
-        "Optional domains: No additional domains are required\n"
-        "Additional domain mappings:\n",
-        "Optional domains: Yes, additional supported scenarios require domains\n"
-        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Additional scenario domains: No additional scenario domains are required\n",
+        "Additional scenario domains: Worker Data | custom worker lookup\n"
         "Absence | custom leave lookup\n",
     )
 
@@ -1013,12 +1021,40 @@ def test_workday_labeled_worksheet_parses_multiline_optional_domains() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "worksheet",
+    [
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required\n"
+            ),
+            "",
+        ),
+        _workday_worksheet().replace(
+            (
+                "Additional scenario domains: "
+                "No additional scenario domains are required"
+            ),
+            "Additional scenario domains:",
+        ),
+    ],
+)
+def test_workday_optional_domains_may_be_omitted_or_blank(
+    worksheet: str,
+) -> None:
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        worksheet,
+    )
+
+    assert parsed["optionalDomains"] == []
+
+
 def test_workday_capture_table_parses_multiline_optional_domains() -> None:
     worksheet = _workday_worksheet().replace(
-        "Optional domains: No additional domains are required\n"
-        "Additional domain mappings:\n",
-        "Optional domains: Yes, additional supported scenarios require domains\n"
-        "Additional domain mappings: Worker Data | custom worker lookup\n"
+        "Additional scenario domains: No additional scenario domains are required\n",
+        "Additional scenario domains: Worker Data | custom worker lookup\n"
         "Absence | custom leave lookup\n",
     )
     packet = build_workday_admin_packet(_workday_state())
@@ -1040,12 +1076,32 @@ def test_workday_capture_table_parses_multiline_optional_domains() -> None:
     ]
 
 
+def test_workday_capture_table_may_omit_optional_domains_row() -> None:
+    packet = build_workday_admin_packet(_workday_state())
+    table = _worksheet_table(packet, _workday_worksheet())
+    table = "\n".join(
+        line
+        for line in table.splitlines()
+        if not line.startswith("| Additional scenario domains |")
+    )
+
+    parsed = parse_workday_admin_return_worksheet(
+        _workday_state(),
+        table,
+    )
+
+    assert parsed["optionalDomains"] == []
+
+
 @pytest.mark.parametrize(
     "worksheet",
     [
         _workday_worksheet().replace(
-            "Workday owned scope: Yes",
-            "Workday owned scope: No or not sure",
+            (
+                "API client access: Yes, SAML Bearer, Workday Owned Scope, "
+                "and all four required functional areas are configured"
+            ),
+            "API client access: No, one or more settings are missing",
         ),
         _workday_worksheet().replace(
             "OAuth client ID: safe-client-id\n",
@@ -1141,7 +1197,6 @@ def test_workday_admin_response_validates_exact_endpoints():
                 "Time Off and Leave",
             ],
             "optionalDomains": [],
-            "authorizationOutcome": "verified",
         },
     )
 
@@ -1166,6 +1221,19 @@ def test_workday_admin_response_enforces_limited_rollout_group():
             _workday_state(),
             _workday_response(employeeSecurityGroup="All Employees"),
         )
+
+
+def test_workday_admin_response_defaults_omitted_optional_domains() -> None:
+    response = _workday_response()
+    response.pop("optionalDomains")
+
+    result = validate_workday_admin_response(
+        _workday_state(),
+        response,
+    )
+
+    assert result["evidence"]["optionalDomains"] == []
+    assert result["partialEvidence"]["optionalDomains"] == []
 
 
 def test_workday_admin_response_requires_exact_functional_area_scopes():
@@ -1210,7 +1278,7 @@ def test_workday_admin_response_enforces_api_client_and_saml_mapping(
         )
 
 
-def test_workday_admin_response_requires_bounded_authorization_retest():
+def test_workday_admin_response_accepts_legacy_authorization_retest():
     response = _workday_response(
         authorizationOutcome="task-not-authorized-remediated",
     )
@@ -1234,9 +1302,11 @@ def test_workday_admin_response_requires_bounded_authorization_retest():
         },
     )
 
-    assert result["evidence"]["authorizationRetestOutcome"] == (
-        "verified-after-remediation"
-    )
+    assert "authorizationOutcome" not in result["evidence"]
+    assert "authorizationRemediationDomain" not in result["evidence"]
+    assert "authorizationRemediationScenario" not in result["evidence"]
+    assert "authorizationRetestOutcome" not in result["evidence"]
+    assert "authorizationOutcome" not in result["partialEvidence"]
 
 
 def test_partial_workday_evidence_keeps_valid_siblings() -> None:
@@ -1255,6 +1325,18 @@ def test_partial_workday_evidence_keeps_valid_siblings() -> None:
         "rolloutType": "limited-or-test",
     }
     assert set(result["fieldErrors"]) == {"oauthTokenUrl"}
+
+
+def test_partial_workday_evidence_rejects_legacy_authorization_fields() -> None:
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="unsupported fields: authorizationOutcome",
+    ):
+        validate_administrator_partial_evidence(
+            _state(),
+            "workday-admin",
+            {"authorizationOutcome": "verified"},
+        )
 
 
 def test_partial_administrator_evidence_rejects_secret_material() -> None:
@@ -1411,7 +1493,7 @@ def test_workday_admin_rejects_unused_response_fields():
         )
 
 
-def test_agent_binding_and_employee_evidence_are_strict():
+def test_agent_binding_and_maker_evidence_are_strict():
     state = _state()
     state["scope"].update(
         {
@@ -1479,10 +1561,10 @@ def test_agent_binding_and_employee_evidence_are_strict():
     ]
 
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
-        validate_employee_evidence(
+        validate_maker_evidence(
             {
                 "scenarioName": "Read-only scenario",
-                "testUserCategory": "standard employee",
+                "testUserCategory": "maker",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "outcome": "passed",
                 "employeeName": "not allowed",
@@ -1656,58 +1738,22 @@ def test_workday_admin_rejects_non_workday_or_mixed_endpoint_hosts():
         validate_workday_admin_response(state, response)
 
 
-def test_employee_evidence_rejects_maker_and_invalid_timestamp():
-    with pytest.raises(WorkdayConnectContractError, match="non-maker"):
-        validate_employee_evidence(
+def test_maker_evidence_rejects_non_maker_and_invalid_timestamp() -> None:
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="post-skill activity",
+    ):
+        validate_maker_evidence(
             {
                 "scenarioName": "Read-only scenario",
-                "testUserCategory": "Environment Maker",
+                "testUserCategory": "non-maker employee",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "outcome": "passed",
             }
         )
 
     with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
-            {
-                "testUserCategory": "non-maker employee",
-                "timestamp": "not-a-time",
-                "outcome": "passed",
-            }
-        )
-
-
-def test_employee_evidence_does_not_require_scenario_name():
-    assert validate_employee_evidence(
-        {
-            "testUserCategory": "non-maker employee",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "outcome": "passed",
-        }
-    ) == {
-        "testUserCategory": "non-maker employee",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "outcome": "passed",
-    }
-
-
-def test_maker_validation_evidence_is_accepted() -> None:
-    assert validate_employee_evidence(
-        {
-            "testUserCategory": "maker",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "outcome": "passed",
-        }
-    ) == {
-        "testUserCategory": "maker",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "outcome": "passed",
-    }
-
-
-def test_maker_validation_rejects_invalid_timestamp() -> None:
-    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
+        validate_maker_evidence(
             {
                 "testUserCategory": "maker",
                 "timestamp": "not-a-time",
@@ -1716,145 +1762,80 @@ def test_maker_validation_rejects_invalid_timestamp() -> None:
         )
 
 
-def test_employee_failure_evidence_derives_safe_canonical_fields():
-    for remediation_id, contract in (
-        contracts.EMPLOYEE_VALIDATION_REMEDIATIONS.items()
-    ):
-        evidence = {
-            "remediationId": remediation_id.lower(),
+def test_maker_validation_evidence_is_accepted() -> None:
+    assert validate_maker_evidence(
+        {
+            "scenarioName": "View my time off balance",
+            "testUserCategory": "maker",
+            "timestamp": "2026-09-25T00:00:00+00:00",
+            "outcome": "passed",
+        }
+    ) == {
+        "scenarioName": "View my time off balance",
+        "testUserCategory": "maker",
+        "timestamp": "2026-09-25T00:00:00Z",
+        "outcome": "passed",
+    }
+
+
+def test_maker_failure_evidence_derives_bounded_canonical_fields() -> None:
+    contract = contracts.MAKER_VALIDATION_REMEDIATIONS["WD-E2E-006"]
+
+    assert validate_maker_failure_evidence(
+        {
+            "remediationId": "wd-e2e-006",
+            "scenarioName": "View my time off balance",
+            "affectedDomain": "Worker Data: Time Off",
             "timestamp": "2026-09-25T00:00:00+00:00",
         }
-        if remediation_id == "WD-E2E-999":
-            evidence["failureSurface"] = "agent-chat"
-        assert validate_employee_failure_evidence(
-            evidence
-        ) == {
-            "remediationId": remediation_id,
-            "failureCategory": contract["failureCategory"],
-            "failureSurface": (
-                "agent-chat"
-                if remediation_id == "WD-E2E-999"
-                else contract["failureSurface"]
-            ),
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": contract["remediation"],
-        }
-
-
-def test_employee_failure_evidence_migrates_legacy_files():
-    assert validate_employee_failure_evidence(
-        {
-            "failureCategory": "workday-access-denied",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Customer-specific wording is discarded.",
-        }
     ) == {
         "remediationId": "WD-E2E-006",
-        "failureCategory": "workday-access",
-        "failureSurface": "workday-response",
+        "failureCategory": contract["failureCategory"],
+        "failureSurface": contract["failureSurface"],
         "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-006"
-            ]["remediation"]
-        ),
-    }
-    assert validate_employee_failure_evidence(
-        {
-            "failureCategory": "previous-custom-category",
-            "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Visit https://customer.example/employee.",
-        }
-    ) == {
-        "remediationId": "WD-E2E-999",
-        "failureCategory": "unknown",
-        "failureSurface": "other",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-999"
-            ]["remediation"]
-        ),
+        "remediation": contract["remediation"],
+        "scenarioName": "View my time off balance",
+        "affectedDomain": "Worker Data: Time Off",
     }
 
 
-def test_employee_failure_evidence_ignores_redundant_caller_text():
-    assert validate_employee_failure_evidence(
-        {
+def test_maker_failure_evidence_requires_guided_remediation_fields() -> None:
+    for missing_field in ("scenarioName", "affectedDomain"):
+        evidence = {
             "remediationId": "WD-E2E-006",
-            "failureCategory": "network",
+            "scenarioName": "View my time off balance",
+            "affectedDomain": "Worker Data: Time Off",
             "timestamp": "2026-09-25T00:00:00Z",
-            "remediation": "Visit https://customer.example/employee.",
         }
-    ) == {
-        "remediationId": "WD-E2E-006",
-        "failureCategory": "workday-access",
-        "failureSurface": "workday-response",
-        "timestamp": "2026-09-25T00:00:00Z",
-        "remediation": (
-            contracts.EMPLOYEE_VALIDATION_REMEDIATIONS[
-                "WD-E2E-006"
-            ]["remediation"]
-        ),
-    }
+        evidence.pop(missing_field)
+        with pytest.raises(
+            WorkdayConnectContractError,
+            match=rf"{missing_field} is required",
+        ):
+            validate_maker_failure_evidence(evidence)
 
 
-def test_employee_failure_evidence_rejects_unsafe_fields():
+def test_maker_failure_evidence_rejects_unsafe_or_unbounded_fields() -> None:
     with pytest.raises(WorkdayConnectContractError, match="unsupported fields"):
-        validate_employee_failure_evidence(
+        validate_maker_failure_evidence(
             {
                 "remediationId": "WD-E2E-006",
+                "scenarioName": "View my time off balance",
+                "affectedDomain": "Worker Data: Time Off",
                 "timestamp": "2026-09-25T00:00:00Z",
                 "accessToken": "must-not-be-recorded",
             }
         )
 
-    with pytest.raises(WorkdayConnectContractError, match="must be one of"):
-        validate_employee_failure_evidence(
+    with pytest.raises(
+        WorkdayConnectContractError,
+        match="must be WD-E2E-006",
+    ):
+        validate_maker_failure_evidence(
             {
                 "remediationId": "WD-E2E-123",
+                "scenarioName": "View my time off balance",
+                "affectedDomain": "Worker Data: Time Off",
                 "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="accepted only for WD-E2E-999",
-    ):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-006",
-                "failureSurface": "workday-response",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(
-        WorkdayConnectContractError,
-        match="failureSurface must be one of",
-    ):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-999",
-                "failureSurface": "https://customer.example/employee",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(WorkdayConnectContractError, match="is required"):
-        validate_employee_failure_evidence(
-            {
-                "remediationId": "WD-E2E-999",
-                "timestamp": "2026-09-25T00:00:00Z",
-            }
-        )
-
-    with pytest.raises(WorkdayConnectContractError, match="ISO-8601"):
-        validate_employee_evidence(
-            {
-                "scenarioName": "Read-only scenario",
-                "testUserCategory": "non-maker employee",
-                "timestamp": "not-a-time",
-                "outcome": "passed",
             }
         )

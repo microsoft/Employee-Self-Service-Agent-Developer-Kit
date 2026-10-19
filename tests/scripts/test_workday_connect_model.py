@@ -19,11 +19,18 @@ def test_default_state_has_six_primary_phases() -> None:
         "workday-admin",
         "connections",
         "runtime",
-        "employee-validation",
+        "maker-validation",
     ]
     assert model.next_phase_id(state) == "preflight"
     assert state["status"] == "in-progress"
-    assert state["schemaVersion"] == 10
+    assert state["schemaVersion"] == 12
+    assert state["activeTargetRealm"] == "dev"
+    assert list(state["targets"]) == ["dev", "test", "prod"]
+    assert state["targets"]["dev"]["deploymentStatus"] == (
+        "needs-configuration"
+    )
+    assert state["targets"]["test"] is None
+    assert state["targets"]["prod"] is None
     assert state["lifecycle"]["correlationId"]
     assert state["lifecycle"]["journal"] == []
     assert state["tenantFoundation"] is None
@@ -37,6 +44,21 @@ def test_default_state_has_six_primary_phases() -> None:
         state["phases"]["entra"]["administrator"]
     )
     assert "administrator" not in state["phases"]["runtime"]
+
+
+def test_active_target_projection_cannot_diverge() -> None:
+    import pytest
+
+    import workday_connect_model as model
+
+    state = model.default_state()
+    state["scope"]["environmentId"] = "different"
+
+    with pytest.raises(
+        model.WorkdayConnectModelError,
+        match="active target projection is inconsistent",
+    ):
+        model.validate_state(state)
 
 
 def test_workday_saml_entity_id_is_not_the_entra_app_uri() -> None:
@@ -149,9 +171,9 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
         "id": "entra",
         "title": "Microsoft Entra",
         "whatHappens": [
-            "Give the Microsoft Entra administrator one complete guided handoff.",
+            "Give the Microsoft Entra app administrator one complete guided handoff.",
             (
-                "Guide an Entra administrator through the required SAML, "
+                "Guide that app administrator through the required SAML, "
                 "permission, consent, assignment, and employee sign-in settings."
             ),
             (
@@ -162,7 +184,7 @@ def test_progress_text_is_a_visible_phase_roadmap() -> None:
     }
 
 
-def test_employee_validation_summary_preserves_test_then_publish_order() -> None:
+def test_maker_validation_summary_preserves_test_then_publish_order() -> None:
     import workday_connect_model as model
 
     state = model.default_state()
@@ -176,7 +198,7 @@ def test_employee_validation_summary_preserves_test_then_publish_order() -> None
         state["phases"][phase_id]["status"] = "complete"
 
     assert model.next_phase_summary(state) == {
-        "id": "employee-validation",
+        "id": "maker-validation",
         "title": "Maker validation",
         "whatHappens": [
             (

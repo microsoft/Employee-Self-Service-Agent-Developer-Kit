@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Microsoft Entra administrator contracts for Workday Connect."""
+"""Microsoft Entra app administrator contracts for Workday Connect."""
 
 from __future__ import annotations
 
@@ -29,6 +29,25 @@ from workday_connect_model import (
 
 WORKDAY_CONNECTOR_APP_ID = "4e4707ca-5f53-46a6-a819-f7765446e6ff"
 GRAPH_DELEGATED_PERMISSIONS = ("openid", "profile", "User.Read")
+ENTRA_APP_ADMIN_ROLE = (
+    "Application Administrator or Cloud Application Administrator (either "
+    "role by itself is sufficient; these are exact Microsoft Entra role "
+    "names)"
+)
+ENTRA_ADMIN_CONSENT_NOTE = (
+    "If tenant policy prevents the engaged app administrator from granting "
+    "admin consent, involve a separate consent-capable administrator for the "
+    "consent step only; you do not need to arrange one up front."
+)
+ENTRA_ADMIN_ENGAGEMENT_QUESTION = (
+    "Have you engaged a Microsoft Entra app administrator who holds either "
+    "the Application Administrator or Cloud Application Administrator role?"
+)
+ENTRA_ADMIN_COMPLETION_QUESTION = (
+    "Has the Microsoft Entra app administrator completed this handoff, "
+    "including Grant admin consent (by a separate consent-capable "
+    "administrator only if tenant policy required one)?"
+)
 ENTRA_PRESERVATION_OUTCOMES = {
     "preserved",
     "remediated",
@@ -82,7 +101,7 @@ def parse_entra_return_worksheet(
     values = _parse_labeled_worksheet(
         worksheet,
         labels=ENTRA_WORKSHEET_LABELS,
-        label="Microsoft Entra administrator return worksheet",
+        label="Microsoft Entra app administrator return worksheet",
         label_aliases=ENTRA_WORKSHEET_LABEL_ALIASES,
     )
     confirmed = {
@@ -244,7 +263,7 @@ def build_entra_handoff(
     state: Mapping[str, Any],
     discovery: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an Entra administrator handoff with optional live discovery."""
+    """Build an Entra app administrator handoff with optional discovery."""
     _require_preflight(state)
     if discovery is not None and not isinstance(discovery, Mapping):
         raise WorkdayConnectContractError("Entra discovery must contain a JSON object.")
@@ -351,7 +370,7 @@ def build_entra_handoff(
         ]
     elif reusable:
         actions = [
-            "Ask the Microsoft Entra administrator to review the exact "
+            "Ask the Microsoft Entra app administrator to review the exact "
             "Workday application and service principal",
             "Reuse the stored tenant configuration only after the "
             "administrator confirms every required setting",
@@ -381,16 +400,10 @@ def build_entra_handoff(
                 else {}
             ),
         },
-        "administratorRole": (
-            "Application Administrator or Cloud Application Administrator"
-        ),
-        "engagementQuestion": (
-            "Have you looped in the Microsoft Entra administrator to "
-            "complete these tasks?"
-        ),
-        "completionQuestion": (
-            "Has the Microsoft Entra administrator completed the tasks in this handoff?"
-        ),
+        "administratorRole": ENTRA_APP_ADMIN_ROLE,
+        "consentNote": ENTRA_ADMIN_CONSENT_NOTE,
+        "engagementQuestion": ENTRA_ADMIN_ENGAGEMENT_QUESTION,
+        "completionQuestion": ENTRA_ADMIN_COMPLETION_QUESTION,
         "target": target,
         "identifiers": {
             "workdaySamlEntityId": entity_id,
@@ -650,7 +663,7 @@ _ROLE_AWARE_GRAPH_ENTRA_CHECKS = _ENTRA_CHECKS - {
     "samlSigningOption",
 }
 # Role-aware execution will require these live Entra API checks later.
-# For now, Workday Connect accepts a guided Entra administrator attestation.
+# For now, Workday Connect accepts a guided app administrator attestation.
 # _GRAPH_ONLY_ENTRA_CHECKS = _ROLE_AWARE_GRAPH_ENTRA_CHECKS
 
 

@@ -22,6 +22,10 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 See [`setup/README.md`](setup/README.md) for GitHub Codespaces, FlightCheck-only, and Maker vs Developer mode selection. Prefer to clone and open the repo yourself? See the [maker kit quick start](solutions/ess-maker-skills/README.md#quick-start). A **GitHub Copilot subscription is required** for the in-editor maker experience.
 
+> [!NOTE]
+>
+> **The installer can be run as a normal user; elevated administrator privileges are not required.** After installation, `/setup` and other operations identify any login, environment role, consent, or administrator handoff needed for the requested action.
+
 ## New to VS Code?
 
 The installer opens VS Code for you. If this is your first time in VS Code, use the guided view for a friendlier way to navigate the kit. In the **activity bar** along the far-left edge of the window, click the **rocket icon**.

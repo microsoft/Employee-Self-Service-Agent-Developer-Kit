@@ -6,28 +6,15 @@ Use this shared path to resolve the Power Platform environment for DA foundation
 
 ## Resolve the service ring
 
-Treat a recognized Copilot Studio hostname as authoritative ring evidence that completes ring selection. Map `copilotstudio.microsoft.com` and `copilotstudio.preview.microsoft.com` to `prod`, and infer `test` or `preprod` when the supplied URL explicitly identifies either ring. Whenever the current request and supplied target do not identify a ring, render this exact decision surface:
+Resolve the ring in this order: a recognized Copilot Studio hostname, supplied target context, an explicit current-request instruction, then `prod`. Map `copilotstudio.microsoft.com` and `copilotstudio.preview.microsoft.com` to `prod`, and infer `test` or `preprod` when the supplied URL explicitly identifies either ring. When earlier evidence does not identify the ring, honor an explicit request to run setup in the Preview, `preprod`/Pre-production, or `test`/Test ring. Otherwise use `prod`. Do not show a ring-selection question or infer an internal ring from an environment name or uncertainty.
 
-> Which Power Platform service ring should setup use?
-
-Use the host's interactive single-selection control and present these standard choices:
-
-- **Production / Preview**
-- **Pre-production**
-- **Test**
-- **Help me decide**
-
-Present all three labels unchanged with no default selection. Map **Production / Preview** to `prod`, **Pre-production** to `preprod`, and **Test** to `test`; retain the mapped value as `{RING}` and use it for every later operation in this invocation. A ring is resolved only by an explicit URL segment, supplied context, or the maker's selection from this template.
-
-For **Help me decide**, follow the shared contract in `SKILL.md`. Establish where the environment or Microsoft Copilot Studio URL came from and whether the maker was explicitly directed to an internal service ring. Explain that **Production / Preview** is for normal customer and development environments, while **Pre-production** and **Test** apply only when the target or testing instructions explicitly identify those rings. Do not recommend an internal ring from an environment name or from uncertainty alone.
-
-Retain `{COPILOT_STUDIO_ORIGIN}`, `{POWER_PLATFORM_ADMIN_ORIGIN}`, and `{POWER_APPS_ORIGIN}` with the ring evidence. An explicit `copilotstudio.preview.microsoft.com` target keeps `RING: prod` but uses `https://copilotstudio.preview.microsoft.com`, `https://admin.preview.powerplatform.microsoft.com`, and `https://make.preview.powerapps.com`. A production target, or a **Production / Preview** selection without an explicit Preview hostname, uses `https://copilotstudio.microsoft.com`, `https://admin.powerplatform.microsoft.com`, and `https://make.powerapps.com`; do not infer Preview from the combined label. `preprod` uses `https://copilotstudio.preprod.microsoft.com`, `https://admin.preprod.powerplatform.microsoft.com`, and `https://make.preprod.powerapps.com`. `test` uses `https://copilotstudio.test.microsoft.com`, `https://admin.test.powerplatform.microsoft.com`, and `https://make.test.powerapps.com`. Every later ring-aware portal link must use these retained origins rather than reconstructing an origin from `{RING}` alone.
+Retain `{COPILOT_STUDIO_ORIGIN}`, `{POWER_PLATFORM_ADMIN_ORIGIN}`, and `{POWER_APPS_ORIGIN}` with the ring evidence. An explicit Preview URL or request keeps `RING: prod` but uses `https://copilotstudio.preview.microsoft.com`, `https://admin.preview.powerplatform.microsoft.com`, and `https://make.preview.powerapps.com`. A production target or the implicit `prod` default uses `https://copilotstudio.microsoft.com`, `https://admin.powerplatform.microsoft.com`, and `https://make.powerapps.com`. `preprod` uses `https://copilotstudio.preprod.microsoft.com`, `https://admin.preprod.powerplatform.microsoft.com`, and `https://make.preprod.powerapps.com`. `test` uses `https://copilotstudio.test.microsoft.com`, `https://admin.test.powerplatform.microsoft.com`, and `https://make.test.powerapps.com`. Every later ring-aware portal link must use these retained origins rather than reconstructing an origin from `{RING}` alone.
 
 ## Resolve the environment
 
 When an environment URL is supplied, infer its environment ID and resolve its ring through **Resolve the service ring** above. Ask only when the environment ID is unclear.
 
-When the target is not supplied, complete the shared account-selection step in `SKILL.md`. Before showing the shared authorization message or running environment discovery, resolve the ring through the exact decision surface above.
+When the target is not supplied, complete the shared account-selection step in `SKILL.md`. Before showing the shared authorization message or running environment discovery, resolve the ring through the precedence above.
 
 After the account and ring are selected, follow the shared authorization guidance in `SKILL.md`, render the **Environment access check** from `permission-guidance.md`, then list environments visible to that account in the selected ring:
 
@@ -78,7 +65,7 @@ Do not preselect a choice.
   URL or environment discovery returns the new environment. Do not route into a
   Dataverse provisioning skill.
 
-- For **Go back**, retain the selected account and return to **Resolve the service ring**. Do not rerun environment discovery until the maker explicitly selects a ring. **Use another account** remains the account-switch route on this surface.
+- For **Go back**, retain the selected account and return to the parent setup choice that entered environment discovery. Do not rerun environment discovery until the maker selects a setup path. **Use another account** remains the account-switch route on this surface.
 
 When environment discovery fails, parse `DA_ENVIRONMENT_LIST_ERROR_JSON:` and preserve it with `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:` or `DA_ENVIRONMENT_LIST_ERROR_RESPONSE_TEXT:` as diagnostic evidence. Say that the environment list could not be loaded and ask how to continue. Present **Retry**, **Use another account**, **Use an environment URL**, and **Go back** as the standard choices, with no preselected choice. **Retry** reruns the same read-only environment listing. Apply the documented route when one of the other standard choices is selected. When `authorizationFailure` is `true`, render **Environment discovery** from `permission-guidance.md` before the recovery choices. Do not name a missing role, convert the failure into an empty environment list, or prevent a maker-supplied environment from reaching its authoritative environment-scoped operation.
 

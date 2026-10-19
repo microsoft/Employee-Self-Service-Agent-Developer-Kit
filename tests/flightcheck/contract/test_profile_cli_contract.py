@@ -12,6 +12,7 @@ import pytest
 
 import auth
 from flightcheck import cli, registry
+from flightcheck.agent_scope import is_declarative_agent
 from flightcheck.runner import (
     CheckResult,
     FlightCheckRunner,
@@ -35,11 +36,6 @@ def _args(**overrides):
         "tenant_id": None,
         "runtime_reachability": False,
         "alm_import_probe": False,
-        "runtime_evidence_attempt_id": None,
-        "runtime_evidence_start": None,
-        "runtime_evidence_end": None,
-        "runtime_evidence_flow_id": [],
-        "runtime_evidence_migration_baseline": False,
         "output": "out",
         "no_telemetry": True,
     }
@@ -171,6 +167,86 @@ def test_profile_passes_preferred_account_and_forces_read_only(
     assert result.requested_validation_context["agentSlug"] == "ess-hr"
     assert result.requested_validation_context["environmentId"] == ""
     assert result.validation_context["agentId"].endswith("3333")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("profile_name", [
+    "workday-da:post-connection",
+    "workday-legacy:diagnostic",
+])
+@pytest.mark.parametrize("selection,expected", [
+    ("none", False),
+    ("explicit_da", True),
+    ("explicit_legacy", False),
+    ("configured_da", True),
+    ("compatibility_da", True),
+])
+def test_profile_preserves_explicit_context_without_promoting_first_record(
+    selection, expected, profile_name, reverse, tmp_path, monkeypatch,
+) -> None:
+    # Arrange: keep the real profile and CLI runner, but replace API checks.
+    config = _config()
+    config.pop("activeAgent")
+    config["agents"] = [
+        {"slug": "hr", "releaseLine": "da"},
+        {"slug": "legacy", "releaseLine": "cea"},
+    ]
+    if reverse:
+        config["agents"].reverse()
+    if selection == "configured_da":
+        config["activeAgent"] = "hr"
+    if selection == "compatibility_da":
+        config["agent"] = {"slug": "hr", "releaseLine": "da"}
+    explicit_slug = {
+        "explicit_da": "hr",
+        "explicit_legacy": "legacy",
+    }.get(selection)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    observed = []
+
+    def check(runner):
+        observed.append((
+            runner.agent_slug,
+            runner.workday_da_profile,
+            is_declarative_agent(runner),
+        ))
+        return []
+
+    monkeypatch.setattr(registry, "profile_requirements", lambda _name: SimpleNamespace(
+        clients=frozenset(),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        ordered_fns=[("Applicability", check)],
+    ))
+    monkeypatch.setattr(cli, "_print_prioritized_summary", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "_emit_run_telemetry", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "save_results", lambda *_a, **_k: None)
+
+    # Act.
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(_args(
+            profile=profile_name,
+            agent_slug=explicit_slug,
+            agent_schema_name=None,
+        ))
+
+    # Assert: missing evidence remains blocked, but list order never supplies DA identity.
+    assert exc.value.code == 1
+    da_profile = profile_name.startswith("workday-da:")
+    selected_slug = (
+        explicit_slug
+        or config.get("activeAgent")
+        or config.get("agent", {}).get("slug")
+        or ""
+    )
+    assert observed == [(
+        selected_slug,
+        da_profile,
+        expected or (selection == "none" and da_profile),
+    )]
 
 
 def test_profile_rejects_mixed_authenticated_accounts_without_hint(
@@ -1294,12 +1370,12 @@ def test_client_error_reason_does_not_persist_exception_text() -> None:
 def test_profile_checkpoint_contract_blocks_missing_and_unresolved_rows() -> None:
     profile = registry.ProfileSpec(
         name="workday-da:test",
-        checkpoint_ids=("WD-DA-PKG-001", "WD-DA-RUN-001"),
+        checkpoint_ids=("WD-DA-PKG-001", "TEST-REQUIRED-001"),
         description="test",
     )
     runner = SimpleNamespace(results=[
         CheckResult(
-            checkpoint_id="WD-DA-RUN-001",
+            checkpoint_id="TEST-REQUIRED-001",
             category="Workday DA",
             priority=Priority.CRITICAL.value,
             status=Status.NOT_CONFIGURED.value,
@@ -1345,20 +1421,20 @@ def test_profile_checkpoint_contract_flags_guided_rows() -> None:
 def test_required_not_configured_row_makes_profile_not_ready() -> None:
     profile = registry.ProfileSpec(
         name="workday-da:test",
-        checkpoint_ids=("WD-DA-RUN-001",),
+        checkpoint_ids=("TEST-REQUIRED-001",),
         description="test",
     )
     runner = FlightCheckRunner(
         scope="profile:workday-da:test",
         target_matcher=lambda checkpoint_id: (
-            checkpoint_id == "WD-DA-RUN-001"
+            checkpoint_id == "TEST-REQUIRED-001"
             or checkpoint_id.startswith("PROFILE-CHECKPOINT-")
         ),
     )
     runner.register(
         "Workday DA",
         lambda _runner: [CheckResult(
-            checkpoint_id="WD-DA-RUN-001",
+            checkpoint_id="TEST-REQUIRED-001",
             category="Workday DA",
             priority=Priority.CRITICAL.value,
             status=Status.NOT_CONFIGURED.value,

@@ -304,8 +304,44 @@ test('customization view is a tree named Customization (no guidance webview)', (
         'customizationInfoView should be removed');
 });
 
-test('activates on startup so the guided layout can restore hidden VS Code chrome', () => {
-    assert.ok(pkg.activationEvents.includes('onStartupFinished'));
+test('activates during startup so the guided layout is ready before startup settles', () => {
+    assert.ok(pkg.activationEvents.includes('*'));
+    assert.ok(!pkg.activationEvents.includes('onStartupFinished'));
+});
+
+test('package version matches the current Maker artifact release', () => {
+    assert.strictEqual(pkg.version, '0.4.36');
+    assert.ok(fs.existsSync(path.join(__dirname, `ess-maker-profile-${pkg.version}.vsix`)));
+    assert.ok(!fs.existsSync(path.join(__dirname, 'ess-maker-profile-0.4.35.vsix')));
+});
+
+test('updates layout settings concurrently during startup', () => {
+    assert.ok(
+        /Promise\.all\(Object\.entries\(settings\)\.map/.test(src),
+        'layout settings should be updated concurrently'
+    );
+});
+
+test('awaits the first Maker layout before completing activation dispatch', () => {
+    assert.ok(
+        /await applyGuidedLayout\(\{ silent: true, firstRun: true \}\)/.test(src),
+        'first Maker layout should be awaited'
+    );
+    assert.ok(
+        /firstRun \? 350 : 200/.test(src),
+        'first-run layout should not retain the old multi-second delay'
+    );
+});
+
+test('does not persist first-run state when an essential layout command fails', () => {
+    assert.ok(/async function requireRun\(commandId, \.\.\.args\)/.test(src));
+    assert.ok(/await requireRun\('workbench\.view\.extension\.essMakerActions'\)/.test(src));
+    assert.ok(/await openGettingStarted\(undefined, \{ required: true \}\)/.test(src));
+    assert.ok(/await requireRun\('workbench\.action\.chat\.open'\)/.test(src));
+    assert.ok(
+        /await applyGuidedLayout\(\{ silent: true, firstRun: true \}\);\s*await context\.globalState\.update\(APPLIED_KEY, true\)/.test(src),
+        'first-run state must follow the awaited guided layout'
+    );
 });
 
 test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {

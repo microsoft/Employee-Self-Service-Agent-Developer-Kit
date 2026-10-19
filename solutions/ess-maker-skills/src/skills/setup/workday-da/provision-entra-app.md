@@ -4,15 +4,21 @@
 
 This phase guides an administrator through the required Entra changes and
 records the administrator's non-secret response.
-It requires an Application Administrator or Cloud Application Administrator;
-administrator consent may require a consent-capable role.
+It requires one Microsoft Entra app administrator with either the
+**Application Administrator** or **Cloud Application Administrator** role.
+These are alternative role options; the same person does not need both.
+**Cloud Application Administrator** is the exact Microsoft Entra role name,
+not a general "cloud administrator." If that administrator cannot grant admin
+consent under the tenant's policy, involve a separate consent-capable
+administrator only for the consent step; the maker does not need to arrange
+one up front.
 
 `workday_connect.py` does not create or modify the Entra application. It
 validates the structured response and records evidence. The maker may not hold
-an Entra administrator role, so this release does not authenticate the maker
+an Entra app administrator role, so this release does not authenticate the maker
 to Microsoft Graph or make maker-owned Entra API calls. Role-aware execution
 will trigger those live API checks later. For now, use the guided handoff to
-the Entra administrator. Do not say that the skill will create, configure,
+the Entra app administrator. Do not say that the skill will create, configure,
 update, grant, enable, or independently verify an Entra setting.
 
 ## Prepare the guided handoff
@@ -43,7 +49,7 @@ update, grant, enable, or independently verify an Entra setting.
 
 2. Do not align Azure CLI, query the maker's directory roles, discover
    applications, or reread configuration through Microsoft Graph. Those live
-   checks require role-aware Entra administrator execution.
+   checks require role-aware Entra app administrator execution.
 3. Give the administrator the canonical tenant ID, Workday tenant, expected
    Service Provider ID `http://www.workday.com/{workdayTenant}`, and the
    administrator guide below. The administrator must identify the selected
@@ -51,7 +57,7 @@ update, grant, enable, or independently verify an Entra setting.
 
 <!--
 Role-aware execution will trigger these live Entra API checks later.
-For now, Workday Connect uses a guided Entra administrator handoff.
+For now, Workday Connect uses a guided Entra app administrator handoff.
 
 The deferred automated path writes entra-discovery.json and runs:
 python scripts/workday_connect.py entra-handoff --discovery-file ".local\connect\workday-da\entra-discovery.json"
@@ -67,19 +73,22 @@ these portal changes.
 ## Reuse an existing tenant foundation
 
 Do not silently reuse Entra configuration from tenant-scoped evidence while
-live role-aware verification is deferred. Show the exact required Entra role.
-Add a consent-capable administrator only when administrator consent is
-required. Then use this exact `vscode_askQuestions` form:
+live role-aware verification is deferred. Tell the maker that Application
+Administrator and Cloud Application Administrator are alternative accepted
+roles, not two required people. Do not ask the maker to arrange a separate
+consent-capable administrator up front. That person is needed only if tenant
+policy later prevents the engaged app administrator from granting consent at
+step 7. Then use this exact `vscode_askQuestions` form:
 
 ```json
 [
   {
-    "header": "Microsoft Entra administrator",
-    "question": "Have you looped in the Microsoft Entra administrator to complete the remaining portal action?",
+    "header": "Microsoft Entra app administrator",
+    "question": "Have you engaged a Microsoft Entra app administrator who holds either the Application Administrator or Cloud Application Administrator role?",
     "options": [
-      { "label": "Yes, the Microsoft Entra administrator is engaged" },
+      { "label": "Yes, that administrator is engaged" },
       {
-        "label": "No, I still need to engage the Microsoft Entra administrator"
+        "label": "No, I still need to engage that administrator"
       }
     ],
     "allowFreeformInput": false
@@ -109,7 +118,7 @@ This command reads only the recorded lifecycle state. It does not authenticate
 to Microsoft Graph, discover applications, or make an Entra change. Use the
 returned `packet` for every packet-driven value below.
 
-Render one standalone section titled **Microsoft Entra administrator handoff -
+Render one standalone section titled **Microsoft Entra app administrator handoff -
 share this whole section**. It must contain the administrator role, canonical
 tenant ID, expected Workday Service Provider ID, the capture table, and the
 numbered tasks below. The administrator identifies the selected directory and
@@ -118,6 +127,8 @@ to forward that one section without copying values from earlier chat messages.
 
 Before the numbered tasks, tell the administrator:
 
+> Required role: {packet.administratorRole}
+>
 > Complete the **Your tenant values** column while performing the tasks, then
 > return the completed table to the maker. The maker will paste it back into
 > the agent chat. Return only non-secret values; never include credentials,
@@ -149,7 +160,7 @@ python scripts/workday_connect.py administrator-stage --phase entra --substage a
 
 ## Administrator guide for missing or changed settings
 
-The Entra administrator must identify the exact application by the expected
+The Entra app administrator must identify the exact application by the expected
 Service Provider ID and matching Application ID. Never select an application
 by display name alone.
 
@@ -159,13 +170,13 @@ by display name alone.
      application. Do not create another application.
    - If it is not established, follow the Microsoft Learn
      [Workday SSO tutorial](https://learn.microsoft.com/entra/identity/saas-apps/workday-tutorial).
-     That tutorial directs the Entra administrator to select
+     That tutorial directs the Entra app administrator to select
      **Enterprise applications -> New application**, search for **Workday**,
      and add it from the Microsoft Entra application gallery.
 
    Confirm that the selected application's SAML **Identifier (Entity ID)** is
    `http://www.workday.com/{workdayTenant}`. If more than one application uses
-   that same Identifier, the Entra administrator must identify the
+   that same Identifier, the Entra app administrator must identify the
    authoritative application and resolve the duplicate before continuing.
 
 2. **Configure SAML.** Open **Enterprise applications -> the exact Workday
@@ -200,7 +211,13 @@ by display name alone.
    Workday application -> API permissions -> Add a permission -> Microsoft
    Graph -> Delegated permissions**. Add `openid`, `profile`, and `User.Read`,
    preserving unrelated existing permissions. Then select **Grant admin
-   consent** using a consent-capable administrator.
+   consent**. The engaged app administrator may complete this when allowed by
+   tenant policy; otherwise use the separately arranged consent-capable
+   administrator for this step only.
+
+   Render `packet.consentNote` exactly here. Do not ask the maker to arrange a
+   separate consent-capable administrator unless this tenant-policy condition
+   occurs.
 8. **Configure assignment.** Open **Enterprise applications -> the exact
    Workday application -> Users and groups**. If assignment is required,
    assign the intended ESS employee security group; prefer a maintained group
@@ -214,14 +231,16 @@ End the shareable handoff after the numbered tasks. Do not repeat an
 **Information to return to the maker** checklist: the five-column table already
 contains every required value, location, instruction, and allowed example.
 
-After `record-entra` succeeds, the Entra administrator sign-off is complete.
+After `record-entra` succeeds, the Entra app administrator sign-off is complete.
 The next phase must consume the recorded identifiers and transferred
-certificate without asking the maker to re-engage the Entra administrator.
+certificate without asking the maker to re-engage the Entra app administrator.
 Only an explicit controller-detected Entra target change may reopen this phase.
 
 After the worksheet, ask exactly:
 
-**Has the Microsoft Entra administrator completed the tasks in this handoff?**
+**Has the Microsoft Entra app administrator completed this handoff, including
+Grant admin consent (by a separate consent-capable administrator only if
+tenant policy required one)?**
 
 Do not treat the answer as a broad "everything is done" confirmation or as
 configuration evidence. It is only the coordination boundary before answer
@@ -238,7 +257,7 @@ After **Yes**, run:
 python scripts/workday_connect.py administrator-stage --phase entra --substage completion-confirmed
 ```
 
-Then collect the Entra administrator's values in one response. Object IDs, the
+Then collect the Entra app administrator's values in one response. Object IDs, the
 scope GUID, derived tenant URLs, and complete URI lists are not required. A
 reply such as "done", "all good", "continue", or "proceed" is not evidence and
 must not be converted into administrator attestation.
@@ -250,8 +269,8 @@ Do not submit one question per worksheet field. Use one
 ```json
 [
   {
-    "header": "Entra administrator details",
-    "question": "Paste the completed Microsoft Entra administrator details in one response. Do not include credentials, tokens, certificate contents, or private keys."
+    "header": "Microsoft Entra app administrator details",
+    "question": "Paste the completed Microsoft Entra app administrator details in one response. Do not include credentials, tokens, certificate contents, or private keys."
   }
 ]
 ```
@@ -313,7 +332,7 @@ safe validated values and the names to reopen to
 python scripts/workday_connect.py record-administrator-evidence --phase entra --evidence-file ".local\connect\workday-da\entra-partial-evidence.json"
 ```
 
-On resume, use the Entra administrator entry returned by `status`. Do not
+On resume, use the Entra app administrator entry returned by `status`. Do not
 redisplay a completed handoff; collect only its `invalidFields` and
 `outstandingFields`.
 

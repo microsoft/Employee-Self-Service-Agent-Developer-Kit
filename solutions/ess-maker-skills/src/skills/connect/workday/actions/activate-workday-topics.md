@@ -104,7 +104,40 @@ The command may also report dependency diagnostics such as
 `CloudFlow NotFound`; preserve those diagnostics for support correlation, but
 do not treat them as an activation failure or proof of a broken package.
 
-Record the live activation evidence:
+**Message:**
+
+I enabled the Workday topics and verified the change. Refresh the Copilot
+Studio page, open **Topics**, and confirm that all
+**{WORKDAY_TOPIC_COUNT}** Workday topics now show as **On**.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Confirm Workday topics",
+    "question": "After refreshing Copilot Studio, do all Workday topics show as On?",
+    "options": [
+      { "label": "Yes, all Workday topics show as On" },
+      { "label": "No, one or more topics do not show as On" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Leave the selection unset. This confirmation checks that the maker's refreshed
+Copilot Studio page reflects the verified activation; it does not replace the
+controller's live reread.
+
+If the maker selects **No**, stop before recording topic activation. Keep the
+runtime phase active, preserve the live diagnostics, and repeat the scoped
+activation verification before asking the maker to refresh and confirm again.
+Do not accept a generic `done` response or continue to runtime-template wiring.
+
+If the maker selects **Yes**, record the live activation evidence:
 
 ```powershell
 python scripts/workday_connect.py record-topic-activation
