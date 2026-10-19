@@ -31,6 +31,7 @@ from workday_connect_entra_contracts import (  # noqa: E402
     ENTRA_ADMIN_CONSENT_NOTE,
     ENTRA_ADMIN_ENGAGEMENT_QUESTION,
     ENTRA_APP_ADMIN_ROLE,
+    ENTRA_WORKSHEET_CHOICE_OUTCOMES,
 )
 from workday_connect_model import (  # noqa: E402
     ADMINISTRATOR_REQUIRED_FIELDS,
@@ -457,6 +458,17 @@ def test_entra_completed_capture_table_parses_to_validated_evidence() -> None:
         row["information"] for row in packet["captureInstructions"]
     ] == packet["responseForm"]["collection"]["labels"]
     assert all(row["exampleValue"] for row in packet["captureInstructions"])
+    capture_by_information = {
+        row["information"]: row for row in packet["captureInstructions"]
+    }
+    assert capture_by_information["SAML configuration"][
+        "acceptedValues"
+    ] == ["Yes, confirmed"]
+    assert capture_by_information["Existing configuration"][
+        "acceptedValues"
+    ] == list(
+        ENTRA_WORKSHEET_CHOICE_OUTCOMES["Existing configuration"]
+    )
 
     parsed = parse_entra_return_worksheet(
         _state(),

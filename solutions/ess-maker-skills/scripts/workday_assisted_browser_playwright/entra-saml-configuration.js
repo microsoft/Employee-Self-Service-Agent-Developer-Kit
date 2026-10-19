@@ -43,6 +43,30 @@ async (page, options = {}) => {
     };
   }
 
+  const signingPanelClose = page.getByRole("button", {
+    name: "Close content 'SAML Signing Certificate'",
+    exact: true,
+  });
+  if (
+    (await signingPanelClose.count()) === 1 &&
+    (await signingPanelClose.isVisible())
+  ) {
+    try {
+      await signingPanelClose.click();
+      await signingPanelClose.waitFor({
+        state: "hidden",
+        timeout: 10000,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        failedAt: "close-signing-panel",
+        url: page.url(),
+        error: error.message,
+      };
+    }
+  }
+
   const loginUrlLabel = page.getByText("Login URL", { exact: true });
   const loginUrlLabelCount = await loginUrlLabel.count();
   if (loginUrlLabelCount !== 1) {
