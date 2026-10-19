@@ -25,6 +25,7 @@ Contracts pinned:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ def _args(
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
+    allow_capacity_override: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -49,6 +51,7 @@ def _args(
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
         quiet_auth=quiet_auth,
+        allow_capacity_override=allow_capacity_override,
     )
 
 
@@ -93,6 +96,33 @@ class TestGates:
         assert registry.resolve("DEFINITELY-NOT-A-REAL-ID-ZZZ") is None
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("DEFINITELY-NOT-A-REAL-ID-ZZZ", tmp_path))
+        assert exc.value.code == 2
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            [
+                "cli.py",
+                "--scope",
+                "full",
+                "--allow-capacity-override",
+            ],
+            [
+                "cli.py",
+                "--checkpoint",
+                "ENV-002",
+                "--allow-capacity-override",
+            ],
+        ],
+    )
+    def test_capacity_override_flag_is_rejected_outside_capacity_checkpoint(
+        self,
+        argv: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
         assert exc.value.code == 2
 
     def test_missing_config_exits_1(
@@ -229,6 +259,56 @@ class TestHermeticRun:
         output = capsys.readouterr().out
         assert "Single Checkpoint" not in output
         assert "Running checkpoint" not in output
+
+    def test_capacity_override_flag_is_passed_to_checkpoint_runner(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            @staticmethod
+            def _rows(runner):
+                status = (
+                    Status.WARNING.value
+                    if runner.allow_capacity_override
+                    else Status.FAILED.value
+                )
+                return [_row("ENV-CAPACITY-001", status)]
+
+            ordered_fns = [("Fake", _rows)]
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry,
+            "transitive_requirements",
+            lambda target: _Plan(),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as without_flag:
+            cli._run_single_checkpoint(
+                _args("ENV-CAPACITY-001", tmp_path)
+            )
+        with pytest.raises(SystemExit) as with_flag:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    allow_capacity_override=True,
+                )
+            )
+
+        assert without_flag.value.code == 1
+        assert with_flag.value.code == 0
 
 
 class TestCheckpointTelemetry:

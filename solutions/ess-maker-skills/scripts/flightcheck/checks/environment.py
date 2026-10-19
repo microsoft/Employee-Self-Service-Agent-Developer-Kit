@@ -399,9 +399,10 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    Capacity is a hard setup gate. When allocation cannot be read
-    programmatically or allocation is zero, the row fails rather than allowing
-    a billing selection or manual attestation to bypass the check.
+    A confirmed zero allocation is a failure by default. Foundation setup can
+    explicitly request a warning so it can offer a bounded
+    administrator-attested override after a second check. Missing environment
+    identity and unreadable allocation evidence remain failures in every mode.
     """
     env_id = getattr(runner, "env_id", None)
     if not env_id:
@@ -421,16 +422,21 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
             f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]
+    zero_status = (
+        Status.WARNING.value
+        if getattr(runner, "allow_capacity_override", False)
+        else Status.FAILED.value
+    )
     if reason == "zero_with_payg":
-        return [_env_capacity(Status.FAILED.value,
+        return [_env_capacity(zero_status,
             "No Copilot Studio message capacity is allocated to this environment. Pay-as-you-go billing does not satisfy the foundation setup capacity gate.",
             f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint.")]
     if reason == "zero_payg_unknown":
-        return [_env_capacity(Status.FAILED.value,
+        return [_env_capacity(zero_status,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
-            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint. Setup cannot continue without allocated capacity.")]
+            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint.")]
     # reason == "zero_no_payg"
-    return [_env_capacity(Status.FAILED.value,
+    return [_env_capacity(zero_status,
         "No Copilot Studio message capacity is allocated to this environment and Pay-as-you-go billing is not configured, so the ESS agent will have no message capacity to consume at runtime.",
         f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint.")]
 
