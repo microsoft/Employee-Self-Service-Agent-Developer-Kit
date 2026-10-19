@@ -48,6 +48,7 @@ class FakeCheck:
     severity: str = "info"
     automation_type: str = "automated"
     roles: list = field(default_factory=lambda: ["Entra Admin", "ESS Maker / Agent Developer"])
+    block_reason: str = ""
 
 
 @dataclass
@@ -387,8 +388,13 @@ def test_classify_branch_privacy_bounded():
 
 
 def test_telemetry_schema_version_bumped_for_check_dimensions():
-    """Version-gate the ADO 7955324 dimensions on schema 1.4."""
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"
+    """Version-gate the blockReason split on schema 1.5.
+
+    1.4 added the ADO 7955324 check dimensions; 1.5 adds ``blockReason``
+    (the admin-API-auth split of the single Blocked wedge). Bumping on any
+    new emitted dimension lets a query gate on schema version.
+    """
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.5"
 
 
 def test_classify_agent_type_maps_shipping_branches():
@@ -468,6 +474,275 @@ def test_derive_run_outcome_blocked_only_is_not_ready():
         FakeRun(errors=0, failed=0, blocked=1, warnings=0)
     ) == telemetry.RUN_OUTCOME_BLOCKED
     assert telemetry.RUN_OUTCOME_BLOCKED != telemetry.RUN_OUTCOME_READY
+
+
+# --- blockReason: splitting the Blocked wedge by cause (schema 1.5) --------
+def test_derive_check_block_reason_only_for_blocked_checks():
+    """``block_reason`` is meaningful only on a Blocked check; every other
+    status emits "" so a passed/failed row never carries a cause."""
+    for status in ("Passed", "Failed", "Error", "Warning", "Skipped"):
+        assert telemetry.derive_check_block_reason(
+            FakeCheck(status=status, block_reason="adminApiAuthorization")
+        ) == ""
+    # A blocked check surfaces its classified reason.
+    assert telemetry.derive_check_block_reason(
+        FakeCheck(status="Blocked", block_reason="adminApiAuthorization")
+    ) == "adminApiAuthorization"
+
+
+def test_derive_check_block_reason_bounds_to_allowed_enum():
+    """A blocked check with an out-of-vocabulary or empty reason collapses to
+    ``other`` — no free-form string is ever emitted (privacy contract), and
+    pre-1.5 blocked rows (empty reason) bucket as ``other`` too."""
+    assert telemetry.derive_check_block_reason(
+        FakeCheck(status="Blocked", block_reason="totally-made-up")
+    ) == "other"
+    assert telemetry.derive_check_block_reason(
+        FakeCheck(status="Blocked", block_reason="")
+    ) == "other"
+
+
+def test_derive_run_block_reason_precedence_auth_wins():
+    """Run roll-up picks the highest-precedence cause among blocked checks:
+    adminApiAuthorization > adminApiUnavailable > checkpointContract >
+    profileCardinality > evidenceAmbiguous > other."""
+    run = FakeRun(
+        results=[
+            FakeCheck(status="Blocked", block_reason="evidenceAmbiguous"),
+            FakeCheck(status="Blocked", block_reason="adminApiAuthorization"),
+            FakeCheck(status="Blocked", block_reason="adminApiUnavailable"),
+        ],
+        blocked=3,
+    )
+    assert telemetry.derive_run_block_reason(run) == "adminApiAuthorization"
+
+
+def test_derive_run_block_reason_auth_countable_even_when_run_failed():
+    """A run can have a blocked auth check but an overall Failed/Errored
+    verdict (failed/errored rank above blocked in the donut). The run-level
+    blockReason must still report the auth block so it stays countable
+    independent of the final donut slice."""
+    run = FakeRun(
+        results=[
+            FakeCheck(status="Failed", block_reason=""),
+            FakeCheck(status="Blocked", block_reason="adminApiAuthorization"),
+        ],
+        failed=1,
+        blocked=1,
+    )
+    # Overall verdict is Failed (failed outranks blocked)...
+    assert telemetry.derive_run_outcome(run) == "Failed"
+    # ...yet the auth block is still reported at run level.
+    assert telemetry.derive_run_block_reason(run) == "adminApiAuthorization"
+
+
+def test_derive_run_block_reason_empty_when_no_blocked_checks():
+    """No blocked check anywhere -> "" (nothing to attribute)."""
+    run = FakeRun(
+        results=[
+            FakeCheck(status="Passed"),
+            FakeCheck(status="Failed", block_reason=""),
+        ],
+        failed=1,
+        blocked=0,
+    )
+    assert telemetry.derive_run_block_reason(run) == ""
+
+
+def test_build_events_emits_bounded_block_reason():
+    """End to end: a blocked auth check produces a bounded ``blockReason`` on
+    both its check event and the run event, and non-blocked rows emit ""."""
+    run = FakeRun(
+        results=[
+            FakeCheck(checkpoint_id="CHK-1", status="Passed"),
+            FakeCheck(
+                checkpoint_id="CHK-2",
+                status="Blocked",
+                block_reason="adminApiAuthorization",
+            ),
+        ],
+        passed=1,
+        failed=0,
+        blocked=1,
+    )
+    events = telemetry.build_events(
+        run,
+        env="dev",
+        instance_id="i",
+        tenant_id="t",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+    )
+    run_event = events[0]
+    assert run_event["data"]["blockReason"] == "adminApiAuthorization"
+    check_events = {e["data"]["checkpointId"]: e["data"] for e in events[1:]}
+    assert check_events["CHK-1"]["blockReason"] == ""
+    assert check_events["CHK-2"]["blockReason"] == "adminApiAuthorization"
+    # Still a bounded enum value, never free text.
+    for data in check_events.values():
+        assert data["blockReason"] in telemetry._ALLOWED_BLOCK_REASONS or data["blockReason"] == ""
+
+
+def test_classify_client_block_auth_vs_unavailable():
+    """cli._classify_client_block: only HTTP 401/403 or AADSTS* count as an
+    admin-API authorization block; everything else is adminApiUnavailable so
+    the known test-ring 404-wrong-host case never inflates the auth metric."""
+    from flightcheck import cli
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class _HttpError(Exception):
+        def __init__(self, status_code):
+            super().__init__(f"HTTP {status_code}")
+            self.response = _Resp(status_code)
+
+    # Authorization denials.
+    assert cli._classify_client_block(_HttpError(401)) == "adminApiAuthorization"
+    assert cli._classify_client_block(_HttpError(403)) == "adminApiAuthorization"
+    assert cli._classify_client_block("AADSTS65001 consent required") == "adminApiAuthorization"
+    assert cli._classify_client_block(Exception("AADSTS700016")) == "adminApiAuthorization"
+    # Reach / availability failures — NOT auth.
+    assert cli._classify_client_block(_HttpError(404)) == "adminApiUnavailable"
+    assert cli._classify_client_block(_HttpError(500)) == "adminApiUnavailable"
+    assert cli._classify_client_block("connection timed out") == "adminApiUnavailable"
+    assert cli._classify_client_block(Exception("DNS failure")) == "adminApiUnavailable"
+
+
+# --- End-to-end wiring: client failure -> CheckResult.block_reason -> payload
+# These tests close the gap the pure-derivation tests leave open: they drive a
+# real client error through cli._classify_client_block, attach the result to a
+# real runner.CheckResult, and assert the derived blockReason lands on BOTH the
+# run event and the check event payload. (Avery / PR #405 review.)
+class _BlockWiringResp:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+class _BlockWiringHttpError(Exception):
+    def __init__(self, status_code):
+        super().__init__(f"HTTP {status_code}")
+        self.response = _BlockWiringResp(status_code)
+
+
+def _blocked_check_from_error(error, checkpoint_id="DV-CONN-001"):
+    """Mimic the production path: a required-client failure is classified and
+    recorded on a Blocked CheckResult via block_reason."""
+    from flightcheck import cli, runner
+
+    return runner.CheckResult(
+        checkpoint_id=checkpoint_id,
+        category="Dataverse",
+        priority="Critical",
+        status="Blocked",
+        description="admin client authorization",
+        result="client failure (text redacted at emit time)",
+        block_reason=cli._classify_client_block(error),
+    )
+
+
+def _run_from_checks(checks):
+    from flightcheck import runner
+
+    blocked = sum(1 for c in checks if c.status == "Blocked")
+    return runner.RunResult(
+        scope="full",
+        started=telemetry._now().isoformat(),
+        duration_secs=1.0,
+        results=checks,
+        total=len(checks),
+        blocked=blocked,
+        overall="NOT_READY",
+        profile="full",
+    )
+
+
+def _events_for(run):
+    return telemetry.build_events(
+        run,
+        env="dev",
+        instance_id="i",
+        tenant_id="t",
+        agent_id="a",
+        agent_count=1,
+        scope="full",
+        invocation_source="cli",
+        ikey_envelope=f"o:{DEV_TOKEN}",
+    )
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (_BlockWiringHttpError(401), "adminApiAuthorization"),
+        (_BlockWiringHttpError(403), "adminApiAuthorization"),
+        ("AADSTS65001: consent required", "adminApiAuthorization"),
+        (Exception("AADSTS700016 app not found"), "adminApiAuthorization"),
+        (_BlockWiringHttpError(404), "adminApiUnavailable"),
+        (_BlockWiringHttpError(500), "adminApiUnavailable"),
+        ("connection timed out", "adminApiUnavailable"),
+        (Exception("DNS failure"), "adminApiUnavailable"),
+    ],
+)
+def test_client_failure_wires_block_reason_to_run_and_check_payloads(error, expected):
+    """401/403/AADSTS* must surface as adminApiAuthorization on both events;
+    404/timeout/5xx must surface as adminApiUnavailable (never auth)."""
+    run = _run_from_checks([_blocked_check_from_error(error)])
+    events = _events_for(run)
+
+    run_event = events[0]
+    assert run_event["data"]["blockReason"] == expected
+
+    check_event = events[1]
+    assert check_event["data"]["checkpointId"] == "DV-CONN-001"
+    assert check_event["data"]["blockReason"] == expected
+    # Bounded enum, never free text.
+    assert check_event["data"]["blockReason"] in telemetry._ALLOWED_BLOCK_REASONS
+
+
+def test_mixed_client_failures_run_reason_follows_precedence():
+    """When one run carries both an auth denial (403) and a reach failure
+    (timeout), the run-level blockReason reports the higher-precedence auth
+    cause while each check keeps its own classified reason."""
+    auth_check = _blocked_check_from_error(
+        _BlockWiringHttpError(403), checkpoint_id="DV-CONN-001"
+    )
+    unavailable_check = _blocked_check_from_error(
+        "connection timed out", checkpoint_id="DV-CONN-002"
+    )
+    run = _run_from_checks([unavailable_check, auth_check])
+    events = _events_for(run)
+
+    assert events[0]["data"]["blockReason"] == "adminApiAuthorization"
+    by_id = {e["data"]["checkpointId"]: e["data"]["blockReason"] for e in events[1:]}
+    assert by_id["DV-CONN-001"] == "adminApiAuthorization"
+    assert by_id["DV-CONN-002"] == "adminApiUnavailable"
+
+
+def test_non_blocked_client_check_emits_empty_block_reason():
+    """A classified reason only counts when the check actually blocks; a
+    Passed/Failed check must emit an empty blockReason even if a reason
+    string is present on the record."""
+    from flightcheck import runner
+
+    passed = runner.CheckResult(
+        checkpoint_id="DV-CONN-001",
+        category="Dataverse",
+        priority="Critical",
+        status="Passed",
+        description="admin client ok",
+        result="ok",
+        block_reason="adminApiAuthorization",
+    )
+    run = _run_from_checks([passed])
+    events = _events_for(run)
+
+    assert events[0]["data"]["blockReason"] == ""
+    assert events[1]["data"]["blockReason"] == ""
 
 
 def test_check_events_never_leak_free_text():
@@ -829,4 +1104,6 @@ def test_profile_run_emits_profile_realm_and_check_contract_fields():
 
 
 def test_schema_version_bump_records_ado_7955324_dimensions():
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.4"
+    # 1.4 recorded the ADO 7955324 check dimensions; 1.5 adds the blockReason
+    # split (admin-API-auth cause of the Blocked wedge).
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.5"
