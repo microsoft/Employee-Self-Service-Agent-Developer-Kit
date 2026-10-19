@@ -133,6 +133,11 @@ use announcement content to decide which agent owns it.
    error and stop. Do not search by agent name, fall back to tenant-wide
    announcements, or synthesize a title as `T_{botId}`. Never substitute a
    Dataverse bot ID, Teams app ID, Microsoft 365 app ID, or share link.
+   Interactive Dataverse sign-in is limited to 300 seconds. A cancelled request
+   leaves its bounded lookup in progress; retries do not start another lookup
+   until it finishes. If the tool reports that resolution is already in
+   progress, complete the pending sign-in or wait for its timeout before
+   retrying. Do not repeatedly call the resolver while it is still running.
 5. Persist a discovered, verified `titleId` using the existing local-agent
    convention: reread the complete config, find the selected `agents` entry by
    `botId` then `slug` (name only if unambiguous), and change only its `titleId`.

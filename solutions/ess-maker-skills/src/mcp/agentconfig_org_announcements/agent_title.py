@@ -34,6 +34,7 @@ from _odata import _validate_https_base_url  # noqa: E402
 
 
 _LOGGER = logging.getLogger("ess-org-announcements.agent-title")
+_INTERACTIVE_SIGN_IN_TIMEOUT_SECONDS = 300
 
 
 class AgentTitleResolutionError(RuntimeError):
@@ -183,7 +184,19 @@ def acquire_dataverse_token(
         )
         if not isinstance(result, dict) or not result.get("access_token"):
             _LOGGER.info("Opening a browser for Dataverse agent metadata discovery.")
-            result = app.acquire_token_interactive(scopes, prompt="select_account")
+            try:
+                result = app.acquire_token_interactive(
+                    scopes,
+                    prompt="select_account",
+                    timeout=_INTERACTIVE_SIGN_IN_TIMEOUT_SECONDS,
+                )
+            except RuntimeError as error:
+                raise AgentTitleResolutionError(
+                    "Dataverse browser sign-in did not complete. Retry with the "
+                    "current authoring account; the sign-in limit is "
+                    f"{_INTERACTIVE_SIGN_IN_TIMEOUT_SECONDS} seconds.",
+                    code="AuthenticationRequired",
+                ) from error
         token = result.get("access_token") if isinstance(result, dict) else None
         if not isinstance(token, str) or not token:
             raise ValueError

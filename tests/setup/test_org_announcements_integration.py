@@ -95,6 +95,8 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
     assert "returned `botid` matches the selected bot" in skill
     assert "legacy fallback only for the unambiguous active agent" in skill
     assert "never an unbound non-active agent" in skill
+    assert "Interactive Dataverse sign-in is limited to 300 seconds" in skill
+    assert "retries do not start another lookup until it finishes" in skill
     assert "AgentBuilderClient" not in skill
     assert "list_agent_configs" not in skill
     assert "search_agents" not in skill

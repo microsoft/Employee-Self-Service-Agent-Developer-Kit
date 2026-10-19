@@ -301,6 +301,7 @@ mcp = FastMCP(
 
 _client: Optional[OrgAnnouncementsClient] = None
 _client_construction_task: Optional[asyncio.Task[None]] = None
+_title_resolution_task: Optional[asyncio.Task[dict[str, str]]] = None
 _client_users: dict[OrgAnnouncementsClient, int] = {}
 _retired_clients: set[OrgAnnouncementsClient] = set()
 _graph_client: Optional[GraphDirectoryClient] = None
@@ -311,10 +312,17 @@ _graph_client_users: dict[GraphDirectoryClient, int] = {}
 _client_lock = asyncio.Lock()
 
 
-def _observe_task_failure(task: asyncio.Task[None]) -> None:
-    """Retrieve an unobserved construction failure after all waiters cancel."""
+def _observe_task_failure(task: asyncio.Task[Any]) -> None:
+    """Retrieve an unobserved shared-task failure after all waiters cancel."""
     if not task.cancelled():
         task.exception()
+
+
+def _release_title_resolution(task: asyncio.Task[dict[str, str]]) -> None:
+    global _title_resolution_task
+    if _title_resolution_task is task:
+        _title_resolution_task = None
+    _observe_task_failure(task)
 
 
 async def _construct_and_publish_client() -> None:
@@ -947,23 +955,11 @@ def org_announcements_widget() -> str:
     return _widget_shell()
 
 
-@mcp.tool(
-    meta=_shared_tool_meta(),
-    annotations=_READ_ONLY_ANNOTATIONS,
-)
-async def resolve_agent_title_id(botId: str) -> dict[str, str]:
-    """Resolve a configured bot's Microsoft 365 titleId from Dataverse metadata.
-
-    Pass the selected local agent's botId, not a name or a titleId. The server
-    binds its Dataverse endpoint from .local/config.json and uses the current
-    authoring tenant/account. Returns botId and titleId; missing registration and
-    API/auth failures are errors.
-    This read-only tool does not persist configuration or initialize a landing page.
-    """
+async def _run_title_resolution(bot_id: str) -> dict[str, str]:
     started = time.monotonic()
     client = None
     try:
-        target = await asyncio.to_thread(load_configured_target, botId)
+        target = await asyncio.to_thread(load_configured_target, bot_id)
         async with get_client_lease() as client:
             result = await asyncio.to_thread(
                 resolve_configured_agent_title,
@@ -983,6 +979,39 @@ async def resolve_agent_title_id(botId: str) -> dict[str, str]:
         latency_ms=_elapsed_ms(started),
     )
     return result
+
+
+@mcp.tool(
+    meta=_shared_tool_meta(),
+    annotations=_READ_ONLY_ANNOTATIONS,
+)
+async def resolve_agent_title_id(botId: str) -> dict[str, str]:
+    """Resolve a configured bot's Microsoft 365 titleId from Dataverse metadata.
+
+    Pass the selected local agent's botId, not a name or a titleId. The server
+    binds its Dataverse endpoint from .local/config.json and uses the current
+    authoring tenant/account. Returns botId and titleId; missing registration and
+    API/auth failures are errors. Only one lookup runs at a time, including after
+    a caller cancels; retries must wait for that lookup to finish.
+    This read-only tool does not persist configuration or initialize a landing page.
+    """
+    global _title_resolution_task
+    if _title_resolution_task is not None and not _title_resolution_task.done():
+        raise await _discovery_tool_error(
+            "resolve_agent_title_id",
+            AgentTitleResolutionError(
+                "Agent title resolution is already in progress. Complete the "
+                "pending sign-in or wait for the current lookup to finish "
+                "before retrying.",
+                code="ServiceError",
+            ),
+            time.monotonic(),
+            None,
+        ) from None
+    task = asyncio.create_task(_run_title_resolution(botId))
+    _title_resolution_task = task
+    task.add_done_callback(_release_title_resolution)
+    return await asyncio.shield(task)
 
 
 @mcp.tool(

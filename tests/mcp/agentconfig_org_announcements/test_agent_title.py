@@ -10,6 +10,7 @@ import base64
 import json
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -166,8 +167,8 @@ def msal_auth(monkeypatch, api):
             calls.append(("silent", scopes, account))
             return {"access_token": _jwt()}
 
-        def acquire_token_interactive(self, scopes, *, prompt):
-            calls.append(("interactive", scopes, prompt))
+        def acquire_token_interactive(self, scopes, *, prompt, timeout):
+            calls.append(("interactive", scopes, prompt, timeout))
             return {"access_token": _jwt()}
 
     def matching_account(app, tenant_id, object_id):
@@ -550,7 +551,7 @@ def test_silent_miss_uses_interactive_sign_in_without_stdout(msal_auth, monkeypa
     assert agent_title.acquire_dataverse_token(
         DATAVERSE_URL, TENANT_ID, OBJECT_ID
     ) == _jwt()
-    assert calls == [("interactive", [SCOPE], "select_account")]
+    assert calls == [("interactive", [SCOPE], "select_account", 300)]
     assert capsys.readouterr().out == ""
 
 
@@ -564,6 +565,133 @@ def test_interactive_sign_in_cannot_switch_authoring_account(msal_auth, monkeypa
 
     with pytest.raises(agent_title.AgentTitleResolutionError, match="different tenant/account"):
         agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, OBJECT_ID)
+
+
+def test_interactive_timeout_is_a_sanitized_authentication_failure(
+    config, authoring_identity, msal_auth, api, monkeypatch, caplog, capsys
+):
+    App, _, _ = msal_auth
+    monkeypatch.setattr(App, "acquire_token_silent", lambda *args, **kwargs: None)
+
+    def timeout(self, scopes, *, prompt, timeout):
+        assert timeout == 300
+        raise RuntimeError(f"Timeout. No auth response arrived. {PRIVATE}")
+
+    monkeypatch.setattr(App, "acquire_token_interactive", timeout)
+
+    with pytest.raises(ToolError, match="AuthenticationRequired:") as caught:
+        _call()
+
+    assert "sign-in did not complete" in str(caught.value)
+    assert "300 seconds" in str(caught.value)
+    assert PRIVATE not in str(caught.value)
+    assert PRIVATE not in caplog.text
+    assert capsys.readouterr().out == ""
+    assert api.calls == []
+    assert server._title_resolution_task is None
+
+
+def test_cancelled_sign_in_cannot_accumulate_workers_or_independent_retries(
+    config, authoring_identity, msal_auth, api, monkeypatch, caplog
+):
+    App, _, _ = msal_auth
+    monkeypatch.setattr(App, "acquire_token_silent", lambda *args, **kwargs: None)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        unhandled = []
+        loop.set_exception_handler(lambda loop, context: unhandled.append(context))
+        started = asyncio.Event()
+        expire_sign_in = threading.Event()
+        interactive_calls = []
+
+        def interactive(self, scopes, *, prompt, timeout):
+            interactive_calls.append(timeout)
+            if len(interactive_calls) == 1:
+                loop.call_soon_threadsafe(started.set)
+                assert timeout == 300
+                # Advance the fake SDK's timeout only after checking cancelled retries.
+                assert expire_sign_in.wait(5), "Test did not release the fake sign-in"
+                raise RuntimeError(f"Timeout. No auth response arrived. {PRIVATE}")
+            return {"access_token": _jwt()}
+
+        monkeypatch.setattr(App, "acquire_token_interactive", interactive)
+        first = asyncio.create_task(server.resolve_agent_title_id(BOT_ID))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            assert server._title_resolution_task is not None
+            assert not server._title_resolution_task.done()
+
+            for bot_id in (BOT_ID, BOT_ID.upper(), OTHER_BOT_ID):
+                with pytest.raises(ToolError, match="already in progress"):
+                    await asyncio.wait_for(
+                        server.resolve_agent_title_id(bot_id), timeout=1
+                    )
+            assert interactive_calls == [300]
+
+            probe = asyncio.create_task(asyncio.to_thread(lambda: "worker available"))
+            await asyncio.sleep(0)
+            expire_sign_in.set()
+            assert await asyncio.wait_for(probe, timeout=2) == "worker available"
+            await asyncio.sleep(0)
+            assert server._title_resolution_task is None
+            assert unhandled == []
+
+            result = await asyncio.wait_for(
+                server.resolve_agent_title_id(BOT_ID), timeout=2
+            )
+            assert result == {"botId": BOT_ID, "titleId": TITLE_ID}
+            assert interactive_calls == [300, 300]
+            assert len(api.calls) == 1
+        finally:
+            expire_sign_in.set()
+
+    asyncio.run(run())
+    assert PRIVATE not in caplog.text
+
+
+def test_cancelled_lookup_cannot_start_another_lookup_before_its_worker_finishes(
+    config, authoring_identity, monkeypatch
+):
+    async def run():
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        finish = threading.Event()
+        calls = []
+
+        def resolve(target, tenant_id, object_id):
+            calls.append(target.bot_id)
+            loop.call_soon_threadsafe(started.set)
+            assert finish.wait(5), "Test did not release the fake lookup"
+            return {"botId": target.bot_id, "titleId": TITLE_ID}
+
+        monkeypatch.setattr(server, "resolve_configured_agent_title", resolve)
+        first = asyncio.create_task(server.resolve_agent_title_id(BOT_ID))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            pending = server._title_resolution_task
+            assert pending is not None
+            assert not pending.cancelled()
+            with pytest.raises(ToolError, match="already in progress"):
+                await server.resolve_agent_title_id(OTHER_BOT_ID)
+            assert calls == [BOT_ID]
+            finish.set()
+            assert await asyncio.wait_for(asyncio.shield(pending), timeout=2) == {
+                "botId": BOT_ID, "titleId": TITLE_ID,
+            }
+            await asyncio.sleep(0)
+            assert server._title_resolution_task is None
+        finally:
+            finish.set()
+
+    asyncio.run(run())
 
 
 def test_auth_errors_do_not_expose_provider_details(msal_auth, monkeypatch):

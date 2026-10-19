@@ -95,7 +95,10 @@ dependency, or landing-page configuration creation.
 
 Discovery uses a separate Dataverse resource token for the same authoring tenant
 and account, requesting the selected endpoint's `/user_impersonation` scope and
-reusing the shared AgentConfiguration MSAL cache. No MinimalBot component fetch,
+reusing the shared AgentConfiguration MSAL cache. Browser sign-in is limited to
+300 seconds. One title lookup remains tracked until completion even if its
+caller cancels; concurrent retries receive an in-progress error instead of
+starting independent sign-ins. No MinimalBot component fetch,
 Power Platform environment inventory, or Island Gateway sign-in is needed.
 A missing Microsoft 365 registration title is an explicit `RegistrationRequired`
 error; malformed metadata, sign-in, access, and API failures are not treated as
