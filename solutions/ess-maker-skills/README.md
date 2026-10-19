@@ -79,23 +79,23 @@ applies no additional Security Group filtering, so the announcement reaches
 everyone who uses that agent. An explicit or stored `titleId` is reused.
 Otherwise, `resolve_agent_title_id` on the `ess-org-announcements` provider
 uses the selected configured `botId` and environment with
-`AgentBuilderClient.fetch_components`, reading
-`bot.teamsAppInformation.microsoft365.titleId` and checking `bot.cdsBotId`.
-Older setup configs with only a Dataverse URL resolve its exact environment
-through Power Platform's user-scoped environment list. The skill persists the
+the Dataverse Web API:
+`GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`.
+It validates the returned `botid`, parses the `applicationmanifestinformation`
+JSON string, and reads `microsoft365.titleId`. The selected entry's
+`dataverseEndpoint` takes precedence; the workspace endpoint is used only when
+that entry has no separate environment settings. The skill persists the
 resolved title only to that agent's local entry and, when active, its mirror.
 There is no agent-name search fallback, synthesized ID, landing-page MCP
 dependency, or landing-page configuration creation.
 
-Component discovery uses a separate Power Platform resource token for the same
-authoring tenant and account, reusing the shared AgentConfiguration MSAL cache.
-It requests `CopilotStudio.MinimalBot.Read`; URL-only environment discovery
-separately requests the documented Power Platform `.default` scope. A missing
-Microsoft 365 registration title is an explicit `RegistrationRequired` error;
-sign-in, access, and API failures are not treated as empty discovery.
-The narrowly backported client retains its component API version
-`2022-03-01-preview` (environment listing uses `2024-10-01`); a title-bearing
-response captured at `2024-10-01` does not establish version equivalence.
+Discovery uses a separate Dataverse resource token for the same authoring tenant
+and account, requesting the selected endpoint's `/user_impersonation` scope and
+reusing the shared AgentConfiguration MSAL cache. No MinimalBot component fetch,
+Power Platform environment inventory, or Island Gateway sign-in is needed.
+A missing Microsoft 365 registration title is an explicit `RegistrationRequired`
+error; malformed metadata, sign-in, access, and API failures are not treated as
+empty discovery.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`

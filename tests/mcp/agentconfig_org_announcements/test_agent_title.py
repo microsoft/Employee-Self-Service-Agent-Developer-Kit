@@ -1,28 +1,24 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Offline announcement title resolution through the selected bot's components."""
+"""Offline title resolution through the selected bot's Dataverse manifest."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import copy
 import json
 import sys
 import threading
-from json import dumps
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import requests
-import yaml
 from mcp.server.fastmcp.exceptions import ToolError
 from portalocker.exceptions import LockException
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _mcp_modules import load_org_announcements_modules  # noqa: E402
@@ -33,12 +29,12 @@ agent_title = MODULES["agent_title"]
 server = MODULES["server"]
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
-BOT_ID = "00000000-0000-0000-0000-000000004444"
-OTHER_BOT_ID = "00000000-0000-0000-0000-000000005555"
-ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
-OTHER_ENVIRONMENT_ID = "00000000-0000-4000-8000-000000002222"
-HOST = "https://0000000000004000800000000000111.1.environment.api.test.powerplatform.com"
-COMPONENTS_URL = f"{HOST}/copilotstudio/minimalBots/api/{BOT_ID}/components"
+BOT_ID = "aaaaaaaa-0000-4000-8000-000000004444"
+OTHER_BOT_ID = "bbbbbbbb-0000-4000-8000-000000005555"
+TITLE_ID = "T_00000000-0000-0000-0000-000000006666"
+DATAVERSE_URL = "https://orgmocktenant.crm.dynamics.com"
+OTHER_DATAVERSE_URL = "https://orgother.crm.dynamics.com"
+SCOPE = f"{DATAVERSE_URL}/user_impersonation"
 PRIVATE = "PRIVATE_RESPONSE_OR_AUTH_DETAIL"
 
 
@@ -63,14 +59,14 @@ def config(monkeypatch, tmp_path):
              "titleId": "other-title"},
             {"botId": BOT_ID, "slug": "selected", "name": "Same name"},
         ],
-        "environmentId": ENVIRONMENT_ID,
-        "powerPlatformApiEndpoint": HOST,
-        "ring": "test",
+        "dataverseEndpoint": DATAVERSE_URL,
         "unrelated": {"preserved": True},
     }
 
     def write(payload=None):
-        path.write_text(json.dumps(value if payload is None else payload), encoding="utf-8")
+        path.write_text(
+            json.dumps(value if payload is None else payload), encoding="utf-8"
+        )
         return path
 
     write()
@@ -93,71 +89,56 @@ def authoring_identity(monkeypatch):
 
 
 @pytest.fixture
-def components():
-    # Recorded BotEntity shape; the response's title is deliberately not BOT_ID.
-    cassette = REPO_ROOT / "tests/fixtures/cassettes/island_gateway_botcomponents.yaml"
-    record = next(
-        entry
-        for entry in yaml.safe_load(cassette.read_text(encoding="utf-8"))["interactions"]
-        if entry["request"]["uri"].endswith("/content/botcomponents")
-    )
-    body = json.loads(record["response"]["body"]["string"])
-    bot = body["bot"]
-    return {
-        "bot": {
-            "cdsBotId": BOT_ID,
-            "teamsAppInformation": copy.deepcopy(bot["teamsAppInformation"]),
-            "description": PRIVATE,
-        },
-        "botComponentChanges": [{"privateContent": PRIVATE}],
-    }
-
-
-@pytest.fixture
 def api(monkeypatch):
-    """A closed request transport; it cannot bypass the MCP network guard."""
+    """Exercise auth.dataverse_get through a closed, GET-only transport.
+
+    The readable column is documented at:
+    https://learn.microsoft.com/power-apps/developer/data-platform/reference/
+    entities/bot#applicationmanifestinformation
+    Its JSON microsoft365.titleId path was verified with a read-only bot lookup.
+    """
     state = SimpleNamespace(
-        calls=[], components=None, environments=None, status=200, error=None, closed=0
+        endpoint=DATAVERSE_URL,
+        calls=[],
+        payload={
+            "botid": BOT_ID,
+            "applicationmanifestinformation": json.dumps({
+                "microsoft365": {"titleId": TITLE_ID},
+            }),
+            "unselectedPrivateField": PRIVATE,
+        },
+        raw=None,
+        status=200,
+        error=None,
     )
 
     class Session:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            state.closed += 1
-
-        def mount(self, *args):
-            pass
-
-        def request(self, method, url, *, params, headers, timeout, json=None):
-            state.calls.append({"method": method, "url": url, "params": params})
+        def get(self, url, *, params, headers, timeout, verify):
+            state.calls.append({"method": "GET", "url": url, "params": params})
+            assert url == f"{state.endpoint}/api/data/v9.2/bots({BOT_ID})"
+            assert params == {"$select": "botid,applicationmanifestinformation"}
+            assert headers["Authorization"] == f"Bearer {_jwt()}"
+            assert headers["OData-Version"] == "4.0"
             assert timeout > 0
+            assert verify is True
             if state.error is not None:
                 raise state.error
-            if method == "POST":
-                assert url == COMPONENTS_URL
-                assert params == {"api-version": "2022-03-01-preview"}
-                assert json == {}
-                assert state.components is not None or state.status != 200
-                payload = state.components
-            else:
-                assert method == "GET"
-                assert url == (
-                    "https://api.test.powerplatform.com/environmentmanagement/environments"
-                )
-                assert params == {"api-version": "2024-10-01"}
-                assert state.environments is not None
-                payload = {"value": state.environments}
             response = requests.Response()
             response.status_code = state.status
             response.headers["x-ms-request-id"] = PRIVATE
-            if state.status != 200:
-                payload = {"error": {"code": PRIVATE}}
-            response._content = dumps(payload).encode()
+            response.request = requests.Request("GET", url).prepare()
+            payload = (
+                {"error": {"code": PRIVATE, "message": PRIVATE}}
+                if state.status != 200 else state.payload
+            )
+            response._content = (
+                state.raw if state.raw is not None else json.dumps(payload).encode()
+            )
             return response
 
-    monkeypatch.setattr(agent_title.requests, "Session", Session)
+    import auth
+
+    monkeypatch.setattr(auth, "_SESSION", Session())
     return state
 
 
@@ -169,7 +150,7 @@ def msal_auth(monkeypatch, api):
 
     class App:
         def __init__(self, client_id, *, authority, token_cache):
-            assert client_id == agent_title.CLIENT_ID
+            assert client_id == agent_title.DATAVERSE_CLIENT_ID
             assert authority == f"https://login.microsoftonline.com/{TENANT_ID}"
             assert token_cache is cache
 
@@ -186,19 +167,12 @@ def msal_auth(monkeypatch, api):
         return account
 
     def shared_cache(path):
-        assert Path(path) == agent_title.AGENTBUILDER_TOKEN_CACHE_PATH
+        assert Path(path) == agent_title.DATAVERSE_TOKEN_CACHE_PATH
         return cache
 
     monkeypatch.setattr(agent_title.msal, "PublicClientApplication", App)
     monkeypatch.setattr(agent_title, "create_token_cache", shared_cache)
     monkeypatch.setattr(agent_title, "account_for_identity", matching_account)
-    monkeypatch.setattr(
-        agent_title, "derive_environment_host",
-        lambda environment_id, ring: (
-            HOST if (environment_id, ring) == (ENVIRONMENT_ID, "test") else
-            pytest.fail("Resolved a different environment or service ring")
-        ),
-    )
     return App, calls, account
 
 
@@ -210,148 +184,113 @@ def _call(bot_id=BOT_ID):
     return result[1] if isinstance(result, tuple) else result.structuredContent
 
 
-def _add_components(api, components):
-    api.components = components
-
-
-def test_mcp_resolves_exact_non_active_bot_without_name_search_or_writes(
-    config, authoring_identity, components, msal_auth, api, capsys
+def test_mcp_reads_exact_non_active_bot_without_name_search_or_writes(
+    config, authoring_identity, msal_auth, api, capsys
 ) -> None:
     value, write = config
     path = write()
     original = path.read_bytes()
-    _add_components(api, components)
 
-    result = _call(BOT_ID.upper())
+    assert _call(BOT_ID.upper()) == {"botId": BOT_ID, "titleId": TITLE_ID}
 
-    assert result == {
-        "botId": BOT_ID,
-        "environmentId": ENVIRONMENT_ID,
-        "titleId": components["bot"]["teamsAppInformation"]["microsoft365"]["titleId"],
-    }
-    assert result["titleId"] != f"T_{BOT_ID}"
+    assert TITLE_ID != f"T_{BOT_ID}"
     assert value["agent"]["titleId"] == "other-title"
     assert path.read_bytes() == original
     assert len(api.calls) == 1
-    assert api.calls[0]["method"] == "POST"
-    assert api.closed == 1
-    assert PRIVATE not in json.dumps(result)
+    assert api.calls[0]["method"] == "GET"
+    assert msal_auth[1] == [("silent", [SCOPE], msal_auth[2])]
     assert capsys.readouterr().out == ""
-    assert msal_auth[1] == [
-        ("silent", ["https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read"],
-         msal_auth[2]),
-    ]
 
 
-@pytest.mark.parametrize("domain_only", [False, True])
-@pytest.mark.parametrize("api_host", [False, True])
-def test_url_only_setup_resolves_the_exact_environment_before_components(
-    config, authoring_identity, components, msal_auth, api, domain_only, api_host
-) -> None:
+@pytest.mark.parametrize("endpoint", [
+    DATAVERSE_URL + "/", "https://orgmocktenant.api.crm.dynamics.com/",
+])
+def test_url_only_setup_uses_the_configured_endpoint_without_environment_inventory(
+    config, authoring_identity, msal_auth, api, endpoint
+):
     value, write = config
-    value.pop("environmentId")
-    value.pop("powerPlatformApiEndpoint")
-    value["dataverseEndpoint"] = (
-        "https://orgmocktenant.api.crm.dynamics.com/"
-        if api_host else "https://orgmocktenant.crm.dynamics.com/"
-    )
-    path = write()
-    before = path.read_bytes()
-    environment = {
-        "id": f"Default-{ENVIRONMENT_ID}", "tenantId": TENANT_ID,
-        **(
-            {"domainName": "orgmocktenant.crm.dynamics.com"}
-            if domain_only else {"url": "https://orgmocktenant.crm.dynamics.com/"}
-        ),
-    }
-    # EnvironmentResponse schema:
-    # https://learn.microsoft.com/rest/api/power-platform/environmentmanagement/
-    # environments/list-environments-for-user#environmentresponse
-    api.environments = [
-        {"id": OTHER_ENVIRONMENT_ID, "url": "https://other.crm.dynamics.com"},
-        environment,
-    ]
-    _add_components(api, components)
+    value["dataverseEndpoint"] = endpoint
+    write()
+    api.endpoint = endpoint.rstrip("/")
 
-    result = _call()
-
-    assert result["environmentId"] == ENVIRONMENT_ID
-    assert result["titleId"] == components["bot"]["teamsAppInformation"]["microsoft365"]["titleId"]
-    assert [call["method"] for call in api.calls] == ["GET", "POST"]
-    assert msal_auth[1][0][1] == ["https://api.test.powerplatform.com/.default"]
-    assert msal_auth[1][1][1] == [
-        "https://api.test.powerplatform.com/CopilotStudio.MinimalBot.Read"
-    ]
-    assert path.read_bytes() == before
+    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID}
+    assert len(api.calls) == 1
+    assert msal_auth[1][0][1] == [f"{api.endpoint}/user_impersonation"]
 
 
-def test_selected_agent_environment_does_not_inherit_the_active_agents_host(config):
+def test_selected_agent_endpoint_takes_precedence_over_the_active_environment(
+    config, authoring_identity, msal_auth, api
+):
     value, write = config
-    value["environmentId"] = OTHER_ENVIRONMENT_ID
-    value["powerPlatformApiEndpoint"] = (
-        "https://000000000000400080000000000022.22.environment.api.powerplatform.com"
-    )
-    value["ring"] = "prod"
-    value["agents"][1].update({
-        "environmentId": ENVIRONMENT_ID,
-        "powerPlatformApiEndpoint": HOST,
-    })
+    value["dataverseEndpoint"] = OTHER_DATAVERSE_URL
+    value["agents"][1]["dataverseEndpoint"] = DATAVERSE_URL
     write()
 
-    target = agent_title.load_configured_target(BOT_ID)
+    assert agent_title.load_configured_target(BOT_ID).dataverse_endpoint == DATAVERSE_URL
+    assert _call()["titleId"] == TITLE_ID
+    assert msal_auth[1][0][1] == [SCOPE]
 
-    assert (target.environment_id, target.host, target.ring) == (
-        ENVIRONMENT_ID, HOST, "test"
-    )
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("environmentId", "separate-environment"),
+     ("powerPlatformApiEndpoint", "https://separate-environment.example")],
+)
+def test_separate_environment_without_its_own_dataverse_endpoint_cannot_inherit(
+    config, monkeypatch, field, value
+):
+    cfg, write = config
+    cfg["agents"][1][field] = value
+    write()
+    monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
+
+    with pytest.raises(ToolError, match="no configured Dataverse endpoint"):
+        _call()
 
 
 def test_legacy_active_agent_only_config_is_supported(config):
     value, write = config
     value["agent"] = value.pop("agents")[1]
     value["activeAgent"] = "selected"
-    value["environmentId"] = f"Default-{ENVIRONMENT_ID}"
     write()
 
-    assert agent_title.load_configured_target(BOT_ID).bot_id == BOT_ID
-    assert agent_title.load_configured_target(BOT_ID).environment_id == ENVIRONMENT_ID
+    target = agent_title.load_configured_target(BOT_ID)
+    assert target.bot_id == BOT_ID
+    assert target.dataverse_endpoint == DATAVERSE_URL
 
 
-@pytest.mark.parametrize(
-    ("field", "invalid"),
-    [
-        ("environmentId", OTHER_ENVIRONMENT_ID),
-        ("powerPlatformApiEndpoint", HOST + ".attacker.example"),
-        ("powerPlatformApiEndpoint", HOST + "/path"),
-        ("powerPlatformApiEndpoint", "http://private.example"),
-        ("powerPlatformApiEndpoint", {"private": PRIVATE}),
-        ("ring", "prod"),
-        ("ring", ["test"]),
-        ("dataverseEndpoint", "http://private.example"),
-    ],
-)
-def test_inconsistent_environment_settings_fail_before_any_auth(
-    config, monkeypatch, field, invalid
-):
+@pytest.mark.parametrize("endpoint", [
+    "", "http://private.example", "https://user:password@private.example",
+    DATAVERSE_URL + "/api/data/v9.2", DATAVERSE_URL + "?private=value",
+    DATAVERSE_URL + "#private", {"private": PRIVATE}, 123,
+])
+def test_invalid_endpoints_fail_before_any_auth(config, monkeypatch, endpoint):
     value, write = config
-    value[field] = invalid
+    value["dataverseEndpoint"] = endpoint
     write()
     monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
 
-    with pytest.raises(ToolError, match="environment.*invalid|inconsistent") as caught:
+    with pytest.raises(ToolError, match="dataverseEndpoint.*HTTPS origin") as caught:
         _call()
 
     assert PRIVATE not in str(caught.value)
 
 
-@pytest.mark.parametrize("bot_id", ["unconfigured", OTHER_ENVIRONMENT_ID, "../../other"])
-def test_resolver_rejects_unknown_or_invalid_bot_ids_before_auth(config, monkeypatch, bot_id):
+@pytest.mark.parametrize("bot_id", [
+    "unconfigured", OTHER_DATAVERSE_URL, "../../other", OTHER_BOT_ID.replace("bbbb", "cccc"),
+])
+def test_unknown_or_invalid_bot_ids_fail_before_auth(config, monkeypatch, bot_id):
     monkeypatch.setattr(server, "get_client", lambda: pytest.fail("Must not authenticate"))
 
     with pytest.raises(ToolError, match="botId"):
         _call(bot_id)
 
 
-@pytest.mark.parametrize("variant", ["missing", "malformed", "incomplete", "ambiguous"])
+@pytest.mark.parametrize(
+    "variant",
+    ["missing", "malformed", "incomplete", "ambiguous", "not-an-object", "bad-agents",
+     "missing-endpoint"],
+)
 def test_bad_or_ambiguous_config_is_an_explicit_error(config, variant):
     value, write = config
     path = write()
@@ -362,101 +301,86 @@ def test_bad_or_ambiguous_config_is_an_explicit_error(config, variant):
     elif variant == "incomplete":
         value["setup"] = "pending"
         write()
-    else:
+    elif variant == "ambiguous":
         value["agents"].append(dict(value["agents"][1]))
         write()
+    elif variant == "not-an-object":
+        write([])
+    elif variant == "bad-agents":
+        value["agents"] = [None]
+        write()
+    else:
+        value.pop("dataverseEndpoint")
+        write()
 
-    with pytest.raises(ToolError, match="setup|configured agent"):
+    with pytest.raises(ToolError, match="setup|configured agent|Dataverse endpoint"):
         _call()
 
 
-@pytest.mark.parametrize(
-    "variant", ["missing", "ambiguous", "bad-id", "wrong-tenant", "bad-url", "bad-domain"]
-)
-def test_unresolved_environment_is_not_replaced_by_a_default_or_bot_id(
-    config, authoring_identity, msal_auth, api, variant
+@pytest.mark.parametrize("raw_manifest", [
+    None, "", " ", "{}", '{"microsoft365":null}', '{"microsoft365":{}}',
+    '{"microsoft365":{"titleId":null}}', '{"microsoft365":{"titleId":""}}',
+    '{"microsoft365":{"titleId":" "}}',
+    '{"teams":{"titleId":"not-microsoft365"},"microsoft365":{"appId":"not-a-title",'
+    '"shareLink":"https://m365.cloud.microsoft/chat/?titleId=not-the-title"}}',
+])
+def test_missing_title_is_an_explicit_registration_error_without_synthesis(
+    config, authoring_identity, msal_auth, api, raw_manifest
 ):
-    value, write = config
-    value.pop("environmentId")
-    value.pop("powerPlatformApiEndpoint")
-    value["dataverseEndpoint"] = "https://orgmocktenant.crm.dynamics.com"
-    write()
-    environments = []
-    if variant != "missing":
-        environments = [{"id": ENVIRONMENT_ID, "url": value["dataverseEndpoint"]}]
-    if variant == "ambiguous":
-        environments.append({"id": OTHER_ENVIRONMENT_ID, "url": value["dataverseEndpoint"]})
-    elif variant == "bad-id":
-        environments[0]["id"] = PRIVATE
-    elif variant == "wrong-tenant":
-        environments[0]["tenantId"] = OTHER_ENVIRONMENT_ID
-    elif variant == "bad-url":
-        environments[0]["url"] = {"private": PRIVATE}
-    elif variant == "bad-domain":
-        environments[0].pop("url")
-        environments[0]["domainName"] = [PRIVATE]
-    api.environments = environments
+    api.payload["applicationmanifestinformation"] = raw_manifest
 
-    with pytest.raises(ToolError, match="environment|metadata") as caught:
+    with pytest.raises(ToolError, match="RegistrationRequired:") as caught:
         _call()
 
-    assert len(api.calls) == 1
-    assert PRIVATE not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        None,
-        {},
-        {"teams": {"appId": "teams-app"}, "microsoft365": {}},
-        {"microsoft365": {"titleId": None, "appId": "m365-app"}},
-        {"microsoft365": {"titleId": "", "shareLink": "https://private.example"}},
-        {"microsoft365": {"titleId": " "}},
-    ],
-)
-def test_missing_microsoft365_title_is_an_explicit_registration_error(
-    config, authoring_identity, components, msal_auth, api, metadata
-):
-    components["bot"]["teamsAppInformation"] = metadata
-    _add_components(api, components)
-
-    with pytest.raises(ToolError, match="no Microsoft 365 registration titleId") as caught:
-        _call()
-
-    assert "RegistrationRequired" in str(caught.value)
+    assert "no Microsoft 365 registration titleId" in str(caught.value)
     assert PRIVATE not in str(caught.value)
     assert len(api.calls) == 1
 
 
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        [],
-        {"microsoft365": "invalid"},
-        {"microsoft365": {"titleId": ["title"]}},
-        {"microsoft365": {"titleId": "private\ntitle"}},
-        {"microsoft365": {"titleId": " title "}},
-    ],
-)
-def test_malformed_registration_is_not_treated_as_no_agents(
-    config, authoring_identity, components, msal_auth, api, metadata
+@pytest.mark.parametrize("raw_manifest", [
+    [], {}, 12, "not-json", "null", '"not-an-object"', "[]",
+    '{"microsoft365":[]}', '{"microsoft365":"invalid"}',
+])
+def test_malformed_manifest_is_a_service_error_not_missing_registration(
+    config, authoring_identity, msal_auth, api, raw_manifest
 ):
-    components["bot"]["teamsAppInformation"] = metadata
-    _add_components(api, components)
+    api.payload["applicationmanifestinformation"] = raw_manifest
 
-    with pytest.raises(ToolError, match="malformed|invalid Microsoft 365"):
+    with pytest.raises(ToolError, match="ServiceError:.*malformed application manifest"):
+        _call()
+
+
+@pytest.mark.parametrize("title_id", [
+    False, 123, [], {}, "private\ntitle", " title ", "x" * 257,
+])
+def test_invalid_title_is_a_service_error(
+    config, authoring_identity, msal_auth, api, title_id
+):
+    api.payload["applicationmanifestinformation"] = json.dumps({
+        "microsoft365": {"titleId": title_id},
+    })
+
+    with pytest.raises(ToolError, match="ServiceError:.*invalid Microsoft 365 titleId"):
         _call()
 
 
 @pytest.mark.parametrize("returned_id", [OTHER_BOT_ID, None, "not-a-guid"])
-def test_components_must_identify_the_selected_bot(
-    config, authoring_identity, components, msal_auth, api, returned_id
+def test_metadata_must_identify_the_selected_bot(
+    config, authoring_identity, msal_auth, api, returned_id
 ):
-    components["bot"]["cdsBotId"] = returned_id
-    _add_components(api, components)
+    api.payload["botid"] = returned_id
 
     with pytest.raises(ToolError, match="did not identify the selected configured bot"):
+        _call()
+
+
+@pytest.mark.parametrize("payload", [[], {}, None])
+def test_invalid_record_responses_are_explicit_service_errors(
+    config, authoring_identity, msal_auth, api, payload
+):
+    api.payload = payload
+
+    with pytest.raises(ToolError, match="ServiceError:"):
         _call()
 
 
@@ -465,17 +389,9 @@ def test_components_must_identify_the_selected_bot(
     [(401, "sign-in"), (403, "not authorized"), (404, "not found"),
      (429, "could not resolve"), (500, "could not resolve")],
 )
-@pytest.mark.parametrize("phase", ["components", "environments"])
-def test_api_failures_are_explicit_sanitized_errors_without_search_fallback(
-    config, authoring_identity, msal_auth, api, caplog, status, message, phase
+def test_http_failures_are_sanitized_errors_without_discovery_fallback(
+    config, authoring_identity, msal_auth, api, caplog, status, message
 ):
-    if phase == "environments":
-        value, write = config
-        value.pop("environmentId")
-        value.pop("powerPlatformApiEndpoint")
-        value["dataverseEndpoint"] = "https://orgmocktenant.crm.dynamics.com"
-        write()
-        api.environments = []
     api.status = status
 
     with pytest.raises(ToolError, match=message) as caught:
@@ -485,15 +401,15 @@ def test_api_failures_are_explicit_sanitized_errors_without_search_fallback(
     assert PRIVATE not in str(caught.value)
     assert PRIVATE not in caplog.text
     assert len(api.calls) == 1
-    assert api.closed == 1
 
 
+@pytest.mark.parametrize("error_type", [requests.ConnectionError, requests.Timeout])
 def test_network_failure_is_not_empty_discovery(
-    config, authoring_identity, msal_auth, api, caplog
+    config, authoring_identity, msal_auth, api, caplog, error_type
 ):
-    api.error = requests.ConnectionError(PRIVATE)
+    api.error = error_type(PRIVATE)
 
-    with pytest.raises(ToolError, match="temporarily unavailable") as caught:
+    with pytest.raises(ToolError, match="NetworkError:.*temporarily unavailable") as caught:
         _call()
 
     assert PRIVATE not in str(caught.value)
@@ -501,23 +417,22 @@ def test_network_failure_is_not_empty_discovery(
     assert len(api.calls) == 1
 
 
-@pytest.mark.parametrize("payload", [[], {}, {"bot": None}])
-def test_invalid_component_responses_are_explicit_service_errors(
-    config, authoring_identity, msal_auth, api, payload
+def test_non_json_http_success_is_not_reported_as_network_failure(
+    config, authoring_identity, msal_auth, api, caplog
 ):
-    api.components = payload
+    api.raw = f"<html>{PRIVATE}</html>".encode()
 
-    with pytest.raises(ToolError, match="ServiceError:") as caught:
+    with pytest.raises(ToolError, match="ServiceError:.*invalid discovery response") as caught:
         _call()
 
-    assert "titleId" in str(caught.value) or "selected configured bot" in str(caught.value)
-    assert len(api.calls) == 1
+    assert PRIVATE not in str(caught.value)
+    assert PRIVATE not in caplog.text
 
 
 @pytest.mark.parametrize("claims", [
-    {"tenant_id": OTHER_ENVIRONMENT_ID}, {"object_id": OTHER_BOT_ID}, {"object_id": None},
+    {"tenant_id": OTHER_BOT_ID}, {"object_id": OTHER_BOT_ID}, {"object_id": None},
 ])
-def test_powerplatform_token_must_match_the_authoring_tenant_and_account(
+def test_dataverse_token_must_match_the_authoring_tenant_and_account(
     msal_auth, monkeypatch, claims
 ):
     App, _, _ = msal_auth
@@ -527,43 +442,50 @@ def test_powerplatform_token_must_match_the_authoring_tenant_and_account(
     )
 
     with pytest.raises(agent_title.AgentTitleResolutionError, match="different tenant/account"):
-        agent_title.acquire_agentbuilder_token(TENANT_ID, OBJECT_ID, ["read-scope"])
+        agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, OBJECT_ID)
 
 
-def test_missing_authoring_object_id_cannot_start_an_unbound_sign_in(monkeypatch):
+def test_missing_authoring_object_id_cannot_start_unbound_sign_in(monkeypatch):
     monkeypatch.setattr(
         agent_title.msal, "PublicClientApplication",
         lambda *args, **kwargs: pytest.fail("Must not open unbound sign-in"),
     )
 
     with pytest.raises(agent_title.AgentTitleResolutionError, match="cannot be identified"):
-        agent_title.acquire_agentbuilder_token(TENANT_ID, None, ["read-scope"])
+        agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, None)
 
 
 def test_silent_miss_uses_interactive_sign_in_without_stdout(msal_auth, monkeypatch, capsys):
     App, calls, _ = msal_auth
     monkeypatch.setattr(App, "acquire_token_silent", lambda *args, **kwargs: None)
 
-    assert agent_title.acquire_agentbuilder_token(
-        TENANT_ID, OBJECT_ID, ["read-scope"]
+    assert agent_title.acquire_dataverse_token(
+        DATAVERSE_URL, TENANT_ID, OBJECT_ID
     ) == _jwt()
-    assert calls == [("interactive", ["read-scope"], "select_account")]
+    assert calls == [("interactive", [SCOPE], "select_account")]
     assert capsys.readouterr().out == ""
+
+
+def test_interactive_sign_in_cannot_switch_authoring_account(msal_auth, monkeypatch):
+    App, _, _ = msal_auth
+    monkeypatch.setattr(App, "acquire_token_silent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        App, "acquire_token_interactive",
+        lambda *args, **kwargs: {"access_token": _jwt(object_id=OTHER_BOT_ID)},
+    )
+
+    with pytest.raises(agent_title.AgentTitleResolutionError, match="different tenant/account"):
+        agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, OBJECT_ID)
 
 
 def test_auth_errors_do_not_expose_provider_details(msal_auth, monkeypatch):
     App, _, _ = msal_auth
-    monkeypatch.setattr(
-        App, "acquire_token_silent",
-        lambda *args, **kwargs: {"error": PRIVATE, "error_description": PRIVATE},
-    )
-    monkeypatch.setattr(
-        App, "acquire_token_interactive",
-        lambda *args, **kwargs: {"error": PRIVATE, "error_description": PRIVATE},
-    )
+    failure = {"error": PRIVATE, "error_description": PRIVATE}
+    monkeypatch.setattr(App, "acquire_token_silent", lambda *args, **kwargs: failure)
+    monkeypatch.setattr(App, "acquire_token_interactive", lambda *args, **kwargs: failure)
 
     with pytest.raises(agent_title.AgentTitleResolutionError, match="sign-in failed") as caught:
-        agent_title.acquire_agentbuilder_token(TENANT_ID, OBJECT_ID, ["read-scope"])
+        agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, OBJECT_ID)
 
     assert PRIVATE not in str(caught.value)
 
@@ -581,14 +503,14 @@ def test_auth_exceptions_are_safe_and_explicit(msal_auth, monkeypatch, error, ca
     monkeypatch.setattr(App, "acquire_token_silent", fail)
 
     with pytest.raises(agent_title.AgentTitleResolutionError, match="sign-in failed") as caught:
-        agent_title.acquire_agentbuilder_token(TENANT_ID, OBJECT_ID, ["read-scope"])
+        agent_title.acquire_dataverse_token(DATAVERSE_URL, TENANT_ID, OBJECT_ID)
 
     assert caught.value.code == "AuthenticationRequired"
     assert PRIVATE not in str(caught.value)
     assert PRIVATE not in caplog.text
 
 
-def test_blocking_component_lookup_runs_off_the_mcp_event_loop(
+def test_blocking_dataverse_lookup_runs_off_the_mcp_event_loop(
     config, authoring_identity, monkeypatch
 ):
     caller_thread = threading.get_ident()
@@ -596,8 +518,8 @@ def test_blocking_component_lookup_runs_off_the_mcp_event_loop(
     def resolve(target, tenant_id, object_id):
         assert threading.get_ident() != caller_thread
         assert (target.bot_id, tenant_id, object_id) == (BOT_ID, TENANT_ID, OBJECT_ID)
-        return {"botId": BOT_ID, "environmentId": ENVIRONMENT_ID, "titleId": "registered-title"}
+        return {"botId": BOT_ID, "titleId": TITLE_ID}
 
     monkeypatch.setattr(server, "resolve_configured_agent_title", resolve)
 
-    assert _call()["titleId"] == "registered-title"
+    assert _call()["titleId"] == TITLE_ID

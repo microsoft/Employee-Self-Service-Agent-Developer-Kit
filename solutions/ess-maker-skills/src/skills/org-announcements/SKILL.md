@@ -107,18 +107,22 @@ use announcement content to decide which agent owns it.
    force `get_agent_config` before each opener.
 3. If the title is missing, call the read-only `resolve_agent_title_id` tool on
    `ess-org-announcements` with `{"botId": "<selected configured botId>"}`.
-   The server reads the selected entry's environment from `.local/config.json`
-   (falling back to workspace environment settings only when the entry has none).
-   For older setup configs with only a Dataverse URL, it resolves that exact
-   environment through Power Platform's user-scoped environment listing.
-   It then calls `AgentBuilderClient.fetch_components(botId)` and reads only
-   `bot.teamsAppInformation.microsoft365.titleId`, after checking `bot.cdsBotId`
-   matches the selected bot. Use the returned `titleId`, never the input `botId`
-   as a substitute. No landing-page MCP process is needed; follow this skill's
-   availability check if the tool is unavailable.
+   The server reads the selected entry's `dataverseEndpoint` from
+   `.local/config.json` (falling back to the workspace endpoint only when the
+   entry has no separate environment settings). It issues a read-only Dataverse
+   `GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`,
+   checks that the returned `botid` matches the selected bot, parses the
+   `applicationmanifestinformation` JSON string, and reads only
+   `microsoft365.titleId`. The result contains `botId` and `titleId`.
+   Use the returned `titleId`, never the input `botId` as a substitute.
+   No Power Platform environment listing, MinimalBot components request, or
+   landing-page MCP process is needed; follow this skill's availability check
+   if the tool is unavailable.
 4. Resolve any ambiguity among local configured agents before calling the tool.
-   If the selected entry has no `botId` or environment, stop and have the maker
-   complete `/setup` for that agent. Missing Microsoft 365 registration metadata
+   If the selected entry has no `botId` or usable Dataverse endpoint, stop and
+   have the maker complete `/setup` for that agent. An entry with its own
+   environment settings must supply its own Dataverse endpoint; never inherit
+   another agent's endpoint. Missing Microsoft 365 registration metadata
    is an explicit `RegistrationRequired` error: have the maker publish/register
    that agent for Microsoft 365, then retry. Authentication, authorization,
    network, and API errors are failures, not empty discovery; report the tool's
@@ -137,7 +141,7 @@ use announcement content to decide which agent owns it.
 
 Discovery does **not** initialize landing-page configuration. Never call
 `create_agent_config` or `update_agent_config` as part of this flow, including
-when a target was resolved through components. No landing-page existence check
+when a target was resolved through Dataverse. No landing-page existence check
 or creation is needed to open announcements.
 
 ## Hard rules

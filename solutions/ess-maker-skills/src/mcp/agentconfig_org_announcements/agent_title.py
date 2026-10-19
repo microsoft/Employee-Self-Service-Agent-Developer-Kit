@@ -1,18 +1,17 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Resolve one configured agent's Microsoft 365 title through AgentBuilder."""
+"""Resolve one configured agent's Microsoft 365 title through Dataverse."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import msal
@@ -26,20 +25,9 @@ _SOLUTION_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_PATH = _SOLUTION_ROOT / ".local" / "config.json"
 sys.path.insert(0, str(_SOLUTION_ROOT / "scripts"))
 
-from agentbuilder import (  # noqa: E402
-    CLIENT_ID,
-    RING_CONFIG,
-    AgentBuilderClient,
-    AgentBuilderError,
-    AgentBuilderHTTPError,
-    derive_environment_host,
-    environment_id_from_host,
-    list_environments,
-    minimal_bot_read_scope,
-    ring_from_environment_host,
-    validate_environment_host,
-)
+from auth import dataverse_get  # noqa: E402
 from base_client import (  # noqa: E402
+    _CLIENT_ID as DATAVERSE_CLIENT_ID,
     _TOKEN_CACHE_PATH,
     account_for_identity,
     validate_token_identity,
@@ -48,7 +36,7 @@ from _odata import _validate_https_base_url  # noqa: E402
 from _token_cache import create_token_cache  # noqa: E402
 
 
-AGENTBUILDER_TOKEN_CACHE_PATH = Path(_TOKEN_CACHE_PATH)
+DATAVERSE_TOKEN_CACHE_PATH = Path(_TOKEN_CACHE_PATH)
 _LOGGER = logging.getLogger("ess-org-announcements.agent-title")
 
 
@@ -64,10 +52,7 @@ class AgentTitleResolutionError(RuntimeError):
 @dataclass(frozen=True)
 class ConfiguredAgentTarget:
     bot_id: str
-    ring: str
-    environment_id: str | None
-    host: str | None
-    dataverse_endpoint: str | None
+    dataverse_endpoint: str
 
 
 def _guid(value: Any, field: str) -> str:
@@ -83,12 +68,6 @@ def _guid(value: Any, field: str) -> str:
             f"{field} must be a non-empty GUID. Confirm the selected agent in /setup.",
             code="InvalidRequest",
         ) from error
-
-
-def _environment_id(value: Any) -> str:
-    if isinstance(value, str) and value.casefold().startswith("default-"):
-        value = value[len("default-"):]
-    return _guid(value, "environmentId")
 
 
 def _matches_bot(entry: dict[str, Any], bot_id: str) -> bool:
@@ -136,56 +115,37 @@ def load_configured_target(bot_id: str) -> ConfiguredAgentTarget:
         )
     selected = matches[0]
 
-    # An agent-specific environment must not inherit another agent's API host.
+    # An agent-specific environment must not inherit another agent's endpoint.
     has_own_environment = any(
         selected.get(key) is not None
         for key in ("environmentId", "powerPlatformApiEndpoint", "dataverseEndpoint")
     )
     environment = selected if has_own_environment else config
-    raw_environment_id = environment.get("environmentId")
-    environment_id = (
-        _environment_id(raw_environment_id)
-        if raw_environment_id is not None
-        else None
-    )
-    host = environment.get("powerPlatformApiEndpoint")
-    ring = environment.get("ring")
     endpoint = environment.get("dataverseEndpoint")
-    try:
-        if host is not None:
-            if not isinstance(host, str):
-                raise ValueError
-            host_ring = ring_from_environment_host(host)
-            if ring is not None and ring != host_ring:
-                raise ValueError
-            ring = host_ring
-            host = validate_environment_host(host, ring)
-            host_environment_id = _environment_id(environment_id_from_host(host, ring))
-            if environment_id is not None and environment_id != host_environment_id:
-                raise ValueError
-            environment_id = host_environment_id
-        ring = ring if ring is not None else config.get("ring", "prod")
-        if not isinstance(ring, str) or ring not in RING_CONFIG:
-            raise ValueError
-        if endpoint is not None:
-            endpoint = _validate_https_base_url(endpoint, "dataverseEndpoint")
-    except (ValueError, TypeError, AttributeError) as error:
+    if endpoint is None:
         raise AgentTitleResolutionError(
-            "The selected agent's environment, API host, or service ring is invalid "
-            "or inconsistent. Confirm its environment in /setup.",
-            code="InvalidRequest",
-        ) from error
-    if environment_id is None and endpoint is None:
-        raise AgentTitleResolutionError(
-            "The selected agent has no configured environmentId or Dataverse URL. "
+            "The selected agent has no configured Dataverse endpoint. "
             "Complete /setup for that agent.",
             code="InvalidRequest",
         )
-    return ConfiguredAgentTarget(bot_id, ring, environment_id, host, endpoint)
+    try:
+        if not isinstance(endpoint, str):
+            raise ValueError
+        endpoint = _validate_https_base_url(endpoint, "dataverseEndpoint")
+        if urlsplit(endpoint).path:
+            raise ValueError
+    except ValueError as error:
+        raise AgentTitleResolutionError(
+            "The selected agent's dataverseEndpoint must be an HTTPS origin "
+            "without credentials, a path, a query, or a fragment. "
+            "Confirm its environment in /setup.",
+            code="InvalidRequest",
+        ) from error
+    return ConfiguredAgentTarget(bot_id, endpoint)
 
 
-def acquire_agentbuilder_token(
-    tenant_id: str, object_id: str | None, scopes: list[str]
+def acquire_dataverse_token(
+    endpoint: str, tenant_id: str, object_id: str | None
 ) -> str:
     """Reuse the shared authoring cache for the same tenant and account."""
     if not object_id:
@@ -195,10 +155,11 @@ def acquire_agentbuilder_token(
             code="AuthenticationRequired",
         )
     try:
+        scopes = [f"{endpoint}/user_impersonation"]
         app = msal.PublicClientApplication(
-            CLIENT_ID,
+            DATAVERSE_CLIENT_ID,
             authority=f"https://login.microsoftonline.com/{UUID(tenant_id)}",
-            token_cache=create_token_cache(str(AGENTBUILDER_TOKEN_CACHE_PATH)),
+            token_cache=create_token_cache(str(DATAVERSE_TOKEN_CACHE_PATH)),
         )
         account = account_for_identity(app, tenant_id, object_id)
         result = (
@@ -207,7 +168,7 @@ def acquire_agentbuilder_token(
             else None
         )
         if not isinstance(result, dict) or not result.get("access_token"):
-            _LOGGER.info("Opening a browser for Power Platform component discovery.")
+            _LOGGER.info("Opening a browser for Dataverse agent metadata discovery.")
             result = app.acquire_token_interactive(scopes, prompt="select_account")
         token = result.get("access_token") if isinstance(result, dict) else None
         if not isinstance(token, str) or not token:
@@ -215,93 +176,53 @@ def acquire_agentbuilder_token(
         return validate_token_identity(token, tenant_id, object_id)
     except (ValueError, OSError, LockException, requests.RequestException) as error:
         raise AgentTitleResolutionError(
-            "Power Platform sign-in failed or selected a different tenant/account. "
+            "Dataverse sign-in failed or selected a different tenant/account. "
             "Sign in with the current announcement authoring account and retry.",
             code="AuthenticationRequired",
         ) from error
 
 
-def _dataverse_hostname(url: str) -> str:
-    hostname = (urlparse(url).hostname or "").casefold()
-    # Dataverse web and Web API endpoints identify the same environment.
-    return re.sub(r"\.api\.(crm[0-9]*\.dynamics\.com)$", r".\1", hostname)
-
-
-def _resolve_environment(
-    target: ConfiguredAgentTarget, environments: list[dict[str, Any]], tenant_id: str
-) -> str:
-    wanted = _dataverse_hostname(target.dataverse_endpoint or "")
-    matches: set[str] = set()
-    for environment in environments:
-        try:
-            url = environment.get("url")
-            if url is not None and not isinstance(url, str):
-                raise ValueError
-            if not url:
-                domain = environment.get("domainName")
-                if domain is not None and not isinstance(domain, str):
-                    raise ValueError
-                url = f"https://{domain}" if domain else ""
-            if not url:
-                continue
-            url = _validate_https_base_url(url, "Power Platform environment URL")
-            if _dataverse_hostname(url) != wanted:
-                continue
-            if (
-                environment.get("tenantId") is not None
-                and _guid(environment["tenantId"], "tenantId") != tenant_id
-            ):
-                raise ValueError
-            matches.add(_environment_id(environment.get("id")))
-        except (ValueError, AgentTitleResolutionError) as error:
-            raise AgentTitleResolutionError(
-                "Power Platform returned inconsistent environment metadata. "
-                "No titleId was resolved.",
-                code="ServiceError",
-                source="backend",
-            ) from error
-    if len(matches) != 1:
-        raise AgentTitleResolutionError(
-            "The configured Dataverse URL did not identify exactly one Power "
-            "Platform environment available to the authoring account. Confirm "
-            "the selected environment and access in /setup.",
-            code="NotFound",
-            source="backend",
-        )
-    return matches.pop()
-
-
-def _registered_title(payload: dict[str, Any], bot_id: str) -> str:
-    bot = payload.get("bot")
+def _registered_title(payload: Any, bot_id: str) -> str:
     try:
-        if not isinstance(bot, dict) or _guid(bot.get("cdsBotId"), "cdsBotId") != bot_id:
+        if (
+            not isinstance(payload, dict)
+            or _guid(payload.get("botid"), "botid") != bot_id
+        ):
             raise ValueError
     except (ValueError, AgentTitleResolutionError) as error:
         raise AgentTitleResolutionError(
-            "The component response did not identify the selected configured bot. "
+            "The Dataverse response did not identify the selected configured bot. "
             "No titleId was accepted.",
             code="ServiceError",
             source="backend",
         ) from error
-    metadata = bot
-    for field in ("teamsAppInformation", "microsoft365"):
-        value = metadata.get(field)
-        if value is None:
-            raise AgentTitleResolutionError(
-                "The selected agent has no Microsoft 365 registration titleId. "
-                "Publish/register this agent for Microsoft 365, then retry.",
-                code="RegistrationRequired",
-                source="backend",
-            )
-        if not isinstance(value, dict):
-            raise AgentTitleResolutionError(
-                "The component response contains malformed Microsoft 365 "
-                "registration metadata. No titleId was accepted.",
-                code="ServiceError",
-                source="backend",
-            )
-        metadata = value
-    title_id = metadata.get("titleId")
+    raw_manifest = payload.get("applicationmanifestinformation")
+    if raw_manifest is None or (
+        isinstance(raw_manifest, str) and not raw_manifest.strip()
+    ):
+        raise AgentTitleResolutionError(
+            "The selected agent has no Microsoft 365 registration titleId. "
+            "Publish/register this agent for Microsoft 365, then retry.",
+            code="RegistrationRequired",
+            source="backend",
+        )
+    try:
+        if not isinstance(raw_manifest, str):
+            raise ValueError
+        manifest = json.loads(raw_manifest)
+        if not isinstance(manifest, dict):
+            raise ValueError
+        metadata = manifest.get("microsoft365")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError
+    except ValueError as error:
+        raise AgentTitleResolutionError(
+            "Dataverse returned malformed application manifest information. "
+            "No titleId was accepted.",
+            code="ServiceError",
+            source="backend",
+        ) from error
+    title_id = metadata.get("titleId") if metadata is not None else None
     if title_id is None or (isinstance(title_id, str) and not title_id.strip()):
         raise AgentTitleResolutionError(
             "The selected agent has no Microsoft 365 registration titleId. "
@@ -313,7 +234,7 @@ def _registered_title(payload: dict[str, Any], bot_id: str) -> str:
         return validate_title_id(title_id)
     except ValueError as error:
         raise AgentTitleResolutionError(
-            "The component response contains an invalid Microsoft 365 titleId. "
+            "Dataverse returned an invalid Microsoft 365 titleId. "
             "No titleId was accepted.",
             code="ServiceError",
             source="backend",
@@ -323,64 +244,54 @@ def _registered_title(payload: dict[str, Any], bot_id: str) -> str:
 def resolve_configured_agent_title(
     target: ConfiguredAgentTarget, tenant_id: str, object_id: str | None
 ) -> dict[str, str]:
-    """Read components off the event loop; never write tenant or local state."""
+    """Read bot metadata off the event loop; never write tenant or local state."""
     try:
-        with requests.Session() as session:
-            environment_id = target.environment_id
-            if environment_id is None:
-                # The documented environment-list API uses .default, separately
-                # from the component-read scope; MSAL cannot mix those requests.
-                inventory_token = acquire_agentbuilder_token(
-                    tenant_id, object_id,
-                    [f"{RING_CONFIG[target.ring]['audience']}/.default"],
-                )
-                environments = list_environments(
-                    inventory_token, target.ring, session=session
-                )
-                environment_id = _resolve_environment(target, environments, tenant_id)
-            host = target.host or derive_environment_host(environment_id, target.ring)
-            token = acquire_agentbuilder_token(
-                tenant_id, object_id, [minimal_bot_read_scope(target.ring)]
-            )
-            client = AgentBuilderClient(
-                host, token, ring=target.ring, tenant_id=tenant_id, session=session
-            )
-            payload = client.fetch_components(target.bot_id)
-            return {
-                "botId": target.bot_id,
-                "environmentId": environment_id,
-                "titleId": _registered_title(payload, target.bot_id),
-            }
-    except AgentBuilderHTTPError as error:
-        status = error.status_code
+        token = acquire_dataverse_token(target.dataverse_endpoint, tenant_id, object_id)
+        payload = dataverse_get(
+            target.dataverse_endpoint,
+            token,
+            f"bots({target.bot_id})",
+            params={"$select": "botid,applicationmanifestinformation"},
+        )
+        return {
+            "botId": target.bot_id,
+            "titleId": _registered_title(payload, target.bot_id),
+        }
+    except requests.HTTPError as error:
+        status = (
+            error.response.status_code if error.response is not None
+            else getattr(error, "status_code", None)
+        )
         code, message = {
-            401: ("AuthenticationRequired", "Power Platform sign-in must be renewed."),
+            401: ("AuthenticationRequired", "Dataverse sign-in must be renewed."),
             403: (
                 "AuthorizationDenied",
                 "The authoring account is not authorized to read the selected "
-                "agent's Power Platform metadata.",
+                "agent's Dataverse metadata.",
             ),
             404: (
                 "NotFound",
-                "The configured agent or environment was not found in Power Platform.",
+                "The configured agent was not found in the selected "
+                "Dataverse environment.",
             ),
         }.get(
             status,
-            ("ServiceError", "Power Platform could not resolve the selected agent."),
+            ("ServiceError", "Dataverse could not resolve the selected agent."),
         )
+        status_detail = f" (HTTP {status})" if status is not None else ""
         raise AgentTitleResolutionError(
-            f"{message} (HTTP {status}). No titleId was resolved.",
+            f"{message}{status_detail}. No titleId was resolved.",
             code=code, source="backend",
+        ) from error
+    except ValueError as error:
+        raise AgentTitleResolutionError(
+            "Dataverse returned an invalid discovery response. "
+            "No titleId was resolved.",
+            code="ServiceError", source="backend",
         ) from error
     except requests.RequestException as error:
         raise AgentTitleResolutionError(
-            "Power Platform is temporarily unavailable. No titleId was resolved; "
+            "Dataverse is temporarily unavailable. No titleId was resolved; "
             "retry when connectivity is restored.",
             code="NetworkError", source="backend",
-        ) from error
-    except AgentBuilderError as error:
-        raise AgentTitleResolutionError(
-            "Power Platform returned an invalid discovery response. "
-            "No titleId was resolved.",
-            code="ServiceError", source="backend",
         ) from error

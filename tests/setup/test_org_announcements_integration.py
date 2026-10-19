@@ -86,9 +86,14 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
     )
     assert "omit `suggestedDraft.audience`" in skill
     assert "`resolve_agent_title_id` tool on `ess-org-announcements`" in skill
-    assert "AgentBuilderClient.fetch_components(botId)" in skill
-    assert "bot.teamsAppInformation.microsoft365.titleId" in skill
-    assert "bot.cdsBotId" in skill
+    assert (
+        "GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation"
+        in skill
+    )
+    assert "`applicationmanifestinformation` JSON string" in skill
+    assert "`microsoft365.titleId`" in skill
+    assert "returned `botid` matches the selected bot" in skill
+    assert "AgentBuilderClient" not in skill
     assert "list_agent_configs" not in skill
     assert "search_agents" not in skill
     assert "RegistrationRequired" in skill

@@ -494,7 +494,6 @@ def test_discovery_telemetry_records_success_without_input(
         org_server, "resolve_configured_agent_title",
         lambda target, tenant_id, object_id: {
             "botId": OBJECT_ID,
-            "environmentId": TENANT_ID,
             "titleId": TITLE_ID,
         },
     )

@@ -294,7 +294,7 @@ def test_the_announcements_server_introduces_no_third_token_cache() -> None:
         if candidate.__name__ == "AgentConfigBaseClient"
     )
     cache = Path(base_class.__init__.__globals__["_TOKEN_CACHE_PATH"])
-    title_cache = Path(modules["agent_title"].AGENTBUILDER_TOKEN_CACHE_PATH)
+    title_cache = Path(modules["agent_title"].DATAVERSE_TOKEN_CACHE_PATH)
     locations = {Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH), cache, title_cache}
     assert title_cache == cache
 

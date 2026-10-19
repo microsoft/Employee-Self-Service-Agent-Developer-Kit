@@ -952,11 +952,12 @@ def org_announcements_widget() -> str:
     annotations=_READ_ONLY_ANNOTATIONS,
 )
 async def resolve_agent_title_id(botId: str) -> dict[str, str]:
-    """Resolve a configured bot's Microsoft 365 titleId from its components.
+    """Resolve a configured bot's Microsoft 365 titleId from Dataverse metadata.
 
     Pass the selected local agent's botId, not a name or a titleId. The server
-    binds its environment from .local/config.json and uses the current authoring
-    tenant/account. Missing registration and API/auth failures are errors.
+    binds its Dataverse endpoint from .local/config.json and uses the current
+    authoring tenant/account. Returns botId and titleId; missing registration and
+    API/auth failures are errors.
     This read-only tool does not persist configuration or initialize a landing page.
     """
     started = time.monotonic()
