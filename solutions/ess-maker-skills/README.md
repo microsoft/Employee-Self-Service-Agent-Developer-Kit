@@ -48,6 +48,75 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+### 📢 Post Organization Announcements
+
+Publish announcements for the selected deployed ESS agent and its audiences.
+Run `/org-announcements`, ask `Create an announcement`, or use the **Post an
+announcement** Quick Action.
+
+- **Standard announcements** carry a title, description, priority, and up to
+  two actions.
+- **Alerts** carry a single link action for time-sensitive notices.
+- **Audiences** are optional. An empty audience applies no additional Security
+  Group filtering and reaches everyone who uses the selected agent. Security
+  groups, mail-enabled security groups, or classic distribution groups limit
+  delivery and are searched by name or email in one combined query.
+- **Scheduling** publishes an announcement for a start/end window, and expired
+  announcements can be published again through the normal editor after
+  reviewing and updating their schedule.
+- **Lifecycle** actions archive, unarchive, move back to draft, duplicate, or
+  delete an announcement.
+
+Describe the announcement in chat and the kit opens a pre-filled editor for
+you to review - nothing is saved until you publish or save a draft in that
+editor.
+
+Org Announcements are **scoped to the authenticated tenant and selected
+agent's `titleId`**, not shared across agents. The current 100 limit and latest
+50 archive window apply per tenant-and-agent pair. There is no cross-agent or
+legacy tenant-only API fallback. Within the selected agent, `audience: []`
+applies no additional Security Group filtering, so the announcement reaches
+everyone who uses that agent. An explicit or stored `titleId` is reused.
+Otherwise, `resolve_agent_title_id` on the `ess-org-announcements` provider
+uses the selected configured `botId` and environment with
+the Dataverse Web API:
+`GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`.
+It validates the returned `botid`, parses the `applicationmanifestinformation`
+JSON string, and reads `microsoft365.titleId`. The selected entry's
+`dataverseEndpoint` takes precedence; the workspace endpoint is used only when
+the legacy entry is the unambiguous active agent with no separate environment
+settings. Setup records an endpoint on each agent and preserves the previous
+active agent's legacy binding before switching environments. Unbound non-active
+legacy agents must be set up again; discovery does not guess their environment.
+The skill persists the resolved title only to that agent's local entry and,
+when active, its mirror.
+There is no agent-name search fallback, synthesized ID, landing-page MCP
+dependency, or landing-page configuration creation.
+
+Discovery uses a separate Dataverse resource token for the same authoring tenant
+and account, requesting the selected endpoint's `/user_impersonation` scope and
+reusing the shared AgentConfiguration MSAL cache. Browser sign-in is limited to
+300 seconds. One title lookup remains tracked until completion even if its
+caller cancels; concurrent retries receive an in-progress error instead of
+starting independent sign-ins. No MinimalBot component fetch,
+Power Platform environment inventory, or Island Gateway sign-in is needed.
+A missing Microsoft 365 registration title is an explicit `RegistrationRequired`
+error; malformed metadata, sign-in, access, and API failures are not treated as
+empty discovery.
+
+Announcement authoring requires the Org Announcements feature to be enabled
+for your tenant, and audience search requires the `Directory.Read.All`
+Microsoft Graph permission to be consented in your tenant. Graph uses a
+separate resource token for the same authoring tenant and account. The current
+account-context check requires readable `tid` and `oid` claims; opaque tokens
+or credentials missing those claims return an explicit authentication failure
+rather than using a different account. The API still validates tokens and
+authorizes every request.
+
+This development surface requires the matching agent-qualified v1.1 backend
+and scoped widget. The MCP rejects unscoped canonical responses instead of
+silently consuming records from an older backend.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
@@ -339,6 +408,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
 | `/landing-page` | Configure landing-page branding and content |
+| `/org-announcements` | Create and manage announcements for the selected ESS agent |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create an eval-driven topic, workflow, or evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

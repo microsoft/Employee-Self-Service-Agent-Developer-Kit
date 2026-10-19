@@ -6,9 +6,42 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
+import sys
 
-import setup
+import pytest
+
+
+_SETUP_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "solutions" / "ess-maker-skills" / "scripts" / "setup.py"
+)
+
+
+def _load_setup_module():
+    # tests/setup is also importable as "setup" in a combined run. Resolve the
+    # script by path under a distinct name so cwd and collection order cannot
+    # silently substitute that test package for the implementation.
+    spec = importlib.util.spec_from_file_location("ess_maker_setup_under_test", _SETUP_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load the maker setup module at {_SETUP_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+setup = _load_setup_module()
+
+
+def test_setup_module_is_loaded_from_the_active_checkout() -> None:
+    assert Path(setup.__file__).resolve() == _SETUP_PATH
+    assert callable(setup.write_config)
 
 
 def _agent_info(**overrides: object) -> dict[str, object]:
@@ -127,3 +160,71 @@ def test_write_config_omits_unresolved_title_id(
     config = _write_config(tmp_path, _agent_info())
 
     assert "titleId" not in config["agent"]
+
+
+def test_write_config_records_each_agents_endpoint_after_consecutive_setup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first_url = "https://example.crm.dynamics.com"
+    second_url = "https://other.crm.dynamics.com"
+    _write_config(tmp_path, _agent_info(url=first_url))
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent", url=second_url),
+        slug="other-agent",
+    )
+    agents = {entry["botId"]: entry for entry in config["agents"]}
+
+    assert agents["bot-1"]["dataverseEndpoint"] == first_url
+    assert agents["bot-2"]["dataverseEndpoint"] == second_url
+    assert config["dataverseEndpoint"] == second_url
+    assert config["agent"] == agents["bot-2"]
+
+
+@pytest.mark.parametrize("legacy_shape", ["agents-and-mirror", "mirror-only", "slug-only"])
+def test_setup_preserves_previous_active_legacy_binding_before_environment_switch(
+    tmp_path: Path, monkeypatch, legacy_shape
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    if legacy_shape != "agents-and-mirror":
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config.pop("agents" if legacy_shape == "mirror-only" else "agent")
+        path.write_text(json.dumps(config), encoding="utf-8")
+
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent",
+                             url="https://other.crm.dynamics.com"),
+        slug="other-agent",
+    )
+    agents = {entry["botId"]: entry for entry in config["agents"]}
+
+    assert agents["bot-1"]["dataverseEndpoint"] == "https://example.crm.dynamics.com"
+    assert agents["bot-1"]["titleId"] == "title-1"
+    assert agents["bot-2"]["dataverseEndpoint"] == "https://other.crm.dynamics.com"
+    assert config["agent"]["botId"] == "bot-2"
+
+
+def test_setup_does_not_backfill_an_unbound_non_active_legacy_agent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["agents"].append({
+        "botId": "unbound-bot", "name": "Unbound Agent", "slug": "unbound-agent",
+        "titleId": "unbound-title",
+    })
+    path.write_text(json.dumps(config), encoding="utf-8")
+
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent",
+                             url="https://other.crm.dynamics.com"),
+        slug="other-agent",
+    )
+    unbound = next(entry for entry in config["agents"] if entry["botId"] == "unbound-bot")
+
+    assert "dataverseEndpoint" not in unbound
+    assert unbound["titleId"] == "unbound-title"

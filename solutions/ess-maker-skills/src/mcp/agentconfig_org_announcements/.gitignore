@@ -1,0 +1,12 @@
+# Compiled Python
+__pycache__/
+*.pyc
+
+# This server owns NO token cache of its own. It uses exactly the two shared
+# delegated caches:
+#   - Microsoft Graph  -> solutions/ess-maker-skills/.local/.token_cache.bin
+#   - AgentConfiguration -> src/mcp/agentconfig_core/.local/msal_token_cache.bin
+# both of which are ignored by their own directories' rules. This entry is
+# belt-and-braces only: if anything ever drops local state here it must not be
+# committed.
+.local/
