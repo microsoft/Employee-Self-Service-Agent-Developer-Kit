@@ -88,6 +88,38 @@ def _non_workday_ref() -> dict[str, Any]:
 
 class TestPackageFlavorDetection:
     @responses.activate
+    @pytest.mark.parametrize("extra", ["none", "legacy", "duplicate-oauth", "duplicate-runtime", "unknown"])
+    def test_runtime_and_domain_oauth_coexistence(
+        self, runner: _MinimalRunner, fake_dataverse_url: str, extra: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        refs = [
+            *dv.workday_connection_refs_runtime(),
+            *dv.workday_connection_refs_simplified(),
+        ]
+        if extra == "legacy":
+            refs.append(dv.workday_connection_ref(suffix="0786a", display_name="Generic User"))
+        elif extra == "duplicate-oauth":
+            refs.extend(dv.workday_connection_refs_simplified())
+        elif extra == "duplicate-runtime":
+            refs.extend(dv.workday_connection_refs_runtime())
+        elif extra == "unknown":
+            refs.append(dv.workday_connection_ref(suffix="abcde", display_name="Custom"))
+        _register_connection_refs(base_url=fake_dataverse_url, refs=refs)
+
+        result = _check_package_flavor(runner, wd_flows=[{"name": "runtime"}])[0]
+
+        if extra == "none":
+            assert result.status == "Passed"
+            assert runner._workday_package_flavor == "simplified"
+            assert "2 Workday connection reference(s)" in result.result
+            assert "Workday Runtime OBO + OAuthUser/OBO" in result.result
+        else:
+            assert result.status == "Warning"
+            assert runner._workday_package_flavor == "unknown"
+
+    @responses.activate
     def test_simplified_install_passes_with_flavor_simplified(
         self, runner: _MinimalRunner, fake_dataverse_url: str
     ) -> None:
@@ -347,6 +379,30 @@ class TestPackageFlavorDetection:
 
 
 class TestPackageConnectionCompleteness:
+    @pytest.mark.parametrize("unbound_index", [None, 0, 1])
+    def test_coexisting_runtime_and_oauth_both_require_bindings(
+        self, runner: _MinimalRunner, unbound_index: int | None
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [
+            dv.workday_connection_refs_runtime()[0],
+            *dv.workday_connection_refs_simplified(),
+        ]
+        if unbound_index is not None:
+            runner._workday_connection_refs[unbound_index]["connectionid"] = None
+
+        result = _check_package_connection_completeness(runner)[0]
+
+        assert result.status == ("Passed" if unbound_index is None else "Failed")
+        if unbound_index is None:
+            assert "All 2 Workday connection reference(s)" in result.result
+        else:
+            role = "Workday Runtime (OBO)" if unbound_index == 0 else "OAuthUser"
+            assert role in result.result
+            assert "unbound" in result.result
+
     def test_simplified_all_bound_passes(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_package_connection_completeness
 

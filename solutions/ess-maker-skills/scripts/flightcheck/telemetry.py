@@ -104,7 +104,10 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 #      ADO 7943641.
 # 1.4: added ``agentType`` to check events plus profile/realm/blocking,
 #      severity, and automation dimensions — ADO 7955324.
-TELEMETRY_SCHEMA_VERSION = "1.4"
+# 1.5: added ``blockReason`` to check + run events — splits the single
+#      Blocked verdict wedge by cause so admin-API authorization denials
+#      (HTTP 401/403, AADSTS*) are countable separately from other blocks.
+TELEMETRY_SCHEMA_VERSION = "1.5"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -861,6 +864,91 @@ def derive_run_outcome(run_result: Any) -> str:
     return RUN_OUTCOME_READY
 
 
+# --- Block-reason attribution (ADO: split the Blocked wedge by cause) -------
+# A blocked CheckResult carries a bounded ``block_reason`` enum set by the
+# runner/checks at the block site. We re-validate it here against a
+# self-contained allow-list (telemetry.py never imports runner) and collapse
+# anything unknown to ``other`` so no free-form string ever reaches Aria,
+# mirroring the _ALLOWED_BRANCHES / _classify_branch privacy pattern above.
+#
+# Primary goal: make admin-API authorization denials (HTTP 401/403 or
+# AADSTS*) countable on their own, separate from "admin API unreachable"
+# (404 wrong-env, 5xx, timeout) and the non-auth block causes.
+BLOCK_REASON_ADMIN_API_AUTHORIZATION = "adminApiAuthorization"
+BLOCK_REASON_ADMIN_API_UNAVAILABLE = "adminApiUnavailable"
+BLOCK_REASON_CHECKPOINT_CONTRACT = "checkpointContract"
+BLOCK_REASON_PROFILE_CARDINALITY = "profileCardinality"
+BLOCK_REASON_EVIDENCE_AMBIGUOUS = "evidenceAmbiguous"
+BLOCK_REASON_OTHER = "other"
+
+# The CheckResult.status value for a blocked check (runner Status.BLOCKED.value).
+# Defined locally so telemetry.py stays decoupled from runner; kept distinct
+# from the RUN_OUTCOME_* donut labels, which are run-level verdicts.
+_CHECK_STATUS_BLOCKED = "Blocked"
+
+_ALLOWED_BLOCK_REASONS = frozenset({
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+})
+
+# Run-level roll-up precedence (highest first). A run can have several
+# blocked checks with different causes; we surface the most actionable one.
+# Authorization ranks first because it is the signal this split exists to
+# count; "other" is last so a known cause always wins over the fallback.
+_BLOCK_REASON_PRECEDENCE = (
+    BLOCK_REASON_ADMIN_API_AUTHORIZATION,
+    BLOCK_REASON_ADMIN_API_UNAVAILABLE,
+    BLOCK_REASON_CHECKPOINT_CONTRACT,
+    BLOCK_REASON_PROFILE_CARDINALITY,
+    BLOCK_REASON_EVIDENCE_AMBIGUOUS,
+    BLOCK_REASON_OTHER,
+)
+
+
+def derive_check_block_reason(check: Any) -> str:
+    """Bounded block-reason for a single check event.
+
+    Returns "" for any non-blocked check (``block_reason`` is only
+    meaningful when the status is Blocked). For a blocked check, returns the
+    check's ``block_reason`` if it is an allowed enum value, otherwise
+    ``other`` so no free-form string is ever emitted. A blocked check with an
+    empty ``block_reason`` (pre-change data) also collapses to ``other``.
+    """
+    status = getattr(check, "status", "")
+    if status != _CHECK_STATUS_BLOCKED:
+        return ""
+    reason = getattr(check, "block_reason", "") or ""
+    if reason in _ALLOWED_BLOCK_REASONS:
+        return reason
+    return BLOCK_REASON_OTHER
+
+
+def derive_run_block_reason(run_result: Any) -> str:
+    """Roll block reasons of all blocked checks up to one run-level value.
+
+    Returns "" when the run has no blocked checks. Otherwise returns the
+    highest-precedence block reason present across the blocked checks, so a
+    run that is auth-blocked anywhere is countable as such regardless of its
+    final verdict donut slice (a run can be Blocked-count>0 but overall
+    Failed/Errored).
+    """
+    present: set[str] = set()
+    for check in getattr(run_result, "results", []) or []:
+        reason = derive_check_block_reason(check)
+        if reason:
+            present.add(reason)
+    if not present:
+        return ""
+    for reason in _BLOCK_REASON_PRECEDENCE:
+        if reason in present:
+            return reason
+    return BLOCK_REASON_OTHER
+
+
 # --- Connector attribution (ADO 7943641) ----------------------------------
 # Derive a bounded ``connector`` value (workday | servicenow | "") from the
 # run scope (for the run event) and from the check's category (for each check
@@ -989,6 +1077,7 @@ def _run_data(
         "connector": derive_connector_from_scope(scope),  # derived: workday|servicenow|""
         "overall": getattr(run_result, "overall", ""),
         "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
+        "blockReason": derive_run_block_reason(run_result),  # bounded: splits the Blocked wedge by cause ("" when no blocked checks)
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),
@@ -1030,6 +1119,7 @@ def _check_data(
         "connector": derive_connector_from_category(_category),  # derived
         "priority": getattr(check, "priority", ""),
         "status": getattr(check, "status", ""),
+        "blockReason": derive_check_block_reason(check),  # bounded: cause when Blocked, "" otherwise
         "severity": getattr(check, "severity", ""),
         "automationType": getattr(check, "automation_type", ""),
         "roles": ", ".join(getattr(check, "roles", []) or []),
