@@ -107,6 +107,17 @@ test('no duplicate action ids', () => {
     assert.strictEqual(ids.length, new Set(ids).size);
 });
 
+test('landing-page tutorial offers only supported settings', () => {
+    const getTutorialHtml = eval(`(${_extractFn('getTutorialHtml')})`);
+    const section = getTutorialHtml().match(/<section id="landing-page">([\s\S]*?)<\/section>/);
+    assert.ok(section, 'landing-page tutorial section is missing');
+    assert.deepStrictEqual(
+        [...section[1].matchAll(/<li><strong>([^<]+)<\/strong>/g)].map(match => match[1]),
+        ['Categorized starter prompts', 'Accent colors', 'Quick links', 'Stay up to date'],
+    );
+    assert.doesNotMatch(section[1], /quick access|isQuickAccessEnabled/i);
+});
+
 console.log('\nactionState logic:');
 
 test('action with no requires is always enabled', () => {

@@ -256,6 +256,7 @@ def test_maker_facing_guidance_lists_only_supported_insight_settings() -> None:
         _section(text, "Describe landing-page capabilities"),
         _section(text, "Start a guided configuration"),
         (SKILL_PATH.parents[3] / "README.md").read_text(encoding="utf-8"),
+        (SKILL_PATH.parent.parent / "onboarding" / "step2.md").read_text(encoding="utf-8"),
     ]
     for surface in surfaces:
         assert "quick access" not in surface.lower()
