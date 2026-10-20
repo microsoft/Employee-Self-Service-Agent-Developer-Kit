@@ -10,6 +10,23 @@ update, or infer status from a Markdown checklist.
 Use `shared/config-schema.md` as the internal state and migration reference;
 it is not a customer-executed phase and must not be shown as an extra step.
 
+## Maker communication profile
+
+This is the native DA Connect lifecycle, not foundation Setup. Reuse the
+caller's immutable profile and continue its single eligible entry; never
+count or claim again for a nested call. For direct entry, use eligible mode
+only after controller preflight verifies materialization, the exact supported
+native ESS HR agent, and package admission, before connection mutations.
+Unsupported agents and failed preflight never count or invite.
+
+Read `src/skills/shared/user-profile-entry.md` and
+`src/skills/shared/user-profile-contract.md`. Follow only claimed optional
+onboarding and resume the same target, realm, and phase afterward. Preserve
+the readiness briefing, phase roadmap, administrator handoffs, plan approvals,
+and required confirmations. Do not add a style indicator or automatic proposal.
+Return the actual outcome to the entry owner for finish, or finish once for
+direct entry.
+
 ## Safety contract
 
 - Support only the active native ESS HR agent recorded by `/setup`. Classic DA
