@@ -1,9 +1,18 @@
 # Repo-root Copilot instructions
 
-## Discover Maker Kit operations
+## Determine the active workspace
 
-At the beginning of each conversation, check whether both of these nested Maker
-Kit paths are available:
+At the beginning of each conversation, first check whether both of these direct
+Maker Kit paths are available:
+
+- `.github/prompts/` contains at least one `*.prompt.md` file.
+- `src/skills/` exists.
+
+When that direct pair is available, the Maker Kit is already the active
+workspace. Do not apply the folder-selection guidance in this file. Continue
+with the active workspace instructions instead.
+
+Otherwise, check whether both of these nested Maker Kit paths are available:
 
 - `solutions/ess-maker-skills/.github/prompts/` contains at least one
   `*.prompt.md` file.
@@ -39,6 +48,7 @@ When folder-selection guidance applies, respond with only:
 > 1. In VS Code, select `File` → `Open Folder…` or press `Ctrl+K Ctrl+O`.
 > 2. Select `solutions/ess-maker-skills`.
 > 3. Click `Select Folder`.
-> 4. After VS Code reopens, enter the request again.
+> 4. After VS Code reopens, start a new Copilot chat and enter the request
+>    again.
 
 Route every request not covered above as normal.
