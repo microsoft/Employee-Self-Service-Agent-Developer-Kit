@@ -48,6 +48,23 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+An explicit or locally cached `titleId` is reused without discovery. Otherwise,
+the read-only `resolve_agent_title_id(botId)` tool reads the configured bot's
+Dataverse `applicationmanifestinformation` and extracts `microsoft365.titleId`.
+The skill verifies and saves that ID to the selected local agent before
+checking whether its landing-page configuration exists. It does not search by
+agent name, synthesize a title ID, or fall back to Wevenova.
+
+Discovery uses the current authoring tenant/account and the selected agent's
+recorded Dataverse endpoint. Setup records endpoints per agent and preserves
+the previous active agent's known legacy binding when switching environments.
+An unbound non-active legacy agent must rerun `/setup`; it cannot inherit
+another agent's environment. Browser sign-in is limited to 300 seconds, and a
+cancelled lookup remains tracked until its worker finishes so retries cannot
+start duplicate sign-ins. Missing registration, invalid metadata, and
+authentication or service failures are surfaced without initializing a
+landing-page configuration.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.

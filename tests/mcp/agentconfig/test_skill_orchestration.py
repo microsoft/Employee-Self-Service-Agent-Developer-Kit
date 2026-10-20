@@ -32,6 +32,63 @@ def _prose_section(text: str, heading: str) -> str:
     return " ".join(_section(text, heading).split())
 
 
+def test_target_discovery_uses_dataverse_without_overriding_explicit_or_cached_ids() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    target = _prose_section(text, "Resolve the target")
+    hard_rules = _prose_section(text, "Hard rules")
+
+    assert "When `titleId` was supplied or already stored, skip discovery" in target
+    assert "`resolve_agent_title_id` with that `botId`" in target
+    assert "`applicationmanifestinformation`" in target
+    assert "`microsoft365.titleId`" in target
+    assert "only an unambiguously active legacy agent may use the workspace endpoint" in target
+    assert "Dataverse sign-in uses the current authoring tenant/account" in target
+    assert "bounded to 300 seconds" in target
+    assert "do not launch repeated retries or independent sign-ins" in target
+    assert "Never fall back to name search or Wevenova discovery" in hard_rules
+    assert "list_agent_configs" not in text
+    assert "search_agents" not in text
+
+
+def test_title_resolution_requires_persistence_and_a_separate_existence_read() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    target = _prose_section(text, "Resolve the target")
+    persistence = _prose_section(text, "Persist a discovered title ID")
+    creation = _prose_section(text, "Create or recreate missing configuration")
+
+    assert target.index("Persist that value") < target.index("call `get_agent_config`")
+    assert "Require the returned `botId` to match the selected local bot" in target
+    assert "Successful title resolution alone never authorizes assuming" in target
+    assert "On 404, follow **Create or recreate missing configuration**" in target
+    assert "Find the target entry in `agents` by the returned `botId`" in persistence
+    assert "that complete object into `agents`" in persistence
+    assert "also add or replace `agent.titleId`" in persistence
+    assert "Normalize both identifiers as GUIDs" in persistence
+    assert "If active markers conflict, surface the configuration error and stop" in persistence
+    assert "For a non-active target, leave `agent` and `activeAgent` unchanged" in persistence
+    assert "every other agent field, and every top-level config field" in persistence
+    assert "Reread `.local/config.json` after writing it" in persistence
+    assert "Use this flow when the initial `get_agent_config` returns 404" in creation
+    assert "Do not repeat `resolve_agent_title_id`" in creation
+
+
+def test_registration_failures_and_delete_discovery_never_initialize_configuration() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    target = _prose_section(text, "Resolve the target")
+    unavailable = _prose_section(text, "Target unavailable to AgentConfiguration")
+    deletion = _prose_section(text, "Delete all landing-page configuration")
+
+    assert "On `RegistrationRequired`" in target
+    assert "Do not treat them as missing registration, initialize configuration" in target
+    assert "`resolve_agent_title_id` returns `RegistrationRequired`" in unavailable
+    assert "Do not guess a `titleId` or call `create_agent_config`" in unavailable
+    assert "call `resolve_agent_title_id` for the configured `botId`" in deletion
+    assert "Do not infer that defaults are active from a failed lookup" in deletion
+    assert "Do not call `get_agent_config` or `create_agent_config` as part of deletion" in deletion
+    assert "Obtain explicit confirmation immediately before the delete call" in deletion
+    assert "When delete returns 404" in deletion
+
+
 def test_router_distinguishes_explore_preview_and_direct_update() -> None:
     route = _section(SKILL_PATH.read_text(encoding="utf-8"), "Route the request")
     hard_rules = _section(SKILL_PATH.read_text(encoding="utf-8"), "Hard rules")

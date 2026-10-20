@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import setup
 
 
@@ -127,3 +129,71 @@ def test_write_config_omits_unresolved_title_id(
     config = _write_config(tmp_path, _agent_info())
 
     assert "titleId" not in config["agent"]
+
+
+def test_write_config_records_each_agents_endpoint_after_consecutive_setup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first_url = "https://example.crm.dynamics.com"
+    second_url = "https://other.crm.dynamics.com"
+    _write_config(tmp_path, _agent_info(url=first_url))
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent", url=second_url),
+        slug="other-agent",
+    )
+    agents = {entry["botId"]: entry for entry in config["agents"]}
+
+    assert agents["bot-1"]["dataverseEndpoint"] == first_url
+    assert agents["bot-2"]["dataverseEndpoint"] == second_url
+    assert config["dataverseEndpoint"] == second_url
+    assert config["agent"] == agents["bot-2"]
+
+
+@pytest.mark.parametrize("legacy_shape", ["agents-and-mirror", "mirror-only", "slug-only"])
+def test_setup_preserves_previous_active_legacy_binding_before_environment_switch(
+    tmp_path: Path, monkeypatch, legacy_shape
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    if legacy_shape != "agents-and-mirror":
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config.pop("agents" if legacy_shape == "mirror-only" else "agent")
+        path.write_text(json.dumps(config), encoding="utf-8")
+
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent",
+                             url="https://other.crm.dynamics.com"),
+        slug="other-agent",
+    )
+    agents = {entry["botId"]: entry for entry in config["agents"]}
+
+    assert agents["bot-1"]["dataverseEndpoint"] == "https://example.crm.dynamics.com"
+    assert agents["bot-1"]["titleId"] == "title-1"
+    assert agents["bot-2"]["dataverseEndpoint"] == "https://other.crm.dynamics.com"
+    assert config["agent"]["botId"] == "bot-2"
+
+
+def test_setup_does_not_backfill_an_unbound_non_active_legacy_agent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["agents"].append({
+        "botId": "unbound-bot", "name": "Unbound Agent", "slug": "unbound-agent",
+        "titleId": "unbound-title",
+    })
+    path.write_text(json.dumps(config), encoding="utf-8")
+
+    config = _write_config(
+        tmp_path, _agent_info(botId="bot-2", name="Other Agent",
+                             url="https://other.crm.dynamics.com"),
+        slug="other-agent",
+    )
+    unbound = next(entry for entry in config["agents"] if entry["botId"] == "unbound-bot")
+
+    assert "dataverseEndpoint" not in unbound
+    assert unbound["titleId"] == "unbound-title"

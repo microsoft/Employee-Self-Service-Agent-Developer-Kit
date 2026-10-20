@@ -45,6 +45,27 @@ def backend(contracts) -> harness.FakeLandingPage:
     )
 
 
+def test_registration_resolution_does_not_require_or_initialize_configuration(contracts) -> None:
+    backend = harness.FakeLandingPage({}, contract_by_name=contracts)
+
+    call = backend.invoke("resolve_agent_title_id", {"botId": harness.BOT_ID})
+
+    assert not call.failed
+    assert call.result == {"botId": harness.BOT_ID, "titleId": harness.TITLE_ID}
+    assert backend.configs == {}
+    assert backend.read_count == 0
+
+
+def test_registration_resolution_does_not_guess_an_unconfigured_bot(backend) -> None:
+    before = deepcopy(backend.configs)
+
+    call = backend.invoke("resolve_agent_title_id", {"botId": "unconfigured"})
+
+    assert call.failed
+    assert backend.configs == before
+    assert backend.read_count == 0
+
+
 def test_contracts_match_the_shipped_model_visible_tools(contracts, monkeypatch) -> None:
     shipped_tools = []
     list_tools = FastMCP.list_tools
@@ -60,7 +81,7 @@ def test_contracts_match_the_shipped_model_visible_tools(contracts, monkeypatch)
     actual = {contract.name: contract for contract in asyncio.run(harness.tool_contracts())}
 
     assert set(actual) == {
-        "list_agent_configs", "search_agents", "create_agent_config",
+        "resolve_agent_title_id", "create_agent_config",
         "get_agent_config", "update_agent_config", "delete_agent_config",
         "open_accent_color", "open_quick_links", "open_starter_prompts",
         "view_agent_icon", "read_file", "run_command",
@@ -231,8 +252,7 @@ def test_fake_handlers_never_access_real_files_network_or_processes(backend, mon
             guard.setattr(owner, attribute, forbidden)
         backend.read_mode = "externalized"
         for name, arguments in (
-            ("list_agent_configs", {}),
-            ("search_agents", {"searchString": "Evaluation"}),
+            ("resolve_agent_title_id", {"botId": harness.BOT_ID}),
             ("get_agent_config", {"titleId": harness.TITLE_ID}),
             ("read_file", {"path": r".local\results\config-1.json"}),
             ("open_accent_color", {"titleId": harness.TITLE_ID}),
@@ -319,7 +339,10 @@ _CONSUMPTION_ERROR = "externalized authoritative response was not consumed"
             AssertionError, "failed read", id="latest-get-failed",
         ),
         pytest.param(
-            [_GET, harness.RecordedCall(1, "list_agent_configs", {}, {"value": []}), _UPDATE],
+            [_GET, harness.RecordedCall(
+                1, "resolve_agent_title_id", {"botId": harness.BOT_ID},
+                {"botId": harness.BOT_ID, "titleId": harness.TITLE_ID},
+            ), _UPDATE],
             AssertionError, "Unrelated tools intervened", id="unrelated-tool",
         ),
         pytest.param(

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import html
@@ -17,8 +18,16 @@ from urllib.parse import urlsplit
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
+from portalocker.exceptions import LockException
+from requests import RequestException
 
+from agent_title import (
+    AgentTitleResolutionError,
+    load_configured_target,
+    resolve_configured_agent_title,
+)
 from client import AgentConfigApiError, AgentConfigClient
 from drafts import (
     AccentColorDraft,
@@ -153,12 +162,14 @@ mcp = FastMCP(
     "ess-landing-page-config",
     instructions=(
         "Configure ESS landing pages through the production AgentConfiguration "
-        "EmployeeAgents API. Resolve an agent by titleId, then read, initialize, "
-        "update, or open a landing-page configuration surface."
+        "EmployeeAgents API. Use an explicit or cached titleId, or resolve the "
+        "configured bot's titleId from Dataverse, then read, initialize, update, "
+        "or open a landing-page configuration surface."
     ),
 )
 
 _client: Optional[AgentConfigClient] = None
+_title_resolution_task: Optional[asyncio.Task[dict[str, str]]] = None
 
 
 def get_client() -> AgentConfigClient:
@@ -170,6 +181,38 @@ def get_client() -> AgentConfigClient:
             local_dir=SOLUTION_LOCAL_DIR,
         )
     return _client
+
+
+def _release_title_resolution(task: asyncio.Task[dict[str, str]]) -> None:
+    global _title_resolution_task
+    if _title_resolution_task is task:
+        _title_resolution_task = None
+    if not task.cancelled():
+        task.exception()
+
+
+async def _run_title_resolution(bot_id: str) -> dict[str, str]:
+    try:
+        target = await asyncio.to_thread(load_configured_target, bot_id)
+        try:
+            client = await asyncio.to_thread(get_client)
+        except (
+            AgentConfigApiError, httpx.RequestError, ValueError,
+            OSError, LockException, RequestException,
+        ) as error:
+            raise AgentTitleResolutionError(
+                "Landing-page sign-in could not be completed. Sign in with the "
+                "current authoring tenant/account and retry.",
+                code="AuthenticationRequired",
+            ) from error
+        return await asyncio.to_thread(
+            resolve_configured_agent_title,
+            target,
+            client.tenant_id,
+            client.object_id,
+        )
+    except AgentTitleResolutionError as error:
+        raise ToolError(f"{error.code}: {error}") from None
 
 
 def _format(data: Any) -> str:
@@ -285,16 +328,28 @@ def starter_prompts_widget() -> str:
     return _widget_shell("starter-prompts")
 
 
-@mcp.tool()
-async def list_agent_configs() -> str:
-    """List agents that already have landing-page configuration."""
-    return _format(await get_client().list_agent_configs())
+@mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
+async def resolve_agent_title_id(botId: str) -> dict[str, str]:
+    """Resolve a configured bot's Microsoft 365 titleId from Dataverse metadata.
 
-
-@mcp.tool()
-async def search_agents(searchString: str) -> str:
-    """Search tenant-visible agents by a distinctive name substring."""
-    return _format(await get_client().search_agents(searchString))
+    Pass the selected local agent's botId, not a name or a titleId. The server
+    binds its Dataverse endpoint from .local/config.json and uses the current
+    authoring tenant/account. Returns botId and titleId; missing registration and
+    API/auth failures are errors. Only one lookup runs at a time, including after
+    a caller cancels; retries must wait for that lookup to finish.
+    This read-only tool does not persist configuration or initialize a landing page.
+    """
+    global _title_resolution_task
+    if _title_resolution_task is not None and not _title_resolution_task.done():
+        raise ToolError(
+            "ServiceError: Agent title resolution is already in progress. Complete "
+            "the pending sign-in or wait for the current lookup to finish "
+            "before retrying."
+        )
+    task = asyncio.create_task(_run_title_resolution(botId))
+    _title_resolution_task = task
+    task.add_done_callback(_release_title_resolution)
+    return await asyncio.shield(task)
 
 
 @mcp.tool()

@@ -447,8 +447,8 @@ def test_landing_page_missing_target_explains_org_deployment() -> None:
     normalized_skill = " ".join(skill.replace("> ", "").split())
 
     assert (
-        "`list_agent_configs` has no configured match and `search_agents` "
-        "returns no matching tenant-visible agent"
+        "`resolve_agent_title_id` returns `RegistrationRequired` because the "
+        "selected bot has no Microsoft 365 registration title ID"
         in normalized_skill
     )
     assert "Do not guess a `titleId` or call `create_agent_config`." in skill

@@ -32,6 +32,8 @@ SKILL_PATH = SOLUTION_ROOT / "src" / "skills" / "landing-page-config" / "SKILL.m
 SERVER_DIR = SOLUTION_ROOT / "src" / "mcp" / "agentconfig_landing_page"
 TITLE_ID = "eval-title-hr"
 OTHER_TITLE_ID = "eval-title-it"
+BOT_ID = "aaaaaaaa-0000-4000-8000-000000004444"
+OTHER_BOT_ID = "bbbbbbbb-0000-4000-8000-000000005555"
 DEFAULT_MODEL = "gpt-5.4"
 MAX_CALLS = 24
 TURN_TIMEOUT = 120
@@ -169,7 +171,7 @@ class FakeLandingPage:
                     "agent": {
                         "name": "Evaluation HR Agent",
                         "titleId": TITLE_ID,
-                        "botId": "eval-bot-hr",
+                        "botId": BOT_ID,
                         "schemaName": "msdyn_copilotforemployeeselfservicehr",
                         "slug": "evaluation-hr",
                         "folder": "workspace/agents/evaluation-hr",
@@ -200,12 +202,11 @@ class FakeLandingPage:
             )
             return self._record(name, arguments, {"exitCode": self.validation_exit_code, "stdout": output})
 
-        if name in {"list_agent_configs", "search_agents"}:
-            result = [
-                {"titleId": title_id, "name": config["name"]}
-                for title_id, config in self.configs.items()
-            ]
-            return self._record(name, arguments, {"value": result})
+        if name == "resolve_agent_title_id":
+            title_id = {BOT_ID: TITLE_ID, OTHER_BOT_ID: OTHER_TITLE_ID}.get(arguments["botId"])
+            if title_id is None:
+                return self._record(name, arguments, {"error": "Bot is not configured."}, True)
+            return self._record(name, arguments, {"botId": arguments["botId"], "titleId": title_id})
 
         title_id = arguments["titleId"]
         if name == "create_agent_config":

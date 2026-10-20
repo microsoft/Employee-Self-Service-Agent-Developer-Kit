@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 import warnings
 
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 
@@ -58,8 +60,7 @@ def _tool_functions() -> dict[str, list[str]]:
 
 def test_server_exposes_the_skill_tool_contract() -> None:
     expected_tools = {
-        "list_agent_configs": [],
-        "search_agents": ["searchString"],
+        "resolve_agent_title_id": ["botId"],
         "create_agent_config": ["titleId"],
         "get_agent_config": ["titleId"],
         "view_agent_icon": ["titleId"],
@@ -86,6 +87,50 @@ def test_server_exposes_the_skill_tool_contract() -> None:
     for tool_name in ("open_accent_color", "open_quick_links", "open_starter_prompts"):
         expected_tools[tool_name].append("draft")
     assert _tool_functions() == expected_tools
+
+
+def test_title_resolution_is_read_only_and_requires_only_the_configured_bot() -> None:
+    tools = {
+        tool.name: tool
+        for tool in asyncio.run(agentconfig_server.mcp.list_tools())
+    }
+    resolver = tools["resolve_agent_title_id"]
+    assert set(resolver.inputSchema["properties"]) == {"botId"}
+    assert resolver.inputSchema["required"] == ["botId"]
+    assert resolver.inputSchema["properties"]["botId"]["type"] == "string"
+    assert resolver.annotations.readOnlyHint is True
+    assert resolver.annotations.destructiveHint is False
+    assert resolver.annotations.idempotentHint is True
+    assert "list_agent_configs" not in tools
+    assert "search_agents" not in tools
+
+
+def test_stdio_entrypoint_exposes_discovery_and_rejects_invalid_bots_without_sign_in() -> None:
+    async def run():
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=[str(SERVER_PATH)],
+            cwd=str(SERVER_PATH.parent),
+        )
+        async with stdio_client(parameters) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = {tool.name for tool in (await session.list_tools()).tools}
+                assert "resolve_agent_title_id" in tools
+                assert "list_agent_configs" not in tools
+                assert "search_agents" not in tools
+                assert {"get_agent_config", "open_accent_color", "open_quick_links",
+                        "open_starter_prompts"} <= tools
+                result = await session.call_tool(
+                    "resolve_agent_title_id", {"botId": "not-a-guid"}
+                )
+                assert result.isError is True
+                assert any(
+                    item.type == "text" and "InvalidRequest:" in item.text
+                    for item in result.content
+                )
+
+    asyncio.run(asyncio.wait_for(run(), timeout=15))
 
 
 def test_widget_openers_advertise_surface_specific_draft_schemas() -> None:

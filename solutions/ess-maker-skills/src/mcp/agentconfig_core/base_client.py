@@ -163,10 +163,10 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
     return result["access_token"]
 
 
-def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+def account_for_identity(app: Any, tenant_id: str, object_id: str) -> Any | None:
+    """Find one MSAL home account through its tenant-local profile."""
     import msal
 
-    app = _create_msal_app(tenant_id)
     # get_accounts() groups profiles by home account and can expose another
     # tenant's local id. Resolve the original tenant profile through the cache.
     home_account_ids = {
@@ -182,13 +182,19 @@ def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
         account for account in app.get_accounts()
         if account.get("home_account_id") in home_account_ids
     ]
-    if len(accounts) != 1:
+    return accounts[0] if len(accounts) == 1 else None
+
+
+def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+    app = _create_msal_app(tenant_id)
+    account = account_for_identity(app, tenant_id, object_id)
+    if account is None:
         raise AgentConfigApiError(
             "The original account is unavailable for token refresh. "
             "Sign in again as that account and retry.",
             http_status=401,
         )
-    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
+    result = app.acquire_token_silent(_SCOPE, account=account, force_refresh=True)
     if not result or not result.get("access_token"):
         raise AgentConfigApiError(
             "Could not refresh the access token for the original account. "
@@ -250,11 +256,14 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     payload_segment = parts[1]
     padded = payload_segment + "=" * (-len(payload_segment) % 4)
     try:
-        return json.loads(base64.urlsafe_b64decode(padded))
+        payload = json.loads(base64.urlsafe_b64decode(padded))
     except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError(
             f"Could not decode AGENTCONFIG_ACCESS_TOKEN payload: {error}"
         ) from error
+    if not isinstance(payload, dict):
+        raise ValueError("AGENTCONFIG_ACCESS_TOKEN payload must be a JSON object")
+    return payload
 
 
 def _decode_tenant_id_from_jwt(token: str) -> str:
@@ -285,6 +294,17 @@ def _decode_object_id_from_jwt(token: str) -> Optional[str]:
     if isinstance(object_id, str) and object_id:
         return object_id
     return None
+
+
+def validate_token_identity(token: str, tenant_id: str, object_id: str | None) -> str:
+    """Check resource-token context; services still validate and authorize tokens."""
+    _validate_token_tenant(token, tenant_id)
+    if not object_id:
+        raise ValueError("The authoring account cannot be identified without an oid claim")
+    actual = _decode_object_id_from_jwt(token)
+    if actual is None or actual.casefold() != object_id.casefold():
+        raise ValueError("The token does not identify the intended authoring account")
+    return token
 
 
 class AgentConfigBaseClient:
@@ -319,6 +339,10 @@ class AgentConfigBaseClient:
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
         self._token_lock = asyncio.Lock()
+
+    @property
+    def object_id(self) -> Optional[str]:
+        return self._object_id
 
     def __repr__(self) -> str:
         return (
