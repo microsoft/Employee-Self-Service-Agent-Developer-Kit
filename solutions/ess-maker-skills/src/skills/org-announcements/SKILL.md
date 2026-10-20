@@ -1,7 +1,8 @@
 ---
 name: org-announcements
 description: >-
-  Create, edit, republish, and manage announcements for a deployed ESS agent
+  Create, edit, republish, and manage announcements for a deployed ESS agent's
+  regular or line-of-business (LOB) registration
   through the Org Announcements MCP server. Use for announcements, org
   announcements, bulletins, alerts, announcement audiences, archiving or
   republishing an announcement, and any call to the ess-org-announcements
@@ -22,15 +23,25 @@ agent. `titleId` is an agent identifier, not an author permission, a Dataverse
 `botId`, or a Graph audience group. Tenant identity comes only from the
 authoring sign-in; never supply `tenantId` to a tool.
 
+An agent can have separate **Regular** (`microsoft365.titleId`) and **LOB**
+(`microsoft365.lobTitleId`) registrations. When their IDs differ, they are
+separate announcement scopes, even though they belong to the same bot.
+The opener's `titleId` parameter always receives the selected registration's
+actual ID; it does not always mean the regular registration.
+Registration selection is separate from announcement `type` and priority.
+Do not infer registration from announcement content.
+
 The 100-current-item limit and latest-50 archived window apply separately to
-each tenant-and-agent pair. There is no migration, cross-agent sharing, or
+each tenant-and-registration pair. There is no migration, cross-agent sharing, or
 legacy tenant-only API fallback. An empty audience applies no additional
 Security Group filtering and reaches everyone who uses the selected agent.
 Tell the maker which selected agent they are managing:
+Use **Regular** or **LOB** when the registration kind is known; otherwise
+describe an intentionally supplied scope ID as **explicitly selected**.
 
-> These announcements belong to **{agent name}**. They can reach everyone who
-> uses this agent or selected audiences within it, not across your other ESS
-> agents.
+> These announcements belong to **{agent name} - {chosen registration}**.
+> They can reach everyone who uses this registration or selected audiences
+> within it, not across your other registrations or ESS agents.
 
 ## Setup-state check
 
@@ -96,57 +107,15 @@ stop.
 
 ## Resolve the target
 
-Reuse the setup configuration already loaded. Do not guess an identifier or
-use announcement content to decide which agent owns it.
+Read and follow `src/skills/shared/agent-title-resolution.md` with MCP provider
+`ess-org-announcements`. That shared procedure owns configured-agent selection,
+explicit/cached-ID precedence, regular/LOB selection, and GUID-bound verified
+persistence. Complete its gate before any announcement opener.
 
-1. Select the active agent from the backward-compatible `agent` object. For
-   another configured agent, match an `agents` entry by `slug`, `botId`, or
-   unambiguous `name`.
-2. Use the maker's explicit `titleId`, otherwise the selected entry's stored
-   `titleId`. A verified target can be reused for this conversation; do not
-   force `get_agent_config` before each opener.
-3. If the title is missing, call the read-only `resolve_agent_title_id` tool on
-   `ess-org-announcements` with `{"botId": "<selected configured botId>"}`.
-   The server reads the selected entry's `dataverseEndpoint` from
-   `.local/config.json`. Setup records this endpoint per agent and preserves the
-   previous active agent's legacy endpoint before switching environments.
-   The workspace endpoint is a legacy fallback only for the unambiguous active
-   agent, never an unbound non-active agent. It issues a read-only Dataverse
-   `GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`,
-   checks that the returned `botid` matches the selected bot, parses the
-   `applicationmanifestinformation` JSON string, and reads only
-   `microsoft365.titleId`. The result contains `botId` and `titleId`.
-   Use the returned `titleId`, never the input `botId` as a substitute.
-   No Power Platform environment listing, MinimalBot components request, or
-   landing-page MCP process is needed; follow this skill's availability check
-   if the tool is unavailable.
-4. Resolve any ambiguity among local configured agents before calling the tool.
-   If the selected entry has no `botId` or usable Dataverse endpoint, stop and
-   have the maker complete `/setup` for that agent. An entry with its own
-   environment settings must supply its own Dataverse endpoint; never inherit
-   another agent's endpoint. For an unbound non-active legacy entry, re-run
-   `/setup` for that agent to record its environment instead of guessing from
-   the current workspace endpoint. Missing Microsoft 365 registration metadata
-   is an explicit `RegistrationRequired` error: have the maker publish/register
-   that agent for Microsoft 365, then retry. Authentication, authorization,
-   network, and API errors are failures, not empty discovery; report the tool's
-   error and stop. Do not search by agent name, fall back to tenant-wide
-   announcements, or synthesize a title as `T_{botId}`. Never substitute a
-   Dataverse bot ID, Teams app ID, Microsoft 365 app ID, or share link.
-   Interactive Dataverse sign-in is limited to 300 seconds. A cancelled request
-   leaves its bounded lookup in progress; retries do not start another lookup
-   until it finishes. If the tool reports that resolution is already in
-   progress, complete the pending sign-in or wait for its timeout before
-   retrying. Do not repeatedly call the resolver while it is still running.
-5. Persist a discovered, verified `titleId` using the existing local-agent
-   convention: reread the complete config, find the selected `agents` entry by
-   `botId` then `slug` (name only if unambiguous), and change only its `titleId`.
-   If the active agent exists only as `agent`, copy that complete object into
-   `agents` first. Also update `agent.titleId` when the target matches
-   `activeAgent` or the active object's botId/slug. Preserve all other fields
-   and agents. Reread to verify both copies before calling another tool.
-   With no matching local entry for an explicitly supplied title, use that
-   explicit title for this request without fabricating a partial local agent.
+Pass its chosen non-null ID as `open_org_announcements.titleId` in every flow
+below. A LOB request uses the LOB registration, not the regular ID. No
+landing-page MCP process is needed; follow this skill's availability check if
+this provider's resolver is unavailable. The shared resolver is read-only.
 
 Discovery does **not** initialize landing-page configuration. Never call
 `create_agent_config` or `update_agent_config` as part of this flow, including
@@ -180,9 +149,10 @@ or creation is needed to open announcements.
    API directly.
 10. Pass the resolved `titleId` on every opener. Only the widget may call
     mutations, and it retains this title throughout navigation and retries.
-    On an agent change, open the new scope; never reuse the previous agent's
-    IDs, drafts, manager state, or retry request.
-11. Keep `titleId` outside `suggestedDraft` and bulletin/editor content.
+    On an agent or chosen registration ID change, open the new scope; never
+    reuse the previous scope's IDs, drafts, manager state, or retry request.
+11. Keep `titleId` and `lobTitleId` outside `suggestedDraft` and bulletin/editor
+    content.
     Audience search remains `{query}` in the tenant directory, not per-agent.
 
 ## Classify the request
@@ -430,7 +400,7 @@ before calling again.
 | `SearchUnavailable` | Audience search is temporarily unavailable. Offer to open the editor so they can search there. |
 | `AudienceMetadataUnavailable` | Group names could not be loaded. Note that `Directory.Read.All` needs tenant consent and can be blocked by Conditional Access, then offer to retry. |
 | `InvalidRequest` | Something in the request did not fit the contract. Explain what to change; do not retry the same call. |
-| `RegistrationRequired` | The selected agent has no Microsoft 365 registration titleId. Have the maker publish/register that agent for Microsoft 365, then retry discovery. Never synthesize an identifier. |
+| `RegistrationRequired` | The selected agent has neither a regular nor a LOB Microsoft 365 title ID. Have the maker publish/register that agent for Microsoft 365, then retry discovery. Never synthesize an identifier. |
 | Any backend validation code | Show the backend's own message. Codes such as `AudienceRequired`, `AudienceGroupInvalid`, and `BulletinLimitExceeded` are the authoritative explanation. |
 
 A `retryable` value of `false` means do not retry. Never infer retryability from

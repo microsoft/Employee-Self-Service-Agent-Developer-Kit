@@ -86,14 +86,13 @@ unavailable, tell the maker to reload the VS Code window, rerun
    skill.
 2. Use AgentConfiguration MCP tools for server access. Do not call the backing
    REST/OData API directly.
-3. Use a `titleId` supplied by the maker when available. Otherwise, use the
-   target agent's `titleId` from `.local/config.json`. Never substitute its
-   Dataverse `botId`.
-4. When `titleId` is absent from the target agent's local entry, resolve it
-   through `list_agent_configs` or `search_agents`, then persist the verified
-   value in `.local/config.json` before continuing. A match from
-   `list_agent_configs` already has a configuration. A match found only through
-   `search_agents` must be initialized through `create_agent_config`.
+3. Follow `src/skills/shared/agent-title-resolution.md` with MCP provider
+   `ess-landing-page-config` for explicit/cached-ID precedence and regular/LOB
+   selection. Never substitute a Dataverse `botId` for the chosen title.
+4. When discovery is needed, use this provider's read-only
+   `resolve_agent_title_id`, not name search. Complete the shared GUID-bound
+   persistence gate before continuing. Discovery does not establish that a
+   landing-page configuration exists and never initializes it.
 5. When `titleId` is available from `.local/config.json`, do not call `list_agent_configs` or `search_agents`. Any successful `get_agent_config`, `create_agent_config`, `open_*`, or `update_agent_config` call establishes configuration existence for the conversation. Existence and data freshness are separate: follow **Read current canonical values** whenever current saved values are needed, and **Fresh read-modify-write** for each partial update. Once existence is established, invoke a requested `open_*` tool directly; its server read supplies the widget's baseline.
 6. Classify every widget-supported request into one of three flows:
    - For accent-color lookups, exploration, or editing with an open value, call the matching `open_*` tool with `titleId` only. Accent-color lookups always follow **View accent colors**, including when no custom color is configured. Example: "Update my starter prompts" opens `open_starter_prompts` with the current server baseline so the maker can choose the changes in the widget.
@@ -141,10 +140,9 @@ unavailable, tell the maker to reload the VS Code window, rerun
     display the icon, but never include either in an update payload or imply
     that the AgentConfiguration server can edit them.
 18. Treat a 404 from the initial `get_agent_config` as an uninitialized landing-page configuration, and a later 404 as a configuration deleted elsewhere. Follow the creation flow without rediscovering `titleId`. If the 404 occurs during the required final read for a partial update, withhold that update and report the missing configuration; initialization is a separate recovery operation.
-19. After `list_agent_configs` or `search_agents` returns an unambiguous local
-   match, do not respond to the maker or continue to another MCP call until
-   the resolved `titleId` is persisted and verified in `.local/config.json`
-   according to **Persist a discovered title ID**.
+19. After discovery, complete **Persist a discovered title ID** before another
+    configuration tool call. Verify the registration pair before a required
+    choice question, then verify the selected scalar before proceeding.
 20. When `open_starter_prompts` is called with `draft` omitted and an empty baseline, tell the maker that the widget opened with localized default draft suggestions. A supplied non-empty draft opens those suggestions over either an empty or populated baseline. An explicit `draft: { "pivots": [] }` previews an empty list and suppresses default suggestions. Exact clear requests use `update_agent_config` directly after the required confirmation.
 21. `delete_agent_config` removes every landing-page configuration section and
     restores the default landing-page experience. It is destructive. Always
@@ -165,32 +163,18 @@ For a request to remove all landing-page configuration, follow **Delete all
 landing-page configuration**. That flow does not create or read a configuration
 before deleting it.
 
-1. Use the `.local/config.json` loaded by **Setup-state check** to identify the
-   local target:
-   - For the active agent, use the backward-compatible `agent` object.
-   - For another locally configured agent, match its `agents` entry by `slug`,
-     `botId`, or unambiguous `name`.
-2. Use a `titleId` supplied explicitly by the maker. Otherwise, use the target
-   entry's `titleId` when present.
-3. When `titleId` was supplied or already stored and existence is unknown, call `get_agent_config` once with that value. Do not call `list_agent_configs` or `search_agents`.
+1. Read and follow `src/skills/shared/agent-title-resolution.md` with provider
+   `ess-landing-page-config`. Reuse its chosen `titleId`; announcements does not
+   need to be running. Complete its persistence gate before configuration tools.
+2. When configuration existence is unknown for that selected scope, call
+   `get_agent_config` once with the chosen ID. Do not call `list_agent_configs`
+   or `search_agents`.
    - On success, treat the configuration as existing. This result can answer the current read request; partial updates still require their own final read after all prerequisites are complete.
    - On 404, follow **Create or recreate missing configuration**.
-4. When `titleId` is still unknown, call `list_agent_configs` and match
-   its configured agents against the target agent name.
-5. When `list_agent_configs` returns an unambiguous match:
-   - Persist its `titleId` according to **Persist a discovered title ID**.
-   - Treat the configuration as existing. Do not call `get_agent_config` merely
-     to verify it before opening a widget.
-6. When there is no configured match, call `search_agents` with a distinctive
-   substring of the target agent name. The server does not require a
-   three-character minimum.
-7. Use an unambiguous search result's `titleId`. When multiple candidates
-   match, ask the maker to choose. When none match, follow **Target unavailable
-   to AgentConfiguration** and stop.
-8. Persist the search result's `titleId` according to
-   **Persist a discovered title ID**, then follow
-   **Create or recreate missing configuration**. Do not call
-   `get_agent_config` between search and creation.
+3. `RegistrationRequired` means neither registration ID is available; follow
+   **Target unavailable to AgentConfiguration** and stop. Authentication,
+   malformed-response, and other discovery failures are errors, not an empty
+   list or an uninitialized landing-page configuration.
 
 Do not guess the identifier from the agent name, schema name, `botId`, Teams
 app ID, or manifest ID.
@@ -246,15 +230,14 @@ An explicitly requested wholesale section replacement can use the intended compl
 
 ## Target unavailable to AgentConfiguration
 
-When `list_agent_configs` has no configured match and `search_agents` returns no
-matching tenant-visible agent:
+When the shared resolver returns `RegistrationRequired` because neither
+Microsoft 365 registration title ID is available:
 
 1. Do not guess a `titleId` or call `create_agent_config`.
 2. Tell the maker:
 
-   > I couldn't find **{agent name}** among your tenant's available Employee
-   > Self-Service agents. Confirm the agent name. If it is correct, publish the
-   > agent from Copilot Studio, submit it for admin approval, and have an
+   > I couldn't find a Microsoft 365 registration title ID for **{agent name}**.
+   > Publish the agent from Copilot Studio, submit it for admin approval, and have an
    > administrator deploy it to your organization. Then return to
    > `/landing-page`.
 
@@ -267,45 +250,12 @@ matching tenant-visible agent:
 
 ## Persist a discovered title ID
 
-Treat `titleId` as an optional field on the existing local agent object. A
-configured agent retains its established fields:
-
-```json
-{
-  "name": "Employee Self-Service HR",
-  "botId": "<Dataverse bot ID>",
-  "titleId": "<MetaOS title ID>",
-  "schemaName": "msdyn_copilotforemployeeselfservicehr",
-  "isManaged": true,
-  "slug": "employee-self-service-hr",
-  "folder": "workspace/agents/employee-self-service-hr"
-}
-```
-
-After `list_agent_configs` or `search_agents` returns an unambiguous match:
-
-1. Read the complete `.local/config.json`.
-2. Find the target entry in `agents`. Match the already-selected local target by
-   `botId` when available, then by `slug`. Use `name` only when it is
-   unambiguous. When the active target exists only in the backward-compatible
-   `agent` object, copy that complete object into `agents` before adding
-   `titleId`; this migrates the legacy shape without inventing agent fields.
-3. Add or replace only that entry's `titleId`.
-4. When the target is active, also add or replace `agent.titleId`. Treat the
-   target as active when its `slug` equals `activeAgent` or its `botId`/`slug`
-   matches the backward-compatible `agent` object.
-5. Preserve the `agents` array, the complete `agent` object, every other agent
-   field, and every top-level config field.
-6. Write valid JSON back to `.local/config.json`.
-
-**Completion gate:** Reread `.local/config.json` after writing it. When a local
-target exists, do not respond or continue until the matching `agents` entry
-contains the resolved `titleId` and, for the active target, `agent.titleId`
-contains the same value.
-
-Do not create a partial `agents` entry from an MCP result. When no matching local
-entry exists, use the resolved `titleId` for the current request, but do not
-invent `botId`, `schemaName`, `isManaged`, `slug`, or `folder`.
+Use the persistence gate in `src/skills/shared/agent-title-resolution.md`.
+Match the returned bot GUID exactly after normalization, require one local
+match, reject conflicting active markers, preserve every unrelated field,
+and reread the selected entry and active mirror before another tool call.
+Never persist by name or slug alone. Explicit titles without a local entry
+remain request-only; never fabricate a partial agent.
 
 ## Explain landing-page settings
 
@@ -654,13 +604,10 @@ entry or its stored `titleId`.
 1. Use the `.local/config.json` loaded by **Setup-state check** to identify the
    local target.
 2. Resolve `titleId` without creating or reading a configuration:
-   - Use a maker-supplied `titleId` or the target entry's stored `titleId`.
-   - When `titleId` is absent, call `list_agent_configs` and match the target
-     agent. Persist an unambiguous match according to
-     **Persist a discovered title ID**.
-   - When `list_agent_configs` has no matching configured agent, tell the maker
-     that the default landing-page experience is already active. Do not call
-     `search_agents`, `create_agent_config`, or `delete_agent_config`.
+   - Follow the shared title-resolution reference with this provider.
+   - Complete any regular/LOB choice and the verified persistence gate.
+   - Do not use landing-page configuration discovery or creation to resolve
+     identity. Missing registration is not evidence that defaults are active.
 3. Explain that deletion removes branding, quick links, starter prompts, and
    insight-card settings and restores their defaults.
 4. Obtain explicit confirmation immediately before the delete call. The
@@ -673,14 +620,13 @@ entry or its stored `titleId`.
 
 ## Create or recreate missing configuration
 
-Use this flow after `search_agents` resolves an agent absent from
-`list_agent_configs`, when the initial `get_agent_config` returns 404, or when a
+Use this flow when the initial `get_agent_config` returns 404, or when a
 later `get_agent_config` or `open_*` call returns 404:
 
 1. Keep the known `titleId`. Do not repeat `list_agent_configs` or
    `search_agents`.
 2. Explain the applicable state:
-   - After search or the initial stored-ID read, the landing page has not been
+   - After the initial selected-ID read, the landing page has not been
      configured yet.
    - After a prior successful read, creation, or widget open, the configuration
      was deleted elsewhere and can be recreated.

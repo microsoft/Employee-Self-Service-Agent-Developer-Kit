@@ -71,25 +71,45 @@ Describe the announcement in chat and the kit opens a pre-filled editor for
 you to review - nothing is saved until you publish or save a draft in that
 editor.
 
-Org Announcements are **scoped to the authenticated tenant and selected
-agent's `titleId`**, not shared across agents. The current 100 limit and latest
-50 archive window apply per tenant-and-agent pair. There is no cross-agent or
-legacy tenant-only API fallback. Within the selected agent, `audience: []`
+Org Announcements are **scoped to the authenticated tenant and selected agent
+registration's title ID**, not shared across agents or distinct registrations.
+An agent can have a regular registration (`microsoft365.titleId`) and a
+line-of-business registration (`microsoft365.lobTitleId`). The current 100 limit
+and latest 50 archive window apply per tenant-and-registration pair. There is no
+cross-agent or legacy tenant-only API fallback. Within the selected registration, `audience: []`
 applies no additional Security Group filtering, so the announcement reaches
-everyone who uses that agent. An explicit or stored `titleId` is reused.
-Otherwise, `resolve_agent_title_id` on the `ess-org-announcements` provider
+everyone who uses that registration. An explicit title ID or verified
+registration choice is reused. Otherwise, `resolve_agent_title_id` on the
+`ess-org-announcements` provider
 uses the selected configured `botId` and environment with
 the Dataverse Web API:
 `GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`.
 It validates the returned `botid`, parses the `applicationmanifestinformation`
-JSON string, and reads `microsoft365.titleId`. The selected entry's
+JSON string, and returns both `titleId` and `lobTitleId` (`null` when one
+registration is unavailable). The selected entry's
 `dataverseEndpoint` takes precedence; the workspace endpoint is used only when
 the legacy entry is the unambiguous active agent with no separate environment
 settings. Setup records an endpoint on each agent and preserves the previous
 active agent's legacy binding before switching environments. Unbound non-active
 legacy agents must be set up again; discovery does not guess their environment.
-The skill persists the resolved title only to that agent's local entry and,
-when active, its mirror.
+The skill persists both registration fields in that agent's
+`registrationTitleIds` object and, when active, `agent.registrationTitleIds`.
+The legacy top-level `titleId` remains the selected scope, preserving existing
+explicit/cached-ID precedence. Choosing LOB can intentionally change that
+selected scalar without overwriting the regular identity retained in
+`registrationTitleIds.titleId`. Legacy single-ID caches are refreshed when a
+missing requested registration or a registration choice needs discovery.
+When both IDs are available and different, the maker chooses **Regular**
+or **LOB** unless the request, a verified conversation choice, or a compatible
+stored selection already identifies the scope.
+**LOB means line-of-business.** Regular and LOB identify different Microsoft 365
+app registrations of the same bot, not different agents. Choose the registration
+your intended users use to open the agent. Announcements and landing-page
+settings are scoped to that registration; choosing one does not apply changes
+to the other or select an audience group. The skill explains this distinction
+before asking for a registration choice.
+The chosen value is passed as the opener's `titleId`. An unavailable requested registration never silently
+falls back to the other one.
 There is no agent-name search fallback, synthesized ID, landing-page MCP
 dependency, or landing-page configuration creation.
 
@@ -100,9 +120,17 @@ reusing the shared AgentConfiguration MSAL cache. Browser sign-in is limited to
 caller cancels; concurrent retries receive an in-progress error instead of
 starting independent sign-ins. No MinimalBot component fetch,
 Power Platform environment inventory, or Island Gateway sign-in is needed.
-A missing Microsoft 365 registration title is an explicit `RegistrationRequired`
-error; malformed metadata, sign-in, access, and API failures are not treated as
-empty discovery.
+If neither registration title ID is available, discovery returns an explicit
+`RegistrationRequired` error; malformed metadata, sign-in, access, and API
+failures are not treated as empty discovery.
+
+Landing-page and Org Announcements providers use the same neutral implementation
+in `src/mcp/agentconfig_core/agent_title_resolution.py`, including configured
+environment binding, authentication, validation, and cancellation coordination.
+Their adapters retain feature-specific client lifecycle and error presentation.
+Both skills follow `src/skills/shared/agent-title-resolution.md` for agent
+selection, regular/LOB choice, and GUID-bound verified local persistence.
+Neither provider requires the other's MCP process to run.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`

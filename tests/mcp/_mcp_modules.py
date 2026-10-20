@@ -53,7 +53,6 @@ ORG_ANNOUNCEMENTS_MODULES = (
     "drafts",
     "graph_directory_client",
     "telemetry",
-    "agent_title",
     "server",
 )
 
