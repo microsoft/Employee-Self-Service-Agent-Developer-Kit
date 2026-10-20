@@ -62,6 +62,31 @@ Column casing differs by table family:
 
 Time column on every table: `EventInfo_Time` (UTC).
 
+## Sessions and active-install reporting
+
+All SDK activity emitters, including the capability shim and validated client
+event batches, ensure `adk.session.start` is recorded before sending activity.
+Allocating a session ID (including for a FlightCheck run index) is not evidence
+that its start event was recorded. The SDK persists that distinction in
+`~/.adk/session.json`, reuses sessions within the 30-minute inactivity window,
+and records a missing start for legacy session files on their next activity.
+Starts use the activity's session, install, tenant, and agent-type attribution;
+they do not carry capability-specific dimensions. Recording is tracked per
+install/tenant/agent-type/telemetry-project context within the session, so an
+earlier unknown-tenant or other-clone start cannot suppress a start in the
+correct dashboard cohort. A session spanning contexts can therefore have a
+start in each; use distinct `session_id` when combining cohorts.
+
+A start is marked recorded only after delivery or successful local buffering.
+Failed buffered events are retried by the normal transport. File locks coordinate
+overlapping CLI processes; network requests do not hold the session-state lock.
+This remains best-effort telemetry, not exactly-once delivery: process crashes,
+unwritable state, and bounded-buffer eviction can still cause loss or duplicates.
+
+The active-user charts deduplicate session starts by `instance_id`; they measure
+active installs, not identified people. The fix is prospective: it does not
+backfill historical capability events whose session starts were never emitted.
+
 ## What each identifier means
 
 | Field | Meaning |

@@ -59,8 +59,9 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterator
 
 # Reuse the OneCollector transport + helpers from the FlightCheck emitter.
 # Mirror the sibling-import pattern used by the other scripts so this works
@@ -425,6 +426,7 @@ _BUFFER_LOCK = threading.Lock()
 # Serializes read-modify-write of ~/.adk/session.json (get_session) so
 # concurrent skills can't clobber each other's session/run bookkeeping.
 _SESSION_LOCK = threading.Lock()
+_SESSION_START_LOCK = threading.Lock()
 
 
 # --- Identity model (spec) ------------------------------------------------
@@ -602,46 +604,92 @@ def telemetry_status() -> str:
 
 
 # --- Session identity (spec: UUID v4, 30-min inactivity window) -----------
+@contextmanager
+def _file_lock(path: str) -> Iterator[None]:
+    """Serialize short-lived CLI processes, as well as threads."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(path, "a+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def _read_sessions() -> dict[str, Any]:
+    try:
+        with open(SESSION_PATH, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        return loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def get_session(surface: str = SURFACE_CLI) -> tuple[str, bool]:
     """Return ``(session_id, is_new)`` for the surface.
 
     Sessions persist across short-lived CLI processes via
     ``~/.adk/session.json`` and roll to a fresh UUID after 30 minutes of
-    inactivity. ``is_new`` is True when a brand-new id was minted (so
-    callers can emit exactly one ``session.start`` per session).
+    inactivity. ``is_new`` means an ID was allocated, not that a start event
+    was recorded. Emission tracks that separately, including legacy sessions.
     """
+    try:
+        with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
+            return _get_session_locked(surface)
+    except (OSError, ValueError):
+        return str(uuid.uuid4()), True
+
+
+def _get_session_locked(surface: str) -> tuple[str, bool]:
     now = time.time()
-    with _SESSION_LOCK:
-        data: dict[str, Any] = {}
-        try:
-            with open(SESSION_PATH, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, ValueError):
-            data = {}
-
-        entry = data.get(surface)
-        sid = None
+    data = _read_sessions()
+    entry = data.get(surface)
+    sid = None
+    is_new = True
+    if isinstance(entry, dict):
+        last = entry.get("last", 0)
+        sid = entry.get("id")
+        if sid and (now - float(last or 0)) <= SESSION_TIMEOUT_SECS:
+            is_new = False
+    if not sid or is_new:
+        sid = str(uuid.uuid4())
         is_new = True
-        if isinstance(entry, dict):
-            last = entry.get("last", 0)
-            sid = entry.get("id")
-            if sid and (now - float(last or 0)) <= SESSION_TIMEOUT_SECS:
-                is_new = False
-
-        if not sid or is_new:
-            sid = str(uuid.uuid4())
-            is_new = True
-
-        data[surface] = {"id": sid, "last": now}
-        try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            with open(SESSION_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-        except OSError:
-            pass
-        return sid, is_new
+    started_contexts = entry.get("started_contexts", []) if not is_new else []
+    data[surface] = {
+        "id": sid,
+        "last": now,
+        "started_contexts": started_contexts if isinstance(started_contexts, list) else [],
+    }
+    try:
+        with open(SESSION_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+    return sid, is_new
 
 
 def next_run_index(agent_id: str, surface: str = SURFACE_CLI) -> int:
@@ -795,7 +843,15 @@ def resolve_ikey() -> tuple[str, str]:
     return (override or _fc.ARIA_IKEYS[env]), env
 
 
-def _buffer_append(envelopes: list[dict[str, Any]]) -> None:
+def _buffer_append(envelopes: list[dict[str, Any]]) -> bool:
+    try:
+        with _file_lock(BUFFER_PATH + ".lock"):
+            return _buffer_append_locked(envelopes)
+    except OSError:
+        return False
+
+
+def _buffer_append_locked(envelopes: list[dict[str, Any]]) -> bool:
     with _BUFFER_LOCK:
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -812,11 +868,20 @@ def _buffer_append(envelopes: list[dict[str, Any]]) -> None:
                 combined.pop(0)
             with open(BUFFER_PATH, "w", encoding="utf-8") as f:
                 f.write("\n".join(combined) + "\n")
+            return True
         except OSError:
-            pass
+            return False
 
 
 def _buffer_flush(ikey: str) -> None:
+    try:
+        with _file_lock(BUFFER_PATH + ".lock"):
+            _buffer_flush_locked(ikey)
+    except OSError:
+        return
+
+
+def _buffer_flush_locked(ikey: str) -> None:
     with _BUFFER_LOCK:
         if not os.path.exists(BUFFER_PATH):
             return
@@ -834,7 +899,7 @@ def _buffer_flush(ikey: str) -> None:
             pass
 
 
-def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
+def _post_event_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
     if not telemetry_enabled():
         return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
     try:
@@ -845,20 +910,91 @@ def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
         _buffer_flush(ikey)
         status = _fc._post(ikey, [envelope])
         ok = status in (200, 204)
-        if not ok:
-            _buffer_append([envelope])
+        buffered = not ok and _buffer_append([envelope])
         return {"sent": ok, "events": 1, "status": status, "env": env,
-                "event": event_name, "reason": "ok" if ok else f"http {status}"}
+                "event": event_name, "buffered": buffered,
+                "reason": "ok" if ok else f"http {status}"}
     except Exception as e:  # noqa: BLE001 — telemetry must never break a skill
+        buffered = False
         try:
             ikey, env = resolve_ikey()
             data = dict(data)
             data.setdefault("env", env)
-            _buffer_append([build_event(event_name, data, _fc.envelope_ikey(ikey))])
+            buffered = _buffer_append(
+                [build_event(event_name, data, _fc.envelope_ikey(ikey))]
+            )
         except Exception:  # noqa: BLE001
             pass
         return {"sent": False, "events": 0, "status": None,
-                "event": event_name, "reason": f"{type(e).__name__}: {e}"}
+                "event": event_name, "buffered": buffered,
+                "reason": f"{type(e).__name__}: {e}"}
+
+
+def _ensure_session_started(data: dict[str, Any]) -> dict[str, Any]:
+    """Record a start independently of when the session ID was allocated."""
+    surface = data["surface"]
+    sid = data["session_id"]
+    # The session file is user-global, while dashboards separate installs,
+    # tenants, and CA/DA. An anonymous/other-clone start cannot cover this one.
+    context = [
+        data["instance_id"], data["tenant_id"], data["agent_type"],
+        _fc.envelope_ikey(resolve_ikey()[0]),
+    ]
+    # Keep the network outside the session-state lock: allocating an ID on
+    # the foreground CLI thread must not wait for a background HTTP request.
+    with _SESSION_START_LOCK, _file_lock(SESSION_PATH + ".start.lock"):
+        with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
+            sessions = _read_sessions()
+            entry = sessions.get(surface)
+            if (
+                isinstance(entry, dict)
+                and entry.get("id") == sid
+                and context in entry.get("started_contexts", [])
+            ):
+                return {"sent": False, "reason": "existing-session", "session_id": sid}
+
+        start_data = common_dimensions(
+            surface,
+            session_id=sid,
+            instance_id=data["instance_id"],
+            tenant_id=data["tenant_id"],
+            tenant_name=data["tenant_name"],
+        )
+        for field in start_data:
+            if field in data:
+                start_data[field] = data[field]
+        result = _post_event_sync(EVENT_SESSION_START, start_data)
+        if result["sent"] or result.get("buffered"):
+            with _SESSION_LOCK, _file_lock(SESSION_PATH + ".lock"):
+                sessions = _read_sessions()
+                entry = sessions.get(surface)
+                if not isinstance(entry, dict) or entry.get("id") != sid:
+                    return result
+                entry.setdefault("started_contexts", []).append(context)
+                with open(SESSION_PATH, "w", encoding="utf-8") as f:
+                    json.dump(sessions, f)
+        return result
+
+
+def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
+    if not telemetry_enabled():
+        return {"sent": False, "events": 0, "status": None, "reason": "disabled"}
+    if data.get("session_id"):
+        try:
+            start_result = _ensure_session_started(data)
+        except Exception as e:  # noqa: BLE001 — preserve fail-open emission
+            start_result = {
+                "sent": False, "events": 0, "status": None,
+                "reason": f"{type(e).__name__}: {e}",
+            }
+        if event_name == EVENT_SESSION_START:
+            return start_result
+        result = _post_event_sync(event_name, data)
+        if not start_result["sent"] and not start_result.get("buffered"):
+            if start_result["reason"] != "existing-session":
+                result["session_start_error"] = start_result["reason"]
+        return result
+    return _post_event_sync(event_name, data)
 
 
 def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict[str, Any]:
@@ -882,6 +1018,8 @@ def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, An
             "reason": "disabled",
         }
     try:
+        if rows and rows[0].get("session_id"):
+            _ensure_session_started(rows[0])
         ikey, env = resolve_ikey()
         envelopes = []
         for row in rows:
@@ -1265,10 +1403,11 @@ def start_session(
     instance_id: str | None = None,
     block: bool = False,
 ) -> dict[str, Any]:
-    """Set identity and emit ``adk.session.start`` once per session.
+    """Set identity and record a start for this session's attribution context.
 
     Safe to call at the top of every skill: if the current session is still
-    active (within the 30-min window) no duplicate start is emitted.
+    active (within the 30-min window) and a start was sent or buffered for
+    this install/tenant/agent-type/project, no duplicate start is emitted.
 
     Only bootstraps identity when this process has none yet, or when the
     caller supplies a genuinely different ``tenant_id`` / ``instance_id``.
@@ -1286,9 +1425,7 @@ def start_session(
             tenant_id=tenant_id if tenant_id else None,
             instance_id=instance_id,
         )
-    sid, is_new = get_session(surface)
-    if not is_new:
-        return {"sent": False, "reason": "existing-session", "session_id": sid}
+    sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
     return _emit(EVENT_SESSION_START, data, block=block)
 
