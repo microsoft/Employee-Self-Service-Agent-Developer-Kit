@@ -153,6 +153,21 @@ def test_skill_discovers_a_complete_pair_and_requires_an_explicit_registration_c
     assert "An explicitly chosen `lobTitleId` is passed as the opener's `titleId`" in skill
 
 
+def test_registration_choice_explains_regular_and_lob_to_the_maker():
+    skill = _normalized(_SHARED_TITLE_REFERENCE)
+
+    assert "expand **LOB** as **line-of-business**" in skill
+    assert "two Microsoft 365 app registrations of the same agent" in skill
+    assert "not different bots or audience groups" in skill
+    assert "changes for one are not automatically applied to the other" in skill
+    assert "Ask which registration their intended users use to open the agent" in skill
+    assert "Do not guess a deployment or distribution channel from the labels or IDs" in skill
+    assert "Do not present unexplained Regular/LOB labels or title IDs alone" in skill
+    assert "Explain the distinction above before asking" in skill
+    assert "does not require another question when an explicit, verified, or compatible cached selection" in skill
+    assert "**LOB means line-of-business.**" in _normalized(_SOLUTION / "README.md")
+
+
 def test_announcements_are_registered_across_current_entry_points() -> None:
     repo_instructions = _REPO_INSTRUCTIONS.read_text(encoding="utf-8")
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")

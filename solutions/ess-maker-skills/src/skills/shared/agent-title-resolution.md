@@ -43,6 +43,27 @@ stored selected `titleId`. An explicit Regular/LOB request takes precedence
 over a stored selection of the other registration. Never treat a pasted pair
 of metadata values as an implicit selection of its regular ID.
 
+## Explain the registration choice
+
+When a registration choice is needed, expand **LOB** as **line-of-business**
+and explain that Regular and LOB are two Microsoft 365 app registrations of the
+same agent, not different bots or audience groups. Announcements and landing-page
+settings belong to the selected registration; changes for one are not
+automatically applied to the other.
+
+Ask which registration their intended users use to open the agent. Do not guess
+a deployment or distribution channel from the labels or IDs. If the maker does
+not know which registration they intend to configure, clarify that target
+before continuing.
+
+For example: "Regular and LOB (line-of-business) are separate app registrations
+of this agent. An announcement or landing-page change for one does not apply
+to the other. Which registration do your intended users use?"
+
+Do not present unexplained Regular/LOB labels or title IDs alone. This
+explanation accompanies a needed choice; it does not require another question
+when an explicit, verified, or compatible cached selection already exists.
+
 ## Resolve and choose
 
 1. Read the complete `.local/config.json` already gated by the calling skill.
@@ -81,9 +102,10 @@ of metadata values as an implicit selection of its regular ID.
    back to the other registration.
 6. If no explicit, verified, or compatible stored selection exists, use the
    only available ID. If both IDs are available and different, ask the maker
-   to choose **Regular registration** or **LOB registration**. Do not open a
-   view or issue a feature mutation until they choose. If both fields contain
-   the same ID, they address one scope and need no duplicate choice.
+   to choose **Regular registration** or **LOB registration**. Explain the
+   distinction above before asking. Do not open a view or issue a feature
+   mutation until they choose. If both fields contain the same ID, they
+   address one scope and need no duplicate choice.
 7. When the chosen ID is verified to belong to the local target, persist that
    choice in the target's scalar `titleId` and its active mirror. This is an
    intentional selection change, not a change to either canonical field in

@@ -102,6 +102,12 @@ missing requested registration or a registration choice needs discovery.
 When both IDs are available and different, the maker chooses **Regular**
 or **LOB** unless the request, a verified conversation choice, or a compatible
 stored selection already identifies the scope.
+**LOB means line-of-business.** Regular and LOB identify different Microsoft 365
+app registrations of the same bot, not different agents. Choose the registration
+your intended users use to open the agent. Announcements and landing-page
+settings are scoped to that registration; choosing one does not apply changes
+to the other or select an audience group. The skill explains this distinction
+before asking for a registration choice.
 The chosen value is passed as the opener's `titleId`. An unavailable requested registration never silently
 falls back to the other one.
 There is no agent-name search fallback, synthesized ID, landing-page MCP
