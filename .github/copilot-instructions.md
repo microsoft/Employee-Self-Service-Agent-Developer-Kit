@@ -42,26 +42,73 @@ When folder-selection guidance applies, do not execute the Maker Kit operation
 in the repository-root chat. Preserve the user's original request without
 adding, removing, or rewriting any text.
 
-Offer **Open the Maker Kit in a new chat** and ask for explicit confirmation
-before launching VS Code. If the user confirms:
+Before launching VS Code, first send this standalone message:
+
+> Your prompt needs the Maker Kit workspace so the correct prompts and skills
+> are available.
+>
+> **Continue in a new Maker Kit chat?**
+>
+> I’ll open `solutions/ess-maker-skills` in a new VS Code window, start a fresh
+> chat, and transfer your prompt unchanged. This chat will stop after the
+> transfer.
+
+After sending that message, call `ask_user` with this exact form shape. Keep
+`message` empty so no smaller pre-text appears. Use the field title for the
+single card heading, set a distinct field description for the inner prompt,
+and use labeled options instead of a boolean prompt:
+
+```json
+{
+  "message": "",
+  "requestedSchema": {
+    "properties": {
+      "handoffAction": {
+        "type": "string",
+        "title": "ADK Maker Kit Recovery",
+        "description": "Choose how to continue",
+        "oneOf": [
+          {
+            "const": "open",
+            "title": "Open the Maker Kit and continue"
+          },
+          {
+            "const": "manual",
+            "title": "Show manual steps instead"
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+If the user chooses **Open the Maker Kit and continue**:
 
 1. Resolve `solutions/ess-maker-skills` to an absolute path from the active
    repository root. Verify the direct Maker Kit markers listed above exist at
    that path.
-2. Run `code --new-window "<absolute Maker Kit path>"` and wait for that
-   command to complete successfully. Then wait for the newly opened Maker Kit
-   window to finish loading. Do not run the two commands concurrently.
+2. Show `Opening the Maker Kit workspace` while running
+   `code --new-window "<absolute Maker Kit path>"`. Wait for that command to
+   complete successfully, then wait for the newly opened Maker Kit window to
+   finish loading. Do not run the two commands concurrently.
 3. Use the Maker Kit folder as the working directory and run
-   `code chat --reuse-window "<original request>"`. Pass the preserved request
-   as one prompt argument with shell-appropriate escaping. Do not add guard
-   text, setup instructions, or other framing to the prompt.
-4. After the chat command succeeds, stop processing the request in the current
-   chat. The new Maker Kit chat owns setup gating, execution, recovery, and
-   completion reporting.
+   `code chat --reuse-window "<original request>"` while showing
+   `Transferring your prompt to a fresh Maker Kit chat`. Pass the preserved
+   request as one prompt argument with shell-appropriate escaping. Do not add
+   guard text, setup instructions, or other framing to the prompt.
+4. After the chat command succeeds, respond with only:
 
-If the user declines, provide the manual guidance below without launching
-VS Code. If path validation or either command fails, surface the failure and do
-not claim that the request was transferred. Fall back to this manual guidance:
+   > Your prompt was transferred to a fresh chat in the Maker Kit window.
+   > Continue there.
+
+   Then stop processing the request in the current chat. The new Maker Kit chat
+   owns setup gating, execution, recovery, and completion reporting.
+
+If the user chooses **Show manual steps instead**, declines, or skips the
+confirmation, provide the manual guidance below without launching VS Code. If
+path validation or either command fails, surface the failure and do not claim
+that the request was transferred. Fall back to the same manual guidance:
 
 > ESS Maker Kit agent operations are available from the
 > `solutions/ess-maker-skills` workspace.
@@ -71,7 +118,7 @@ not claim that the request was transferred. Fall back to this manual guidance:
 > 1. In VS Code, select `File` → `Open Folder…` or press `Ctrl+K Ctrl+O`.
 > 2. Select `solutions/ess-maker-skills`.
 > 3. Click `Select Folder`.
-> 4. After VS Code reopens, start a new Copilot chat and enter the request
+> 4. After VS Code reopens, start a new Copilot chat and enter your prompt
 >    again.
 
 Route every request not covered above as normal.
