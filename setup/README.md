@@ -107,15 +107,100 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)"
 ```
 
-That's it. The script handles everything automatically:
+The script asks for a scope before installing anything. There is no default:
+Enter without a scope, end-of-input, and invalid names stop the installer.
 
-1. Installs Python and Git (if not already present)
-2. Opens a browser window for you to sign in with your Microsoft work account
-3. Shows your available environments — pick one by number
-4. Shows the agents in that environment — pick one (or skip)
-5. Runs the full FlightCheck validation and displays results
+1. Choose a validation scope by name from the descriptions shown.
+2. Installs Python and Git (if not already present).
+3. Opens a browser window for Microsoft work-account sign-in.
+4. Shows your available environments and agents for selection.
+5. Runs the selected FlightCheck scope and displays results.
+
+### Selecting a scope explicitly
+
+Both bootstraps and direct installers accept an explicit scope.
+Windows uses `-FlightCheckScope`; macOS uses `--scope`.
+Alternatively, set `FLIGHTCHECK_SCOPE` on either platform.
+An explicit argument overrides the environment variable.
+Names are case-insensitive and surrounding whitespace is ignored.
+Unattended runs (redirected input or CI) must provide a scope, otherwise they fail before downloading the installer or installing tools.
+Providing a scope does not automate the later Microsoft sign-in or target selection.
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1))) -FlightCheckScope workday
+# Direct installer, or set $env:FLIGHTCHECK_SCOPE = 'workday':
+.\setup\Install-EssAdk.ps1 -FlightCheckOnly -FlightCheckScope workday
+```
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --scope workday
+# Direct installer, or export FLIGHTCHECK_SCOPE=workday:
+FLIGHTCHECK_ONLY=true /bin/bash setup/install-ess-adk.sh --scope workday
+```
+
+Available scopes match the existing command-line interface (CLI):
+
+| Scope | Validation area |
+|---|---|
+| `full` | All applicable validation categories, only when explicitly selected |
+| `prerequisites` | Prerequisite access and setup |
+| `infrastructure` | Infrastructure and connectivity |
+| `environment` | Power Platform environment |
+| `solution` | Installed solution configuration |
+| `authentication` | Authentication configuration |
+| `entraapp` | Microsoft Entra application |
+| `workdaytenant` | Workday tenant configuration |
+| `external` | External system configuration |
+| `workday` | External system and Workday checks |
+| `workdayextension` | Workday checks and extension |
+| `workdayda` | Workday declarative-agent package |
+| `topics` | Workday topics |
+| `graphconnector` | External system and Graph connector knowledge |
+| `handoff` | Agent handoff topics |
+| `servicenow` | External system and ServiceNow checks |
+| `local` | Local agent files |
+| `publishing` | Agent publishing |
+| `licensing` | Licensing |
+| `cloudpolicy` | Cloud policies |
+
+Scopes are not litmus profiles: `--scope workday` is not `--profile workday-da`.
+This installer selection requirement does not change the CLI defaults or the full Maker/Developer installation modes.
+
+Installer discovery currently lists Dataverse-linked environments and their
+Dataverse-backed agents. It does not discover native Declarative Agents.
+If agent discovery fails, you must explicitly choose environment-wide checks
+to continue without an agent. Invalid selections stop setup instead of silently
+changing the selected target or check coverage.
+
+If fetching the selected agent's solution fails, the installer prints a warning
+and the fetch diagnostics, then continues to FlightCheck. Local file checks may
+be skipped; this is not proof that the selected agent is ready. Resolve any
+reported access or connectivity error and rerun the installer to retry the fetch.
+Snapshot fetching uses refresh mode so reruns can update an existing agent
+folder. Setup creates a local checkpoint before replacing existing files and
+stops if the checkpoint fails; this does not publish changes to the agent.
+Refresh removes previously mapped agent-component files that disappeared from
+the complete server inventory, including obsolete paths after a rename.
+Local edits to those files remain recoverable from the checkpoint.
+Files that were never mapped are preserved; an incoming component that would
+overwrite a local-only file stops refresh with a conflict.
+Missing or invalid ownership maps, colliding component paths, and previously
+extracted components returned without usable data stop refresh before overwrite.
+Optional workflow or template-configuration fetch failures are not treated as
+evidence of deletion.
+
+The executable installer tests prefer Git Bash on Windows and verify that the
+chosen Bash can run their script paths and Python executable.
+An unusable WSL launcher does not prevent trying installed Git Bash.
+If no compatible Bash exists, Bash cases skip with a prerequisite diagnostic;
+the tests do not install software.
+Continuous-integration jobs requiring Bash coverage must provision a compatible
+shell and check that those cases execute rather than skip.
 
 ### Changing your environment or agent
+
+Environment and agent number prompts ignore surrounding whitespace.
+Whitespace inside a number is invalid and leaves the saved target unchanged.
 
 Re-run the same command — it will ask if you want to reconfigure:
 
@@ -139,7 +224,26 @@ The FlightCheck-only installer targets the Power Platform **prod** service ring 
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)" _ --ring preprod
 ```
 
-Accepted values: `prod`, `preprod`, `test`.
+Accepted values: `prod`, `preprod`, `test`. Environment discovery uses the
+requested ring. The service ring is not the environment's type: a Sandbox
+environment can belong to the prod ring.
+
+The saved ring survives agent snapshot extraction. On reruns without a ring
+flag, the saved ring is retained. If an explicit ring
+differs from the saved ring, the installer asks whether to switch and select a
+new environment and agent or keep the saved target and ring. Reconfiguration
+does not delete the saved configuration before discovery and selection succeed.
+When keeping a legacy target without a recorded or endpoint-inferred ring,
+you must explicitly enter its ring. There is no default; a blank or invalid
+answer stops without changing configuration. Confirmation updates only the
+ring, preserving the saved target and other settings.
+Invalid or conflicting saved ring/endpoint settings cannot be kept, but you
+can choose reconfiguration to replace them after successful target selection.
+
+**Non-prod limitation:** environment discovery supports all three rings, but
+the legacy full-check path still uses production Power Platform Admin, PowerApps,
+and Flow endpoints. Successful discovery does not establish complete preprod/test
+validation. Do not interpret missing non-prod admin data as readiness evidence.
 
 ### Running FlightCheck again (after initial setup)
 
