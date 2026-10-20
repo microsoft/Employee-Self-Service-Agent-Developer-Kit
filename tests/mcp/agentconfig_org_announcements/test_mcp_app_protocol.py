@@ -52,7 +52,7 @@ NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 
 MODEL_VISIBLE_TOOLS = {
     "open_org_announcements", "search_audience_groups",
-    "list_agent_configs", "search_agents",
+    "resolve_agent_title_id",
 }
 APP_ONLY_TOOLS = {"save_bulletin", "transition_bulletin", "duplicate_bulletin"}
 
@@ -470,10 +470,11 @@ def test_announcement_tools_require_title_id_but_directory_search_does_not() -> 
         assert "tenantId" not in properties, tool.name
         if tool.name == "search_audience_groups":
             assert set(properties) == {"query"}
-        elif tool.name == "list_agent_configs":
-            assert properties == {}
-        elif tool.name == "search_agents":
-            assert set(properties) == {"searchString"}
+        elif tool.name == "resolve_agent_title_id":
+            assert set(properties) == {"botId"}
+            assert tool.inputSchema["required"] == ["botId"]
+            assert tool.annotations.readOnlyHint is True
+            assert tool.meta["ui"]["visibility"] == ["model", "app"]
         else:
             assert properties["titleId"]["type"] == "string"
             assert "titleId" in tool.inputSchema["required"]
@@ -2703,83 +2704,17 @@ def test_authoring_cache_failure_preserves_its_private_cause(
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    ("tool", "arguments"),
-    [
-        ("list_agent_configs", {}),
-        ("search_agents", {"searchString": "Finance"}),
-    ],
-)
 def test_discovery_credential_failure_is_a_safe_tool_error(
-    monkeypatch, tool, arguments
+    monkeypatch,
 ) -> None:
     def construct():
         raise _local_credential_error(_PRIVATE_CACHE_DETAIL)
 
     monkeypatch.setattr(org_server, "_client", None)
     monkeypatch.setattr(org_server, "OrgAnnouncementsClient", construct)
+    monkeypatch.setattr(org_server, "load_configured_target", lambda bot_id: object())
 
     with pytest.raises(ToolError, match="sign-in could not be completed") as caught:
-        _call(tool, arguments, include_scope=False)
+        _call("resolve_agent_title_id", {"botId": OBJECT_ID}, include_scope=False)
 
     assert _PRIVATE_CACHE_DETAIL not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    ("tool", "arguments", "status"),
-    [
-        ("list_agent_configs", {}, 400),
-        ("search_agents", {"searchString": "Finance"}, 422),
-    ],
-)
-def test_discovery_backend_failure_is_a_safe_tool_error(
-    fake_clients, tool, arguments, status
-) -> None:
-    private_marker = "SECRET_BACKEND_MARKER"
-
-    class _FailingDiscoveryClient(_FakeClient):
-        async def list_agent_configs(self):
-            raise org_client.AgentConfigApiError(
-                f"PrivateCode: {private_marker}",
-                http_status=status,
-            )
-
-        async def search_agents(self, search_string):
-            raise org_client.AgentConfigApiError(
-                f"PrivateCode: {private_marker}",
-                http_status=status,
-            )
-
-    fake_clients(client=_FailingDiscoveryClient())
-
-    with pytest.raises(ToolError, match="service rejected the request") as caught:
-        _call(tool, arguments, include_scope=False)
-
-    assert private_marker not in str(caught.value)
-
-
-@pytest.mark.parametrize(
-    ("tool", "arguments"),
-    [
-        ("list_agent_configs", {}),
-        ("search_agents", {"searchString": "Finance"}),
-    ],
-)
-def test_discovery_transport_failure_is_a_safe_tool_error(
-    fake_clients, tool, arguments
-) -> None:
-    private_marker = "https://private-backend.example/secret"
-
-    class _FailingDiscoveryClient(_FakeClient):
-        async def list_agent_configs(self):
-            raise httpx.ConnectError(private_marker)
-
-        async def search_agents(self, search_string):
-            raise httpx.ConnectError(private_marker)
-
-    fake_clients(client=_FailingDiscoveryClient())
-
-    with pytest.raises(ToolError, match="temporarily unavailable") as caught:
-        _call(tool, arguments, include_scope=False)
-
-    assert private_marker not in str(caught.value)

@@ -85,10 +85,40 @@ def test_skill_preserves_priority_audience_and_discovery_contracts() -> None:
         "create editor." in skill
     )
     assert "omit `suggestedDraft.audience`" in skill
-    assert "`list_agent_configs`, then `search_agents`" in skill
-    assert "Both tools belong to `ess-org-announcements`" in skill
+    assert "`resolve_agent_title_id` tool on `ess-org-announcements`" in skill
+    assert (
+        "GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation"
+        in skill
+    )
+    assert "`applicationmanifestinformation` JSON string" in skill
+    assert "`microsoft365.titleId`" in skill
+    assert "returned `botid` matches the selected bot" in skill
+    assert "legacy fallback only for the unambiguous active agent" in skill
+    assert "never an unbound non-active agent" in skill
+    assert "Interactive Dataverse sign-in is limited to 300 seconds" in skill
+    assert "retries do not start another lookup until it finishes" in skill
+    assert "AgentBuilderClient" not in skill
+    assert "list_agent_configs" not in skill
+    assert "search_agents" not in skill
+    assert "RegistrationRequired" in skill
+    assert "Authentication, authorization, network, and API errors are failures" in skill
     assert "Never call `create_agent_config` or `update_agent_config`" in skill
     assert "ess-landing-page-config" not in skill
+
+
+def test_title_resolution_preserves_explicit_cached_and_per_agent_persistence() -> None:
+    skill = _normalized(_SKILL)
+
+    assert skill.index("maker's explicit `titleId`") < skill.index(
+        "`resolve_agent_title_id`"
+    )
+    assert "otherwise the selected entry's stored `titleId`" in skill
+    assert "find the selected `agents` entry by `botId` then `slug`" in skill
+    assert "change only its `titleId`" in skill
+    assert "copy that complete object into `agents` first" in skill
+    assert "Also update `agent.titleId` when the target matches `activeAgent`" in skill
+    assert "Preserve all other fields and agents" in skill
+    assert "Reread to verify both copies before calling another tool" in skill
 
 
 def test_announcements_are_registered_across_current_entry_points() -> None:

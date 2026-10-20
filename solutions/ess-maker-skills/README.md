@@ -76,10 +76,33 @@ agent's `titleId`**, not shared across agents. The current 100 limit and latest
 50 archive window apply per tenant-and-agent pair. There is no cross-agent or
 legacy tenant-only API fallback. Within the selected agent, `audience: []`
 applies no additional Security Group filtering, so the announcement reaches
-everyone who uses that agent. The title is resolved using `list_agent_configs`
-and `search_agents` on the `ess-org-announcements` provider. Discovery shares
-neutral Python code with the landing-page provider, but does not require its MCP
-process or initialize its configuration.
+everyone who uses that agent. An explicit or stored `titleId` is reused.
+Otherwise, `resolve_agent_title_id` on the `ess-org-announcements` provider
+uses the selected configured `botId` and environment with
+the Dataverse Web API:
+`GET /api/data/v9.2/bots(<botId>)?$select=botid,applicationmanifestinformation`.
+It validates the returned `botid`, parses the `applicationmanifestinformation`
+JSON string, and reads `microsoft365.titleId`. The selected entry's
+`dataverseEndpoint` takes precedence; the workspace endpoint is used only when
+the legacy entry is the unambiguous active agent with no separate environment
+settings. Setup records an endpoint on each agent and preserves the previous
+active agent's legacy binding before switching environments. Unbound non-active
+legacy agents must be set up again; discovery does not guess their environment.
+The skill persists the resolved title only to that agent's local entry and,
+when active, its mirror.
+There is no agent-name search fallback, synthesized ID, landing-page MCP
+dependency, or landing-page configuration creation.
+
+Discovery uses a separate Dataverse resource token for the same authoring tenant
+and account, requesting the selected endpoint's `/user_impersonation` scope and
+reusing the shared AgentConfiguration MSAL cache. Browser sign-in is limited to
+300 seconds. One title lookup remains tracked until completion even if its
+caller cancels; concurrent retries receive an in-progress error instead of
+starting independent sign-ins. No MinimalBot component fetch,
+Power Platform environment inventory, or Island Gateway sign-in is needed.
+A missing Microsoft 365 registration title is an explicit `RegistrationRequired`
+error; malformed metadata, sign-in, access, and API failures are not treated as
+empty discovery.
 
 Announcement authoring requires the Org Announcements feature to be enabled
 for your tenant, and audience search requires the `Directory.Read.All`
