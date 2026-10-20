@@ -427,8 +427,6 @@ capabilities are used and where they fail, so we can improve the product. It is
   `other`, or `unknown` — so raw branch names (which could otherwise carry
   personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
-- For each completed landing-page configuration MCP business-tool invocation, one `adk.api.call` record: the server's registered tool name (or `unknown`), server name, a random operation UUID, result kind, monotonic duration, HTTP attempt/retry/credential-refresh counts, observed HTTP statuses, retry exhaustion, and confirmed write state when available. These records cover chat and widget calls reaching the server without identifying the caller's origin.
-- Content-free landing-page usage measurements: presence of the recognized `branding`, `quickLinksConfig`, and `pivots` sections; actual quick-link, pivot/category, and starter-prompt counts where the shapes support counting; discovery result counts; widget name; and draft presence/counts. Missing or malformed shapes omit counts; explicit empty lists report zero. Draft counts are separate from baseline counts. No configuration keys outside those recognized sections, section content, search terms, resource IDs, URLs, backend error text, or exception messages are collected by these server records.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an
   install **start**, **per-step** progress, and a **completion**
@@ -442,10 +440,6 @@ capabilities are used and where they fail, so we can improve the product. It is
 
 - No developer, user, or account identifier (no AAD OID, email, or name).
 - No agent content, prompts, credentials, file contents, or personal data.
-
-The canonical server cohort is `adk_api_call` with `mcp_server == "ess-landing-page-config"`. The existing schema-v2 client-event bridge remains app-only on that server and does not generate business-call records. Common installation, tenant, and session dimensions measure active installations and repeat usage, not unique people or agents. Server and client event counts are separate populations and must not be added to form an operation denominator. Historical records without `mcp_server` are unattributed. Org Announcements integration is a separate follow-up.
-
-Collection is asynchronous and fail-open using the shared SDK's opt-out and bounded buffer. A completion record or an accepted client batch does not guarantee collector receipt; process termination and failures before the MCP tool boundary can leave no record. Missing records are not successes, and this data alone does not measure process availability. See [server record semantics and investigation queries](scripts/TELEMETRY.md#completed-mcp-business-calls).
 
 **How to opt out**
 
