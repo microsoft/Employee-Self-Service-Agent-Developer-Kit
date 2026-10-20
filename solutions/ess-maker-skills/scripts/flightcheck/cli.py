@@ -1213,7 +1213,7 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
 
 
 def _configure_connection_validation(runner, args, *, account: str | None = None):
-    """Attach explicit targets and lazy, account-pinned dependency read access."""
+    """Attach explicit targets and account-pinned reads at the configured API version."""
     explicit_ids = getattr(args, "agent_id", None)
     if explicit_ids is not None:
         runner.connection_agent_ids = tuple(str(uuid.UUID(value)) for value in explicit_ids)
@@ -1249,10 +1249,13 @@ def _configure_connection_validation(runner, args, *, account: str | None = None
     if expected_tenant and str(uuid.UUID(expected_tenant)).casefold() != tenant_id.casefold():
         raise ValueError("Authentication selected a different tenant.")
     if needs_native_auth:
+        api_version = runner.config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
         runner.agentbuilder = AgentBuilderClient(
-            host, token, ring=ring, tenant_id=tenant_id,
+            host, token, ring=ring, tenant_id=tenant_id, api_version=api_version,
         )
-        runner.connectivity = ConnectivityClient(token, ring=ring)
+        runner.connectivity = ConnectivityClient(
+            token, ring=ring, api_version=api_version,
+        )
         runner.tenant_id = tenant_id
     runner.ring = ring
     runner.connection_dependency_token = partial(
