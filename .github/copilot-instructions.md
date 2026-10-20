@@ -53,10 +53,7 @@ Before launching VS Code, first send this standalone message:
 > chat, and transfer your prompt unchanged. This chat will stop after the
 > transfer.
 
-After sending that message, call `ask_user` with this exact form shape. Keep
-`message` empty so no smaller pre-text appears. Use the field title for the
-single card heading, set a distinct field description for the inner prompt,
-and use labeled options instead of a boolean prompt:
+After sending that message, call `ask_user` with this exact form shape:
 
 ```json
 {

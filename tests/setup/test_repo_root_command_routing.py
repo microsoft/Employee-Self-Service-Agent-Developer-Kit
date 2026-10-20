@@ -54,8 +54,6 @@ def test_folder_redirect_offers_a_confirmed_action_handoff() -> None:
     assert '"title": "Open the Maker Kit and continue"' in instructions
     assert '"title": "Show manual steps instead"' in instructions
     assert '"title": "Next step"' not in instructions
-    assert "set a distinct field description for the inner prompt" in normalized
-    assert "labeled options instead of a boolean prompt" in normalized
     assert "transfer your prompt unchanged" in normalized
     assert "wait for the newly opened Maker Kit window to finish loading" in normalized
     assert "Do not run the two commands concurrently." in normalized
