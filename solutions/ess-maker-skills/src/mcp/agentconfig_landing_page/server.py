@@ -169,25 +169,54 @@ mcp = FastMCP(
 )
 
 _client: Optional[AgentConfigClient] = None
+_client_construction_task: Optional[asyncio.Task[AgentConfigClient]] = None
 _title_resolution = TitleResolutionCoordinator()
 
 
-def get_client() -> AgentConfigClient:
-    global _client
-    if _client is None:
-        _client = AgentConfigClient()
-        adk_telemetry.initialize_tenant_identity(
-            _client.tenant_id,
-            local_dir=SOLUTION_LOCAL_DIR,
-        )
-    return _client
+def _create_client() -> AgentConfigClient:
+    client = AgentConfigClient()
+    adk_telemetry.initialize_tenant_identity(
+        client.tenant_id,
+        local_dir=SOLUTION_LOCAL_DIR,
+    )
+    return client
+
+
+async def _construct_and_publish_client() -> AgentConfigClient:
+    global _client, _client_construction_task
+    current_task = asyncio.current_task()
+    try:
+        client = await asyncio.to_thread(_create_client)
+        _client = client
+        return client
+    finally:
+        if _client_construction_task is current_task:
+            _client_construction_task = None
+
+
+def _observe_task_failure(task: asyncio.Task[AgentConfigClient]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def get_client() -> AgentConfigClient:
+    """Share one off-loop sign-in even when a waiting tool is cancelled."""
+    global _client_construction_task
+    if _client is not None:
+        return _client
+    construction = _client_construction_task
+    if construction is None:
+        construction = asyncio.create_task(_construct_and_publish_client())
+        construction.add_done_callback(_observe_task_failure)
+        _client_construction_task = construction
+    return await asyncio.shield(construction)
 
 
 async def _run_title_resolution(bot_id: str) -> dict[str, str | None]:
     try:
         target = await asyncio.to_thread(load_configured_target, bot_id)
         try:
-            client = await asyncio.to_thread(get_client)
+            client = await get_client()
         except (
             AgentConfigApiError, httpx.RequestError, ValueError,
             OSError, LockException, RequestException,
@@ -265,13 +294,14 @@ def _widget_error_result(
 
 
 async def _open_widget(
-    request: Callable[[], Awaitable[dict[str, Any]]],
+    request: Callable[[AgentConfigClient], Awaitable[dict[str, Any]]],
     *,
     success_message: str,
     draft: DraftModel | None = None,
 ) -> CallToolResult:
     try:
-        payload = await request()
+        client = await get_client()
+        payload = await request(client)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
 
@@ -320,13 +350,15 @@ def starter_prompts_widget() -> str:
 @mcp.tool()
 async def list_agent_configs() -> str:
     """List agents that already have landing-page configuration."""
-    return _format(await get_client().list_agent_configs())
+    client = await get_client()
+    return _format(await client.list_agent_configs())
 
 
 @mcp.tool()
 async def search_agents(searchString: str) -> str:
     """Search tenant-visible agents by a distinctive name substring."""
-    return _format(await get_client().search_agents(searchString))
+    client = await get_client()
+    return _format(await client.search_agents(searchString))
 
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
@@ -346,20 +378,23 @@ async def resolve_agent_title_id(botId: str) -> dict[str, str | None]:
 @mcp.tool()
 async def create_agent_config(titleId: str) -> str:
     """Initialize landing-page configuration for an eligible primary ESS agent."""
-    return _format(await get_client().create_agent_config(titleId))
+    client = await get_client()
+    return _format(await client.create_agent_config(titleId))
 
 
 @mcp.tool()
 async def get_agent_config(titleId: str) -> str:
     """Get an employee agent's complete landing-page configuration."""
-    return _format(await get_client().get_agent_config(titleId))
+    client = await get_client()
+    return _format(await client.get_agent_config(titleId))
 
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
 async def view_agent_icon(titleId: str) -> CallToolResult:
     """Display an employee agent's current PNG icon in the conversation."""
     try:
-        payload = await get_client().view_agent_icon(titleId)
+        client = await get_client()
+        payload = await client.view_agent_icon(titleId)
         icon = payload.get("icon")
         name = payload.get("name")
         resolved_title_id = payload.get("titleId", titleId)
@@ -402,7 +437,8 @@ async def update_agent_config(
 ) -> CallToolResult:
     """Apply the complete value of each provided configuration section."""
     try:
-        result = await get_client().update_agent_config(titleId, config)
+        client = await get_client()
+        result = await client.update_agent_config(titleId, config)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
 
@@ -416,7 +452,8 @@ async def update_agent_config(
 async def delete_agent_config(titleId: str) -> CallToolResult:
     """Delete all landing-page configuration after explicit maker confirmation."""
     try:
-        result = await get_client().delete_agent_config(titleId)
+        client = await get_client()
+        result = await client.delete_agent_config(titleId)
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
 
@@ -436,7 +473,7 @@ async def open_accent_color(
 ) -> CallToolResult:
     """Open the accent-color widget with its baseline and optional proposal."""
     return await _open_widget(
-        lambda: get_client().open_accent_color(titleId),
+        lambda client: client.open_accent_color(titleId),
         success_message="Opened the accent-color editor.",
         draft=draft,
     )
@@ -452,7 +489,7 @@ async def open_quick_links(
 ) -> CallToolResult:
     """Open the quick-links widget with its baseline and optional proposal."""
     return await _open_widget(
-        lambda: get_client().open_quick_links(titleId),
+        lambda client: client.open_quick_links(titleId),
         success_message="Opened the quick-links editor.",
         draft=draft,
     )
@@ -468,7 +505,7 @@ async def open_starter_prompts(
 ) -> CallToolResult:
     """Open the starter-prompts widget with its baseline and optional proposal."""
     return await _open_widget(
-        lambda: get_client().open_starter_prompts(titleId),
+        lambda client: client.open_starter_prompts(titleId),
         success_message="Opened the starter-prompts editor.",
         draft=draft,
     )

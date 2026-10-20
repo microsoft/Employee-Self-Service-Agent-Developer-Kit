@@ -118,7 +118,7 @@ def test_refresh_diagnostics_survive_mcp_serialization(
         return httpx.Response(401 if len(sent) == 1 else 200, json={"ok": True})
 
     client = _MODULES["client"].AgentConfigClient(transport=httpx.MockTransport(transport))
-    monkeypatch.setattr(server, "get_client", lambda: client)
+    monkeypatch.setattr(server, "_client", client)
     if failure == "file-missing":
         path.unlink()
     elif failure in ("file-open", "file-read"):
