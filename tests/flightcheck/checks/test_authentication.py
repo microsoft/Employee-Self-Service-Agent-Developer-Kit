@@ -168,7 +168,7 @@ class TestBadConfig:
         assert "Users and groups" in auth_005.remediation
         assert "ESS user security group" in auth_005.remediation
         assert auth_005.doc_link.startswith(
-            "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+            "https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service"
         )
 
 

@@ -182,7 +182,7 @@ def test_profile_passes_preferred_account_and_forces_read_only(
     ("compatibility_da", True),
 ])
 def test_profile_preserves_explicit_context_without_promoting_first_record(
-    selection, expected, profile_name, reverse, tmp_path, monkeypatch,
+    selection, expected, profile_name, reverse, tmp_path, monkeypatch, capsys,
 ) -> None:
     # Arrange: keep the real profile and CLI runner, but replace API checks.
     config = _config()
@@ -233,8 +233,12 @@ def test_profile_preserves_explicit_context_without_promoting_first_record(
             agent_schema_name=None,
         ))
 
-    # Assert: missing evidence remains blocked, but list order never supplies DA identity.
+    # Assert: missing selection stops before any check can resolve a sibling.
     assert exc.value.code == 1
+    if selection == "none":
+        assert observed == []
+        assert "Select an agent with --agent-slug" in capsys.readouterr().out
+        return
     da_profile = profile_name.startswith("workday-da:")
     selected_slug = (
         explicit_slug
@@ -247,6 +251,55 @@ def test_profile_preserves_explicit_context_without_promoting_first_record(
         da_profile,
         expected or (selection == "none" and da_profile),
     )]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("profile_name", [
+    profile.name for profile in registry.list_profiles()
+])
+def test_unselected_profile_rejects_before_auth_or_agent_reads(
+    profile_name, reverse, tmp_path, monkeypatch, capsys,
+):
+    config = _config()
+    config.pop("activeAgent")
+    config["agents"] = [
+        {"slug": "legacy", "botId": "legacy-bot", "releaseLine": "cea"},
+        {"slug": "hr", "botId": "hr-bot", "releaseLine": "da"},
+    ][:: -1 if reverse else 1]
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def unexpected_call(*_args, **_kwargs):
+        pytest.fail("Unselected profile must not authenticate or inspect an agent")
+
+    monkeypatch.setattr(auth, "authenticate", unexpected_call)
+    monkeypatch.setattr(cli, "authenticate_flightcheck", unexpected_call)
+    monkeypatch.setattr(cli, "_active_agent_config", unexpected_call)
+    monkeypatch.setattr(cli, "save_results", unexpected_call)
+
+    with pytest.raises(SystemExit) as exc:
+        cli._run_profile(_args(
+            profile=profile_name, agent_slug=None, agent_schema_name=None,
+        ))
+
+    assert exc.value.code == 1
+    assert "Select an agent with --agent-slug" in capsys.readouterr().out
+
+
+def test_validation_context_never_resolves_first_unselected_sibling():
+    config = _config()
+    config.pop("activeAgent")
+    config["agents"].insert(0, {
+        "slug": "legacy", "botId": "legacy-bot", "schemaName": "legacy_schema",
+    })
+
+    with pytest.raises(ValueError, match="Select an agent with --agent-slug"):
+        cli._validation_context_from_args(
+            _args(agent_slug=None, agent_schema_name=None), config,
+            config["dataverseEndpoint"], config["environmentId"],
+        )
 
 
 def test_profile_rejects_mixed_authenticated_accounts_without_hint(

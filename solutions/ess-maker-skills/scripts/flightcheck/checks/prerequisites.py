@@ -20,7 +20,7 @@ from .licensing import (
     resolve_shared_with_users,
 )
 
-DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+from ..documentation import DOC_BASE
 
 
 def _sku_matches(sku: dict, patterns: tuple[str, ...]) -> bool:

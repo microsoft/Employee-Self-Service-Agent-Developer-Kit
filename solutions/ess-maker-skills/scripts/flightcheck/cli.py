@@ -35,6 +35,7 @@ import os
 import sys
 import uuid
 import webbrowser
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -68,7 +69,9 @@ from agentbuilder import (
     AgentBuilderClient,
     ConnectivityClient,
     DEFAULT_API_VERSION,
+    DEFAULT_TOKEN_CACHE,
     authenticate_flightcheck,
+    authenticate_flightcheck_dependency,
     derive_environment_host,
     environment_id_from_host,
     normalize_environment_id,
@@ -78,7 +81,10 @@ from agentbuilder import (
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
-from flightcheck.checks.environment import run_capacity_check, run_environment_checks
+from flightcheck.checks.environment import (
+    run_capacity_check, run_connection_checks, run_environment_checks,
+)
+from flightcheck.checks._da_connection_refs import agent_bot_ids
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -162,10 +168,14 @@ NATIVE_NO_DATAVERSE_SCOPE_MAP = {
     "full": [
         ("Native Agent", run_native_agent_checks),
         ("Environment", run_capacity_check),
+        ("Connections", run_connection_checks),
         ("Local Files", run_local_file_checks),
         ("Publishing", run_publishing_checks),
     ],
-    "environment": [("Environment", run_capacity_check)],
+    "environment": [
+        ("Environment", run_capacity_check),
+        ("Connections", run_connection_checks),
+    ],
     "servicenow": [("Native Agent", run_native_agent_checks)],
     "workday": [("Native Agent", run_native_agent_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
@@ -735,6 +745,59 @@ def _create_alm_import_target(
     )
 
 
+def _create_hybrid_scope_clients(
+    args, config, verified_env_id, tenant_id, dv_username,
+):
+    """Add native clients without substituting the Dataverse target or account."""
+    ring = _resolve_environment_ring(config, explicit_ring=args.ring)
+    host = validate_environment_host(config["powerPlatformApiEndpoint"], ring)
+    host_env_id = environment_id_from_host(host, ring)
+    if (
+        not verified_env_id or not host_env_id
+        or uuid.UUID(host_env_id) != uuid.UUID(verified_env_id)
+    ):
+        raise ValueError("AgentBuilder host does not match the Dataverse scope environment.")
+    if (
+        args.environment_id
+        and uuid.UUID(args.environment_id) != uuid.UUID(verified_env_id)
+    ):
+        raise ValueError(
+            "--environment-id does not match the verified Dataverse environment."
+        )
+    if not dv_username:
+        raise ValueError("Dataverse could not verify the authenticated account.")
+    preferred = getattr(args, "preferred_username", None)
+    if preferred and preferred.casefold() != dv_username.casefold():
+        raise ValueError("Dataverse authenticated a different account than requested.")
+
+    needs_connection_inventory = args.scope in {"full", "environment"}
+    token, native_tenant, native_username = authenticate_flightcheck(
+        ring,
+        account_hint=dv_username,
+        include_connectivity=needs_connection_inventory,
+        allow_write=bool(args.alm_import_probe),
+        emit_account_identity=False,
+        return_account_identity=True,
+    )
+    if uuid.UUID(native_tenant) != uuid.UUID(tenant_id):
+        raise ValueError("AgentBuilder authenticated a different tenant than Dataverse.")
+    if not native_username or native_username.casefold() != dv_username.casefold():
+        raise ValueError("AgentBuilder authenticated a different account than Dataverse.")
+    api_version = config.get("agentBuilderApiVersion", DEFAULT_API_VERSION)
+    agentbuilder = AgentBuilderClient(
+        host, token, ring=ring, tenant_id=native_tenant, api_version=api_version,
+    )
+    target = _create_alm_import_target(
+        args, source_host=host, token=token, tenant_id=native_tenant,
+        ring=ring, api_version=api_version,
+    )
+    connectivity = (
+        ConnectivityClient(token, ring=ring, api_version=api_version)
+        if needs_connection_inventory else None
+    )
+    return agentbuilder, target, connectivity
+
+
 def _validation_context_from_args(
     args,
     config: dict,
@@ -742,9 +805,16 @@ def _validation_context_from_args(
     env_id: str | None,
 ) -> ValidationContext:
     explicit_slug = str(getattr(args, "agent_slug", "") or "").strip()
-    configured_slug = str(config.get("activeAgent") or "").strip()
-    active = _active_agent_config(config, explicit_slug or None)
+    configured_slug = str(
+        config.get("activeAgent") or (config.get("agent") or {}).get("slug") or ""
+    ).strip()
     selected_slug = explicit_slug or configured_slug
+    if config.get("agents") and not selected_slug:
+        raise ValueError(
+            "Select an agent with --agent-slug or activeAgent before running "
+            "a profile; the first configured agent is not a selected target."
+        )
+    active = _active_agent_config(config, explicit_slug or None)
     if selected_slug and not active:
         raise ValueError(
             f"Selected agent {selected_slug!r} does not resolve to a "
@@ -1142,6 +1212,58 @@ def _emit_run_telemetry(result, args, config, graph, tenant_id, scope):
         pass
 
 
+def _configure_connection_validation(runner, args, *, account: str | None = None):
+    """Attach explicit targets and lazy, account-pinned dependency read access."""
+    explicit_ids = getattr(args, "agent_id", None)
+    if explicit_ids is not None:
+        runner.connection_agent_ids = tuple(str(uuid.UUID(value)) for value in explicit_ids)
+    if not explicit_ids and not agent_bot_ids(runner.config):
+        return
+    cache_path = Path(getattr(args, "token_cache", None) or DEFAULT_TOKEN_CACHE)
+    ring = getattr(args, "ring", None) or runner.config.get("ring") or "prod"
+    host = runner.config.get("powerPlatformApiEndpoint")
+    if host:
+        ring = ring_from_environment_host(host)
+        if getattr(args, "ring", None) not in (None, ring):
+            raise ValueError("The requested service ring conflicts with the configured host.")
+    elif runner.env_id:
+        host = derive_environment_host(runner.env_id, ring)
+    else:
+        raise ValueError("Connection validation requires --environment-id.")
+    host = validate_environment_host(host, ring)
+    if str(uuid.UUID(runner.env_id)) != environment_id_from_host(host, ring):
+        raise ValueError("The native endpoint belongs to a different Power Platform environment.")
+    needs_native_auth = runner.agentbuilder is None or account is None
+    tenant_id = runner.tenant_id
+    if needs_native_auth:
+        token, tenant_id, account = authenticate_flightcheck(
+            ring, cache_path=cache_path,
+            account_hint=getattr(args, "preferred_username", None),
+            include_connectivity=True, emit_account_identity=False,
+            return_account_identity=True,
+        )
+    preferred = getattr(args, "preferred_username", None)
+    if not account or (preferred and account.casefold() != preferred.casefold()):
+        raise ValueError("Native authentication selected a different or unverifiable account.")
+    expected_tenant = getattr(args, "tenant_id", None) or runner.config.get("tenantId")
+    if expected_tenant and str(uuid.UUID(expected_tenant)).casefold() != tenant_id.casefold():
+        raise ValueError("Authentication selected a different tenant.")
+    if needs_native_auth:
+        runner.agentbuilder = AgentBuilderClient(
+            host, token, ring=ring, tenant_id=tenant_id,
+        )
+        runner.connectivity = ConnectivityClient(token, ring=ring)
+        runner.tenant_id = tenant_id
+    runner.ring = ring
+    runner.connection_dependency_token = partial(
+        authenticate_flightcheck_dependency,
+        tenant_id=runner.tenant_id,
+        ring=runner.ring,
+        account_hint=account,
+        cache_path=cache_path,
+    )
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -1181,7 +1303,9 @@ def _run_single_checkpoint(args):
 
     try:
         config = {}
-        if os.path.exists(config_path):
+        if os.path.exists(config_path) and not (
+            target == "ENV-004" and getattr(args, "agent_id", None)
+        ):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             if not isinstance(config, dict):
@@ -1452,6 +1576,13 @@ def _run_single_checkpoint(args):
 
     if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
         native_host = config.get("powerPlatformApiEndpoint", "")
+        if target == "ENV-004" and not native_host and env_id:
+            native_host = derive_environment_host(
+                env_id, getattr(args, "ring", None) or "prod",
+            )
+        if not native_host and target == "ENV-004":
+            print("ERROR: ENV-004 requires --environment-id and --agent-id, or an optional configured target.")
+            sys.exit(1)
         if not native_host:
             print(
                 "  Native AgentBuilder APIs: WARNING — no "
@@ -1460,6 +1591,8 @@ def _run_single_checkpoint(args):
             )
         try:
             native_ring = ring_from_environment_host(native_host)
+            if getattr(args, "ring", None) not in (None, native_ring):
+                raise ValueError("The requested service ring conflicts with the native host.")
             native_host = validate_environment_host(native_host, native_ring)
             if env_id:
                 native_environment_id = environment_id_from_host(
@@ -1484,6 +1617,9 @@ def _run_single_checkpoint(args):
         if not quiet_auth:
             print("Authenticating to native AgentBuilder APIs...")
         try:
+            cache_options = {}
+            if getattr(args, "token_cache", None):
+                cache_options["cache_path"] = Path(args.token_cache)
             native_auth = authenticate_flightcheck(
                 native_ring,
                 account_hint=canonical_username,
@@ -1491,6 +1627,7 @@ def _run_single_checkpoint(args):
                 allow_write=bool(getattr(args, "alm_import_probe", False)),
                 emit_account_identity=False,
                 return_account_identity=True,
+                **cache_options,
             )
             (
                 native_token,
@@ -1634,6 +1771,12 @@ def _run_single_checkpoint(args):
     runner.agentbuilder = agentbuilder
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
+    runner.tenant_id = tenant_id
+    if target == "ENV-004" and agentbuilder is not None:
+        runner.ring = native_ring
+        _configure_connection_validation(runner, args, account=canonical_username)
+    elif target == "ENV-004" and getattr(args, "agent_id", None):
+        runner.connection_agent_ids = tuple(args.agent_id)
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
     runner.results.extend(
         _client_blockers(client_availability, "CHECKPOINT")
@@ -2509,13 +2652,7 @@ def _run_profile(args):
     runner.execution_targets = profile.checkpoint_ids
     runner.workday_da_profile = profile_name.startswith("workday-da:")
     runner.config = config
-    # ValidationContext may use the legacy first-record fallback, not a selection.
-    runner.agent_slug = (
-        str(getattr(args, "agent_slug", "") or "").strip()
-        or config.get("activeAgent")
-        or (config.get("agent") or {}).get("slug")
-        or ""
-    )
+    runner.agent_slug = validation_context.agent_slug
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -2599,6 +2736,16 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--agent-id", action="append",
+        help="Exact agent GUID for ENV-004. Repeat for multiple agents. Requires "
+             "--environment-id. Supported with --checkpoint ENV-004 or --scope environment.",
+    )
+    parser.add_argument(
+        "--token-cache",
+        help="Original native authentication cache path for ENV-004; no setup "
+             "config or credential copying is required.",
     )
     parser.add_argument(
         "--tenant-id",
@@ -2762,6 +2909,19 @@ def main():
              "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
+    if args.agent_id or args.token_cache:
+        if args.checkpoint != "ENV-004" and args.scope != "environment":
+            parser.error("--agent-id and --token-cache are supported only for ENV-004 or --scope environment.")
+        if args.agent_id:
+            if not args.environment_id:
+                parser.error("--agent-id requires --environment-id.")
+            if args.connect_config:
+                parser.error("Explicit agent targets cannot merge --connect-config identity.")
+            try:
+                args.agent_id = [str(uuid.UUID(value)) for value in args.agent_id]
+                args.environment_id = str(uuid.UUID(args.environment_id))
+            except ValueError:
+                parser.error("--agent-id and --environment-id must be GUIDs.")
     if args.alm_import_probe and not args.alm_import_target_environment_id:
         parser.error(
             "--alm-import-target-environment-id is required with "
@@ -2812,12 +2972,15 @@ def main():
 
     # Load config
     config_path = os.path.join(".local", "config.json")
-    if not os.path.exists(config_path):
+    explicit_connection_target = bool(args.agent_id)
+    if not os.path.exists(config_path) and not explicit_connection_target:
         print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    config = {}
+    if not explicit_connection_target:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
 
     try:
         config = _merge_connect_config(config, args.connect_config)
@@ -2828,10 +2991,24 @@ def main():
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    native_no_dataverse = _is_native_no_dataverse(config, env_url)
+    native_no_dataverse = explicit_connection_target or _is_native_no_dataverse(config, env_url)
     native_remote_scope = (
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
+    )
+    checks = (
+        NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+        if native_remote_scope
+        else SCOPE_MAP.get(args.scope, FULL_SCOPE)
+    )
+    # Hybrid agents still need native evidence even when Dataverse is configured.
+    hybrid_native_scope = (
+        bool(env_url)
+        and bool(config.get("powerPlatformApiEndpoint"))
+        and any(fn in {
+            run_environment_checks, run_solution_checks,
+            run_workday_checks, run_publishing_checks,
+        } for _, fn in checks)
     )
     resolved_ring = None
     power_platform_admin_origin = None
@@ -2905,6 +3082,8 @@ def main():
     connectivity = None
     powerplatform = None
     azure_arm = None
+    connection_account = None
+    connection_validation_error = None
     if da_local_scope:
         tenant_id = None
         dv_token = None
@@ -2995,11 +3174,20 @@ def main():
                 print(f"ERROR: Invalid native Power Platform endpoint: {exc}")
                 sys.exit(1)
             print("Authenticating for native AgentBuilder FlightCheck...")
-            token, tenant_id = authenticate_flightcheck(
+            connection_auth_options = (
+                {"return_account_identity": True, "emit_account_identity": False}
+                if args.scope == "full" else {}
+            )
+            native_auth = authenticate_flightcheck(
                 ring,
                 include_connectivity=True,
                 allow_write=bool(args.alm_import_probe),
+                **connection_auth_options,
             )
+            if args.scope == "full":
+                token, tenant_id, connection_account = native_auth
+            else:
+                token, tenant_id = native_auth
             api_version = config.get(
                 "agentBuilderApiVersion",
                 DEFAULT_API_VERSION,
@@ -3050,10 +3238,15 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(
-            env_url,
-            preferred_username=getattr(args, "preferred_username", None),
-        )
+        dv_auth_kwargs = {
+            "preferred_username": getattr(args, "preferred_username", None),
+        }
+        if hybrid_native_scope:
+            dv_token, dv_username = authenticate(
+                env_url, **dv_auth_kwargs, return_account_identity=True,
+            )
+        else:
+            dv_token = authenticate(env_url, **dv_auth_kwargs)
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")
@@ -3098,11 +3291,21 @@ def main():
         # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
         # knowledge source). Erroring out here would block those.
         print("Deriving Power Platform environment ID...")
+        # An override or WhoAmI fallback cannot authorize combined native/DV evidence.
+        verified_env_id = None
+        if hybrid_native_scope and pp_admin is not None:
+            verified_env_id = derive_environment_id(
+                env_url, dv_token, pp_admin=pp_admin,
+            )
         if args.environment_id:
             env_id = args.environment_id
             print(f"Environment ID: {env_id} (provided via --environment-id)")
         else:
-            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            env_id = (
+                verified_env_id
+                if hybrid_native_scope and pp_admin is not None
+                else derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            )
             if env_id and pp_admin is not None:
                 print(f"Environment ID: {env_id}")
             elif env_id:
@@ -3137,6 +3340,33 @@ def main():
                     "license, auth, Workday env-var, Workday SOAP, and local-file "
                     "checks will still run."
                 )
+
+    if hybrid_native_scope and not verified_env_id:
+        print(
+            "  Native AgentBuilder APIs: WARNING - Could not independently verify "
+            "the Dataverse environment through Power Platform Admin. "
+            "Native clients remain unavailable; --environment-id and Dataverse "
+            "OrganizationId are not mapping evidence."
+        )
+        print("  (Native-dependent checks cannot verify readiness)")
+    elif hybrid_native_scope:
+        print("Authenticating to native AgentBuilder APIs...")
+        try:
+            agentbuilder, alm_import_target, connectivity = _create_hybrid_scope_clients(
+                args, config, verified_env_id, tenant_id, dv_username,
+            )
+            connection_account = dv_username
+            print("  Native AgentBuilder APIs: OK")
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        except Exception as exc:
+            connection_validation_error = _safe_client_error_reason(exc)
+            print(
+                "  Native AgentBuilder APIs: WARNING - "
+                f"{_safe_client_error_reason(exc)}"
+            )
+            print("  (Native-dependent checks cannot verify readiness)")
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
@@ -3223,6 +3453,15 @@ def main():
     runner.alm_import_target = alm_import_target
     runner.connectivity = connectivity
     runner.alm_import_probe = bool(getattr(args, "alm_import_probe", False))
+    runner.tenant_id = tenant_id
+    if connection_validation_error:
+        runner.connection_validation_error = connection_validation_error
+    elif args.scope in {"full", "environment"}:
+        try:
+            _configure_connection_validation(runner, args, account=connection_account)
+        except (ValueError, RuntimeError) as exc:
+            print(f"  ENV-004 dependency access: WARNING - {type(exc).__name__}: {exc}")
+            runner.connection_validation_error = str(exc)
     runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
         args.scope
     )
@@ -3235,14 +3474,6 @@ def main():
     # setup gates deterministic.
     if not native_remote_scope:
         _resolve_target_selection(args, runner)
-
-    # Register checks based on scope
-    if native_remote_scope:
-        checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
-    elif args.scope == "full":
-        checks = FULL_SCOPE
-    else:
-        checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
 
     # Resolve consent for the mutating runtime-reachability probe (INFRA-003)
     # before any check runs. This is the only FlightCheck path that writes to
