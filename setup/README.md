@@ -186,6 +186,9 @@ Files that were never mapped are preserved; an incoming component that would
 overwrite a local-only file stops refresh with a conflict.
 Missing or invalid ownership maps, colliding component paths, and previously
 extracted components returned without usable data stop refresh before overwrite.
+Every component page must contain an object collection. Invalid, repeated or
+cross-collection continuation links stop fetching before extraction, leaving
+the working files, ownership map, baseline and selected configuration unchanged.
 Optional workflow or template-configuration fetch failures are not treated as
 evidence of deletion.
 

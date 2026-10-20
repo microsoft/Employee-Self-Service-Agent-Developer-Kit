@@ -200,6 +200,13 @@ Native reads support the selected service ring. Flow administration and Datavers
 
 `--scope environment` also accepts these standalone target flags. Other scope checks retain their own prerequisites. Configured runs without explicit agent IDs remain supported, including their existing optional release-commit comparison.
 
+Configured Dataverse-backed runs require a configured native endpoint and an
+independently verified environment/account match before combining native and
+Dataverse evidence. Failed mapping or a missing native endpoint cannot trigger
+a late native fallback; independent checks remain available. The canonical
+`agents` records take precedence over stale same-slug compatibility `agent`
+copies for both connection audits and release-commit comparisons.
+
 **What it checks (41+ automated checks across 8 categories):**
 
 | Category | What's validated |

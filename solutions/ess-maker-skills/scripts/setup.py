@@ -110,7 +110,7 @@ def load_json(filepath, *, require_complete=False):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        if require_complete and data.get("@odata.nextLink"):
+        if require_complete and data.get("@odata.nextLink") is not None:
             raise ValueError("Refresh requires all component inventory pages.")
         for key in ("value", "records", "results"):
             if key in data and isinstance(data[key], list):

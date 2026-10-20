@@ -5,9 +5,13 @@
 
 import json
 import sys
+from unittest.mock import Mock
 
 import pytest
+import responses
+import fetch_and_setup
 import setup
+from tests.mocks import dataverse as dv
 
 
 def _component(component_id="selected-component", name="Greeting", ctype=9, **extra):
@@ -299,11 +303,89 @@ def test_component_paths_refuse_unsafe_manifest_paths(tmp_path, relative):
         setup.checked_component_path(str(tmp_path), relative)
 
 
-def test_component_inventory_rejects_unfetched_pages(tmp_path):
+@pytest.mark.parametrize("next_link", ["next-page", "", False, [], {}])
+def test_component_inventory_rejects_unfetched_pages(tmp_path, next_link):
     inventory = tmp_path / "partial.json"
     inventory.write_text(json.dumps({
-        "value": [_component()], "@odata.nextLink": "next-page",
+        "value": [_component()], "@odata.nextLink": next_link,
     }), encoding="utf-8")
 
     with pytest.raises(ValueError, match="all component inventory pages"):
         setup.load_json(inventory, require_complete=True)
+
+
+@pytest.mark.parametrize("invalid_page", [
+    [],
+    {},
+    {"value": None},
+    {"value": {}},
+    {"value": [None]},
+    {"value": [], "@odata.nextLink": ""},
+    {"value": [], "@odata.nextLink": False},
+    {"value": [], "@odata.nextLink": "https://other.crm.dynamics.com/api/data/v9.2/botcomponents"},
+    {"value": [], "@odata.nextLink": "https://selected.crm.dynamics.com/api/data/v9.2/bots"},
+    {"value": [], "@odata.nextLink": "https://selected.crm.dynamics.com/api/data/v9.2/botcomponents?$skiptoken=page2"},
+])
+def test_refresh_rejects_invalid_later_page_without_changing_workspace(
+    tmp_path, monkeypatch, capsys, invalid_page,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    _run_setup(tmp_path, monkeypatch, inventory=[
+        _component(), _component("retained", "User Context"),
+    ])
+    config_path = tmp_path / ".local" / "config.json"
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file()
+    }
+    monkeypatch.setattr(fetch_and_setup, "load_config", lambda: json.loads(
+        config_path.read_text(encoding="utf-8"),
+    ))
+    monkeypatch.setattr(fetch_and_setup, "authenticate", lambda _url: "test-token")
+    save = Mock(wraps=fetch_and_setup.save_temp_files)
+    run = Mock(return_value=0)
+    monkeypatch.setattr(fetch_and_setup, "save_temp_files", save)
+    monkeypatch.setattr(fetch_and_setup, "run_setup", run)
+    monkeypatch.setattr(sys, "argv", ["fetch_and_setup.py", "--refresh"])
+    root = "https://selected.crm.dynamics.com/api/data/v9.2/"
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        replay.add("GET", root + "botcomponents", json=dv.collection(
+            [_component()], next_link=root + "botcomponents?$skiptoken=page2",
+        ))
+        replay.add("GET", root + "botcomponents?$skiptoken=page2", json=invalid_page)
+        for entity in ("msdyn_employeeselfservicetemplateconfigs", "workflows"):
+            replay.add("GET", root + entity, json=dv.collection([]))
+
+        with pytest.raises(SystemExit) as exc:
+            fetch_and_setup.main()
+
+    assert exc.value.code == 1
+    assert "ERROR: Invalid Dataverse inventory:" in capsys.readouterr().out
+    save.assert_not_called()
+    run.assert_not_called()
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*") if path.is_file()
+    }
+    assert after == before
+    assert not list(tmp_path.rglob(".checkpoints"))
+
+
+@responses.activate
+def test_fetch_components_accepts_complete_multiple_pages():
+    root = "https://selected.crm.dynamics.com/api/data/v9.2/botcomponents"
+    responses.add("GET", root, json=dv.collection(
+        [_component()], next_link=root + "?$skiptoken=page2",
+    ))
+    responses.add("GET", root + "?$skiptoken=page2", json=dv.collection([
+        _component("retained", "User Context"),
+    ]))
+
+    records = fetch_and_setup.fetch_components(
+        "https://selected.crm.dynamics.com", "test-token", "selected-bot",
+    )
+
+    assert [record["botcomponentid"] for record in records] == [
+        "selected-component", "retained",
+    ]

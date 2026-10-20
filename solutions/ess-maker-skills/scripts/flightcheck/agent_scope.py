@@ -12,6 +12,33 @@ from typing import Any
 _AGENT_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def configured_agents(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """List canonical subjects, excluding stale compatibility copies."""
+    candidates = [
+        agent for agent in config.get("agents", []) or []
+        if isinstance(agent, dict)
+    ]
+    single = config.get("agent")
+    if isinstance(single, dict):
+        candidates.append(single)
+    agents: list[dict[str, Any]] = []
+    known_slugs: set[str] = set()
+    known_ids: set[str] = set()
+    for agent in candidates:
+        raw_slug = agent.get("slug")
+        slug = raw_slug.strip() if isinstance(raw_slug, str) else ""
+        raw_id = agent.get("botId")
+        bot_id = raw_id.strip().casefold() if isinstance(raw_id, str) else ""
+        if (slug and slug in known_slugs) or (bot_id and bot_id in known_ids):
+            continue
+        agents.append(agent)
+        if slug:
+            known_slugs.add(slug)
+        if bot_id:
+            known_ids.add(bot_id)
+    return agents
+
+
 def active_agent(
     config: dict[str, Any] | None,
     selected_slug: str | None = None,

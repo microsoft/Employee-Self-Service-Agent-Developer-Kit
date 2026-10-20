@@ -102,6 +102,23 @@ def test_active_workday_dependencies_pass_without_setup_config(dependency_case):
     dependency_case.native.get_agent.assert_called_once_with(dependency_case.agent_id)
 
 
+def test_connection_audit_excludes_stale_same_slug_compatibility_agent(dependency_case):
+    case = dependency_case
+    del case.runner.connection_agent_ids
+    case.runner.config = {
+        "agents": [{"slug": "hr", "botId": case.agent_id}],
+        "agent": {"slug": "hr", "botId": SECOND_AGENT},
+    }
+
+    row = _summary(case)
+
+    assert row.status == "Passed"
+    assert "2 required reference(s) from 3 active flow call(s)" in row.result
+    assert row.remediation == ""
+    case.native.get_agent.assert_called_once_with(case.agent_id)
+    case.native.fetch_components.assert_called_once_with(case.agent_id)
+
+
 @pytest.mark.parametrize("maker_visible,malformed_collection", [
     (True, None), (False, None), (True, "dataverse"), (False, "admin"),
 ])

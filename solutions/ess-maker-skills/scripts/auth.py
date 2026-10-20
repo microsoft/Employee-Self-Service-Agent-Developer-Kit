@@ -14,7 +14,7 @@ import re
 import sys
 import stat
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 try:
     import msal
@@ -452,7 +452,8 @@ def query_all(env_url, token, entity_set, select, filter_expr=None, *, strict_co
     """Query a Dataverse table with automatic @odata.nextLink pagination.
 
     Returns all records across all pages. With strict_collection, malformed
-    collection responses raise ValueError rather than implying absence.
+    records, continuations and repeated pages raise ValueError rather than
+    admitting an incomplete inventory.
     """
     _validate_https_url(env_url)
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
@@ -461,6 +462,8 @@ def query_all(env_url, token, entity_set, select, filter_expr=None, *, strict_co
         url += f"&$filter={quote(filter_expr, safe='')}"
 
     all_records = []
+    collection_url = urlsplit(url)
+    seen_urls = set()
     page = 0
     _start = time.perf_counter()
     while url:
@@ -474,11 +477,33 @@ def query_all(env_url, token, entity_set, select, filter_expr=None, *, strict_co
             # api-error metrics alongside create/update/delete/get failures.
             _emit_api_call(entity_set, "read", _start, status=resp.status_code)
         raise_api_error(resp, resource_name=entity_set, operation="read")
-        data = resp.json()
-        if strict_collection and (
-            not isinstance(data, dict) or not isinstance(data.get("value"), list)
-        ):
-            raise ValueError(f"{entity_set} returned an invalid collection.")
+        try:
+            data = resp.json()
+            if strict_collection:
+                if (
+                    not isinstance(data, dict)
+                    or not isinstance(data.get("value"), list)
+                    or any(not isinstance(record, dict) for record in data["value"])
+                ):
+                    raise ValueError(f"{entity_set} returned an invalid collection.")
+                seen_urls.add(url)
+                next_link = data.get("@odata.nextLink")
+                if next_link is not None:
+                    if not isinstance(next_link, str) or not next_link.strip():
+                        raise ValueError(f"{entity_set} returned an invalid continuation.")
+                    continuation = urlsplit(next_link)
+                    if (
+                        continuation.scheme != "https"
+                        or continuation.netloc.casefold() != collection_url.netloc.casefold()
+                        or continuation.path != collection_url.path
+                        or continuation.fragment
+                    ):
+                        raise ValueError(f"{entity_set} returned an invalid continuation.")
+                    if next_link in seen_urls:
+                        raise ValueError(f"{entity_set} returned a repeated continuation.")
+        except ValueError as exc:
+            _emit_api_call(entity_set, "read", _start, error=exc)
+            raise
         records = data.get("value", [])
         all_records.extend(records)
         url = data.get("@odata.nextLink")

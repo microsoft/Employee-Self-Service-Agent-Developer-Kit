@@ -130,6 +130,7 @@ def fetch_components(env_url, token, bot_id):
         entity_set="botcomponents",
         select=_component_select(),
         filter_expr=f"_parentbotid_value eq '{bot_id}'",
+        strict_collection=True,
     )
     return normalize_components(raw_components)
 
@@ -366,6 +367,9 @@ def main():
         except APIError as e:
             print(e.format_for_terminal())
             sys.exit(1)
+        except ValueError as exc:
+            print(f"ERROR: Invalid Dataverse inventory: {exc}")
+            sys.exit(1)
         paths = save_temp_files(components, template_configs, workflows)
         rc = run_setup(
             env_url,
@@ -403,6 +407,9 @@ def main():
             env_url, token, args.bot_id)
     except APIError as e:
         print(e.format_for_terminal())
+        sys.exit(1)
+    except ValueError as exc:
+        print(f"ERROR: Invalid Dataverse inventory: {exc}")
         sys.exit(1)
     paths = save_temp_files(components, template_configs, workflows)
     rc = run_setup(

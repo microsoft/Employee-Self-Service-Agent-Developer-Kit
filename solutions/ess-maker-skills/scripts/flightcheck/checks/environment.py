@@ -9,6 +9,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 
 import uuid
 
+from ..agent_scope import configured_agents
 from ..runner import CheckResult, Priority, Role, Status
 from ._connection_dependencies import audit_connections
 from ._da_connection_refs import agent_bot_ids
@@ -72,30 +73,7 @@ def _env004_config_value(config: dict, keys: tuple[str, ...]) -> str:
 def _env004_grs_commit_pin_result(runner) -> CheckResult:
     """Judge each configured agent against its own pin and realm, then fold."""
     config = getattr(runner, "config", None) or {}
-    candidates = [
-        agent for agent in config.get("agents", []) or []
-        if isinstance(agent, dict)
-    ]
-    single = config.get("agent")
-    if isinstance(single, dict):
-        candidates.append(single)
-    # Canonical records precede the compatibility copy. A stale copy of the
-    # same logical subject must not add another pin, even when its botId changed.
-    agents: list[dict] = []
-    known_slugs: set[str] = set()
-    known_ids: set[str] = set()
-    for agent in candidates:
-        raw_slug = agent.get("slug")
-        slug = raw_slug.strip() if isinstance(raw_slug, str) else ""
-        bot_ids = agent_bot_ids({"agent": agent})
-        bot_id = bot_ids[0].casefold() if bot_ids else ""
-        if (slug and slug in known_slugs) or (bot_id and bot_id in known_ids):
-            continue
-        agents.append(agent)
-        if slug:
-            known_slugs.add(slug)
-        if bot_id:
-            known_ids.add(bot_id)
+    agents = configured_agents(config)
 
     results: list[CheckResult] = []
     details: list[str] = []

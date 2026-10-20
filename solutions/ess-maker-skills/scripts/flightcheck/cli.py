@@ -3345,6 +3345,11 @@ def main():
                 )
 
     if hybrid_native_scope and not verified_env_id:
+        connection_validation_error = (
+            "Could not independently verify the Dataverse environment through "
+            "Power Platform Admin. Native dependency reads remain unavailable; "
+            "--environment-id and Dataverse OrganizationId are not mapping evidence."
+        )
         print(
             "  Native AgentBuilder APIs: WARNING - Could not independently verify "
             "the Dataverse environment through Power Platform Admin. "
@@ -3459,6 +3464,16 @@ def main():
     runner.tenant_id = tenant_id
     if connection_validation_error:
         runner.connection_validation_error = connection_validation_error
+    elif (
+        env_url and args.scope in {"full", "environment"}
+        and runner.agentbuilder is None and agent_bot_ids(config)
+    ):
+        runner.connection_validation_error = (
+            "Native connection validation requires a configured, independently "
+            "verified native target before combining it with Dataverse evidence. "
+            "Run /setup to capture the native Power Platform API endpoint."
+        )
+        print(f"  ENV-004 dependency access: WARNING - {runner.connection_validation_error}")
     elif args.scope in {"full", "environment"}:
         try:
             _configure_connection_validation(runner, args, account=connection_account)

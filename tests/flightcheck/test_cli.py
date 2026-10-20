@@ -783,6 +783,31 @@ def test_legacy_scope_without_native_endpoint_keeps_existing_clients(hybrid_scop
     hybrid_scope.native_auth.assert_not_called()
 
 
+@pytest.mark.parametrize("scope", ["full", "environment"])
+@pytest.mark.parametrize("mapping_available", [False, True])
+def test_dataverse_scope_without_native_endpoint_cannot_create_late_native_clients(
+    hybrid_scope, scope, mapping_available, capsys,
+):
+    hybrid_scope.config.pop("powerPlatformApiEndpoint")
+    hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
+    if not mapping_available:
+        hybrid_scope.resolve_environment.return_value = None
+
+    assert hybrid_scope.run(scope, extra_args=[
+        "--environment-id", hybrid_scope.config["environmentId"],
+    ]) == 0
+
+    runner = _FakeRunner.last_instance
+    assert runner.dv_token == "dv-token"
+    assert runner.registered == (cli.FULL_SCOPE if scope == "full" else cli.SCOPE_MAP[scope])
+    assert runner.agentbuilder is None
+    assert runner.connectivity is None
+    assert "independently verified native target" in runner.connection_validation_error
+    assert "ENV-004 dependency access: WARNING" in capsys.readouterr().out
+    hybrid_scope.native_auth.assert_not_called()
+    hybrid_scope.native_client.assert_not_called()
+
+
 @pytest.mark.parametrize("mismatch", ["environment", "ring", "tenant", "account", "missing_account"])
 def test_hybrid_scope_rejects_mismatched_native_identity(hybrid_scope, mismatch, capsys):
     if mismatch == "environment":
@@ -822,12 +847,14 @@ def test_hybrid_scope_auth_failure_is_reported_without_a_partial_client(hybrid_s
 
 
 @pytest.mark.parametrize("explicit_id", [False, True])
+@pytest.mark.parametrize("scope", ["full", "environment"])
 @pytest.mark.parametrize(
     "unavailable", ["lookup_miss", "admin_auth_failed", "matching_organization_id"]
 )
 def test_hybrid_scope_without_verified_mapping_keeps_independent_checks(
-    hybrid_scope, monkeypatch, capsys, unavailable, explicit_id,
+    hybrid_scope, monkeypatch, capsys, unavailable, explicit_id, scope,
 ):
+    hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
     if unavailable == "lookup_miss":
         hybrid_scope.resolve_environment.return_value = None
     else:
@@ -846,13 +873,16 @@ def test_hybrid_scope_without_verified_mapping_keeps_independent_checks(
         if explicit_id else []
     )
 
-    assert hybrid_scope.run(extra_args=extra_args) == 0
+    assert hybrid_scope.run(scope, extra_args=extra_args) == 0
 
     runner = _FakeRunner.last_instance
-    assert runner.registered == cli.FULL_SCOPE
+    assert runner.registered == (cli.FULL_SCOPE if scope == "full" else cli.SCOPE_MAP[scope])
     assert runner.dv_token == "dv-token"
     assert runner.agentbuilder is None
     assert runner.alm_import_target is None
+    assert runner.connectivity is None
+    assert "independently verify" in runner.connection_validation_error
+    assert not hasattr(runner, "connection_dependency_token")
     hybrid_scope.native_auth.assert_not_called()
     hybrid_scope.native_client.assert_not_called()
     output = capsys.readouterr().out
