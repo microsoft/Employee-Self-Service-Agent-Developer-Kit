@@ -36,14 +36,37 @@ When that pair is available:
 - Also provide the folder-selection guidance when the user explicitly asks to
   use, open, or run the ESS Maker Kit as a maker experience.
 
-## Folder-selection guidance
+## Folder-selection handoff
 
-When folder-selection guidance applies, respond with only:
+When folder-selection guidance applies, do not execute the Maker Kit operation
+in the repository-root chat. Preserve the user's original request without
+adding, removing, or rewriting any text.
+
+Offer **Open the Maker Kit in a new chat** and ask for explicit confirmation
+before launching VS Code. If the user confirms:
+
+1. Resolve `solutions/ess-maker-skills` to an absolute path from the active
+   repository root. Verify the direct Maker Kit markers listed above exist at
+   that path.
+2. Run `code --new-window "<absolute Maker Kit path>"` and wait for that
+   command to complete successfully. Then wait for the newly opened Maker Kit
+   window to finish loading. Do not run the two commands concurrently.
+3. Use the Maker Kit folder as the working directory and run
+   `code chat --reuse-window "<original request>"`. Pass the preserved request
+   as one prompt argument with shell-appropriate escaping. Do not add guard
+   text, setup instructions, or other framing to the prompt.
+4. After the chat command succeeds, stop processing the request in the current
+   chat. The new Maker Kit chat owns setup gating, execution, recovery, and
+   completion reporting.
+
+If the user declines, provide the manual guidance below without launching
+VS Code. If path validation or either command fails, surface the failure and do
+not claim that the request was transferred. Fall back to this manual guidance:
 
 > ESS Maker Kit agent operations are available from the
 > `solutions/ess-maker-skills` workspace.
 >
-> **Open the Maker Kit workspace:**
+> **Open the Maker Kit workspace manually:**
 >
 > 1. In VS Code, select `File` → `Open Folder…` or press `Ctrl+K Ctrl+O`.
 > 2. Select `solutions/ess-maker-skills`.
