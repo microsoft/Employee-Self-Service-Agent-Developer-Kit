@@ -667,6 +667,8 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             description="Connection dependency coverage",
             result="; ".join(audit.warnings),
             remediation=(
+                "For configured targets, ensure each canonical agent has its own botId "
+                "in .local/config.json. "
                 "Restore read access to the selected agent's components, "
                 "invoked flows, required Dataverse references, and physical "
                 "connections, then re-run FlightCheck."

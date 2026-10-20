@@ -18,6 +18,7 @@ from uuid import UUID
 import requests
 
 from auth import discover_tenant, query_all
+from ..agent_scope import configured_agents
 from ..pp_admin_client import FLOW_SCOPE, PP_SCOPE, PPAdminClient
 from ._da_connection_refs import agent_bot_ids, _require_identity_field
 
@@ -183,6 +184,16 @@ def audit_connections(runner) -> ConnectionAudit:
     if getattr(runner, "connection_validation_error", None):
         audit.blocked = runner.connection_validation_error
         return audit
+    if getattr(runner, "connection_agent_ids", None) is None:
+        for index, agent in enumerate(configured_agents(
+            getattr(runner, "config", None) or {}
+        ), 1):
+            bot_id = agent.get("botId")
+            if not isinstance(bot_id, str) or not bot_id.strip():
+                subject = agent.get("slug") or f"configured agent {index}"
+                audit.warnings.append(
+                    f"Agent {subject}: dependency discovery incomplete (botId not available)."
+                )
     try:
         agent_ids = selected_agent_ids(runner)
     except (ValueError, TypeError, AttributeError):

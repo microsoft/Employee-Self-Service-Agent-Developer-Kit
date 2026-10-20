@@ -742,17 +742,38 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     elif existing.get("environmentId"):
         config["environmentId"] = existing["environmentId"]
 
-    # Snapshot extraction must retain the installer's ring, but never transfer
-    # it when setup switches to a different environment.
     existing_endpoint = existing.get("dataverseEndpoint")
-    if (
+    previous_environment_id = str(existing.get("environmentId") or "").strip()
+    same_environment = (
         isinstance(existing_endpoint, str)
         and existing_endpoint
         and existing_endpoint.rstrip("/").casefold()
         == agent_info["url"].rstrip("/").casefold()
-        and "ring" in existing
-    ):
-        config["ring"] = existing["ring"]
+        and (
+            not environment_id or not previous_environment_id
+            or environment_id.casefold() == previous_environment_id.casefold()
+        )
+    )
+    if same_environment:
+        for key in ("ring", "powerPlatformApiEndpoint", "agentBuilderApiVersion", "tenantId"):
+            if key in existing:
+                config[key] = existing[key]
+        previous_active_agent = next(
+            (entry for entry in existing_agents
+             if entry.get("slug") == existing.get("activeAgent")),
+            legacy_active_agent,
+        )
+        previous_bot_id = str(previous_active_agent.get("botId") or "").strip()
+        if previous_bot_id and previous_bot_id.casefold() == bot_id.casefold():
+            # Agent policy defaults must not follow a switch to another subject.
+            for key in (
+                "releaseLine", "realm",
+                "expectedGrsCommitSha", "grsExpectedCommitSha",
+                "expectedMinimalBotsCommitSha", "expectedEssSolutionCommitSha",
+                "minimalBotsAlmRealm", "grsRealm", "almRealm",
+            ):
+                if key in existing:
+                    config[key] = existing[key]
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):

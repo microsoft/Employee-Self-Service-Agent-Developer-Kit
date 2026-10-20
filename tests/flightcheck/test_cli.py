@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import requests
 
 from flightcheck import cli
 
@@ -888,6 +889,38 @@ def test_hybrid_scope_without_verified_mapping_keeps_independent_checks(
     output = capsys.readouterr().out
     assert "Native AgentBuilder APIs: WARNING" in output
     assert "independently verify" in output
+    assert "Native-dependent checks cannot verify readiness" in output
+
+
+@pytest.mark.parametrize("explicit_id", [False, True])
+@pytest.mark.parametrize("failure", [
+    requests.HTTPError("HTTP 503"), requests.Timeout("Mapping timed out"),
+    ValueError("Invalid environment inventory"),
+])
+def test_mapping_read_failure_preserves_independent_scope_checks(
+    hybrid_scope, capsys, explicit_id, failure,
+):
+    hybrid_scope.config["agent"]["botId"] = "00000000-0000-4000-8000-000000003333"
+    hybrid_scope.resolve_environment.side_effect = failure
+    arguments = (
+        ["--environment-id", hybrid_scope.config["environmentId"]]
+        if explicit_id else []
+    )
+
+    assert hybrid_scope.run("full", extra_args=arguments) == 0
+
+    runner = _FakeRunner.last_instance
+    assert runner.registered == cli.FULL_SCOPE
+    assert runner.dv_token == "dv-token"
+    assert runner.env_id == (hybrid_scope.config["environmentId"] if explicit_id else None)
+    assert runner.agentbuilder is None
+    assert runner.connectivity is None
+    assert "independently verify" in runner.connection_validation_error
+    assert not hasattr(runner, "connection_dependency_token")
+    hybrid_scope.resolve_environment.assert_called_once()
+    hybrid_scope.native_auth.assert_not_called()
+    output = capsys.readouterr().out
+    assert type(failure).__name__ in output
     assert "Native-dependent checks cannot verify readiness" in output
 
 

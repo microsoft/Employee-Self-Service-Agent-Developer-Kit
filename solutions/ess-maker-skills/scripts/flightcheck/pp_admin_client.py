@@ -377,8 +377,12 @@ class PPAdminClient:
         """
         items: list = []
         url = f"{base}{path}"
+        collection_path = urlparse(url).path
+        seen_urls: set[str] = set()
         h = self.flow_headers if use_flow_token else self.headers
         while url:
+            if strict_collection:
+                seen_urls.add(url)
             resp = _SESSION.get(url, headers=h, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return {"_error": "insufficient_permissions", "_status": resp.status_code}
@@ -389,12 +393,31 @@ class PPAdminClient:
             ):
                 raise ValueError("Power Platform administration returned an invalid collection.")
             items.extend(data.get("value", []))
-            next_url = data.get("nextLink") or data.get("@odata.nextLink")
-            url = (
-                _same_origin_pagination_url(next_url, base)
-                if next_url
-                else None
-            )
+            if strict_collection:
+                continuations = set()
+                for key in ("nextLink", "@odata.nextLink"):
+                    next_url = data.get(key)
+                    if next_url is None:
+                        continue
+                    if not isinstance(next_url, str) or not next_url.strip():
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    next_url = _same_origin_pagination_url(next_url, base)
+                    parsed = urlparse(next_url)
+                    if parsed.path != collection_path or parsed.fragment:
+                        raise ValueError("Power Platform administration returned an invalid continuation.")
+                    if next_url in seen_urls:
+                        raise ValueError("Power Platform administration returned a repeated continuation.")
+                    continuations.add(next_url)
+                if len(continuations) > 1:
+                    raise ValueError("Power Platform administration returned conflicting continuations.")
+                url = next(iter(continuations), None)
+            else:
+                next_url = data.get("nextLink") or data.get("@odata.nextLink")
+                url = (
+                    _same_origin_pagination_url(next_url, base)
+                    if next_url
+                    else None
+                )
             params = None
         return items
 

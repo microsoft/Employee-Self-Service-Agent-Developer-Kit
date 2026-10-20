@@ -95,6 +95,34 @@ def test_refresh_stops_before_overwrite_when_checkpoint_fails(tmp_path, monkeypa
     assert config_path.read_bytes() == original_config
 
 
+def test_same_target_refresh_preserves_native_validation_metadata(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _run_setup(tmp_path, monkeypatch)
+    config_path = tmp_path / ".local" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    metadata = {
+        "ring": "prod",
+        "powerPlatformApiEndpoint": "https://mockenv.00.environment.api.powerplatform.com",
+        "agentBuilderApiVersion": "2099-01-01",
+        "tenantId": "00000000-0000-0000-0000-000000001111",
+        "releaseLine": "da",
+        "realm": "dev",
+        "expectedGrsCommitSha": "required-release",
+        "grsRealm": 0,
+    }
+    config.update(metadata)
+    for agent in [config["agent"], *config["agents"]]:
+        agent["releaseLine"] = "da"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    _run_setup(tmp_path, monkeypatch, refresh=True)
+
+    refreshed = json.loads(config_path.read_text(encoding="utf-8"))
+    assert {key: refreshed.get(key) for key in metadata} == metadata
+    assert refreshed["agent"]["releaseLine"] == "da"
+    assert refreshed["agent"]["botId"] == "selected-bot"
+
+
 @pytest.mark.parametrize("ctype,folder", [
     (9, "topics"), (12, "variables"), (16, "knowledge"),
     (14, "attachments"), (99, "other"),

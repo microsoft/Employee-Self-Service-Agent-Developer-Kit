@@ -160,3 +160,49 @@ def test_write_config_preserves_ring_only_for_same_environment(
         assert config["ring"] == ring
     else:
         assert "ring" not in config
+
+
+@pytest.mark.parametrize("target_change", ["none", "agent", "url", "environment_id"])
+def test_native_metadata_is_scoped_to_environment_and_active_agent(
+    tmp_path, monkeypatch, target_change,
+):
+    monkeypatch.chdir(tmp_path)
+    _seed_config(tmp_path)
+    path = tmp_path / ".local" / "config.json"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    environment_metadata = {
+        "ring": "test",
+        "powerPlatformApiEndpoint": "https://mockenv.00.environment.api.test.powerplatform.com",
+        "agentBuilderApiVersion": "2099-01-01",
+        "tenantId": "00000000-0000-0000-0000-000000001111",
+    }
+    agent_metadata = {
+        "releaseLine": "da", "realm": "dev",
+        "expectedGrsCommitSha": "required-release",
+        "grsExpectedCommitSha": "",
+        "expectedMinimalBotsCommitSha": None,
+        "expectedEssSolutionCommitSha": "another-pin",
+        "minimalBotsAlmRealm": 0, "grsRealm": "Test", "almRealm": 2,
+    }
+    saved.update(environmentId="env-1", **environment_metadata, **agent_metadata)
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    overrides = {
+        "none": {}, "agent": {"botId": "bot-2"},
+        "url": {"url": "https://other.crm.dynamics.com"},
+        "environment_id": {"environmentId": "env-2"},
+    }[target_change]
+
+    config = _write_config(
+        tmp_path, _agent_info(**{"environmentId": "env-1", **overrides}),
+    )
+
+    for key, value in environment_metadata.items():
+        if target_change in ("none", "agent"):
+            assert key in config and config[key] == value
+        else:
+            assert key not in config
+    for key, value in agent_metadata.items():
+        if target_change == "none":
+            assert key in config and config[key] == value
+        else:
+            assert key not in config

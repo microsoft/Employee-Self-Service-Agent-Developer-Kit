@@ -119,8 +119,33 @@ def test_connection_audit_excludes_stale_same_slug_compatibility_agent(dependenc
     case.native.fetch_components.assert_called_once_with(case.agent_id)
 
 
+@pytest.mark.parametrize("missing_id", [None, "", "   ", False, 0])
+def test_missing_canonical_subject_warns_without_substituting_compatibility_agent(
+    dependency_case, missing_id,
+):
+    case = dependency_case
+    del case.runner.connection_agent_ids
+    case.runner.config = {
+        "agents": [
+            {"slug": "hr", "botId": missing_id},
+            {"slug": "it", "botId": case.agent_id},
+        ],
+        "agent": {"slug": "hr", "botId": SECOND_AGENT},
+    }
+
+    row = _summary(case)
+
+    assert row.status == "Warning"
+    assert "Agent hr: dependency discovery incomplete" in row.result
+    assert "botId not available" in row.result
+    assert "2 bound" in row.result
+    assert "each canonical agent has its own botId" in row.remediation
+    case.native.get_agent.assert_called_once_with(case.agent_id)
+
+
 @pytest.mark.parametrize("maker_visible,malformed_collection", [
     (True, None), (False, None), (True, "dataverse"), (False, "admin"),
+    (False, "admin_nextlink"), (False, "admin_odata_nextlink"),
 ])
 def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, malformed_collection):
     interactions = _captured()
@@ -157,6 +182,11 @@ def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, mal
                 or malformed_collection == "admin" and "api.powerapps." in item["request"]["uri"]
             ):
                 del body["value"]
+            if "api.powerapps." in item["request"]["uri"]:
+                if malformed_collection == "admin_nextlink":
+                    body.update(value=[], nextLink=False)
+                elif malformed_collection == "admin_odata_nextlink":
+                    body.update(value=[], **{"@odata.nextLink": False})
             replay.add(
                 item["request"]["method"],
                 item["request"]["uri"].split("?")[0],
@@ -169,8 +199,10 @@ def test_actual_http_capture_exercises_the_check(monkeypatch, maker_visible, mal
     summary = next(row for row in rows if row.checkpoint_id == "ENV-004")
     if malformed_collection:
         assert summary.status == "Warning"
-        assert "invalid collection" in summary.result
+        assert ("invalid continuation" if "nextlink" in malformed_collection
+                else "invalid collection") in summary.result
         assert "does not exist" not in summary.result
+        assert "Restore read access" in summary.remediation
         return
     assert summary.status == "Passed"
     assert "2 bound" in summary.result

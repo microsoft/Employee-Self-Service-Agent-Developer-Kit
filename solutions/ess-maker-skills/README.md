@@ -205,7 +205,12 @@ independently verified environment/account match before combining native and
 Dataverse evidence. Failed mapping or a missing native endpoint cannot trigger
 a late native fallback; independent checks remain available. The canonical
 `agents` records take precedence over stale same-slug compatibility `agent`
-copies for both connection audits and release-commit comparisons.
+copies for both connection audits and release-commit comparisons. A canonical
+agent missing its `botId` is reported as incomplete coverage, not silently
+omitted from a passing sibling's result. Mapping read errors also leave native
+validation unavailable without preventing independent scope checks. Malformed,
+conflicting or repeated admin continuation links leave physical connection
+existence unverified; incomplete inventories cannot prove a connection is absent.
 
 **What it checks (41+ automated checks across 8 categories):**
 

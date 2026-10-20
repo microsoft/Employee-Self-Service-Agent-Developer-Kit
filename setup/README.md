@@ -179,6 +179,9 @@ reported access or connectivity error and rerun the installer to retry the fetch
 Snapshot fetching uses refresh mode so reruns can update an existing agent
 folder. Setup creates a local checkpoint before replacing existing files and
 stops if the checkpoint fails; this does not publish changes to the agent.
+Refreshing the same target retains its native endpoint, API version, tenant
+metadata and release-commit policy. Environment metadata is not carried to a
+different environment, and agent policy defaults are not carried to another agent.
 Refresh removes previously mapped agent-component files that disappeared from
 the complete server inventory, including obsolete paths after a rename.
 Local edits to those files remain recoverable from the checkpoint.

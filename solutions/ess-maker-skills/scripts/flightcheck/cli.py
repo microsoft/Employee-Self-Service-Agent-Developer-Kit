@@ -39,6 +39,8 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
+from requests import RequestException
+
 # Ensure scripts/ is on the path so we can import auth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -3297,9 +3299,15 @@ def main():
         # An override or WhoAmI fallback cannot authorize combined native/DV evidence.
         verified_env_id = None
         if hybrid_native_scope and pp_admin is not None:
-            verified_env_id = derive_environment_id(
-                env_url, dv_token, pp_admin=pp_admin,
-            )
+            try:
+                verified_env_id = derive_environment_id(
+                    env_url, dv_token, pp_admin=pp_admin,
+                )
+            except (RequestException, ValueError, RuntimeError) as exc:
+                print(
+                    "  Dataverse/environment mapping: WARNING - "
+                    f"{_safe_client_error_reason(exc)}"
+                )
         if args.environment_id:
             env_id = args.environment_id
             print(f"Environment ID: {env_id} (provided via --environment-id)")
