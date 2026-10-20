@@ -74,11 +74,15 @@ test('every action has required fields', () => {
     }
 });
 
-test('landing-page action sends the skill-triggering query', () => {
+test('landing-page action sends the slash command', () => {
     const landingPage = ACTIONS.find(a => a.id === 'landingPage');
     assert.strictEqual(landingPage.label, 'Customize landing page');
-    assert.strictEqual(landingPage.query, 'Customize my landing page');
+    assert.strictEqual(landingPage.query, '/landing-page');
     assert.deepStrictEqual(landingPage.requires, ['setup']);
+});
+
+test('landing-page action is last, immediately after push', () => {
+    assert.deepStrictEqual(ACTIONS.slice(-2).map(action => action.id), ['push', 'landingPage']);
 });
 
 test('setup has no requirements', () => {
@@ -248,9 +252,9 @@ test('extensionIsStale true only when repo version is newer', () => {
     assert.strictEqual(extensionIsStale('0.4.25', '0.4.24'), false);
 });
 
-test('landing-page package prompts existing 0.4.24 installs to reinstall', () => {
+test('landing-page package prompts existing 0.4.25 installs to reinstall', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-    assert.strictEqual(extensionIsStale('0.4.24', packageJson.version), true);
+    assert.strictEqual(extensionIsStale('0.4.25', packageJson.version), true);
     assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
 });
 
