@@ -3,7 +3,8 @@
 
 """ESS Org Announcements MCP server.
 
-Announcements are scoped to the authenticated tenant and deployed ESS titleId.
+Announcements are scoped to the authenticated tenant and the selected regular
+or LOB registration's deployed ESS titleId.
 The tenant comes exclusively from the AgentConfiguration access token; each
 request carries its agent identity through every read, write, and refresh.
 
@@ -53,8 +54,9 @@ from client import (
     is_deleted_item,
 )
 from base_client import LocalCredentialError
-from agent_title import (
+from agent_title_resolution import (
     AgentTitleResolutionError,
+    TitleResolutionCoordinator,
     load_configured_target,
     resolve_configured_agent_title,
 )
@@ -291,9 +293,10 @@ mcp = FastMCP(
     "ess-org-announcements",
     instructions=(
         "Author ESS announcements for one deployed agent in the authenticated "
-        "tenant. A required titleId selects the agent, not an author permission "
+        "tenant. A required titleId selects the agent's regular or LOB registration, "
+        "not an author permission "
         "or an audience group. The current100/latest50 limits apply per tenant "
-        "and agent. Open the management view or the editor "
+        "and agent registration. Open the management view or the editor "
         "through open_org_announcements; the widget owns every save, lifecycle "
         "action, and audience search after it opens."
     ),
@@ -301,7 +304,7 @@ mcp = FastMCP(
 
 _client: Optional[OrgAnnouncementsClient] = None
 _client_construction_task: Optional[asyncio.Task[None]] = None
-_title_resolution_task: Optional[asyncio.Task[dict[str, str]]] = None
+_title_resolution = TitleResolutionCoordinator()
 _client_users: dict[OrgAnnouncementsClient, int] = {}
 _retired_clients: set[OrgAnnouncementsClient] = set()
 _graph_client: Optional[GraphDirectoryClient] = None
@@ -316,13 +319,6 @@ def _observe_task_failure(task: asyncio.Task[Any]) -> None:
     """Retrieve an unobserved shared-task failure after all waiters cancel."""
     if not task.cancelled():
         task.exception()
-
-
-def _release_title_resolution(task: asyncio.Task[dict[str, str]]) -> None:
-    global _title_resolution_task
-    if _title_resolution_task is task:
-        _title_resolution_task = None
-    _observe_task_failure(task)
 
 
 async def _construct_and_publish_client() -> None:
@@ -955,7 +951,7 @@ def org_announcements_widget() -> str:
     return _widget_shell()
 
 
-async def _run_title_resolution(bot_id: str) -> dict[str, str]:
+async def _run_title_resolution(bot_id: str) -> dict[str, str | None]:
     started = time.monotonic()
     client = None
     try:
@@ -985,33 +981,27 @@ async def _run_title_resolution(bot_id: str) -> dict[str, str]:
     meta=_shared_tool_meta(),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def resolve_agent_title_id(botId: str) -> dict[str, str]:
-    """Resolve a configured bot's Microsoft 365 titleId from Dataverse metadata.
+async def resolve_agent_title_id(botId: str) -> dict[str, str | None]:
+    """Resolve a configured bot's regular and LOB Microsoft 365 title IDs.
 
     Pass the selected local agent's botId, not a name or a titleId. The server
     binds its Dataverse endpoint from .local/config.json and uses the current
-    authoring tenant/account. Returns botId and titleId; missing registration and
-    API/auth failures are errors. Only one lookup runs at a time, including after
+    authoring tenant/account. Returns botId, titleId, and lobTitleId; each missing
+    registration is null. At least one title must be available. Missing both
+    registrations, malformed metadata, and API/auth failures are errors.
+    Only one lookup runs at a time, including after
     a caller cancels; retries must wait for that lookup to finish.
     This read-only tool does not persist configuration or initialize a landing page.
     """
-    global _title_resolution_task
-    if _title_resolution_task is not None and not _title_resolution_task.done():
+    try:
+        return await _title_resolution.run(lambda: _run_title_resolution(botId))
+    except AgentTitleResolutionError as error:
         raise await _discovery_tool_error(
             "resolve_agent_title_id",
-            AgentTitleResolutionError(
-                "Agent title resolution is already in progress. Complete the "
-                "pending sign-in or wait for the current lookup to finish "
-                "before retrying.",
-                code="ServiceError",
-            ),
+            error,
             time.monotonic(),
             None,
         ) from None
-    task = asyncio.create_task(_run_title_resolution(botId))
-    _title_resolution_task = task
-    task.add_done_callback(_release_title_resolution)
-    return await asyncio.shield(task)
 
 
 @mcp.tool(

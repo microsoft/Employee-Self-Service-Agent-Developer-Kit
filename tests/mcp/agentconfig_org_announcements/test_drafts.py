@@ -391,7 +391,7 @@ def test_save_requests_accept_an_absent_id_as_a_create() -> None:
     assert "id" not in request.model_dump(mode="json", exclude_none=True)
 
 
-@pytest.mark.parametrize("field", ["titleId", "tenantId"])
+@pytest.mark.parametrize("field", ["titleId", "lobTitleId", "tenantId"])
 @pytest.mark.parametrize("nested", [False, True])
 def test_http_save_body_and_authored_content_reject_scope(field, nested) -> None:
     body = {

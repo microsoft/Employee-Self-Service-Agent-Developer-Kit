@@ -27,16 +27,17 @@ from _mcp_modules import load_org_announcements_modules  # noqa: E402
 
 
 MODULES = load_org_announcements_modules()
-agent_title = MODULES["agent_title"]
 server = MODULES["server"]
 
 import base_client  # noqa: E402
+import agent_title_resolution as agent_title  # noqa: E402
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 OBJECT_ID = "00000000-0000-0000-0000-000000003333"
 BOT_ID = "aaaaaaaa-0000-4000-8000-000000004444"
 OTHER_BOT_ID = "bbbbbbbb-0000-4000-8000-000000005555"
 TITLE_ID = "T_00000000-0000-0000-0000-000000006666"
+LOB_TITLE_ID = "T_00000000-0000-0000-0000-000000007777"
 DATAVERSE_URL = "https://orgmocktenant.crm.dynamics.com"
 OTHER_DATAVERSE_URL = "https://orgother.crm.dynamics.com"
 SCOPE = f"{DATAVERSE_URL}/user_impersonation"
@@ -204,7 +205,9 @@ def test_mcp_reads_exact_non_active_bot_without_name_search_or_writes(
     path = write()
     original = path.read_bytes()
 
-    assert _call(BOT_ID.upper()) == {"botId": BOT_ID, "titleId": TITLE_ID}
+    assert _call(BOT_ID.upper()) == {
+        "botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None,
+    }
 
     assert TITLE_ID != f"T_{BOT_ID}"
     assert value["agent"]["titleId"] == "other-title"
@@ -213,6 +216,33 @@ def test_mcp_reads_exact_non_active_bot_without_name_search_or_writes(
     assert api.calls[0]["method"] == "GET"
     assert msal_auth[1] == [("silent", [SCOPE], msal_auth[2])]
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("metadata", "regular", "lob"),
+    [
+        ({"titleId": TITLE_ID, "lobTitleId": LOB_TITLE_ID}, TITLE_ID, LOB_TITLE_ID),
+        ({"lobTitleId": LOB_TITLE_ID}, None, LOB_TITLE_ID),
+        ({"titleId": None, "lobTitleId": LOB_TITLE_ID}, None, LOB_TITLE_ID),
+        ({"titleId": "", "lobTitleId": LOB_TITLE_ID}, None, LOB_TITLE_ID),
+        ({"titleId": " ", "lobTitleId": LOB_TITLE_ID}, None, LOB_TITLE_ID),
+        ({"titleId": TITLE_ID}, TITLE_ID, None),
+        ({"titleId": TITLE_ID, "lobTitleId": None}, TITLE_ID, None),
+        ({"titleId": TITLE_ID, "lobTitleId": ""}, TITLE_ID, None),
+        ({"titleId": TITLE_ID, "lobTitleId": " "}, TITLE_ID, None),
+        ({"titleId": TITLE_ID, "lobTitleId": TITLE_ID}, TITLE_ID, TITLE_ID),
+    ],
+)
+def test_discovery_returns_both_registration_fields_without_conflating_them(
+    config, authoring_identity, msal_auth, api, metadata, regular, lob
+):
+    api.payload["applicationmanifestinformation"] = json.dumps({"microsoft365": metadata})
+    before = agent_title.CONFIG_PATH.read_bytes()
+
+    assert _call() == {"botId": BOT_ID, "titleId": regular, "lobTitleId": lob}
+
+    assert len(api.calls) == 1
+    assert agent_title.CONFIG_PATH.read_bytes() == before
 
 
 @pytest.mark.parametrize("endpoint", [
@@ -229,7 +259,7 @@ def test_url_only_setup_uses_the_configured_endpoint_without_environment_invento
     write()
     api.endpoint = endpoint.rstrip("/")
 
-    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID}
+    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None}
     assert len(api.calls) == 1
     assert msal_auth[1][0][1] == [f"{api.endpoint}/user_impersonation"]
 
@@ -341,7 +371,7 @@ def test_non_active_agent_resolves_its_original_environment_after_consecutive_se
     assert config["agent"]["botId"] == OTHER_BOT_ID
     assert config["dataverseEndpoint"] == OTHER_DATAVERSE_URL
 
-    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID}
+    assert _call() == {"botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None}
     assert len(api.calls) == 1
     assert api.calls[0]["url"].startswith(DATAVERSE_URL)
     assert msal_auth[1][0][1] == [SCOPE]
@@ -410,8 +440,13 @@ def test_bad_or_ambiguous_config_is_an_explicit_error(config, variant):
     None, "", " ", "{}", '{"microsoft365":null}', '{"microsoft365":{}}',
     '{"microsoft365":{"titleId":null}}', '{"microsoft365":{"titleId":""}}',
     '{"microsoft365":{"titleId":" "}}',
+    '{"microsoft365":{"lobTitleId":null}}', '{"microsoft365":{"lobTitleId":""}}',
+    '{"microsoft365":{"lobTitleId":" "}}',
+    '{"microsoft365":{"titleId":null,"lobTitleId":null}}',
     '{"teams":{"titleId":"not-microsoft365"},"microsoft365":{"appId":"not-a-title",'
-    '"shareLink":"https://m365.cloud.microsoft/chat/?titleId=not-the-title"}}',
+    '"shareLink":"https://m365.cloud.microsoft/chat/?titleId=not-the-title",'
+    '"lobAppId":"not-a-lob-title",'
+    '"lobShareLink":"https://m365.cloud.microsoft/chat/?titleId=not-the-lob-title"}}',
 ])
 def test_missing_title_is_an_explicit_registration_error_without_synthesis(
     config, authoring_identity, msal_auth, api, raw_manifest
@@ -440,17 +475,25 @@ def test_malformed_manifest_is_a_service_error_not_missing_registration(
 
 
 @pytest.mark.parametrize("title_id", [
-    False, 123, [], {}, "private\ntitle", " title ", "x" * 257,
+    False, 123, [], {}, f"{PRIVATE}\ntitle", " title ", "x" * 257,
 ])
+@pytest.mark.parametrize("field", ["titleId", "lobTitleId"])
 def test_invalid_title_is_a_service_error(
-    config, authoring_identity, msal_auth, api, title_id
+    config, authoring_identity, msal_auth, api, title_id, field, caplog
 ):
+    metadata = {"titleId": TITLE_ID, "lobTitleId": LOB_TITLE_ID}
+    metadata[field] = title_id
     api.payload["applicationmanifestinformation"] = json.dumps({
-        "microsoft365": {"titleId": title_id},
+        "microsoft365": metadata,
     })
 
-    with pytest.raises(ToolError, match="ServiceError:.*invalid Microsoft 365 titleId"):
+    with pytest.raises(
+        ToolError, match=f"ServiceError:.*invalid Microsoft 365 {field}"
+    ) as caught:
         _call()
+
+    assert PRIVATE not in str(caught.value)
+    assert PRIVATE not in caplog.text
 
 
 @pytest.mark.parametrize("returned_id", [OTHER_BOT_ID, None, "not-a-guid"])
@@ -588,7 +631,7 @@ def test_interactive_timeout_is_a_sanitized_authentication_failure(
     assert PRIVATE not in caplog.text
     assert capsys.readouterr().out == ""
     assert api.calls == []
-    assert server._title_resolution_task is None
+    assert server._title_resolution._task is None
 
 
 def test_cancelled_sign_in_cannot_accumulate_workers_or_independent_retries(
@@ -623,8 +666,8 @@ def test_cancelled_sign_in_cannot_accumulate_workers_or_independent_retries(
             first.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await first
-            assert server._title_resolution_task is not None
-            assert not server._title_resolution_task.done()
+            assert server._title_resolution._task is not None
+            assert not server._title_resolution._task.done()
 
             for bot_id in (BOT_ID, BOT_ID.upper(), OTHER_BOT_ID):
                 with pytest.raises(ToolError, match="already in progress"):
@@ -638,13 +681,15 @@ def test_cancelled_sign_in_cannot_accumulate_workers_or_independent_retries(
             expire_sign_in.set()
             assert await asyncio.wait_for(probe, timeout=2) == "worker available"
             await asyncio.sleep(0)
-            assert server._title_resolution_task is None
+            assert server._title_resolution._task is None
             assert unhandled == []
 
             result = await asyncio.wait_for(
                 server.resolve_agent_title_id(BOT_ID), timeout=2
             )
-            assert result == {"botId": BOT_ID, "titleId": TITLE_ID}
+            assert result == {
+                "botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None,
+            }
             assert interactive_calls == [300, 300]
             assert len(api.calls) == 1
         finally:
@@ -667,7 +712,7 @@ def test_cancelled_lookup_cannot_start_another_lookup_before_its_worker_finishes
             calls.append(target.bot_id)
             loop.call_soon_threadsafe(started.set)
             assert finish.wait(5), "Test did not release the fake lookup"
-            return {"botId": target.bot_id, "titleId": TITLE_ID}
+            return {"botId": target.bot_id, "titleId": TITLE_ID, "lobTitleId": None}
 
         monkeypatch.setattr(server, "resolve_configured_agent_title", resolve)
         first = asyncio.create_task(server.resolve_agent_title_id(BOT_ID))
@@ -676,7 +721,7 @@ def test_cancelled_lookup_cannot_start_another_lookup_before_its_worker_finishes
             first.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await first
-            pending = server._title_resolution_task
+            pending = server._title_resolution._task
             assert pending is not None
             assert not pending.cancelled()
             with pytest.raises(ToolError, match="already in progress"):
@@ -684,10 +729,10 @@ def test_cancelled_lookup_cannot_start_another_lookup_before_its_worker_finishes
             assert calls == [BOT_ID]
             finish.set()
             assert await asyncio.wait_for(asyncio.shield(pending), timeout=2) == {
-                "botId": BOT_ID, "titleId": TITLE_ID,
+                "botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None,
             }
             await asyncio.sleep(0)
-            assert server._title_resolution_task is None
+            assert server._title_resolution._task is None
         finally:
             finish.set()
 
@@ -734,7 +779,7 @@ def test_blocking_dataverse_lookup_runs_off_the_mcp_event_loop(
     def resolve(target, tenant_id, object_id):
         assert threading.get_ident() != caller_thread
         assert (target.bot_id, tenant_id, object_id) == (BOT_ID, TENANT_ID, OBJECT_ID)
-        return {"botId": BOT_ID, "titleId": TITLE_ID}
+        return {"botId": BOT_ID, "titleId": TITLE_ID, "lobTitleId": None}
 
     monkeypatch.setattr(server, "resolve_configured_agent_title", resolve)
 

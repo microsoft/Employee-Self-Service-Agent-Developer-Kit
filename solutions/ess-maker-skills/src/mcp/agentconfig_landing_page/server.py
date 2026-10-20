@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import html
@@ -17,9 +18,18 @@ from urllib.parse import urlsplit
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
+from portalocker.exceptions import LockException
+from requests import RequestException
 
 from client import AgentConfigApiError, AgentConfigClient
+from agent_title_resolution import (
+    AgentTitleResolutionError,
+    TitleResolutionCoordinator,
+    load_configured_target,
+    resolve_configured_agent_title,
+)
 from drafts import (
     AccentColorDraft,
     DraftModel,
@@ -159,6 +169,7 @@ mcp = FastMCP(
 )
 
 _client: Optional[AgentConfigClient] = None
+_title_resolution = TitleResolutionCoordinator()
 
 
 def get_client() -> AgentConfigClient:
@@ -170,6 +181,27 @@ def get_client() -> AgentConfigClient:
             local_dir=SOLUTION_LOCAL_DIR,
         )
     return _client
+
+
+async def _run_title_resolution(bot_id: str) -> dict[str, str | None]:
+    try:
+        target = await asyncio.to_thread(load_configured_target, bot_id)
+        try:
+            client = await asyncio.to_thread(get_client)
+        except (
+            AgentConfigApiError, httpx.RequestError, ValueError,
+            OSError, LockException, RequestException,
+        ) as error:
+            raise AgentTitleResolutionError(
+                "Landing-page sign-in could not be completed. Sign in with the "
+                "current authoring tenant/account and retry.",
+                code="AuthenticationRequired",
+            ) from error
+        return await asyncio.to_thread(
+            resolve_configured_agent_title, target, client.tenant_id, client.object_id
+        )
+    except AgentTitleResolutionError as error:
+        raise ToolError(f"{error.code}: {error}") from None
 
 
 def _format(data: Any) -> str:
@@ -295,6 +327,20 @@ async def list_agent_configs() -> str:
 async def search_agents(searchString: str) -> str:
     """Search tenant-visible agents by a distinctive name substring."""
     return _format(await get_client().search_agents(searchString))
+
+
+@mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
+async def resolve_agent_title_id(botId: str) -> dict[str, str | None]:
+    """Read a configured bot's regular and LOB title IDs through the shared core.
+
+    Returns botId, titleId, and lobTitleId. Unavailable registrations are null;
+    at least one title must be available. This tool never persists local state,
+    checks landing-page configuration existence, or creates configuration.
+    """
+    try:
+        return await _title_resolution.run(lambda: _run_title_resolution(botId))
+    except AgentTitleResolutionError as error:
+        raise ToolError(f"{error.code}: {error}") from None
 
 
 @mcp.tool()
