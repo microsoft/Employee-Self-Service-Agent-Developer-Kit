@@ -19,6 +19,10 @@ from .checks.environment import (
 )
 from .checks.da_baseline import run_da_baseline_checks
 from .checks.local_files import run_da_local_file_checks
+from .checks.da_integrations import (
+    configured_da_features, run_da_integration_checks, run_da_workday_binding_checks,
+    run_da_workday_checks, run_da_workday_extension_checks,
+)
 from .checks.native_agent import run_native_agent_checks
 from .checks.publishing import run_publishing_checks
 from .checks.solution import run_solution_checks
@@ -45,6 +49,8 @@ _APPROVED_PRODUCERS = frozenset({
     run_native_agent_checks, run_connection_checks,
     run_solution_checks, run_publishing_checks,
     run_da_baseline_checks, run_da_local_file_checks, run_da_capacity_check,
+    run_da_integration_checks, run_da_workday_binding_checks,
+    run_da_workday_checks, run_da_workday_extension_checks,
     registry.DA_CHECKPOINT_OVERRIDES["ENV-004-GRS"].category_fn,
 })
 
@@ -206,7 +212,12 @@ def build_da_execution_plan(
     for key in ("realm", "ring", "powerPlatformApiEndpoint", "agentBuilderApiVersion"):
         if subject.get(key) is not None:
             scoped_config[key] = subject[key]
-    feature_evidence = dict(features or {})
+    feature_evidence = configured_da_features(scoped_config)
+    for feature, evidence in (features or {}).items():
+        configured = feature_evidence.get(feature)
+        if configured is not None and evidence.enabled is False:
+            raise ValueError(f"Feature {feature.value} contradicts the selected Workday Connect target.")
+        feature_evidence[feature] = evidence
     pin = _env004_pin_value(scoped_config, _ENV004_GRS_EXPECTED_COMMIT_KEYS)
     pin_enabled = pin is not None and pin != ""
     supplied_pin = feature_evidence.get(DAFeature.REVISION_PIN)

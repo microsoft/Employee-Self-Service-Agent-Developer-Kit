@@ -35,7 +35,7 @@ import os
 import sys
 import uuid
 import webbrowser
-from functools import partial
+from functools import partial, wraps
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -1061,6 +1061,21 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
                 f"schemaVersion; expected an integer from 2 to {STATE_SCHEMA_VERSION}"
             )
         scope = overlay.get("scope", {})
+        selected = active_agent(merged)
+        realm = selected.get("realm", merged.get("realm"))
+        targets = overlay.get("targets")
+        target = targets.get(realm) if isinstance(targets, dict) else None
+        if isinstance(target, dict) and isinstance(target.get("scope"), dict):
+            target_scope = target["scope"]
+            if (
+                isinstance(target_scope.get("agent"), dict)
+                and target_scope["agent"].get("botId") == selected.get("botId")
+                and target_scope.get("environmentId") == merged.get("environmentId")
+            ):
+                scope = target_scope
+                overlay = dict(
+                    overlay, activeTargetRealm=realm, phases=target.get("phases", {}),
+                )
         identifiers = overlay.get("identifiers", {})
         endpoints = overlay.get("endpoints", {})
         for section_name, section in (
@@ -1081,6 +1096,12 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
             "tenantId": scope.get("entraTenantId"),
             "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
         }
+        merged["_connectConfigScope"] = scope
+        merged["_connectConfigRealm"] = overlay.get("activeTargetRealm")
+        merged["_connectConfigPhases"] = overlay.get("phases", {})
+        merged["_connectConfigFoundationTenant"] = merged.get(
+            "_connectConfigFoundationTenant", merged.get("tenantId"),
+        )
 
     for canonical, alias in (
         ("tenant", "workdayTenant"),
@@ -2153,6 +2174,7 @@ def _profile_checkpoint_contract_check(
 
 def _run_da_full(args, config):
     from flightcheck.da_execution import build_da_execution_plan
+    from flightcheck.checks.da_integrations import workday_target_matches
 
     try:
         _profile_target_matches_config(args, config)
@@ -2163,6 +2185,19 @@ def _run_da_full(args, config):
             target_config, getattr(args, "agent_slug", None),
             environment_url=args.environment_url or "",
         )
+        if getattr(args, "connect_config", None):
+            execution = build_da_execution_plan(
+                _merge_connect_config(execution.config, args.connect_config),
+                environment_url=args.environment_url or "",
+            )
+            if execution.config.get("_connectConfigScope") is not None and not workday_target_matches(execution.config):
+                raise ValueError("The Workday Connect state does not match the selected agent, environment and realm.")
+        else:
+            state_path = Path(".local") / "connect" / "workday-da" / "config.json"
+            if state_path.is_file():
+                candidate = _merge_connect_config(execution.config, str(state_path))
+                if workday_target_matches(candidate):
+                    execution = build_da_execution_plan(candidate, environment_url=args.environment_url or "")
         _resolve_environment_ring(
             execution.config, explicit_ring=getattr(args, "ring", None),
         )
@@ -2170,10 +2205,43 @@ def _run_da_full(args, config):
             execution.config,
             explicit_origin=getattr(args, "power_platform_admin_origin", None),
         )
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         print(f"ERROR: Unable to plan the selected DA assessment: {exc}")
         sys.exit(1)
     _run_profile(args, da_execution=execution)
+
+
+def _prepare_da_integration_execution(runner, args, execution):
+    """Read the selected DA once before composing additional integration clients."""
+    from flightcheck import registry
+    from flightcheck.checks._connection_dependencies import _Access, READ_ERRORS
+    from flightcheck.checks.da_integrations import discover_da_features
+    from flightcheck.da_execution import build_da_execution_plan
+
+    native_rows = run_native_agent_checks(runner)
+    passed = {row.checkpoint_id for row in native_rows if row.status == Status.PASSED.value}
+    if not {"DA-AGENT-001", "DA-CONTENT-001"} <= passed:
+        return execution, native_rows
+    features = discover_da_features(runner)
+    execution = build_da_execution_plan(
+        runner.config, runner.agent_slug, features=features, environment_url=runner.env_url,
+    )
+    if registry.DATAVERSE in execution.requirements.clients and not runner.dv_token:
+        try:
+            binding = getattr(runner, "_da_dependency_dataverse", None)
+            if binding is None:
+                access = _Access(runner)
+                env_url, token = access.dataverse()
+                binding = env_url, token, access.pp
+            runner.env_url, runner.dv_token, runner.pp_admin = binding
+        except READ_ERRORS as exc:
+            runner._da_dataverse_error = _safe_client_error_reason(exc)
+    if runner.env_url and runner.dv_token:
+        config = dict(execution.config, dataverseEndpoint=runner.env_url)
+        execution = build_da_execution_plan(
+            config, runner.agent_slug, features=features, environment_url=runner.env_url,
+        )
+    return execution, native_rows
 
 
 def _run_profile(args, *, da_execution=None):
@@ -2230,7 +2298,7 @@ def _run_profile(args, *, da_execution=None):
         sys.exit(1)
 
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if plan.requires_dataverse_endpoint and not env_url:
+    if plan.requires_dataverse_endpoint and not env_url and da_execution is None:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
     try:
@@ -2364,7 +2432,10 @@ def _run_profile(args, *, da_execution=None):
         else:
             native_tenant_bootstrap = (
                 da_execution is not None
-                and needed <= {registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM}
+                and needed <= {
+                    registry.AGENTBUILDER, registry.CONNECTIVITY, registry.POWERPLATFORM,
+                    registry.DATAVERSE, registry.PP_ADMIN,
+                }
             )
             if not configured_tenant_id and not native_tenant_bootstrap:
                 print(
@@ -2741,10 +2812,41 @@ def _run_profile(args, *, da_execution=None):
         )
         if agentbuilder is not None:
             _configure_connection_validation(runner, args, account=canonical_username)
+    native_rows = None
+    if da_execution:
+        da_execution, native_rows = _prepare_da_integration_execution(runner, args, da_execution)
+        profile = da_execution.profile
+        profile_selector = profile
+        plan = da_execution.requirements
+        needed = plan.clients
+        config = da_execution.config
+        runner.config = config
+        runner.execution_targets = profile.checkpoint_ids
+        env_url, dv_token, pp_admin = runner.env_url, runner.dv_token, runner.pp_admin
+        validation_context = _validation_context_from_args(
+            args, dict(config, tenantId=tenant_id), env_url, env_id,
+        )
+        runner.validation_context = validation_context.to_dict()
+        for name in needed:
+            if name not in client_availability:
+                client_availability[name] = {
+                    "required": True, "available": False,
+                    "reason": getattr(runner, "_da_dataverse_error", "Required integration client is unavailable."),
+                }
+        if dv_token and registry.DATAVERSE in needed:
+            mark_available(registry.DATAVERSE, canonical_username)
+        if pp_admin and registry.PP_ADMIN in needed:
+            mark_available(registry.PP_ADMIN, canonical_username)
     runner.results.extend(_profile_client_blockers(client_availability))
 
     for label, fn in plan.ordered_fns:
-        runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
+        if native_rows is not None and fn is run_native_agent_checks:
+            @wraps(fn)
+            def prepared_native(_runner):
+                return native_rows
+            runner.register(label, prepared_native)
+        else:
+            runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
     if da_execution:
         runner.register("DA FlightCheck Coverage", da_execution.coverage_check)
     family_contract = registry.profile_family_contract(profile_selector)

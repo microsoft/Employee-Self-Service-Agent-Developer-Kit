@@ -22,6 +22,8 @@ import yaml
 from agentbuilder import AgentBuilderClient, ConnectivityClient
 from flightcheck.checks import _connection_dependencies as dependencies
 from flightcheck.checks.environment import _check_connections_and_refs
+from flightcheck.checks.da_integrations import discover_da_features, run_da_integration_checks
+from flightcheck.da_contract import DAFeature
 from flightcheck.pp_admin_client import PPAdminClient
 
 
@@ -100,6 +102,93 @@ def test_active_workday_dependencies_pass_without_setup_config(dependency_case):
         "connectionreferencelogicalname eq 'msdyn_sharedworkdaysoap_workdayruntime'"
     )
     dependency_case.native.get_agent.assert_called_once_with(dependency_case.agent_id)
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_da_service_now_check_replays_exact_native_binding(monkeypatch, bound):
+    interactions = _captured()
+    runner = _http_runner(monkeypatch, interactions)
+    runner.should_execute = lambda key: key == "SN-CONN-001"
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        for item in interactions:
+            body = _body(item)
+            if "/components" in item["request"]["uri"]:
+                topic = next(
+                    change for change in body["botComponentChanges"]
+                    if "InvokeConnectorAction" in json.dumps(change)
+                )
+                topic["component"]["status"] = "Active"
+                body["botComponentChanges"] = [topic]
+                ref = body["connectionReferenceChanges"][0]["connectionReference"]
+                ref["connectionId"] = "physical-sn" if bound else None
+                connector = ref["connectorId"]
+            if "/connectivity/" in item["request"]["uri"] and bound:
+                body["value"].append({"name": "physical-sn", "properties": {"apiId": connector}})
+            replay.add(
+                item["request"]["method"], item["request"]["uri"].split("?")[0],
+                json=body, status=item["response"]["status"]["code"],
+            )
+        features = discover_da_features(runner)
+        row = run_da_integration_checks(runner)[0]
+    assert features[DAFeature.SERVICENOW].enabled is True
+    assert row.status == ("Passed" if bound else "Failed")
+    assert "1 exact required reference(s)" in row.result
+    assert f"{0 if bound else 1} unbound" in row.result
+    assert row.remediation == "" if bound else "Connected candidates" in row.remediation
+    assert row.evidence["references"][0]["agentId"] == runner.connection_agent_ids[0]
+
+
+def test_da_discovery_replays_mapping_and_reuses_verified_binding(monkeypatch):
+    from flightcheck import cli, registry
+    from flightcheck.da_execution import build_da_execution_plan
+    from flightcheck.runner import CheckResult
+
+    interactions = _captured()
+    runner = _http_runner(monkeypatch, interactions)
+    agent = {
+        "slug": "hr", "botId": runner.connection_agent_ids[0],
+        "schemaName": "gptagent_hr", "releaseLine": "da",
+    }
+    runner.config = {
+        "activeAgent": "hr", "agents": [agent], "agent": agent,
+        "environmentId": runner.env_id, "tenantId": runner.tenant_id, "realm": "dev",
+    }
+    runner.agent_slug = "hr"
+    runner.da_full_assessment = True
+    runner.should_execute = lambda _key: True
+    runner.env_url = ""
+    runner.dv_token = None
+    token_provider = Mock(return_value="REDACTED_TOKEN")
+    runner.connection_dependency_token = token_provider
+    # Native access has its own captured replay coverage. Isolate this
+    # orchestration boundary while replaying every dependency/provisioning read.
+    monkeypatch.setattr(cli, "run_native_agent_checks", lambda _runner: [
+        CheckResult(key, "Native", "High", "Passed", "Preflight", "Already verified.")
+        for key in ("DA-AGENT-001", "DA-CONTENT-001")
+    ])
+    initial = build_da_execution_plan(runner.config)
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as replay:
+        for item in interactions:
+            replay.add(
+                item["request"]["method"], item["request"]["uri"].split("?")[0],
+                json=_body(item), status=item["response"]["status"]["code"],
+            )
+        execution, _ = cli._prepare_da_integration_execution(runner, None, initial)
+        calls_before = len(replay.calls)
+        summary = next(row for row in _check_connections_and_refs(runner)
+                       if row.checkpoint_id == "ENV-004")
+        assert len(replay.calls) == calls_before
+        assert sum("api.bap." in call.request.url for call in replay.calls) == 1
+    assert registry.DATAVERSE not in initial.requirements.clients
+    assert registry.DATAVERSE in execution.requirements.clients
+    assert registry.GRAPH not in execution.requirements.clients
+    assert "WD-DA-PKG-001" in execution.profile.checkpoint_ids
+    assert "WD-DA-MAKER-001" in execution.profile.checkpoint_ids
+    assert runner.env_url == "https://orgmocktenant.crm.dynamics.com"
+    assert execution.config["dataverseEndpoint"] == runner.env_url
+    assert runner.dv_token == "REDACTED_TOKEN"
+    assert summary.status == "Passed"
+    assert "2 bound" in summary.result and summary.remediation == ""
 
 
 def test_connection_audit_excludes_stale_same_slug_compatibility_agent(dependency_case):

@@ -41,7 +41,7 @@ config and can run via the plan/``--checkpoint`` path. See
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 from flightcheck.runner import Priority, Role
@@ -55,6 +55,10 @@ from flightcheck.checks.environment import (
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck.checks.da_baseline import DA_MANUAL_REQUIREMENTS, run_da_baseline_checks
+from flightcheck.checks.da_integrations import (
+    run_da_integration_checks, run_da_workday_binding_checks,
+    run_da_workday_checks, run_da_workday_extension_checks,
+)
 from flightcheck.checks.local_files import run_da_local_file_checks
 from flightcheck.checks.environment import run_da_capacity_check, _env004_grs_commit_pin_result
 from flightcheck.checks.publishing import run_publishing_checks
@@ -107,6 +111,7 @@ CATEGORY_ORDER = [
     "Environment",
     "Native Agent",
     "DA Baseline",
+    "DA Integrations",
     "Solution",
     "Authentication",
     "Entra App",
@@ -782,10 +787,36 @@ for _key in ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006", "PUB-011"):
         key=_key, category_fn=run_publishing_checks, category_label="Publishing",
         roles=(Role.ESS_MAKER.value,),
     )
+for _key in ("DA-INTEGRATIONS-001", "DA-CONN-001", "SN-CONN-001"):
+    DA_CHECKPOINT_OVERRIDES[_key] = CheckpointSpec(
+        key=_key, category_fn=run_da_integration_checks, category_label="DA Integrations",
+        roles=(Role.POWER_PLATFORM_ADMIN.value, Role.ESS_MAKER.value),
+    )
+for _key in ("WD-DA-PKG-001", "WD-DA-FLOW-001", "WD-DA-AUTH-001",
+             "WD-DA-TOPIC-001", "WD-DA-WIRING-001", "WD-DA-ATTACH-001"):
+    DA_CHECKPOINT_OVERRIDES[_key] = replace(
+        next(spec for spec in _SPECS if spec.key == _key),
+        category_fn=run_da_workday_checks,
+    )
+DA_CHECKPOINT_OVERRIDES["WD-CONN-012"] = CheckpointSpec(
+    key="WD-CONN-012", category_fn=run_da_workday_binding_checks,
+    category_label="Workday DA", clients=frozenset({DATAVERSE}),
+    requires_dataverse_endpoint=True, prereqs=("WD-DA-PKG-001",),
+    roles=(Role.POWER_PLATFORM_ADMIN.value,),
+)
+for _key in ("DV-CONN-001", "WD-REST-002"):
+    DA_CHECKPOINT_OVERRIDES[_key] = replace(
+        next(spec for spec in _SPECS if spec.key == _key),
+        category_fn=run_da_workday_extension_checks,
+    )
 
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
 REGISTRY.update({
-    key: spec for key, spec in DA_CHECKPOINT_OVERRIDES.items() if key not in REGISTRY
+    key: spec for key, spec in DA_CHECKPOINT_OVERRIDES.items()
+    if key not in REGISTRY and not any(
+        existing.is_family and key.startswith(existing.key + "-")
+        for existing in _SPECS
+    )
 })
 
 

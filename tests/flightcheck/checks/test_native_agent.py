@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from unittest.mock import Mock
 
 import pytest
 import responses
@@ -71,6 +72,49 @@ def test_full_da_native_access_replays_exact_lookup_without_dev_only_setup_reads
             assert "did not establish a deployment realm" in rows[0].result
             assert "Establish the exact target realm" in rows[0].remediation
         assert len(http.calls) == 1
+
+
+def test_full_da_native_producer_never_runs_legacy_connection_candidates():
+    path = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "agentbuilder_readiness.yaml"
+    interactions = yaml.safe_load(path.read_text(encoding="utf-8"))["interactions"]
+    reads = [
+        item for item in interactions
+        if "/minimalBots/api/" in item["request"]["uri"]
+        and (item["request"]["method"] == "GET" or "/components" in item["request"]["uri"])
+    ]
+    agent = json.loads(next(item for item in reads if item["request"]["method"] == "GET")[
+        "response"
+    ]["body"]["string"])
+    components = json.loads(next(item for item in reads if item["request"]["method"] == "POST")[
+        "response"
+    ]["body"]["string"])
+    host = derive_environment_host(ENVIRONMENT_ID, "prod")
+    connectivity = Mock()
+    runner = SimpleNamespace(
+        agentbuilder=AgentBuilderClient(host, "test-token", ring="prod", tenant_id=TENANT_ID),
+        connectivity=connectivity, env_id=ENVIRONMENT_ID, agent_slug="hr",
+        config={"activeAgent": "hr", "agent": {
+            "slug": "hr", "botId": agent["botId"], "schemaName": components["bot"]["schemaName"],
+            "releaseLine": "da",
+        }},
+        da_full_assessment=True, validation_context={"realm": "dev"},
+        should_execute=lambda _key: True,
+    )
+    with responses.RequestsMock() as http:
+        for item in reads:
+            parsed = urlsplit(item["request"]["uri"])
+            uri = parsed._replace(netloc=urlsplit(host).netloc, query="").geturl()
+            http.add(
+                item["request"]["method"], uri,
+                json=json.loads(item["response"]["body"]["string"]),
+                status=item["response"]["status"]["code"],
+            )
+        rows = run_native_agent_checks(runner)
+        assert len(http.calls) == 2
+    assert {row.checkpoint_id for row in rows} == {"DA-AGENT-001", "DA-CONTENT-001"}
+    assert all(row.status == "Passed" for row in rows)
+    connectivity.list_connections.assert_not_called()
+    assert runner._da_native_snapshot["agentId"] == agent["botId"]
 
 
 def _reference(

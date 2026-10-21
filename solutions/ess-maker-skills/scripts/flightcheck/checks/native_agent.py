@@ -464,8 +464,13 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             "componentCount": len(components),
             "evidenceBoundary": "authored_components_not_employee_execution",
         })
+        runner._da_native_snapshot = {
+            "agentId": str(uuid.UUID(str(agent_id))),
+            "environmentId": environment_id,
+            "changeset": changeset,
+        }
 
-    if not should_execute("DA-CONN-001"):
+    if da_full or not should_execute("DA-CONN-001"):
         return results
 
     try:

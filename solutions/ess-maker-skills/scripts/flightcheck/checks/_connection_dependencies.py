@@ -43,6 +43,8 @@ class ConnectionAudit:
     blocked: str = ""
     additional_connections: int = 0
     flow_count: int = 0
+    discovered_connectors: set[str] = field(default_factory=set)
+    has_direct_references: bool = False
 
 
 def selected_agent_ids(runner) -> tuple[str, ...]:
@@ -184,6 +186,8 @@ class _Access:
             token = self.token_provider(env_url + "/user_impersonation")
         if not env_url or not token:
             raise ValueError("Dataverse connection-reference read access is unavailable.")
+        if getattr(self.runner, "da_full_assessment", False) is True:
+            self.runner._da_dependency_dataverse = (env_url, token, self.pp)
         return env_url, token
 
 
@@ -223,10 +227,20 @@ def audit_connections(runner) -> ConnectionAudit:
             agent = _mapping(runner.agentbuilder.get_agent(agent_id), "Agent lookup")
             if str(agent.get("botId", "")).casefold() != agent_id.casefold():
                 raise ValueError("Agent lookup returned a different subject.")
-            payload = runner.agentbuilder.fetch_components(agent_id)
+            snapshot = getattr(runner, "_da_native_snapshot", None)
+            if (
+                getattr(runner, "da_full_assessment", False) is True
+                and isinstance(snapshot, dict)
+                and snapshot.get("agentId") == agent_id
+                and snapshot.get("environmentId") == runner.env_id
+            ):
+                payload = snapshot["changeset"]
+            else:
+                payload = runner.agentbuilder.fetch_components(agent_id)
             if not isinstance(payload, dict):
                 raise ValueError("Component fetch returned a malformed snapshot.")
             direct, flow_ids, topic_warnings = _dependencies(payload)
+            audit.has_direct_references |= bool(direct)
             audit.warnings.extend(
                 f"Agent {agent_id}: dependency discovery incomplete ({warning})."
                 for warning in topic_warnings
@@ -240,6 +254,7 @@ def audit_connections(runner) -> ConnectionAudit:
             if item is None:
                 audit.failures.append(f"Agent {agent_id}: required native reference {name} is missing.")
                 continue
+            audit.discovered_connectors.add(_connector(item["connectorId"]))
             audit.references.append(Reference(
                 agent_id, item["connectionReferenceLogicalName"],
                 item["connectorId"], item.get("connectionId"),
@@ -271,6 +286,7 @@ def audit_connections(runner) -> ConnectionAudit:
                     connector = _identity(
                         _mapping(item.get("apiDefinition"), "Flow connector").get("id"), "connector ID"
                     )
+                    audit.discovered_connectors.add(_connector(connector))
                     key = (agent_id, name.casefold())
                     if key in required:
                         if _connector(required[key].connector_id) != _connector(connector):

@@ -671,7 +671,12 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     roles = [Role.POWER_PLATFORM_ADMIN.value]
     description = "Connections & connection references"
 
-    audit = audit_connections(runner)
+    audit = (
+        getattr(runner, "_da_connection_audit", None)
+        if getattr(runner, "da_full_assessment", False) is True else None
+    )
+    if audit is None:
+        audit = audit_connections(runner)
     if audit.blocked:
         results.append(CheckResult(roles=roles,
             checkpoint_id="ENV-004", category="Environment",

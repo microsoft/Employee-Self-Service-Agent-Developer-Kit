@@ -37,10 +37,10 @@ def test_unknown_features_remain_visible_without_hiding_baseline():
     assert workday.checkpoint.required is True
     assert "not established" in workday.applicability_reason
     assert workday.evidence_source == ""
-    assert entries["DA-CONN-002+"].applicability == DAApplicability.UNKNOWN
+    assert entries["DA-CONN-002+"].applicability == DAApplicability.EXCLUDED
     assert entries["DA-RUNTIME-001"].applicability == DAApplicability.APPLICABLE
     assert entries["DA-RUNTIME-001"].checkpoint.disposition == DADisposition.MANUAL
-    assert entries["DA-SAP-RUNTIME-001"].applicability == DAApplicability.UNKNOWN
+    assert entries["DA-SAP-RUNTIME-001"].applicability == DAApplicability.EXCLUDED
 
 
 def test_explicitly_disabled_feature_retains_its_exclusion_evidence():
@@ -73,8 +73,8 @@ def test_da_review_and_manual_evidence_are_not_promoted_to_executable_passes():
         DAFeature.NATIVE_CONNECTIONS: DAFeatureEvidence(True, "native references"),
     })
 
-    assert entries["DA-CONN-001"].checkpoint.disposition == DADisposition.REVIEW
-    assert entries["WD-RUN-001"].checkpoint.disposition == DADisposition.REVIEW
+    assert entries["DA-CONN-001"].checkpoint.disposition == DADisposition.EVALUATOR
+    assert entries["WD-RUN-001"].checkpoint.disposition == DADisposition.SUPERSEDED
     assert entries["WD-DA-ATTACH-001"].checkpoint.disposition == DADisposition.MANUAL
     assert entries["WD-DA-ATTACH-001"].checkpoint.required is True
     assert entries["QA-001"].checkpoint.required is True

@@ -760,7 +760,16 @@ def _fetch_selected_components(
         runner._workday_da_component_cache = cache
     components = cache.get(bot_id)
     if components is None:
-        payload = client.fetch_components(bot_id)
+        snapshot = getattr(runner, "_da_native_snapshot", None)
+        if (
+            getattr(runner, "da_full_assessment", False) is True
+            and isinstance(snapshot, dict)
+            and snapshot.get("agentId") == bot_id
+            and snapshot.get("environmentId") == getattr(runner, "env_id", None)
+        ):
+            payload = snapshot["changeset"]
+        else:
+            payload = client.fetch_components(bot_id)
         components = _dialog_components(payload)
         cache[bot_id] = components
     return slug, schema, bot_id, components

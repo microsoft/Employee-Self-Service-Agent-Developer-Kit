@@ -246,16 +246,43 @@ applicable. These include required evidence fields and `accepted: false`; setup
 completion, skip overrides and inventory counts cannot satisfy them. Dataverse
 provisioning is conditional on an actual Dataverse runtime dependency, not a
 universal native authoring prerequisite. Unknown feature applicability remains
-unresolved. The current catalog has 147 definitions: the original 142, four
-earlier additions and an explicit DA handoff requirement replacing the historical
-PVA handoff family.
+unresolved. The current catalog has 149 definitions: the original 142, four
+earlier additions, an explicit DA handoff requirement, selected-agent integration
+discovery and maker Workday Test-pane validation. These are definitions, not
+149 executable or mandatory deployment checks.
+
+DA full first verifies exact-agent access/content, then discovers active direct
+and invoked-flow dependencies and recomposes the selected integration plan.
+Partial reads preserve known dependencies without proving other integrations
+absent. An exact agent/environment/realm match in the existing Workday Connect
+state also establishes installation intent before activation; saved completion
+flags are not fresh validation. The state adapter is read-only, selects the
+matching realm target, and does not migrate lifecycle state. Explicit mismatched
+Workday state is rejected; another agent's automatically discovered state is not
+merged.
+
+Workday coverage follows foundation setup and the DA Workday Connect lifecycle:
+reviewed package/flow configuration, delegated authorization, exact bindings,
+selected topic activation/wiring and User Context redirect. Connection attachment
+and parameter sharing remain explicit evidence requirements. Maker Test-pane
+smoke-test evidence is separate from published signed-in employee execution;
+publishing and flow run-history correlation are not added to Connect acceptance.
+Administrator-only Entra/Graph and Workday verification is **Skipped** by default:
+maker administrator permissions are not assumed, no Graph authentication or role
+question is introduced, and skips do not verify those prerequisites. A later
+role-aware change may opt administrators into additional checks.
+
+Manually configured ServiceNow receives selected-dependency binding diagnostics
+and explicit scenario/runtime evidence requirements, not a guided installer.
+Connected candidates, legacy flow names and unrelated run history cannot prove
+an exact binding or employee execution. **SAP is excluded from DA coverage**,
+including when stale configuration suggests it is enabled.
 
 The combined JSON/HTML report includes a `DA-PLAN-COVERAGE` row with the complete
 versioned coverage manifest in JSON evidence. Required dispatch gaps block a
 successful full run instead of disappearing from the report. This is an
-incremental implementation: integration composition, discovery of feature
-applicability, coverage reconciliation and separate deployment-readiness
-reporting are still pending. Inventory and a diagnostic
+incremental implementation: coverage reconciliation and separate
+deployment-readiness reporting are still pending. Inventory and a diagnostic
 verdict are not deployment approval; Connect acceptance is unchanged. DA full
 rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
 explicitly authorized operations.

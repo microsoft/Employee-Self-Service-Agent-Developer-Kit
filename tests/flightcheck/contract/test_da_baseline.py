@@ -10,7 +10,7 @@ import pytest
 
 from flightcheck import registry
 from flightcheck.checks import environment, local_files, publishing
-from flightcheck.checks.da_baseline import run_da_baseline_checks
+from flightcheck.checks.da_baseline import DA_DEFERRED_ADMIN_CHECKS, run_da_baseline_checks
 from flightcheck.da_contract import DAFeature, DAFeatureEvidence
 from flightcheck.da_execution import build_da_execution_plan
 from flightcheck.runner import CheckResult, Priority, Status
@@ -64,6 +64,19 @@ def test_da_overrides_do_not_repurpose_legacy_environment_or_capacity_checks():
     assert baseline.clients == {registry.POWERPLATFORM}
     assert registry.transitive_requirements("ENV-001").clients == {registry.PP_ADMIN}
     assert registry.resolve("ENV-CAPACITY-001").category_fn is environment.run_capacity_check
+
+
+def test_maker_assessment_skips_admin_checks_without_accepting_them():
+    runner = _runner(should_execute=lambda key: key in DA_DEFERRED_ADMIN_CHECKS)
+    rows = run_da_baseline_checks(runner)
+    assert {row.checkpoint_id for row in rows} == DA_DEFERRED_ADMIN_CHECKS
+    for row in rows:
+        assert row.status == Status.SKIPPED.value
+        assert "maker administrator permissions" in row.result
+        assert "has not been verified" in row.result
+        assert "do not grant administrator permissions" in row.remediation
+        assert row.evidence["administratorCheckDeferred"] is True
+        assert row.evidence["accepted"] is False
 
 
 @pytest.mark.parametrize("body, status", [

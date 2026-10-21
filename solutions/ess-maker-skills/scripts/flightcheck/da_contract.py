@@ -144,6 +144,18 @@ def _group(
 
 DA_CATALOG: tuple[DACheckpoint, ...] = (
     *_group(
+        "DA-INTEGRATIONS-001", "Integration applicability", DADisposition.OBSERVATION,
+        "Observe selected-agent dependencies and exact Workday Connect intent; "
+        "neither observation completes setup, Connect or deployment approval.",
+        _MAKER + _PP, required=False,
+    ),
+    *_group(
+        "WD-DA-MAKER-001", "Workday maker validation", DADisposition.MANUAL,
+        "The guided Workday lifecycle ends after a successful maker Test-pane "
+        "read-only scenario. Publishing and employee validation remain separate.",
+        _MAKER, feature=DAFeature.WORKDAY,
+    ),
+    *_group(
         "PRE-001 PRE-002 PRE-004 PRE-005 PRE-006", "Prerequisites",
         DADisposition.MANUAL,
         "Require target-bound audience, maker entitlement, sizing and billing "
@@ -163,10 +175,11 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _ENTRA, required=False,
     ),
     *_group(
-        "AUTH-005 AUTH-006", "Workday identity", DADisposition.REVIEW,
-        "Reconcile selected-app assignment and cross-system identity evidence "
-        "with the Workday-specific checks; do not count aliases as independent proof.",
-        _ENTRA + _WORKDAY, feature=DAFeature.WORKDAY,
+        "AUTH-005 AUTH-006", "Workday identity", DADisposition.SUPERSEDED,
+        "Workday-specific assignment and NameID requirements account for these "
+        "aliases. Administrator verification is permission-deferred for makers.",
+        _ENTRA + _WORKDAY, required=False,
+        replacements=("WD-ASSIGN-001", "WD-ENTRA-NAMEID-001"),
     ),
     *_group(
         "POL-FB-001 POL-FB-002", "Feedback policies", DADisposition.MANUAL,
@@ -271,9 +284,10 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, feature=DAFeature.CONNECTORS,
     ),
     *_group(
-        "LIC-FLOW-001 LIC-FLOW-002", "Flow licensing", DADisposition.REVIEW,
-        "Use exact invoked flows and native deployment audience rather than "
-        "all local agents or Dataverse bot-sharing identity.",
+        "LIC-FLOW-001 LIC-FLOW-002", "Flow licensing", DADisposition.MANUAL,
+        "Require target-bound licensing evidence for exact invoked flows and the "
+        "native deployment audience; do not query maker-owned Graph or substitute "
+        "all local agents and Dataverse bot-sharing identity.",
         _M365 + _PP, feature=DAFeature.POWER_AUTOMATE,
     ),
     *_group(
@@ -320,7 +334,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER + _M365,
     ),
     *_group(
-        "DA-CONN-001", "Native connections", DADisposition.REVIEW,
+        "DA-CONN-001", "Native connections", DADisposition.EVALUATOR,
         "Require exact bindings for deployment evidence; Connected candidates "
         "without an exposed mapping must not satisfy exact-binding readiness.",
         _PP + _MAKER, feature=DAFeature.NATIVE_CONNECTIONS,
@@ -350,24 +364,31 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _M365, required=False,
     ),
     *_group(
-        "SN-CONN-001 SN-FLOW-000 SN-RUN-001 SN-LOCAL-001 SN-LOCAL-002 SN-LOCAL-003",
-        "ServiceNow", DADisposition.REVIEW,
-        "Flow-name discovery, uncorrelated run history and legacy topic "
-        "heuristics need selected native DA topology and runtime evidence.",
+        "SN-CONN-001", "ServiceNow", DADisposition.EVALUATOR,
+        "Inspect only the selected DA's exact active ServiceNow dependencies. "
+        "This is diagnostic coverage, not guided ServiceNow installation.",
         _SN + _PP, feature=DAFeature.SERVICENOW,
     ),
     *_group(
-        "DA-SN-RUNTIME-001", "ServiceNow runtime", DADisposition.REVIEW,
+        "SN-FLOW-000 SN-RUN-001 SN-LOCAL-001 SN-LOCAL-002 SN-LOCAL-003",
+        "ServiceNow", DADisposition.SUPERSEDED,
+        "Legacy names and uncorrelated run history are replaced by selected DA "
+        "bindings and explicit scenario evidence.",
+        _SN + _PP, required=False,
+        replacements=("SN-CONN-001", "DA-SN-RUNTIME-001"),
+    ),
+    *_group(
+        "DA-SN-RUNTIME-001", "ServiceNow runtime", DADisposition.MANUAL,
         "Native connection metadata does not establish selected-agent ServiceNow "
         "employee execution; a DA runtime evidence contract is required.",
         _SN + _MAKER, feature=DAFeature.SERVICENOW,
     ),
     *_group(
-        "DA-SAP-RUNTIME-001", "SAP SuccessFactors runtime", DADisposition.REVIEW,
-        "SAP-named flow discovery and Connected SAP OData bindings do not "
-        "establish selected-agent SuccessFactors employee execution.",
+        "DA-SAP-RUNTIME-001", "SAP SuccessFactors runtime", DADisposition.LEGACY,
+        "SAP coverage is outside the supported DA scope; no SAP evaluator or "
+        "deployment requirement is scheduled.",
         (Role.SAP_ADMIN.value, Role.ESS_MAKER.value),
-        feature=DAFeature.SAP_SUCCESSFACTORS,
+        required=False,
     ),
     *_group(
         "ESS-SOLN-001", "ESS package", DADisposition.EVALUATOR,
@@ -377,9 +398,9 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
     ),
     *_group(
         "WD-ENTRA-SCOPE-001 WD-ENTRA-CONSENT-001 WD-ASSIGN-001 WD-ENTRA-NAMEID-001",
-        "Workday Entra", DADisposition.EVALUATOR,
-        "Existing selected-app configuration checks remain independent of "
-        "Workday profile membership and are not employee-runtime proof.",
+        "Workday Entra", DADisposition.MANUAL,
+        "Use the current role-aware administrator workbook handoff; do not "
+        "introduce maker-owned Graph authentication into DA installation.",
         _ENTRA, feature=DAFeature.WORKDAY,
     ),
     *_group(
@@ -390,11 +411,17 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _ENTRA + _WORKDAY, feature=DAFeature.WORKDAY,
     ),
     *_group(
-        "WD-CONN-001 WD-CONN-013 WD-CONN-101 WD-RUN-001", "Workday",
-        DADisposition.REVIEW,
-        "Environment-wide connections, legacy topic identity and shared run "
-        "history must be adapted to exact DA bindings and correlated employee evidence.",
+        "WD-CONN-013", "Workday", DADisposition.MANUAL,
+        "Confirm the exact selected-agent Workday attachments and parameter "
+        "sharing without substituting physical connection inventory.",
         _PP + _WORKDAY, feature=DAFeature.WORKDAY,
+    ),
+    *_group(
+        "WD-CONN-001 WD-CONN-101 WD-RUN-001", "Workday", DADisposition.SUPERSEDED,
+        "Environment-wide connection/topic/run discovery is replaced by the "
+        "reviewed DA binding/topic and maker validation contracts.",
+        _PP + _WORKDAY, required=False,
+        replacements=("WD-CONN-012", "WD-DA-TOPIC-001", "WD-DA-MAKER-001"),
     ),
     *_group(
         "WD-PKG-001", "Workday package", DADisposition.SUPERSEDED,
@@ -446,7 +473,7 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP + _MAKER, feature=DAFeature.WORKDAY,
     ),
     *_group(
-        "WD-REST-001", "Workday runtime", DADisposition.REVIEW,
+        "WD-REST-001", "Workday runtime", DADisposition.MANUAL,
         "A trimmed /api suffix alone does not validate the host, tenant or "
         "signed-in employee REST execution.",
         _MAKER + _WORKDAY, feature=DAFeature.WORKDAY,
@@ -475,10 +502,10 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER, required=False,
     ),
     *_group(
-        "DA-CONN-002+", "Native connections", DADisposition.REVIEW,
-        "Dynamic connection details must retain exact resource identity and "
-        "must not treat an unverified Connected candidate as a proven binding.",
-        _PP, feature=DAFeature.NATIVE_CONNECTIONS, kind="family",
+        "DA-CONN-002+", "Native connections", DADisposition.SUPERSEDED,
+        "Exact resource identities are retained in the fixed DA binding result, "
+        "not collision-prone numeric Connected-candidate rows.",
+        _PP, required=False, kind="family", replacements=("DA-CONN-001",),
     ),
     *_group(
         "ENV-004-UR-*", "Connections", DADisposition.DIAGNOSTIC,
@@ -510,15 +537,16 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER, feature=DAFeature.CUSTOM_TOPICS, kind="family",
     ),
     *_group(
-        "WD-CONN-002+ WD-FLOW-NNN", "Workday", DADisposition.REVIEW,
-        "Replace environment-wide numeric details with exact DA dependencies "
-        "without collisions with dedicated checkpoint IDs.",
-        _PP, feature=DAFeature.WORKDAY, kind="family",
+        "WD-CONN-002+ WD-FLOW-NNN", "Workday", DADisposition.SUPERSEDED,
+        "Reviewed package bindings and flow catalog replace environment-wide "
+        "name discovery and collision-prone numeric details.",
+        _PP, required=False, kind="family",
+        replacements=("WD-CONN-012", "WD-DA-FLOW-001"),
     ),
     *_group(
-        "SN-CONN-002+ SN-FLOW-NNN", "ServiceNow", DADisposition.REVIEW,
+        "SN-CONN-002+ SN-FLOW-NNN", "ServiceNow", DADisposition.SUPERSEDED,
         "Resolve only the selected DA's required connections and flows.",
-        _PP + _SN, feature=DAFeature.SERVICENOW, kind="family",
+        _PP + _SN, required=False, kind="family", replacements=("SN-CONN-001",),
     ),
     *_group(
         "CHECKPOINT-CONTRACT-MISSING CHECKPOINT-CONTRACT-UNRESOLVED "

@@ -18,6 +18,21 @@ from ..runner import (
 
 # These describe evidence to obtain, not claims that the evidence already exists.
 DA_MANUAL_REQUIREMENTS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "DA-SN-RUNTIME-001": (
+        "Manually configured ServiceNow employee validation",
+        "Review target-bound tests for the selected ServiceNow scenarios and intended "
+        "users. Guided ServiceNow setup is unavailable; do not use legacy flow names "
+        "or uncorrelated run history as execution evidence.",
+        ("serviceNowTarget", "enabledScenarios", "employeeTestRuns", "outcomes"),
+    ),
+    "WD-DA-MAKER-001": (
+        "Workday maker Test-pane smoke test",
+        "Review the recorded maker's successful enabled read-only Workday scenario "
+        "in this realm's Copilot Studio Test pane. Obtain missing evidence without "
+        "publishing, waiting for flow run-history correlation, or repeating a healthy "
+        "administrator handoff. This is not published-employee validation.",
+        ("makerTestCategory", "scenario", "testTimestamp", "outcome"),
+    ),
     "PRE-001": (
         "Intended employee audience licensing",
         "Confirm the intended published audience and its applicable Microsoft 365 "
@@ -96,6 +111,50 @@ DA_MANUAL_REQUIREMENTS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     ),
 }
 
+for _keys, _title, _action, _fields in (
+    (
+        ("LIC-FLOW-001", "LIC-FLOW-002"),
+        "Exact invoked-flow licensing evidence",
+        "Review the intended deployment audience and applicable licensing route "
+        "for this agent's exact invoked flows with the licensing owner. Do not "
+        "authenticate the maker to Graph or use unrelated flow/license inventory.",
+        ("invokedFlowIds", "deploymentAudience", "licensingRoute", "licensingOwnerReview"),
+    ),
+    (
+        ("WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
+         "WD-ENTRA-NAMEID-001", "WD-ENTRA-SIGNOPT-001", "WD-CONN-010", "WD-CONN-102"),
+        "Workday Entra administrator evidence",
+        "Review the validated Workday Connect Entra administrator workbook for "
+        "the exact tenant/application and certificate. Keep portal attestations manual; "
+        "do not authenticate the maker to Graph or repeat healthy configuration.",
+        ("entraTenant", "applicationIdentity", "administratorWorkbook", "certificateMetadata"),
+    ),
+    (
+        ("WD-API-CLIENT-001", "WD-TENANT-001", "WD-SEC-003", "WD-NET-001", "WD-REST-001"),
+        "Workday administrator configuration evidence",
+        "Review the Workday administrator workbook and validated endpoints for the "
+        "same tenant/application/certificate. Verify scenario permissions with the "
+        "Workday administrator; do not request ISU credentials or execute SOAP probes.",
+        ("workdayTenant", "administratorWorkbook", "validatedEndpoints", "scenarioPermissions"),
+    ),
+    (
+        ("WD-CONN-AUTH-001", "WD-CONN-013"),
+        "Workday connection authentication and parameter sharing",
+        "Review the confirmed exact Workday connection target and both Workday entries "
+        "in the selected agent's Connection Settings, including parameter sharing. "
+        "Physical Connected status alone does not verify these settings.",
+        ("workdayConnectionTarget", "agentAttachments", "parameterSharing"),
+    ),
+):
+    for _key in _keys:
+        DA_MANUAL_REQUIREMENTS[_key] = (_title, _action, _fields)
+
+DA_DEFERRED_ADMIN_CHECKS = frozenset({
+    "WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
+    "WD-ENTRA-NAMEID-001", "WD-ENTRA-SIGNOPT-001", "WD-CONN-010", "WD-CONN-102",
+    "WD-API-CLIENT-001", "WD-TENANT-001", "WD-SEC-003", "WD-NET-001",
+})
+
 
 def manual_evidence_requirement(runner, fields: tuple[str, ...]) -> dict:
     """Describe target-bound evidence without accepting a saved setup override."""
@@ -126,18 +185,35 @@ def run_da_baseline_checks(runner) -> list[CheckResult]:
     for key, (title, action, fields) in DA_MANUAL_REQUIREMENTS.items():
         if not requested(key):
             continue
+        deferred = declarative and key in DA_DEFERRED_ADMIN_CHECKS
+        evidence = manual_evidence_requirement(runner, fields)
+        if deferred:
+            evidence.update({
+                "administratorCheckDeferred": True,
+                "reason": "Maker administrator permissions are not assumed.",
+                "evidenceBoundary": "skipped_not_verified_administrator_prerequisite",
+            })
         rows.append(CheckResult(
             checkpoint_id=key,
             category="DA Baseline",
             priority=Priority.HIGH.value,
-            status=Status.MANUAL.value if declarative else Status.BLOCKED.value,
+            status=(Status.SKIPPED.value if deferred else
+                    Status.MANUAL.value if declarative else Status.BLOCKED.value),
             description=title,
             result=(
+                "Administrator-only verification skipped; maker administrator permissions "
+                "are not assumed. This prerequisite has not been verified."
+                if deferred else
                 "This assessment has not accepted target-bound evidence for this requirement."
                 if declarative else "The selected target has no explicit DA context."
             ),
-            remediation=action,
-            evidence=manual_evidence_requirement(runner, fields),
+            remediation=(
+                "Keep the administrator workbook as supporting evidence. Role-aware "
+                "verification is deferred; do not grant administrator permissions just "
+                "to run FlightCheck."
+                if deferred else action
+            ),
+            evidence=evidence,
             roles=list(specs[key].owners),
             block_reason="" if declarative else BLOCK_REASON_CHECKPOINT_CONTRACT,
         ))

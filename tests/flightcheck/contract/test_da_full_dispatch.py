@@ -134,7 +134,8 @@ def test_unknown_and_disabled_features_remain_distinct_without_dispatching_legac
     )
     assert "WD-DA-PKG-001" in dict(unknown.pending)
     assert "WD-DA-PKG-001" not in dict(disabled.pending)
-    assert "dispatch review" in dict(enabled.pending)["WD-DA-PKG-001"]
+    assert "WD-DA-PKG-001" in enabled.profile.checkpoint_ids
+    assert registry.GRAPH not in enabled.requirements.clients
     row = unknown.coverage_check(None)[0]
     assert row.status == Status.BLOCKED.value
     assert len(row.evidence["coverage"]) == len(DA_CATALOG)
@@ -204,7 +205,8 @@ class _OrchestrationRunner(FlightCheckRunner):
         self.producers = []
 
     def register(self, category, fn):
-        if category in {"Native Agent", "Environment", "DA Baseline", "Solution", "Local Files", "Publishing"}:
+        if category in {"Native Agent", "Environment", "DA Baseline", "DA Integrations",
+                        "Workday DA", "Workday Extension", "Solution", "Local Files", "Publishing"}:
             self.producers.append(category)
 
             def dispatch_rows(runner):
@@ -242,6 +244,8 @@ def da_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "PPAdminClient", admin_client)
     monkeypatch.setattr(cli, "PowerPlatformClient", licensing_client)
     monkeypatch.setattr(cli, "FlightCheckRunner", _OrchestrationRunner)
+    prepare = Mock(side_effect=lambda _runner, _args, execution: (execution, None))
+    monkeypatch.setattr(cli, "_prepare_da_integration_execution", prepare)
     monkeypatch.setattr(auth, "discover_tenant", lambda _url: TENANT_ID)
 
     def forbidden(*_args, **_kwargs):
@@ -285,7 +289,38 @@ def da_cli(tmp_path, monkeypatch):
         native_client=native_client, connectivity_client=connectivity_client,
         admin=admin, admin_client=admin_client, telemetry=telemetry, browser=browser,
         output=tmp_path / "out", licensing=licensing, licensing_client=licensing_client,
+        prepare=prepare,
     )
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_discovered_workday_recomposes_cli_clients_and_persists_new_requirements(da_cli, available):
+    def prepare(runner, _args, execution):
+        if available:
+            runner.env_url = "https://org.crm.dynamics.com"
+            runner.dv_token = "verified-dependency-token"
+            runner.pp_admin = da_cli.admin
+        else:
+            runner._da_dataverse_error = "Verified dependency authentication is unavailable."
+        return build_da_execution_plan(
+            execution.config, features={
+                DAFeature.WORKDAY: DAFeatureEvidence(True, "selected dependency discovery"),
+                DAFeature.SERVICENOW: DAFeatureEvidence(False, "selected dependency discovery"),
+            }, environment_url=runner.env_url,
+        ), None
+
+    da_cli.prepare.side_effect = prepare
+    assert da_cli.run("--scope", "full") == 1
+    result = da_cli.captured["result"]
+    assert "WD-DA-PKG-001" in result.profile_checkpoints
+    assert "WD-DA-MAKER-001" in result.profile_checkpoints
+    assert registry.GRAPH not in result.client_availability
+    assert result.client_availability[registry.DATAVERSE]["available"] is available
+    if available:
+        assert result.client_availability[registry.DATAVERSE]["authenticatedAccountVerified"]
+    else:
+        assert "authentication is unavailable" in result.client_availability[registry.DATAVERSE]["reason"]
+        assert any(row.checkpoint_id == "PROFILE-CLIENT-DATAVERSE" for row in result.results)
 
 
 @pytest.mark.parametrize("dataverse", [False, True])
@@ -303,7 +338,7 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
     assert result.overall == "NOT_READY"
     runner = _OrchestrationRunner.last
     assert runner.producers == [
-        "Native Agent", "Environment", "Environment", "DA Baseline",
+        "Native Agent", "Environment", "Environment", "DA Baseline", "DA Integrations",
         "Solution", "Local Files", "Publishing",
     ]
     assert runner.config["agents"] == [da_cli.config["agents"][0]]
