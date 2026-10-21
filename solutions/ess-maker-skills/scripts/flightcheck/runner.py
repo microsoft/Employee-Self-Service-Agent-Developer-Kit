@@ -634,20 +634,15 @@ def versioned_run_result_to_dict(run_result: RunResult) -> dict[str, Any]:
 
 
 def _generate_html_report(r: RunResult) -> str:
-    """Generate the category-grouped HTML report.
+    """Render the DA work queue or legacy categories without changing results."""
+    if r.da_assessment:
+        from .da_report import render_da_report
 
-    The report is presentation-only: all content is derived from ``RunResult``
-    and existing render helpers. The Fluent 2 shell wraps category sections in
-    one checks card, but it does not change which checks run or how statuses
-    are computed.
-    """
-    buckets = bucket_results(r.results, deferred_as_manual=bool(r.da_assessment))
+        return render_da_report(r)
+    buckets = bucket_results(r.results)
 
     verdict_class, verdict_icon, verdict_headline, verdict_sub = _verdict_text(r)
-    if r.da_assessment:
-        verdict_headline = f"Diagnostics: {r.overall}"
-        verdict_sub = "Diagnostic check statuses are unchanged; deployment readiness is assessed separately below."
-    elif r.diagnostic_only:
+    if r.diagnostic_only:
         verdict_headline = f"Local diagnostics: {r.overall}"
         verdict_sub = "Local files only; deployment readiness not assessed."
 
@@ -669,7 +664,6 @@ def _generate_html_report(r: RunResult) -> str:
         + _render_header(
             r, verdict_class, verdict_icon, verdict_headline, verdict_sub
         )
-        + _render_da_assessment(r.da_assessment)
         + _render_howto()
         + _render_action_panel(buckets)
         + _render_synopsis(r, categories)
@@ -1398,72 +1392,6 @@ def _category_roles(results: list[CheckResult]) -> list[str]:
             if role not in roles:
                 roles.append(role)
     return roles
-
-
-def _render_da_assessment(assessment: dict) -> str:
-    if not assessment:
-        return ""
-    counts = assessment["counts"]
-    state = assessment["deploymentReadiness"]
-    color = {"READY": "verdict-ready", "NOT_READY": "verdict-not-ready"}.get(state, "verdict-warnings")
-    target = assessment["target"]
-    rows = []
-    for entry in assessment["coverage"]:
-        observed = ", ".join(
-            f"{row['checkpointId']}: {row['status']}" for row in entry["observed"]
-        ) or "No row"
-        reason = "; ".join(entry["reasonCodes"]) or entry["applicabilityReason"]
-        fields = ", ".join(entry["requiredEvidenceFields"])
-        rows.append(
-            "<tr>"
-            f"<th scope='row'><code>{_html_escape(entry['checkpointId'])}</code></th>"
-            f"<td>{_html_escape(entry['kind'])}</td>"
-            f"<td>{'Required' if entry['deploymentRequired'] else 'Not a deployment requirement'}</td>"
-            f"<td>{_html_escape(entry['applicability'])}</td>"
-            f"<td>{_html_escape(entry['coverageState'])}</td>"
-            f"<td>{_html_escape(observed)}</td>"
-            f"<td>{_html_escape(entry['evidenceState'])} ({_html_escape(entry['evidenceBasis'] or 'no accepted proof')})</td>"
-            f"<td>{_html_escape(reason)}"
-            + f"<br>Owning roles: {_html_escape(', '.join(entry['roles']))}"
-            + (f"<br>Evidence fields: {_html_escape(fields)}" if fields else "")
-            + "</td></tr>"
-        )
-    reviews = "".join(
-        "<li>"
-        f"{_html_escape(review['checkpointId'])}: "
-        + ("accepted reviewed attestation" if review["accepted"] else
-           "rejected: " + _html_escape(", ".join(review["reasonCodes"])))
-        + (f"; source: {_html_escape(_mask_sensitive(review['source']))}; "
-           f"valid until {_html_escape(review['validUntil'])}" if review["accepted"] else "")
-        + "</li>"
-        for review in assessment["evidenceReviews"]
-    )
-    issues = "; ".join(assessment["issues"])
-    return (
-        '<section class="checks-card" aria-labelledby="da-readiness-title"><div class="head-pad">'
-        '<h2 id="da-readiness-title">DA deployment readiness</h2>'
-        f'<p class="verdict {color}">{_html_escape(state)}</p>'
-        f"<p>Assessed target: {_html_escape(target['agentSlug'])}; "
-        f"realm: {_html_escape(target['realm'])}; service ring: {_html_escape(target['serviceRing'])}.</p>"
-        "<p>This decision applies only to this target and realm, not a sibling agent "
-        "or another deployment realm. Attestations are explicit reviewer declarations, not "
-        "independently executed administrator or employee tests. Skipped checks do not become Passed.</p>"
-        f"<p>Required definitions: {counts['requiredDefinitions']}; satisfied: {counts['satisfied']}; "
-        f"confirmed defects: {counts['defects']}; incomplete: {counts['incomplete']}.</p>"
-        f"<p>Configuration revision: <code>{_html_escape(assessment['configurationRevision'] or 'Unavailable: exact snapshot not verified')}</code></p>"
-        + (f"<p>Assessment gaps: {_html_escape(issues)}</p>" if issues else "")
-        + f"<details><summary>Coverage reconciliation: {counts['catalogDefinitions']} definitions, "
-        f"{counts['scheduledSelectors']} scheduled selectors, {counts['observedRows']} result rows</summary>"
-        '<div style="overflow-x:auto"><table><thead><tr><th>Checkpoint</th><th>Kind</th>'
-        "<th>Requirement</th><th>Applicability</th><th>Coverage</th><th>Observed rows</th>"
-        "<th>Evidence</th><th>Reason / required evidence</th></tr></thead><tbody>"
-        + "".join(rows) + "</tbody></table></div></details>"
-        + ("<h3>Evidence reviews</h3><ul>" + reviews + "</ul>" if reviews else "")
-        + ("<p>Unrecognized evidence checkpoints: "
-           + _html_escape(", ".join(assessment["unrecognizedEvidenceCheckpoints"])) + "</p>"
-           if assessment["unrecognizedEvidenceCheckpoints"] else "")
-        + "</div></section>\n"
-    )
 
 
 def _render_header(

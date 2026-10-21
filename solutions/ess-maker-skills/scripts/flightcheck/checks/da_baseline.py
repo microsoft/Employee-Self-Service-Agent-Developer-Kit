@@ -113,12 +113,22 @@ DA_MANUAL_REQUIREMENTS: dict[str, tuple[str, str, tuple[str, ...]]] = {
 
 for _keys, _title, _action, _fields in (
     (
-        ("LIC-FLOW-001", "LIC-FLOW-002"),
-        "Exact invoked-flow licensing evidence",
-        "Review the intended deployment audience and applicable licensing route "
-        "for this agent's exact invoked flows with the licensing owner. Do not "
-        "authenticate the maker to Graph or use unrelated flow/license inventory.",
-        ("invokedFlowIds", "deploymentAudience", "licensingRoute", "licensingOwnerReview"),
+        ("LIC-FLOW-001",),
+        "Licensing route for the exact invoked flows",
+        "Have the licensing owner classify each exact invoked flow and its connectors "
+        "and confirm the applicable licensing route. Record the flow-by-flow rationale; "
+        "connector tier alone does not establish how a flow is billed. "
+        "Audience entitlement coverage is reviewed separately under LIC-FLOW-002.",
+        ("invokedFlowIds", "flowClassifications", "licensingRoute", "licensingOwnerReview"),
+    ),
+    (
+        ("LIC-FLOW-002",),
+        "Audience coverage for the approved flow licensing route",
+        "Have the licensing owner reconcile the intended employee audience with the "
+        "route established under LIC-FLOW-001. Record entitlement or applicable "
+        "coverage evidence for that audience, not the maker's license or unrelated "
+        "Dataverse bot-sharing inventory. Do not authenticate the maker to Graph.",
+        ("deploymentAudience", "licensingRoute", "audienceCoverage", "licensingOwnerReview"),
     ),
     (
         ("WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
@@ -138,16 +148,55 @@ for _keys, _title, _action, _fields in (
         ("workdayTenant", "administratorWorkbook", "validatedEndpoints", "scenarioPermissions"),
     ),
     (
-        ("WD-CONN-AUTH-001", "WD-CONN-013"),
-        "Workday connection authentication and parameter sharing",
-        "Review the confirmed exact Workday connection target and both Workday entries "
-        "in the selected agent's Connection Settings, including parameter sharing. "
-        "Physical Connected status alone does not verify these settings.",
-        ("workdayConnectionTarget", "agentAttachments", "parameterSharing"),
+        ("WD-CONN-AUTH-001",),
+        "Workday connection authentication configuration",
+        "Review the exact Workday connection target and configured authentication "
+        "mode with its owner. Record the tenant/application match and authentication "
+        "configuration review. Connected status is not signed-in employee execution; "
+        "this check does not repeat attachment or parameter-sharing verification.",
+        ("workdayConnectionTarget", "authenticationMode", "authenticationOwnerReview"),
+    ),
+    (
+        ("WD-CONN-013",),
+        "Workday connection parameter-sharing consent",
+        "In the selected agent's Connection Settings, review both Workday connection "
+        "entries and confirm 'Allow permission to share parameters' for each. Record "
+        "each exact connection target and its setting. Flow exposure is reviewed "
+        "separately under WD-DA-ATTACH-001.",
+        ("workdayConnectionTarget", "parameterSharing"),
     ),
 ):
     for _key in _keys:
         DA_MANUAL_REQUIREMENTS[_key] = (_title, _action, _fields)
+
+for _key, _title, _criterion, _field in (
+    ("WD-ENTRA-SCOPE-001", "Entra application scopes",
+     "Record the approved scopes for this exact application.", "approvedScopes"),
+    ("WD-ENTRA-CONSENT-001", "Entra administrator consent",
+     "Record consent granted for the application's required permissions.", "administratorConsent"),
+    ("WD-ASSIGN-001", "Workday enterprise application assignments",
+     "Record the intended employee users/groups assigned to this application.", "audienceAssignments"),
+    ("WD-ENTRA-NAMEID-001", "Workday federation NameID mapping",
+     "Record the approved NameID claim and matching Workday identity mapping.", "nameIdMapping"),
+    ("WD-ENTRA-SIGNOPT-001", "Federation signing options",
+     "Record the signing options approved for this Workday federation.", "signingOptions"),
+    ("WD-CONN-010", "Cross-system federation configuration",
+     "Record the matching Entra and Workday federation settings.", "federationConfiguration"),
+    ("WD-CONN-102", "Cross-system certificate agreement",
+     "Record the matching certificate metadata and validity in both systems.", "certificateAgreement"),
+    ("WD-API-CLIENT-001", "Workday API client registration",
+     "Record the exact registered client and approved grant configuration.", "apiClientRegistration"),
+    ("WD-TENANT-001", "Workday tenant authentication policy",
+     "Record the employee authentication policy for the selected tenant.", "tenantAuthenticationPolicy"),
+    ("WD-SEC-003", "Workday write-scenario permissions",
+     "Record permission approval for each enabled write scenario without executing writes.", "writeScenarioPermissions"),
+    ("WD-NET-001", "Workday network allowlist",
+     "Record the approved network allowlist; this is not managed-runtime reachability proof.", "networkAllowlist"),
+    ("WD-REST-001", "Workday REST endpoint and tenant agreement",
+     "Record the approved REST host, tenant and enabled scenario endpoint mapping.", "restEndpointAgreement"),
+):
+    _, _action, _fields = DA_MANUAL_REQUIREMENTS[_key]
+    DA_MANUAL_REQUIREMENTS[_key] = (_title, f"{_action} {_criterion}", (*_fields, _field))
 
 DA_DEFERRED_ADMIN_CHECKS = frozenset({
     "WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
@@ -187,6 +236,7 @@ def run_da_baseline_checks(runner) -> list[CheckResult]:
             continue
         deferred = declarative and key in DA_DEFERRED_ADMIN_CHECKS
         evidence = manual_evidence_requirement(runner, fields)
+        evidence["acceptanceCriteria"] = action
         if deferred:
             evidence.update({
                 "administratorCheckDeferred": True,

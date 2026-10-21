@@ -2223,6 +2223,12 @@ def _run_da_full(args, config):
             target_config, getattr(args, "agent_slug", None),
             environment_url=args.environment_url or "",
         )
+        expected_agent = getattr(args, "expected_agent_id", None)
+        configured_agent = execution.config["agent"].get("botId")
+        if expected_agent and (
+            not isinstance(configured_agent, str) or uuid.UUID(expected_agent) != uuid.UUID(configured_agent)
+        ):
+            raise ValueError("--expected-agent-id does not match the selected DA.")
         if getattr(args, "connect_config", None):
             execution = build_da_execution_plan(
                 _merge_connect_config(execution.config, args.connect_config),
@@ -2916,6 +2922,23 @@ def _run_profile(args, *, da_execution=None):
         result.da_assessment = build_da_assessment(
             da_execution, result, runner, getattr(args, "_da_evidence_records", None),
         )
+        rerun_arguments = list(sys.argv[1:])
+        for option, value in (
+            ("scope", "full"),
+            ("expected-agent-id", result.da_assessment["target"]["agentId"]),
+            ("environment-id", result.da_assessment["target"]["environmentId"]),
+            ("tenant-id", result.da_assessment["target"]["tenantId"]),
+            ("agent-schema-name", result.da_assessment["target"]["agentSchemaName"]),
+            ("agent-slug", result.da_assessment["target"]["agentSlug"]),
+            ("validation-realm", result.da_assessment["target"]["realm"]),
+            ("ring", result.da_assessment["target"]["serviceRing"]),
+        ):
+            if value and not getattr(args, option.replace("-", "_"), None):
+                rerun_arguments.extend((f"--{option}", value))
+        result.da_assessment["rerun"] = {
+            "arguments": rerun_arguments,
+            "shell": "powershell" if os.name == "nt" else "sh",
+        }
 
     _print_prioritized_summary(result, verbose_manual=True)
     save_results(result, args.output)
@@ -3024,6 +3047,10 @@ def main():
     parser.add_argument(
         "--agent-schema-name",
         help="Expected agent schema name for DA full or a --profile validation context.",
+    )
+    parser.add_argument(
+        "--expected-agent-id",
+        help="DA full rerun guard: reject a changed selected native agent before authentication.",
     )
     parser.add_argument(
         "--connect-config",
@@ -3155,6 +3182,11 @@ def main():
         or args.scope not in {None, "full"}
     ):
         parser.error("--da-evidence is supported only for selected DA --scope full.")
+    if args.expected_agent_id and (
+        args.checkpoint or args.profile or args.list_checkpoints or args.list_targets
+        or args.scope not in {None, "full"}
+    ):
+        parser.error("--expected-agent-id is supported only for selected DA --scope full.")
     if args.agent_id or args.token_cache:
         if args.checkpoint != "ENV-004" and args.scope != "environment":
             parser.error("--agent-id and --token-cache are supported only for ENV-004 or --scope environment.")
@@ -3250,8 +3282,8 @@ def main():
             _run_da_full(args, config)
             return
 
-    if args.da_evidence:
-        parser.error("--da-evidence requires an explicitly selected DA full assessment.")
+    if args.da_evidence or args.expected_agent_id:
+        parser.error("--da-evidence and --expected-agent-id require an explicitly selected DA full assessment.")
     infra_only_scope = args.scope == "infrastructure"
     da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")

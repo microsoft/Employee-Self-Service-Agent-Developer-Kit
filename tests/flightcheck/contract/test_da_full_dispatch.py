@@ -420,6 +420,33 @@ def test_da_full_reconciles_coverage_without_applying_connect_acceptance(da_cli,
     checkpoint_gate.assert_not_called()
 
 
+@pytest.mark.parametrize("expected", [TENANT_ID, "not-a-guid"])
+def test_saved_report_cannot_rerun_against_a_changed_native_agent(da_cli, expected):
+    assert da_cli.run("--scope", "full", "--expected-agent-id", expected) == 1
+    da_cli.native_auth.assert_not_called()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_configured_report_rerun_preserves_target_and_saved_api_version(da_cli, changed):
+    da_cli.config["agentBuilderApiVersion"] = "2024-10-01"
+    assert da_cli.run("--scope", "full") == 1
+    result = da_cli.captured["result"]
+    arguments = result.da_assessment["rerun"]["arguments"]
+    assert arguments[arguments.index("--expected-agent-id") + 1] == BOT_ID
+    assert arguments[arguments.index("--agent-slug") + 1] == "hr"
+    assert arguments[arguments.index("--validation-realm") + 1] == "dev"
+    da_cli.native_auth.reset_mock()
+    if changed:
+        da_cli.config["agents"][0]["botId"] = TENANT_ID
+    assert da_cli.run(*arguments) == 1
+    if changed:
+        da_cli.native_auth.assert_not_called()
+    else:
+        da_cli.native_auth.assert_called_once()
+        assert da_cli.captured["result"].da_assessment["target"] == result.da_assessment["target"]
+        assert da_cli.native_client.call_args.kwargs["api_version"] == "2024-10-01"
+
+
 @pytest.mark.parametrize("configured", [False, True])
 def test_explicit_da_url_uses_same_contract_without_reading_or_replacing_saved_target(da_cli, configured, tmp_path):
     da_cli.config["environmentId"] = "00000000-0000-0000-0000-000000009999"
@@ -438,6 +465,13 @@ def test_explicit_da_url_uses_same_contract_without_reading_or_replacing_saved_t
     result = da_cli.captured["result"]
     assert result.profile == "da:full"
     assert result.da_assessment["counts"]["catalogDefinitions"] == len(DA_CATALOG)
+    rerun = result.da_assessment["rerun"]["arguments"]
+    assert rerun[rerun.index("--expected-agent-id") + 1] == BOT_ID
+    assert rerun[rerun.index("--da-target-url") + 1] == (
+        f"https://copilotstudio.microsoft.com/environments/{ENV_ID}/copilots/{BOT_ID}/tools?agentBackend=cosmos"
+    )
+    assert rerun[rerun.index("--validation-realm") + 1] == "dev"
+    assert rerun[rerun.index("--agent-schema-name") + 1] == "gptagent_hr"
     assert da_cli.native_auth.call_args.kwargs["allow_write"] is False
     path = tmp_path / ".local" / "config.json"
     assert path.exists() is configured

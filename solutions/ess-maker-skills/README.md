@@ -311,6 +311,23 @@ and visible with the other evidence requirements. DA full uses its independent
 coverage reconciliation, not the Connect profile's resolved-family or skipped-
 checkpoint acceptance gates.
 
+DA HTML reports use an offline Fluent-style layout with responsive work-item
+cards, a navigation rail, separate status totals and an expandable diagnostic
+inventory. Shared reviews (licensing, billing, Workday connection settings and
+administrator handoffs) are grouped without losing their distinct assertions.
+Skipped is never counted as Passed, and Blocked is not labeled Failed.
+Informational observations remain in the inventory, not the required work queue.
+Each evidence requirement exposes its acceptance criteria, required fields and
+an explicitly **unreviewed** copyable JSON template. Copying a template does not
+verify anything. Full CLI reports record their original arguments, shell and
+resolved target guards for a target-preserving rerun. The DA-only
+`--expected-agent-id` guard rejects a changed native agent before authentication;
+environment, tenant, schema, slug, realm and ring guards are retained as well.
+These remain in the private report/JSON, never telemetry.
+No external UI assets, tracking or additional runtime dependency is required.
+Previously generic evidence may need checkpoint-specific details; use the
+current report's required fields rather than reusing an incomplete old record.
+
 **Reviewed external evidence (DA full only):** run once to obtain the report's
 exact `target`, `configurationRevision` and requirement-specific
 `requiredEvidenceFields`. After an authorized reviewer reviews the evidence,

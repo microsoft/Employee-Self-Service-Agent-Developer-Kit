@@ -6,7 +6,9 @@
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
+from html import unescape
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -210,6 +212,67 @@ def test_alm_diagnostic_text_does_not_invalidate_unchanged_configuration(status)
     actual = _assessment(case, [record])
     assert actual["evidenceReviews"][0]["accepted"] is True
     assert actual["deploymentReadiness"] == "INCOMPLETE"
+
+
+def test_manual_bundles_preserve_distinct_assertions_instead_of_duplicate_tasks():
+    runner = _case().runner
+    runner.should_execute = lambda _key: True
+    rows = {row.checkpoint_id: row for row in run_da_baseline_checks(runner)}
+    bundles = [
+        ("LIC-FLOW-001", "LIC-FLOW-002"),
+        ("WD-CONN-AUTH-001", "WD-CONN-013"),
+        ("WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
+         "WD-ENTRA-NAMEID-001", "WD-ENTRA-SIGNOPT-001", "WD-CONN-010", "WD-CONN-102"),
+        ("WD-API-CLIENT-001", "WD-TENANT-001", "WD-NET-001", "WD-REST-001"),
+    ]
+    for keys in bundles:
+        assert len({rows[key].description for key in keys}) == len(keys)
+        assert len({tuple(rows[key].evidence["requiredFields"]) for key in keys}) == len(keys)
+        assert len({rows[key].evidence["acceptanceCriteria"] for key in keys}) == len(keys)
+    assert rows["WD-ENTRA-SCOPE-001"].status == "Skipped"
+
+
+def test_da_report_groups_work_without_hiding_assertions_or_self_approving_templates(tmp_path):
+    case = _case("WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001")
+    case.result.da_assessment = _assessment(case)
+    before = deepcopy(case.result)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "Entra administrator handoff" in html
+    assert 'id="chk-wd-entra-scope-001"' in html
+    assert 'id="chk-wd-entra-consent-001"' in html
+    assert "2 Skipped" in html
+    assert " ok</span>" not in html and " fail</span>" not in html
+    assert "Mark as verified" not in html
+    assert "No browser checkbox verifies a requirement" in html
+    assert "Evidence to collect" in html
+    assert 'aria-label="Report sections"' in html
+    templates = re.findall(r"<textarea[^>]*>(.*?)</textarea>", html, re.DOTALL)
+    assert templates
+    template = json.loads(unescape(templates[0]))
+    record = template["records"][0]
+    assert record["reviewed"] is False
+    assert record["target"] == case.result.da_assessment["target"]
+    assert _assessment(case, [record])["evidenceReviews"][0]["accepted"] is False
+    assert case.result == before
+
+
+def test_da_report_rerun_preserves_explicit_target_and_quotes_shell_arguments(tmp_path):
+    case = _case()
+    case.result.da_assessment = _assessment(case)
+    url = "https://copilotstudio.microsoft.com/environments/exact-env/copilots/exact-agent"
+    case.result.da_assessment["rerun"] = {
+        "shell": "powershell",
+        "arguments": ["--scope", "full", "--da-target-url", url,
+                      "--validation-realm", "test", "--da-evidence", r"C:\reviewer's evidence.json"],
+    }
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert url in html
+    assert "--da-target-url" in html and "--validation-realm" in html
+    assert "reviewer&#x27;&#x27;s evidence.json" in html
+    assert "re-run <code>/flightcheck" not in html
+    assert "maker /flightcheck is local-only" not in html
 
 
 def test_same_checkpoint_can_have_distinct_resource_status_buckets():

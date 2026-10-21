@@ -166,6 +166,13 @@ def run_da_workday_checks(runner) -> list[CheckResult]:
         row.evidence["evidenceBoundary"] = "workday_configuration_not_published_employee_execution"
         if row.status == Status.MANUAL.value:
             row.evidence.update(manual_evidence_requirement(
-                runner, ("agentAttachments", "parameterSharing"),
+                runner, ("agentAttachments", "exposedFlowIds"),
             ))
+            if row.checkpoint_id == "WD-DA-ATTACH-001":
+                row.remediation = (
+                    "In the selected agent's Workday connection settings, confirm "
+                    "that the exact reviewed agent-facing flows are exposed to this "
+                    "agent. Record the flow IDs and attachments. Parameter-sharing "
+                    "consent is reviewed separately under WD-CONN-013."
+                )
     return rows
