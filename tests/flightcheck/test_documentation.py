@@ -158,6 +158,8 @@ def test_mixed_local_reports_route_each_subject_not_active_agent(
     save_results(report, str(output))
 
     saved = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert report.diagnostic_only is True
+    assert saved["diagnostic_only"] is saved["contract"]["diagnosticOnly"] is True
     cards = (output / "report.html").read_text(encoding="utf-8").split('<div class="check"')[1:]
     contracts = saved["contract"]["results"]
     assert len(report.results) == len(before) == len(saved["results"]) == len(contracts) == len(cards)

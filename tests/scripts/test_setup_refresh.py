@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 import responses
 import fetch_and_setup
+import checkpoint
 import setup
 from tests.mocks import dataverse as dv
 
@@ -297,6 +298,55 @@ def test_refresh_cleanup_failure_does_not_publish_map_or_baseline(tmp_path, monk
     assert (agent / ".baseline" / "topics" / "old.mcs.yml").exists()
     assert (agent / ".checkpoints" / "1" / "topics" / "old.mcs.yml").exists()
 
+
+def test_failed_rename_refresh_can_restore_exact_folder_and_retry_without_losing_later_edits(
+    tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    old = _component(name="Old")
+    renamed = _component(name="Renamed")
+    _run_setup(tmp_path, monkeypatch, inventory=[old])
+    agent = tmp_path / "workspace" / "agents" / "selected-agent"
+    original_map = (agent / ".component-map.json").read_bytes()
+    original_config = (tmp_path / ".local" / "config.json").read_bytes()
+    (agent / "topics" / "old.mcs.yml").write_text("before refresh edit\n", encoding="utf-8")
+    original_remove = setup.os.remove
+
+    def fail_cleanup(path):
+        if str(path).endswith("old.mcs.yml"):
+            raise PermissionError("stale file locked")
+        return original_remove(path)
+
+    with monkeypatch.context() as locked:
+        locked.setattr(setup.os, "remove", fail_cleanup)
+        with pytest.raises(PermissionError, match="stale file locked"):
+            _run_setup(tmp_path, monkeypatch, refresh=True, inventory=[renamed])
+
+    new_file = agent / "topics" / "renamed.mcs.yml"
+    new_file.write_text("edited after failed refresh\n", encoding="utf-8")
+    local_file = agent / "topics" / "local-only.mcs.yml"
+    local_file.write_text("new local work after failure\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as conflict:
+        _run_setup(tmp_path, monkeypatch, refresh=True, inventory=[renamed])
+    assert conflict.value.code == 1
+    assert "Incoming component conflicts with local-only file: topics/renamed.mcs.yml" in capsys.readouterr().out
+    assert (agent / ".component-map.json").read_bytes() == original_map
+
+    checkpoint.cmd_revert_reason(str(agent), "auto-save before refresh")
+    saved = agent / ".checkpoints" / "2"
+    assert (saved / "topics" / new_file.name).read_text(encoding="utf-8") == "edited after failed refresh\n"
+    assert (saved / "topics" / local_file.name).read_text(encoding="utf-8") == "new local work after failure\n"
+    assert not new_file.exists()
+    assert (agent / "topics" / "old.mcs.yml").read_text(encoding="utf-8") == "before refresh edit\n"
+    assert (agent / ".component-map.json").read_bytes() == original_map
+    assert (tmp_path / ".local" / "config.json").read_bytes() == original_config
+
+    _run_setup(tmp_path, monkeypatch, refresh=True, inventory=[renamed])
+    assert new_file.read_text(encoding="utf-8") == renamed["data"]
+    assert not (agent / "topics" / "old.mcs.yml").exists()
+    assert "topics/renamed.mcs.yml" in json.loads((agent / ".component-map.json").read_text(encoding="utf-8"))
+    assert (saved / "topics" / new_file.name).read_text(encoding="utf-8") == "edited after failed refresh\n"
+    assert (saved / "topics" / local_file.name).read_text(encoding="utf-8") == "new local work after failure\n"
 
 @pytest.mark.parametrize("ctype,relative,data", [
     (15, "agent.mcs.yml", "kind: GptComponent\n"),

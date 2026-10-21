@@ -266,6 +266,31 @@ the working files, ownership map, baseline and selected configuration unchanged.
 Optional workflow or template-configuration fetch failures are not treated as
 evidence of deletion.
 
+**Recovering a partially written refresh:** a write or obsolete-file cleanup
+failure can leave newly extracted files beside the old ownership map. A retry
+may then correctly stop with a local-only-file conflict. Do not delete the map
+or bypass this safeguard.
+
+1. Release the reported file lock or correct the write permission.
+2. Use the **exact agent folder printed by the failed extraction**, not an
+   unrelated active agent from `.local/config.json`. Confirm its newest
+   `auto-save before refresh` checkpoint is from that failed attempt.
+3. From `solutions\ess-maker-skills`, restore that folder's complete pre-refresh
+   checkpoint, including its ownership map. Replace the example folder below
+   with the failed extraction's folder:
+
+   ```powershell
+   python -c "import sys; sys.path.insert(0, 'scripts'); from checkpoint import cmd_revert_reason; cmd_revert_reason(r'workspace\agents\selected-agent', 'auto-save before refresh')"
+   ```
+
+4. The command first saves the current working files in another checkpoint
+   marked `auto-save before named revert`. This preserves edits made after the
+   failure, including new local-only files, but does not automatically reapply
+   them. Note the printed checkpoint number before retrying the installer.
+5. Retry the installer. After a successful refresh, compare the saved checkpoint
+   and selectively reapply your authored changes. Do not copy the old
+   `.component-map.json` back over the successful refresh.
+
 The executable installer tests prefer Git Bash on Windows and verify that the
 chosen Bash can run their script paths and Python executable.
 An unusable WSL launcher does not prevent trying installed Git Bash.

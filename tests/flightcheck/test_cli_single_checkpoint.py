@@ -376,16 +376,53 @@ class TestGates:
         assert merged["tokenEndpoint"] == "https://workday.example/token"
         assert merged["agent"] == {"slug": "selected"}
 
-    @pytest.mark.parametrize("value", ["canonical", "", None])
-    def test_connect_config_explicit_canonical_fields_win_over_aliases(
-        self, tmp_path: Path, value: str | None
+    @pytest.mark.parametrize("scope", [None, {}, {"environmentId": "selected-environment"}])
+    def test_versioned_flat_connect_config_preserves_fields_absent_from_scope(
+        self, tmp_path: Path, scope,
     ) -> None:
+        payload = {
+            "schemaVersion": 12, "workdayTenant": "acme_impl", "tenantId": "provider-tenant",
+            "sidecarDataverseEndpoint": "https://sidecar.crm.dynamics.com",
+        }
+        if scope is not None:
+            payload["scope"] = scope
+        overlay = tmp_path / "projection.json"
+        overlay.write_text(json.dumps(payload), encoding="utf-8")
+        merged = cli._merge_connect_config({"agent": {"slug": "selected"}}, str(overlay))
+
+        assert merged["tenant"] == "acme_impl"
+        assert merged["tenantId"] == "provider-tenant"
+        assert merged["sidecarDataverseEndpoint"] == "https://sidecar.crm.dynamics.com"
+        assert merged["dataverseEndpoint"] == "https://sidecar.crm.dynamics.com"
+        assert merged["agent"] == {"slug": "selected"}
+
+    def test_versioned_connect_scope_overrides_only_present_flat_fields(self, tmp_path: Path) -> None:
         overlay = tmp_path / "projection.json"
         overlay.write_text(json.dumps({
+            "schemaVersion": 12, "workdayTenant": "flat", "tenantId": "flat-tenant",
+            "sidecarDataverseEndpoint": "https://sidecar.crm.dynamics.com",
+            "scope": {"workdayTenant": "scoped", "entraTenantId": "scoped-tenant"},
+        }), encoding="utf-8")
+        merged = cli._merge_connect_config({}, str(overlay))
+
+        assert merged["tenant"] == "scoped"
+        assert merged["tenantId"] == "scoped-tenant"
+        assert merged["dataverseEndpoint"] == "https://sidecar.crm.dynamics.com"
+
+    @pytest.mark.parametrize("version", [None, 12])
+    @pytest.mark.parametrize("value", ["canonical", "", None])
+    def test_connect_config_explicit_canonical_fields_win_over_aliases(
+        self, tmp_path: Path, value: str | None, version,
+    ) -> None:
+        overlay = tmp_path / "projection.json"
+        payload = {
             "tenant": value, "workdayTenant": "alias",
             "appIdUri": value, "entraAppIdUri": "alias",
             "tokenEndpoint": value, "oauthTokenUrl": "alias",
-        }), encoding="utf-8")
+        }
+        if version is not None:
+            payload["schemaVersion"] = version
+        overlay.write_text(json.dumps(payload), encoding="utf-8")
 
         merged = cli._merge_connect_config({}, str(overlay))
 

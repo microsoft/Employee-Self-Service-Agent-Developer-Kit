@@ -7,14 +7,20 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
+import re
 from dataclasses import replace
 from inspect import unwrap
 from types import SimpleNamespace
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import responses
+import yaml
 
 import auth
+from agentbuilder import AgentBuilderClient
 from flightcheck import cli, registry
 from flightcheck.checks import native_agent, publishing
 from flightcheck.da_contract import DA_CATALOG, DAFeature, DAFeatureEvidence
@@ -322,6 +328,61 @@ def test_discovered_workday_recomposes_cli_clients_and_persists_new_requirements
     else:
         assert "authentication is unavailable" in result.client_availability[registry.DATAVERSE]["reason"]
         assert any(row.checkpoint_id == "PROFILE-CLIENT-DATAVERSE" for row in result.results)
+
+
+@pytest.mark.parametrize(("realm", "realm_number"), [("test", 1), ("prod", 2)])
+@pytest.mark.parametrize("mismatch", [None, "cdsBotId", "schemaName", "realm", "commitSha"])
+def test_full_dispatch_release_pin_reads_assessed_realm_and_validates_configure_identity(
+    da_cli, monkeypatch, realm, realm_number, mismatch,
+):
+    """Mutate the captured configure contract to pin exact-realm/identity boundaries."""
+    cassette = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes" / "agentbuilder_readiness.yaml"
+    interaction = next(
+        item for item in yaml.safe_load(cassette.read_text(encoding="utf-8"))["interactions"]
+        if item["request"]["method"] == "GET" and "/configure" in item["request"]["uri"]
+    )
+    payload = json.loads(interaction["response"]["body"]["string"])
+    selected = da_cli.config["agents"][0]
+    selected.update(
+        botId=payload["cdsBotId"], schemaName=payload["schemaName"], expectedGrsCommitSha=payload["commitSha"],
+    )
+    da_cli.config["realm"] = realm
+    payload["realm"] = realm.title()
+    if mismatch:
+        payload[mismatch] = {
+            "cdsBotId": "00000000-0000-0000-0000-000000009999",
+            "schemaName": "gptagent_other", "realm": "Dev", "commitSha": 42,
+        }[mismatch]
+
+    class ReleasePinRunner(_OrchestrationRunner):
+        def register(self, category, fn):
+            if unwrap(fn) is registry.DA_CHECKPOINT_OVERRIDES["ENV-004-GRS"].category_fn:
+                FlightCheckRunner.register(self, category, fn)
+            else:
+                super().register(category, fn)
+
+    monkeypatch.setattr(cli, "FlightCheckRunner", ReleasePinRunner)
+    da_cli.native_client.side_effect = AgentBuilderClient
+    uri = re.compile(
+        rf"https://[^/]+/copilotstudio/minimalBots/alm/{selected['botId']}/configure(?:\?.*)?$"
+    )
+    with responses.RequestsMock() as http:
+        http.add(responses.GET, uri, json=payload, status=200)
+        assert da_cli.run("--scope", "full") == 1
+        assert len(http.calls) == 1
+        request = urlsplit(http.calls[0].request.url)
+        assert parse_qs(request.query)["realm"] == [str(realm_number)]
+        assert request.path.endswith(f"/{selected['botId']}/configure")
+
+    row = next(row for row in da_cli.captured["result"].results if row.checkpoint_id == "ENV-004-GRS")
+    if mismatch:
+        assert row.status == "Warning"
+        assert ("unavailable or invalid" if mismatch == "commitSha" else "did not match") in row.result
+        assert "exact selected agent, schema, assessed realm" in row.remediation
+    else:
+        assert row.status == "Passed"
+        assert f"realm {realm.title()}" in row.result
+        assert row.remediation == ""
 
 
 @pytest.mark.parametrize("dataverse", [False, True])

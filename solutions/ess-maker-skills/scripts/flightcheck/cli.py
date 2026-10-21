@@ -1092,10 +1092,14 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
             **overlay,
             **identifiers,
             **endpoints,
-            "workdayTenant": scope.get("workdayTenant"),
-            "tenantId": scope.get("entraTenantId"),
-            "sidecarDataverseEndpoint": scope.get("dataverseUrl"),
         }
+        for field, scope_field in (
+            ("workdayTenant", "workdayTenant"),
+            ("tenantId", "entraTenantId"),
+            ("sidecarDataverseEndpoint", "dataverseUrl"),
+        ):
+            if scope_field in scope:
+                overlay[field] = scope[scope_field]
         merged["_connectConfigScope"] = scope
         merged["_connectConfigRealm"] = overlay.get("activeTargetRealm")
         merged["_connectConfigPhases"] = overlay.get("phases", {})

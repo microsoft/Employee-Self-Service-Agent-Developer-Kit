@@ -180,15 +180,7 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
             getattr(runner, "config", None), getattr(runner, "agent_slug", None),
         )
         expected_schema = str(selected.get("schemaName") or "").strip()
-        returned_id = config.get("cdsBotId")
-        if (
-            not isinstance(returned_id, str)
-            or returned_id.casefold() != bot_id.casefold()
-            or _parse_alm_realm(config.get("realm")) != realm
-            or not expected_schema
-            or not isinstance(config.get("schemaName"), str)
-            or schema_name.casefold() != expected_schema.casefold()
-        ):
+        if not _alm_identity_matches(config, bot_id, realm, expected_schema):
             return [_result(
                 Status.BLOCKED.value,
                 "ALM metadata did not match the exact selected agent ID, schema and realm.",
@@ -323,6 +315,18 @@ def _alm_realm(runner) -> int | None:
     if raw is None:
         raw = _DEFAULT_ALM_REALM
     return _parse_alm_realm(raw)
+
+
+def _alm_identity_matches(config: Any, bot_id: str, realm: int, expected_schema: str) -> bool:
+    return (
+        isinstance(config, dict)
+        and isinstance(config.get("cdsBotId"), str)
+        and config["cdsBotId"].casefold() == bot_id.casefold()
+        and _parse_alm_realm(config.get("realm")) == realm
+        and isinstance(expected_schema, str) and bool(expected_schema.strip())
+        and isinstance(config.get("schemaName"), str)
+        and config["schemaName"].strip().casefold() == expected_schema.strip().casefold()
+    )
 
 
 def _parse_alm_realm(raw: Any) -> int | None:

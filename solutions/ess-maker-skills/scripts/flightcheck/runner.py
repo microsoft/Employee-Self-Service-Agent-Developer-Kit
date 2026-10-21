@@ -317,6 +317,7 @@ class FlightCheckRunner:
             ]
 
         declarative = is_declarative_agent(self)
+        includes_declarative = declarative and not self.results
         for result in self.results:
             result_declarative = declarative
             if "agentSlug" in result.evidence:
@@ -326,6 +327,7 @@ class FlightCheckRunner:
                     and subject_slug != ""
                     and is_declarative_agent(self, subject_slug=subject_slug)
                 )
+            includes_declarative = includes_declarative or result_declarative
             apply_documentation_context(result, declarative=result_declarative)
 
         # Build category summaries
@@ -394,7 +396,7 @@ class FlightCheckRunner:
             skipped=sum(c.skipped for c in cat_map.values()),
             errors=total_errors,
             overall=overall,
-            diagnostic_only=self.scope == "local" and declarative,
+            diagnostic_only=self.scope == "local" and includes_declarative,
         )
 
 

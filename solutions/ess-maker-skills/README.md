@@ -215,6 +215,9 @@ conflicting or repeated admin continuation links leave physical connection
 existence unverified; incomplete inventories cannot prove a connection is absent.
 
 Explicit `--connect-config` input accepts Workday connect state versions 2 through the current schema (v12), or the provider-generated flat projection. Both forms normalize the Workday tenant, Entra application URI, and OAuth token endpoint for validation without replacing the foundation agent identity. Unsupported state versions and malformed nested sections are rejected instead of silently losing provider configuration.
+Version-tagged flat projections retain their tenant and sidecar values when
+those fields are absent from nested scope; explicitly supplied canonical
+fields still take precedence over aliases.
 
 **DA full-contract implementation (in progress):**
 
@@ -239,6 +242,13 @@ DA local-only results carry additive `diagnostic_only: true` /
 `contract.diagnosticOnly: true` and explicitly say deployment readiness was
 not assessed in HTML/terminal output. Diagnostic statuses/exits and legacy
 local reports are unchanged.
+This boundary also applies to mixed local reports containing DA-owned results,
+even when a custom-engine agent is active. A report containing only
+custom-engine-owned results retains its existing behavior.
+
+An optional DA release-commit pin is checked in the verified assessment realm,
+not a legacy ALM realm alias or an implicit Dev default. The returned ALM
+agent ID, schema and realm must match before comparing its commit.
 
 `scripts/flightcheck/da_contract.py` defines the DA coverage inventory and
 pure applicability planning. It separates existing evaluators, observations,

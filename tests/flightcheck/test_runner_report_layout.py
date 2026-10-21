@@ -86,6 +86,51 @@ def test_da_local_reports_are_diagnostics_not_deployment_approval(tmp_path, caps
         assert "Local deployment readiness" in html
 
 
+@pytest.mark.parametrize("selected", ["hr", "legacy"])
+@pytest.mark.parametrize("status", ["Passed", "Warning"])
+def test_mixed_local_report_never_approves_da_deployment(tmp_path, capsys, selected, status):
+    from flightcheck.cli import _print_prioritized_summary, _run_exit_code
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="local")
+    runner.config = {
+        "activeAgent": selected,
+        "agents": [{"slug": "hr", "releaseLine": "da"}, {"slug": "legacy", "releaseLine": "ca"}],
+    }
+    rows = [_make_result(f"LOCAL-{slug}", status) for slug in ("hr", "legacy")]
+    for row, slug in zip(rows, ("hr", "legacy"), strict=True):
+        row.evidence["agentSlug"] = slug
+    runner.register("Local", lambda _runner: rows)
+    result = runner.run()
+    save_results(result, str(tmp_path))
+    _print_prioritized_summary(result)
+    terminal = capsys.readouterr().out
+    payload = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert result.overall == ("READY" if status == "Passed" else "READY_WITH_WARNINGS")
+    assert [row.status for row in result.results] == [status, status]
+    assert _run_exit_code(result) == 0
+    assert result.diagnostic_only is payload["diagnostic_only"] is payload["contract"]["diagnosticOnly"] is True
+    assert "Local files only; deployment readiness not assessed." in terminal
+    assert "Ready for deployment" not in terminal and "Ready for deployment" not in html
+    assert "DA local diagnostics" in html
+
+
+def test_local_custom_engine_only_results_do_not_inherit_a_da_siblings_boundary():
+    from flightcheck.runner import FlightCheckRunner
+
+    runner = FlightCheckRunner(scope="local")
+    runner.config = {
+        "activeAgent": "hr",
+        "agents": [{"slug": "hr", "releaseLine": "da"}, {"slug": "legacy", "releaseLine": "ca"}],
+    }
+    row = _make_result("LOCAL-LEGACY", "Passed")
+    row.evidence["agentSlug"] = "legacy"
+    runner.register("Local", lambda _runner: [row])
+    assert runner.run().diagnostic_only is False
+
+
 def _make_result(checkpoint_id, status, priority="High", category="Test"):
     """Lightweight CheckResult factory for layout tests."""
     from flightcheck.runner import CheckResult

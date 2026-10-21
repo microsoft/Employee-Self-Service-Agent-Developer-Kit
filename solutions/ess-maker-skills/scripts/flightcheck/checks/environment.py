@@ -22,6 +22,7 @@ from .licensing import (
     classify_copilot_studio_capacity,
 )
 from .da_baseline import manual_evidence_requirement
+from .solution import _alm_identity_matches, _alm_realm
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 from ..documentation import DOC_BASE
@@ -76,13 +77,16 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
     """Judge each configured agent against its own pin and realm, then fold."""
     config = getattr(runner, "config", None) or {}
     agents = configured_agents(config)
+    da_full = getattr(runner, "da_full_assessment", False) is True
+    assessment_realm = _alm_realm(runner) if da_full else None
 
     results: list[CheckResult] = []
     details: list[str] = []
     for agent in agents or [{}]:
         scoped_config = {**config, "agent": agent, "agents": []}
         result = _env004_grs_commit_pin_for_agent(
-            scoped_config, getattr(runner, "agentbuilder", None)
+            scoped_config, getattr(runner, "agentbuilder", None),
+            da_full=da_full, assessment_realm=assessment_realm,
         )
         expected = _env004_pin_value(scoped_config, _ENV004_GRS_EXPECTED_COMMIT_KEYS)
         if (
@@ -100,7 +104,7 @@ def _env004_grs_commit_pin_result(runner) -> CheckResult:
         return results[0]
     status = next(
         candidate for candidate in (
-            Status.FAILED.value, Status.WARNING.value,
+            Status.FAILED.value, Status.BLOCKED.value, Status.WARNING.value,
             Status.PASSED.value, Status.SKIPPED.value,
         )
         if any(result.status == candidate for result in results)
@@ -127,7 +131,9 @@ def _env004_pin_value(config: dict, keys: tuple[str, ...]) -> object:
     return None
 
 
-def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
+def _env004_grs_commit_pin_for_agent(
+    config: dict, client, *, da_full: bool = False, assessment_realm: int | None = None,
+) -> CheckResult:
     """Validate the minimalBots ALM commit pin (ENV-004-GRS).
 
     Opt-in component-layer check: verifies the deployed Declarative Agent's ALM
@@ -148,6 +154,8 @@ def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
         realm = _ENV004_GRS_REALMS.get(realm_raw.lower())
     elif type(realm_raw) is int and realm_raw in _ENV004_REALM_DISPLAY:
         realm = realm_raw
+    if da_full:
+        realm = assessment_realm
 
     if expected_commit is None or expected_commit == "":
         return CheckResult(
@@ -187,13 +195,17 @@ def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
             checkpoint_id="ENV-004-GRS",
             category="Environment",
             priority=Priority.HIGH.value,
-            status=Status.FAILED.value,
+            status=Status.BLOCKED.value if da_full else Status.FAILED.value,
             description=_ENV004_GRS_DESCRIPTION,
             result=(
+                "The verified DA assessment realm is unavailable."
+                if da_full else
                 f"Configured minimalBots ALM realm '{realm_raw}' is invalid. "
                 "Expected one of Dev, Test, or Prod."
             ),
             remediation=(
+                "Verify the exact selected agent's deployment realm, then rerun the full assessment."
+                if da_full else
                 "Set minimalBotsAlmRealm, grsRealm, or almRealm in "
                 ".local/config.json to Dev, Test, or Prod."
             ),
@@ -232,7 +244,15 @@ def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
         except Exception as e:  # noqa: BLE001 - surface a read failure as WARNING
             read_errors.append((bot_id, f"{type(e).__name__}: {e}"))
             continue
+        if da_full and not _alm_identity_matches(
+            data, bot_id, realm, config["agent"].get("schemaName", ""),
+        ):
+            read_errors.append((bot_id, "ALM metadata did not match the exact selected agent ID, schema and realm."))
+            continue
         observed_commit = (data or {}).get("commitSha") or ""
+        if da_full and (not isinstance(observed_commit, str) or not observed_commit.strip()):
+            read_errors.append((bot_id, "The assessed agent's commitSha is unavailable or invalid."))
+            continue
         if not observed_commit:
             missing_commit.append(bot_id)
         elif observed_commit.lower() != expected_commit.lower():
@@ -280,6 +300,8 @@ def _env004_grs_commit_pin_for_agent(config: dict, client) -> CheckResult:
                 f"{realm_name}: {detail}"
             ),
             remediation=(
+                "Verify the exact selected agent, schema, assessed realm and ALM read access, then retry the release-pin check."
+                if da_full else
                 "Ensure the agent is opted into minimalBots ALM for this realm "
                 "and that FlightCheck is signed in to Copilot Studio (AgentBuilder)."
             ),
