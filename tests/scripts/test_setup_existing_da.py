@@ -2404,28 +2404,20 @@ def test_capacity_warning_requires_explicit_administrator_skip(
     assert step["state"] == "blocked"
 
 
-def test_capacity_warning_accepts_administrator_attested_skip(
+@pytest.mark.parametrize("status", ["Warning", "Manual"])
+def test_capacity_first_result_accepts_administrator_attested_skip(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    status: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
     results_path = _write_flightcheck_results(
         tmp_path,
         "ENV-CAPACITY-001",
-        "Warning",
+        status,
     )
-    blocked = setup_existing_da.maintain_setup_flightcheck(
-        tmp_path,
-        agent_id=AGENT_ID,
-        checkpoint="ENV-CAPACITY-001",
-        results_path=results_path,
-    )
-    assert blocked["state"] == "blocked"
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "ENV-CAPACITY-001",
-        "Warning",
-    )
+    original_evidence = results_path.read_bytes()
+    assert _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]["state"] == "pending"
 
     exit_code = setup_existing_da.main(
         [
@@ -2452,9 +2444,10 @@ def test_capacity_warning_accepts_administrator_attested_skip(
     assert "A Power Platform administrator was present" in step["note"]
     assert "consented to override" in step["note"]
     assert "did not verify" in step["note"]
+    assert results_path.read_bytes() == original_evidence
 
 
-def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
+def test_capacity_warning_skip_requires_fresh_evidence(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
@@ -2463,10 +2456,14 @@ def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
         "ENV-CAPACITY-001",
         "Warning",
     )
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    stale_time = datetime.fromisoformat(step["updated_at"]).timestamp() - 1
+    os.utime(results_path, (stale_time, stale_time))
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="previously recorded zero allocation",
+        match="predate the current setup maintenance run",
     ):
         setup_existing_da.maintain_setup_flightcheck(
             tmp_path,
@@ -2475,44 +2472,39 @@ def test_capacity_warning_rejects_administrator_skip_without_recorded_zero(
             results_path=results_path,
             administrator_attested_skip=True,
         )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
-def test_capacity_manual_result_accepts_administrator_attested_skip(
+@pytest.mark.parametrize("status", ["Warning", "Manual"])
+@pytest.mark.parametrize("counter", ["failed", "errors"])
+def test_capacity_skip_rejects_untrustworthy_run_totals(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    status: str,
+    counter: str,
 ) -> None:
     _attach(FakeClient(), tmp_path)
     results_path = _write_flightcheck_results(
         tmp_path,
         "ENV-CAPACITY-001",
-        "Manual",
+        status,
     )
+    evidence = json.loads(results_path.read_text(encoding="utf-8"))
+    evidence[counter] = 1
+    results_path.write_text(json.dumps(evidence), encoding="utf-8")
+    state_before = (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes()
 
-    exit_code = setup_existing_da.main(
-        [
-            "maintain-flightcheck",
-            "--checkpoint",
-            "ENV-CAPACITY-001",
-            "--agent-id",
-            AGENT_ID,
-            "--results",
-            str(results_path),
-            "--administrator-attested-skip",
-            "--kit-root",
-            str(tmp_path),
-        ]
-    )
-
-    assert exit_code == 0
-    output = capsys.readouterr().out
-    assert '"state": "done"' in output
-    assert '"mode": "administrator-attested-skip"' in output
-    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
-    assert step["state"] == "done"
-    assert step["mode"] == "administrator-attested-skip"
-    assert "A Power Platform administrator was present" in step["note"]
-    assert "consented to override" in step["note"]
-    assert "did not verify" in step["note"]
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="requires a current Manual or Warning",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint="ENV-CAPACITY-001",
+            results_path=results_path,
+            administrator_attested_skip=True,
+        )
+    assert (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_bytes() == state_before
 
 
 @pytest.mark.parametrize(

@@ -1036,18 +1036,6 @@ def maintain_setup_flightcheck(
                 "Administrator-attested skip requires a current Manual or "
                 "Warning ENV-CAPACITY-001 result."
             )
-        if statuses == {"Warning"}:
-            current_step = agent_state["steps"][step_id]
-            if (
-                current_step.get("state") != "blocked"
-                or current_step.get("checkpoint") != "ENV-CAPACITY-001"
-                or not current_step.get("failure_causes")
-            ):
-                raise ExistingDASetupError(
-                    "Administrator-attested skip for Warning requires a "
-                    "previously recorded zero allocation and a fresh Warning "
-                    "recheck."
-                )
         complete = True
     elif requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}

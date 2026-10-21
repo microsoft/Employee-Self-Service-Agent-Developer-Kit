@@ -2298,11 +2298,32 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "--manual-attested" not in text
     assert "--manual-overridden" not in text
     assert "requires an observed allocation greater than zero" in normalized
-    assert (
-        "Apply the first `Warning` without a skip flag to record that zero allocation"
-        in normalized
+    assert "The first eligible result can be used for administrator attestation" in normalized
+    shared_capacity = " ".join(
+        _PERMISSION_GUIDANCE.read_text(encoding="utf-8").split(
+            "## Capacity verification and administration", 1,
+        )[1].split()
     )
-    assert "the recheck still found 0 allocated credits" in normalized
+    assert "after the first successful zero-allocation result" in shared_capacity
+    assert "**Check again** is optional" in shared_capacity
+    assert "after a second successful zero-allocation result" not in shared_capacity
+    assert (
+        "`Failed` and `Error` are not eligible for administrator-attested skip"
+        in shared_capacity
+    )
+    assert "after a second zero-allocation result" not in text
+    assert "**Check again before overriding**" not in text
+    warning_choices = text.split("For `Warning`, present:", 1)[1].split(
+        "When the status is `Manual`", 1
+    )[0]
+    assert "- **Check again**" in warning_choices
+    assert "- **Continue with administrator-attested skip**" in warning_choices
+    assert "- **Not yet**" in warning_choices
+    assert "- **Help me decide**" in warning_choices
+    assert "> ⚠️ **Administrator consent required**" in warning_choices
+    assert "The original zero-allocation result remains the recorded evidence." in warning_choices
+    assert "A capacity check of {environment display name}" in text
+    assert "A recheck of {environment display name}" not in text
     assert (
         "Never treat the maker's statement that capacity was allocated as verification"
         in normalized
