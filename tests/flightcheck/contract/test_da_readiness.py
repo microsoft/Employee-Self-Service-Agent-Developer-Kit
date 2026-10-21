@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 from html import unescape
+from html.parser import HTMLParser
 import json
 import re
 from types import SimpleNamespace
@@ -238,14 +239,14 @@ def test_da_report_groups_work_without_hiding_assertions_or_self_approving_templ
     before = deepcopy(case.result)
     save_results(case.result, str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
-    assert "Entra administrator handoff" in html
+    assert "Ask your Microsoft Entra administrator" in html
     assert 'id="chk-wd-entra-scope-001"' in html
     assert 'id="chk-wd-entra-consent-001"' in html
-    assert "2 Skipped" in html
+    assert "2 Not checked" in html
     assert " ok</span>" not in html and " fail</span>" not in html
     assert "Mark as verified" not in html
-    assert "No browser checkbox verifies a requirement" in html
-    assert "Evidence to collect" in html
+    assert "Opening this report or copying a review form does not complete a check" in html
+    assert "What to record" in html
     assert 'aria-label="Report sections"' in html
     templates = re.findall(r"<textarea[^>]*>(.*?)</textarea>", html, re.DOTALL)
     assert templates
@@ -254,6 +255,71 @@ def test_da_report_groups_work_without_hiding_assertions_or_self_approving_templ
     assert record["reviewed"] is False
     assert record["target"] == case.result.da_assessment["target"]
     assert _assessment(case, [record])["evidenceReviews"][0]["accepted"] is False
+    assert case.result == before
+
+
+@pytest.mark.parametrize("outcome,label", [
+    (None, "More checks needed"),
+    ("satisfied", "Ready for this environment"),
+    ("defect", "Issues need fixing"),
+])
+def test_report_explains_readiness_without_exposing_internal_status_codes(tmp_path, outcome, label):
+    case = _case()
+    case.result.da_assessment = _assessment(case, [_record(case, outcome=outcome)] if outcome else None)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert f'>{label}</span>' in html
+    assert "<dt>Environment type</dt><dd>Development</dd>" in html
+    assert "This result applies only to the agent, environment and version checked" in html
+
+
+def test_customer_copy_keeps_exact_requirements_and_jargon_in_support_details(tmp_path):
+    class CustomerText(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.details = []
+            self.script_or_style = False
+            self.text = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "details":
+                self.details.append("support-details" in dict(attrs).get("class", "").split())
+            if tag in {"script", "style"}:
+                self.script_or_style = True
+
+        def handle_endtag(self, tag):
+            if tag == "details":
+                self.details.pop()
+            if tag in {"script", "style"}:
+                self.script_or_style = False
+
+        def handle_data(self, data):
+            if not any(self.details) and not self.script_or_style:
+                self.text.append(data)
+
+    case = _case("LIC-FLOW-001", "LIC-FLOW-002", "WD-ENTRA-SCOPE-001", "CONFIG-013", "WD-CONN-013")
+    case.result.da_assessment = _assessment(case)
+    before = deepcopy(case.result)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    parser = CustomerText()
+    parser.feed(html)
+    customer_text = " ".join(parser.text)
+    for phrase in (
+        "What to do next", "Confirm which features you use", "Licensing for each automated task",
+        "License coverage for your employees", "Knowledge sources and employee access",
+        "Approved application permissions", "Who can help", "What to record",
+    ):
+        assert phrase in customer_text
+    for jargon in (
+        "native", "attestation", "snapshot", "checkpoint", "applicability", "realm", "service ring", "maker", "agent developer",
+        "configuration revision", "scheduled selectors", "assertion", "target-bound",
+        "LIC-FLOW-001", "approvedScopes", "INCOMPLETE",
+    ):
+        assert re.search(r"\b" + re.escape(jargon) + r"\b", customer_text, re.IGNORECASE) is None
+    assert "approvedScopes" in html and "LIC-FLOW-001" in html
+    assert "<code>Allow permission to share parameters</code>" in html
+    assert "flow-by-flow rationale" in html
     assert case.result == before
 
 
@@ -379,8 +445,8 @@ def test_full_report_uses_one_versioned_decision_and_escapes_review_sources(tmp_
     assert saved["overall"] == saved["contract"]["overall"] == "READY"
     assert assessment["deploymentReadiness"] == "INCOMPLETE"
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
-    assert "Diagnostics: READY" in html and "DA deployment readiness" in html
-    assert "INCOMPLETE" in html and "Coverage reconciliation" in html
+    assert "More checks needed" in html and "Readiness for employee use" in html
+    assert "INCOMPLETE" in html and "Full check list" in html
     assert "<script>not executable</script>" not in html
     assert "&lt;script&gt;not executable&lt;/script&gt;" in html
     cli._print_prioritized_summary(case.result)

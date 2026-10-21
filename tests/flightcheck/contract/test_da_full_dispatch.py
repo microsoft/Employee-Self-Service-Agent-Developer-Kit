@@ -384,8 +384,8 @@ def test_full_cli_uses_verified_read_only_plan_and_persists_gaps(da_cli, dataver
     html = (da_cli.output / "report.html").read_text(encoding="utf-8")
     assert "DA-PLAN-COVERAGE" in html
     assert "Full DA dispatch remains incomplete" in html
-    assert "DA deployment readiness" in html
-    assert "Coverage reconciliation" in html
+    assert "Readiness for employee use" in html
+    assert "Full check list" in html
     assert da_cli.telemetry.call_args.kwargs["scope"] == "full"
     da_cli.licensing.authenticate.assert_called_once_with(preferred_username=ACCOUNT)
 

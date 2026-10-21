@@ -327,6 +327,10 @@ These remain in the private report/JSON, never telemetry.
 No external UI assets, tracking or additional runtime dependency is required.
 Previously generic evidence may need checkpoint-specific details; use the
 current report's required fields rather than reusing an incomplete old record.
+Customer-facing summaries, next steps and review fields use plain language.
+Internal check references, original findings, exact evidence field names,
+version identifiers and rerun commands remain available in expandable support
+details. Friendly status labels do not change the JSON status or readiness policy.
 
 **Reviewed external evidence (DA full only):** run once to obtain the report's
 exact `target`, `configurationRevision` and requirement-specific
