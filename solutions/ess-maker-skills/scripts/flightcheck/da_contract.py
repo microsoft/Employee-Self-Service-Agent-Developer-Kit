@@ -41,6 +41,14 @@ class DAFeature(str, Enum):
     ALM_PROMOTION = "alm_promotion"
 
 
+DA_REVIEWABLE_FEATURES = frozenset({
+    DAFeature.TEAMS, DAFeature.DATAVERSE_CUSTOMIZATION,
+    DAFeature.WORKDAY_CUSTOMIZATIONS, DAFeature.WORKDAY_WRITES,
+    DAFeature.KNOWLEDGE, DAFeature.GRAPH_CONNECTOR, DAFeature.HANDOFF,
+    DAFeature.CUSTOM_TOPICS, DAFeature.EXTERNAL_ENDPOINTS, DAFeature.ALM_PROMOTION,
+})
+
+
 class DADisposition(str, Enum):
     EVALUATOR = "evaluator"
     REVIEW = "requires_da_review"
@@ -144,10 +152,11 @@ def _group(
 
 DA_CATALOG: tuple[DACheckpoint, ...] = (
     *_group(
-        "DA-INTEGRATIONS-001", "Integration applicability", DADisposition.OBSERVATION,
-        "Observe selected-agent dependencies and exact Workday Connect intent; "
-        "neither observation completes setup, Connect or deployment approval.",
-        _MAKER + _PP, required=False,
+        "DA-INTEGRATIONS-001", "Integration applicability", DADisposition.MANUAL,
+        "Review unobservable feature choices for the exact assessed target and "
+        "configuration. Declarations cannot replace observed dependencies or "
+        "the separate checks for enabled features.",
+        _MAKER + _PP,
     ),
     *_group(
         "WD-DA-MAKER-001", "Workday maker validation", DADisposition.MANUAL,
@@ -227,9 +236,9 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, required=False, replacements=("ENV-004", "ENV-004-COVERAGE"),
     ),
     *_group(
-        "ENV-009", "Dataverse customization", DADisposition.REVIEW,
-        "Preferred unmanaged solutions concern explicit Dataverse customization, "
-        "not native DA authoring or mere runtime-package presence.",
+        "ENV-009", "Dataverse customization", DADisposition.MANUAL,
+        "Review the selected runtime's explicit custom Dataverse changes and "
+        "solution ownership, not native authoring or mere package presence.",
         _PP, feature=DAFeature.DATAVERSE_CUSTOMIZATION,
     ),
     *_group(
@@ -261,9 +270,9 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         feature=DAFeature.SAP_SUCCESSFACTORS,
     ),
     *_group(
-        "EXT-002 EXT-002-ACL", "Graph connector knowledge", DADisposition.REVIEW,
-        "Legacy PVA discovery and schema operations do not establish native "
-        "DA indexing, crawl or item-access readiness.",
+        "EXT-002 EXT-002-ACL", "Graph connector knowledge", DADisposition.MANUAL,
+        "Use target-bound administrator evidence for connected source setup and "
+        "item access, without legacy PVA discovery or maker Graph authentication.",
         _M365, feature=DAFeature.GRAPH_CONNECTOR,
     ),
     *_group(
@@ -436,9 +445,9 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, feature=DAFeature.WORKDAY,
     ),
     *_group(
-        "WD-REF-001 WD-WF-CAT-001", "Workday customization", DADisposition.REVIEW,
-        "Adapt legacy template/scenario inventory to the selected DA's "
-        "explicitly enabled custom scenarios.",
+        "WD-REF-001 WD-WF-CAT-001", "Workday customization", DADisposition.MANUAL,
+        "Review exact custom Workday settings and enabled scenario coverage "
+        "without legacy template assumptions or employee write transactions.",
         _MAKER + _WORKDAY, feature=DAFeature.WORKDAY_CUSTOMIZATIONS,
     ),
     *_group(
@@ -513,9 +522,10 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _PP, required=False, kind="family",
     ),
     *_group(
-        "EXT-002-NNN", "Graph connector knowledge", DADisposition.REVIEW,
-        "Per-source observations require validated native knowledge discovery.",
-        _M365, feature=DAFeature.GRAPH_CONNECTOR, kind="family",
+        "EXT-002-NNN", "Graph connector knowledge", DADisposition.SUPERSEDED,
+        "The fixed selected-source review retains the connected-source inventory "
+        "without unvalidated per-source PVA discovery.",
+        _M365, required=False, kind="family", replacements=("EXT-002",),
     ),
     *_group(
         "TOPIC-020-NNN", "Handoff", DADisposition.SUPERSEDED,
@@ -530,11 +540,17 @@ DA_CATALOG: tuple[DACheckpoint, ...] = (
         _MAKER, feature=DAFeature.HANDOFF,
     ),
     *_group(
+        "DA-CUSTOM-TOPICS-001", "Custom topics", DADisposition.MANUAL,
+        "Review the selected agent's enabled custom conversations, starting "
+        "conditions, dependencies and representative read-only test evidence.",
+        _MAKER, feature=DAFeature.CUSTOM_TOPICS,
+    ),
+    *_group(
         "TOPIC-TRIGGER-NNN TOPIC-INTEGRATION-NNN", "Custom topics",
-        DADisposition.REVIEW,
-        "Custom-topic baseline and placeholder checks need selected-agent "
-        "DA applicability; they do not validate all shipped topics.",
-        _MAKER, feature=DAFeature.CUSTOM_TOPICS, kind="family",
+        DADisposition.SUPERSEDED,
+        "The selected-agent custom-conversation review replaces legacy placeholder "
+        "families; shipped conversations are not automatically custom.",
+        _MAKER, required=False, kind="family", replacements=("DA-CUSTOM-TOPICS-001",),
     ),
     *_group(
         "WD-CONN-002+ WD-FLOW-NNN", "Workday", DADisposition.SUPERSEDED,
@@ -602,14 +618,12 @@ def validate_da_catalog(catalog: Sequence[DACheckpoint] = DA_CATALOG) -> None:
         visit(key, frozenset())
 
 
-def build_da_coverage_plan(
+def resolve_da_feature_evidence(
     features: Mapping[DAFeature, DAFeatureEvidence],
-    *,
-    catalog: Sequence[DACheckpoint] = DA_CATALOG,
-) -> tuple[DACoverageEntry, ...]:
-    """Account for every definition; unknown applicability never becomes disabled."""
-    validate_da_catalog(catalog)
-    for feature, evidence in features.items():
+) -> dict[DAFeature, DAFeatureEvidence]:
+    """Derive only logical feature relationships, retaining their provenance."""
+    resolved = dict(features)
+    for feature, evidence in resolved.items():
         if not isinstance(feature, DAFeature):
             raise ValueError(f"Unknown DA feature: {feature!r}.")
         if not isinstance(evidence, DAFeatureEvidence):
@@ -621,16 +635,50 @@ def build_da_coverage_plan(
         (DAFeature.GRAPH_CONNECTOR, DAFeature.KNOWLEDGE),
         (DAFeature.NATIVE_CONNECTIONS, DAFeature.CONNECTORS),
     ):
-        child_evidence = features.get(child)
-        parent_evidence = features.get(parent)
-        if (
-            child_evidence is not None and child_evidence.enabled is True
-            and parent_evidence is not None and parent_evidence.enabled is False
+        child_evidence = resolved.get(child)
+        parent_evidence = resolved.get(parent)
+        if child_evidence is not None and child_evidence.enabled is True:
+            if parent_evidence is not None and parent_evidence.enabled is False:
+                raise ValueError(
+                    f"Conflicting DA feature evidence: {child.value} is enabled "
+                    f"while {parent.value} is disabled."
+                )
+            if parent_evidence is None or parent_evidence.enabled is None:
+                resolved[parent] = DAFeatureEvidence(
+                    True, f"Enabled {child.value}: {child_evidence.source}",
+                )
+        elif (
+            parent_evidence is not None and parent_evidence.enabled is False
+            and (child_evidence is None or child_evidence.enabled is None)
         ):
-            raise ValueError(
-                f"Conflicting DA feature evidence: {child.value} is enabled "
-                f"while {parent.value} is disabled."
+            resolved[child] = DAFeatureEvidence(
+                False, f"Disabled {parent.value}: {parent_evidence.source}",
             )
+
+    for integration in (DAFeature.WORKDAY, DAFeature.SERVICENOW):
+        evidence = resolved.get(integration)
+        if evidence is None or evidence.enabled is not True:
+            continue
+        endpoints = resolved.get(DAFeature.EXTERNAL_ENDPOINTS)
+        if endpoints is not None and endpoints.enabled is False:
+            raise ValueError(
+                f"Conflicting DA feature evidence: {integration.value} requires external_endpoints."
+            )
+        if endpoints is None or endpoints.enabled is None:
+            resolved[DAFeature.EXTERNAL_ENDPOINTS] = DAFeatureEvidence(
+                True, f"Enabled {integration.value}: {evidence.source}",
+            )
+    return resolved
+
+
+def build_da_coverage_plan(
+    features: Mapping[DAFeature, DAFeatureEvidence],
+    *,
+    catalog: Sequence[DACheckpoint] = DA_CATALOG,
+) -> tuple[DACoverageEntry, ...]:
+    """Account for every definition; unknown applicability never becomes disabled."""
+    validate_da_catalog(catalog)
+    features = resolve_da_feature_evidence(features)
 
     entries = []
     excluded = {

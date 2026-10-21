@@ -847,13 +847,19 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 status=Status.MANUAL.value,
                 description=(
                     "Approved representative evaluation library"
-                    if da_full and c["id"] == "QA-001" else c["desc"]
+                    if da_full and c["id"] == "QA-001" else
+                    "Separately approved promotion evidence"
+                    if da_full and c["id"] == "PUB-002" else c["desc"]
                 ),
                 result=(
                     "This assessment has not accepted target-bound release evidence."
                     if da_full and c["id"] != "PUB-011" else c["result"]
                 ),
                 remediation=(
+                    "Review the separately authorized promotion's source artifact, "
+                    "source/destination realms, approval and result. This read-only "
+                    "assessment does not run an import probe or promote an agent."
+                    if da_full and c["id"] == "PUB-002" else
                     "Record stakeholder-approved intent, risk and permission coverage "
                     "for the selected release. Use the agreed quality and acceptance "
                     "criteria; prompt count alone does not establish coverage."
@@ -863,7 +869,10 @@ def run_publishing_checks(runner) -> list[CheckResult]:
                 roles=c["roles"],
                 evidence=(
                     manual_evidence_requirement(
-                        runner, ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
+                        runner,
+                        ("sourceArtifact", "sourceRealm", "destinationRealm", "promotionApproval", "promotionResult")
+                        if c["id"] == "PUB-002" else
+                        ("publishedChannel", "releaseRevision", "testOrApprovalRecord", "outcome"),
                     ) if da_full and c["id"] != "PUB-011" else {}
                 ),
             )

@@ -782,7 +782,7 @@ for _key in ("CONFIG-007", "CONFIG-005", "TOPIC-011", "CONFIG-012", "CONFIG-014"
         key=_key, category_fn=run_da_local_file_checks, category_label="Local Files",
         roles=(Role.ESS_MAKER.value,),
     )
-for _key in ("QA-001", "QA-002", "QA-012", "PUB-003", "PUB-006", "PUB-011"):
+for _key in ("QA-001", "QA-002", "QA-012", "PUB-002", "PUB-003", "PUB-006", "PUB-011"):
     DA_CHECKPOINT_OVERRIDES[_key] = CheckpointSpec(
         key=_key, category_fn=run_publishing_checks, category_label="Publishing",
         roles=(Role.ESS_MAKER.value,),
@@ -811,9 +811,11 @@ for _key in ("DV-CONN-001", "WD-REST-002"):
     )
 
 REGISTRY: dict[str, CheckpointSpec] = {spec.key: spec for spec in _SPECS}
+# DA-only review replacements must not become legacy checkpoint evaluators.
+_DA_ONLY_REVIEWS = {"ENV-009", "EXT-002", "EXT-002-ACL", "WD-REF-001", "WD-WF-CAT-001"}
 REGISTRY.update({
     key: spec for key, spec in DA_CHECKPOINT_OVERRIDES.items()
-    if key not in REGISTRY and not any(
+    if key not in REGISTRY and key not in _DA_ONLY_REVIEWS and not any(
         existing.is_family and key.startswith(existing.key + "-")
         for existing in _SPECS
     )

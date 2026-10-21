@@ -14,7 +14,10 @@ import re
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from .da_contract import DAApplicability, DACheckpoint, DADisposition
+from .da_contract import (
+    DAApplicability, DACheckpoint, DADisposition, DAFeature, DAFeatureEvidence,
+    DA_REVIEWABLE_FEATURES, build_da_coverage_plan, resolve_da_feature_evidence,
+)
 from .runner import CheckResult, RunResult, Status
 
 if TYPE_CHECKING:
@@ -130,9 +133,40 @@ def _family_matches(key: str, checkpoint_id: str) -> bool:
     return False
 
 
+def _feature_evidence(
+    record: dict, observed: dict[DAFeature, DAFeatureEvidence],
+) -> dict[DAFeature, DAFeatureEvidence]:
+    details = record.get("details")
+    flags = details.get("features") if isinstance(details, dict) else None
+    if not isinstance(flags, dict) or not flags:
+        raise ValueError("The feature review requires explicit feature choices.")
+    declared = {}
+    for name, enabled in flags.items():
+        try:
+            feature = DAFeature(name)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Unknown feature in the applicability review: {name!r}.") from exc
+        if feature not in DA_REVIEWABLE_FEATURES or (
+            enabled is not None and type(enabled) is not bool
+        ):
+            raise ValueError(f"Feature {name} is not reviewable or lacks an explicit boolean choice.")
+        if enabled is None:
+            continue
+        existing = observed.get(feature)
+        if existing is not None and existing.enabled is not None:
+            if existing.enabled != enabled:
+                raise ValueError(f"Feature {name} contradicts the observed feature evidence.")
+            continue
+        declared[feature] = DAFeatureEvidence(
+            enabled, f"Reviewed feature applicability: {record.get('source', '')}",
+        )
+    return resolve_da_feature_evidence({**observed, **declared})
+
+
 def _review_record(
     record: dict, spec: DACheckpoint, rows: list[CheckResult],
     target: dict[str, str], revision: str | None, now: datetime,
+    *, features: dict[DAFeature, DAFeatureEvidence] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     supplied_target = record.get("target")
@@ -171,16 +205,25 @@ def _review_record(
             break
         required_fields.update(fields)
     details = record.get("details")
+    detail_fields = required_fields - _BASE_FIELDS
+    if spec.key == "DA-INTEGRATIONS-001":
+        detail_fields -= {"features"}  # Validated separately; null choices remain unknown.
     if not rows or not isinstance(details, dict) or any(
-        not _present(details.get(field)) for field in required_fields - _BASE_FIELDS
+        not _present(details.get(field)) for field in detail_fields
     ):
         errors.append("evidence_required_details_missing")
     kind = (
+        "feature_applicability" if spec.key == "DA-INTEGRATIONS-001" else
         "published_employee_runtime" if spec.key in _RUNTIME_RUN_FIELDS else
         "maker_test_pane" if spec.key == "WD-DA-MAKER-001" else "manual_attestation"
     )
     if record.get("evidenceKind") != kind:
         errors.append("evidence_kind_mismatch")
+    if spec.key == "DA-INTEGRATIONS-001":
+        try:
+            _feature_evidence(record, features or {})
+        except ValueError:
+            errors.append("evidence_features_invalid_or_conflicting")
     if isinstance(details, dict) and spec.key in _RUNTIME_RUN_FIELDS:
         runs = details.get(_RUNTIME_RUN_FIELDS[spec.key])
         outcomes = details.get("outcomes")
@@ -210,6 +253,42 @@ def _review_record(
     return list(dict.fromkeys(errors))
 
 
+def reviewed_da_features(
+    execution: DAExecutionPlan, result: RunResult, runner, records: list[dict] | None,
+    *, now: datetime | None = None,
+) -> dict[DAFeature, DAFeatureEvidence]:
+    """Admit only reviewed choices bound to the same live configuration evidence."""
+    observed = dict(runner._da_observed_features)
+    pin = next(
+        (entry for entry in execution.coverage if entry.checkpoint.feature == DAFeature.REVISION_PIN),
+        None,
+    )
+    if pin is not None:
+        observed[DAFeature.REVISION_PIN] = DAFeatureEvidence(
+            pin.applicability == DAApplicability.APPLICABLE, pin.evidence_source,
+        )
+    record = next(
+        (record for record in records or [] if record["checkpointId"] == "DA-INTEGRATIONS-001"),
+        None,
+    )
+    spec = next(
+        (entry.checkpoint for entry in execution.coverage if entry.checkpoint.key == "DA-INTEGRATIONS-001"),
+        None,
+    )
+    if record is None or spec is None:
+        return observed
+    target = _target(runner, result)
+    errors = _review_record(
+        record, spec,
+        [row for row in result.results if row.checkpoint_id == spec.key],
+        target, _revision(runner, result, target), now or datetime.now(timezone.utc),
+        features=observed,
+    )
+    if errors or record.get("outcome") != "satisfied":
+        return observed
+    return _feature_evidence(record, observed)
+
+
 def build_da_assessment(
     execution: DAExecutionPlan,
     result: RunResult,
@@ -224,7 +303,13 @@ def build_da_assessment(
         raise ValueError("Assessment time requires an explicit timezone.")
     target = _target(runner, result)
     revision = _revision(runner, result, target)
-    by_key = {entry.checkpoint.key: entry for entry in execution.coverage}
+    coverage_entries = execution.coverage
+    if hasattr(runner, "_da_observed_features"):
+        features = reviewed_da_features(execution, result, runner, records, now=now)
+        coverage_entries = build_da_coverage_plan(
+            features, catalog=tuple(entry.checkpoint for entry in execution.coverage),
+        )
+    by_key = {entry.checkpoint.key: entry for entry in coverage_entries}
     matched: dict[str, list[CheckResult]] = defaultdict(list)
     other_rows = []
     for row in result.results:
@@ -250,7 +335,7 @@ def build_da_assessment(
     entries = []
     reviews = []
     selected = set(execution.profile.checkpoint_ids)
-    for entry in execution.coverage:
+    for entry in coverage_entries:
         spec = entry.checkpoint
         rows = matched[spec.key]
         statuses = [row.status for row in rows]
@@ -289,7 +374,10 @@ def build_da_assessment(
         record = evidence.get(spec.key)
         if record is not None:
             errors = (
-                _review_record(record, spec, rows, target, revision, now)
+                _review_record(
+                    record, spec, rows, target, revision, now,
+                    features=getattr(runner, "_da_observed_features", None),
+                )
                 if required and applicable and coverage == "observed" else
                 ["evidence_not_applicable_to_observed_requirement"]
             )

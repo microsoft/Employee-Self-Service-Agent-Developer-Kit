@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from ..agent_scope import active_agent
-from ..da_contract import DAFeature, DAFeatureEvidence
+from ..da_contract import DAFeature, DAFeatureEvidence, DA_REVIEWABLE_FEATURES
 from ..runner import BLOCK_REASON_CHECKPOINT_CONTRACT, CheckResult, Priority, Role, Status
 from ._connection_dependencies import audit_connections
 from .da_baseline import manual_evidence_requirement
@@ -83,24 +83,25 @@ def run_da_integration_checks(runner) -> list[CheckResult]:
     features = getattr(runner, "_da_feature_evidence", {})
     rows = []
     if runner.should_execute("DA-INTEGRATIONS-001"):
-        incomplete = not features or any(value.enabled is None for value in features.values())
         rows.append(CheckResult(
             "DA-INTEGRATIONS-001", "DA Integrations", Priority.HIGH.value,
-            Status.WARNING.value if incomplete else Status.PASSED.value,
-            "Selected DA integration applicability",
-            "Recorded dependency applicability; unresolved states remain unknown."
-            if features else "Selected-agent dependency discovery was unavailable.",
-            (
-                "Incomplete configuration evidence is not proof of a runtime failure. "
-                "Review ENV-004, restore exact dependency read access and rerun."
-                if incomplete else ""
-            ),
+            Status.MANUAL.value,
+            "Features used by the selected agent",
+            f"Recorded {len(features)} feature observation(s); unobservable feature "
+            "choices require an exact-target review.",
+            "Review which features this agent uses and record explicit true/false "
+            "choices in the feature review form. Leave unknown choices unresolved; "
+            "do not change observed dependencies. Include the reviewed form with "
+            "--da-evidence on the next full assessment. Enabled features still "
+            "require their separate checks and reviews.",
             roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             evidence={
+                **manual_evidence_requirement(runner, ("features",)),
                 "features": {
                     feature.value: {"enabled": value.enabled, "source": value.source}
                     for feature, value in features.items()
                 },
+                "reviewableFeatures": sorted(feature.value for feature in DA_REVIEWABLE_FEATURES),
                 "sap": "excluded_from_DA_scope",
                 "evidenceBoundary": "dependency_configuration_not_connect_completion_or_employee_execution",
             },

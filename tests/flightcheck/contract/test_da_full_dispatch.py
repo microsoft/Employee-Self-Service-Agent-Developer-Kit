@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from inspect import unwrap
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -23,9 +24,13 @@ import auth
 from agentbuilder import AgentBuilderClient
 from flightcheck import cli, registry
 from flightcheck.checks import native_agent, publishing
-from flightcheck.da_contract import DA_CATALOG, DAFeature, DAFeatureEvidence
+from flightcheck.da_contract import DA_CATALOG, DA_REVIEWABLE_FEATURES, DAFeature, DAFeatureEvidence
 from flightcheck.da_execution import build_da_execution_plan, da_full_requested
+from flightcheck.da_readiness import DA_EVIDENCE_SCHEMA
+from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.runner import CheckResult, FlightCheckRunner, Priority, Role, Status
+from tests.conftest import require_validated_mock
+from tests.mocks import powerplatform as pp
 
 
 ENV_ID = "00000000-0000-0000-0000-000000002222"
@@ -250,6 +255,7 @@ def da_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "PPAdminClient", admin_client)
     monkeypatch.setattr(cli, "PowerPlatformClient", licensing_client)
     monkeypatch.setattr(cli, "FlightCheckRunner", _OrchestrationRunner)
+    real_prepare = cli._prepare_da_integration_execution
     prepare = Mock(side_effect=lambda _runner, _args, execution: (execution, None))
     monkeypatch.setattr(cli, "_prepare_da_integration_execution", prepare)
     monkeypatch.setattr(auth, "discover_tenant", lambda _url: TENANT_ID)
@@ -296,8 +302,181 @@ def da_cli(tmp_path, monkeypatch):
         native_client=native_client, connectivity_client=connectivity_client,
         admin=admin, admin_client=admin_client, telemetry=telemetry, browser=browser,
         output=tmp_path / "out", licensing=licensing, licensing_client=licensing_client,
-        prepare=prepare,
+        prepare=prepare, real_prepare=real_prepare,
     )
+
+
+def test_all_supported_features_have_approved_required_dispatch():
+    features = {
+        feature: DAFeatureEvidence(True, "Explicit domain applicability evidence.")
+        for feature in DAFeature
+        if feature not in {DAFeature.SAP_SUCCESSFACTORS, DAFeature.REVISION_PIN}
+    }
+    plan = build_da_execution_plan(_config(), features=features)
+    assert len(plan.coverage) == len(DA_CATALOG)
+    assert not plan.pending
+    assert "DA-CUSTOM-TOPICS-001" in plan.profile.checkpoint_ids
+    assert "PUB-002" in plan.profile.checkpoint_ids
+    assert registry.GRAPH not in plan.requirements.clients
+
+
+def test_staged_package_exception_is_retained_as_a_reusable_error(monkeypatch):
+    from flightcheck.checks import da_integrations
+
+    execution = build_da_execution_plan(_config())
+    runner = FlightCheckRunner(scope="full", target_matcher=execution.matches)
+    runner.config, runner.agent_slug = execution.config, "hr"
+    runner.env_id, runner.env_url, runner.dv_token = ENV_ID, "", None
+    runner.ring, runner.validation_context = "prod", {"realm": "dev"}
+    monkeypatch.setattr(cli, "run_native_agent_checks", lambda _runner: [
+        _passed("DA-AGENT-001"), _passed("DA-CONTENT-001"),
+    ])
+    monkeypatch.setattr(da_integrations, "discover_da_features", lambda _runner: {})
+    package = Mock(side_effect=RuntimeError("Unexpected package read failure"))
+    monkeypatch.setattr(cli, "run_solution_checks", package)
+    args = SimpleNamespace(_da_evidence_records=[{"checkpointId": "DA-INTEGRATIONS-001"}])
+    cli._prepare_da_integration_execution(runner, args, execution)
+    rows = runner._da_prepared_results[package]
+    assert len(rows) == 1
+    assert rows[0].status == "Error"
+    assert rows[0].evidence["executionError"] is True
+    assert "Unexpected package read failure" in rows[0].result
+    assert rows[0].remediation
+    package.assert_called_once_with(runner)
+
+
+def _review_records(result, flags):
+    """Explicit policy inputs, not simulated API responses or inferred approvals."""
+    now = datetime.now(timezone.utc)
+    assessment = result.da_assessment
+    records = []
+    for row in result.results:
+        if row.evidence.get("evidenceType") != "manual_requirement":
+            continue
+        details = {
+            field: "Approved review reference"
+            for field in row.evidence["requiredFields"]
+            if field not in {"observedAt", "source", "reviewerRole", "configurationRevision"}
+        }
+        kind = "manual_attestation"
+        if row.checkpoint_id == "DA-INTEGRATIONS-001":
+            details = {"features": flags}
+            kind = "feature_applicability"
+        elif row.checkpoint_id == "DA-RUNTIME-001":
+            details.update(
+                employeeTestRunIds=["published-employee-test"],
+                outcomes={"published-employee-test": "passed"},
+                publishedChannel="Microsoft 365 Copilot",
+            )
+            kind = "published_employee_runtime"
+        records.append({
+            "checkpointId": row.checkpoint_id, "target": assessment["target"],
+            "configurationRevision": assessment["configurationRevision"],
+            "reviewed": True, "reviewerRole": row.roles[0], "source": "approved-review-reference",
+            "observedAt": (now - timedelta(minutes=2)).isoformat(),
+            "reviewedAt": (now - timedelta(minutes=1)).isoformat(),
+            "validUntil": (now + timedelta(days=1)).isoformat(),
+            "outcome": "satisfied", "evidenceKind": kind, "details": details,
+        })
+    return records
+
+
+@pytest.mark.parametrize("conditional_features", [False, True])
+def test_complete_catalog_cli_accepts_reviews_but_retains_real_export_failure(
+    da_cli, monkeypatch, tmp_path, conditional_features,
+):
+    """Real producers + captured reads; the recorded export defect must not turn green."""
+    require_validated_mock(pp)
+    fixtures = Path(__file__).resolve().parents[2] / "fixtures" / "cassettes"
+    native = yaml.safe_load((fixtures / "agentbuilder_readiness.yaml").read_text(encoding="utf-8"))
+    export = yaml.safe_load((fixtures / "agentbuilder_export.yaml").read_text(encoding="utf-8"))
+    configure = next(item for item in native["interactions"] if "/configure?" in item["request"]["uri"])
+    identity = json.loads(configure["response"]["body"]["string"])
+    selected = da_cli.config["agents"][0]
+    selected.update(botId=identity["cdsBotId"], schemaName=identity["schemaName"])
+    workspace = tmp_path / "workspace" / "agents" / "hr"
+    workspace.mkdir(parents=True)
+    (workspace / "agent.mcs.yml").write_text(
+        "displayName: HR\ninstructions: Help employees with approved HR information.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "FlightCheckRunner", FlightCheckRunner)
+    monkeypatch.setattr(cli, "_prepare_da_integration_execution", da_cli.real_prepare)
+    da_cli.native_client.side_effect = AgentBuilderClient
+    da_cli.licensing_client.side_effect = PowerPlatformClient
+
+    def authenticate(client, **_kwargs):
+        client._token = "test-token"
+        client.signed_in_username = ACCOUNT
+        return True
+
+    monkeypatch.setattr(PowerPlatformClient, "authenticate", authenticate)
+    flags = {feature.value: False for feature in DA_REVIEWABLE_FEATURES}
+    if conditional_features:
+        flags.update({name: True for name in (
+            "teams", "dataverse_customization", "knowledge", "graph_connector",
+            "handoff", "custom_topics", "external_endpoints", "alm_promotion",
+        )})
+    evidence = tmp_path / "reviews.json"
+
+    def save_reviews(records):
+        evidence.write_text(json.dumps({
+            "schemaVersion": DA_EVIDENCE_SCHEMA, "records": records,
+        }), encoding="utf-8")
+
+    with responses.RequestsMock() as http:
+        for item in [*native["interactions"], *export["interactions"]]:
+            path = urlsplit(item["request"]["uri"]).path
+            if "/connections" in path:
+                continue
+            http.add(
+                item["request"]["method"],
+                re.compile(r"https://[^/]+" + re.escape(path) + r"(?:\?.*)?$"),
+                body=item["response"]["body"]["string"],
+                status=item["response"]["status"]["code"],
+                content_type="application/json",
+            )
+        http.add(**pp.get_environment_entitlements(
+            environment_id=ENV_ID, entitlements=[pp.environment_entitlement(allocated=25000)],
+        ))
+        assert da_cli.run("--scope", "full") == 1
+        initial = da_cli.captured["result"]
+        assert initial.da_assessment["deploymentReadiness"] == "INCOMPLETE"
+        review = next(record for record in _review_records(initial, flags)
+                      if record["checkpointId"] == "DA-INTEGRATIONS-001")
+        save_reviews([review])
+        assert da_cli.run("--scope", "full", "--da-evidence", str(evidence)) == 1
+        expanded = da_cli.captured["result"]
+        save_reviews(_review_records(expanded, flags))
+        before = len(http.calls)
+        assert da_cli.run("--scope", "full", "--da-evidence", str(evidence)) == 1
+        final = da_cli.captured["result"]
+        assessment = final.da_assessment
+        assert len(assessment["coverage"]) == len(DA_CATALOG)
+        assert all(review["accepted"] for review in assessment["evidenceReviews"])
+        assert assessment["deploymentReadiness"] == "INCOMPLETE"
+        unresolved = [
+            entry["checkpointId"] for entry in assessment["coverage"]
+            if entry["deploymentRequired"] and entry["evidenceState"] not in {
+                "satisfied", "not_applicable", "superseded", "out_of_scope",
+            }
+        ]
+        assert unresolved == ["PUB-001"]
+        exported = next(row for row in final.results if row.checkpoint_id == "PUB-001")
+        assert exported.status == "Warning"
+        assert "BadRequest" in exported.result
+        assert "confirm" in exported.remediation.lower()
+        paths = [urlsplit(call.request.url).path for call in http.calls[before:]]
+        assert sum("/configure" in path for path in paths) == 1
+        assert sum("/components" in path for path in paths) == 1
+        assert sum("/export" in path for path in paths) == 1
+        assert not any("/import" in path or "graph.microsoft.com" in call.request.url
+                       for path, call in zip(paths, http.calls[before:]))
+        if conditional_features:
+            for key in ("EXT-002", "EXT-002-ACL"):
+                assert next(row for row in final.results if row.checkpoint_id == key).status == "Skipped"
+            assert next(row for row in final.results if row.checkpoint_id == "PUB-002").status == "Manual"
+        assert (da_cli.output / "report.html").exists()
 
 
 @pytest.mark.parametrize("available", [True, False])

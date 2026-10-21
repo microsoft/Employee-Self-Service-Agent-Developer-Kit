@@ -80,6 +80,29 @@ preserves the hybrid/legacy route instead.
 | DA-CONN-001    | Summary of native logical-to-physical connection readiness                                                                                                                                                                                                   | High     | AgentBuilder component snapshot + Power Platform Connectivity API | —        |
 | DA-CONN-002+   | One detail row per logical connector reference. Exact ID matches are verified; a sole connected candidate passes with an explicit unverified-binding disclaimer; ambiguous candidates warn without guessing; missing or disconnected candidates do not pass. | High     | AgentBuilder component snapshot + Power Platform Connectivity API | —        |
 
+### Standalone DA full assessment overrides
+
+The native authoring route and legacy methods above are not the standalone
+DA `--scope full` deployment contract. DA full resolves the selected agent's
+release line even when Dataverse is configured. Its full definition catalog is
+`scripts/flightcheck/da_contract.py`; unknown scope or unverified required
+evidence remains incomplete, not passed or silently excluded.
+
+| ID | DA full requirement | Method |
+| --- | --- | --- |
+| DA-INTEGRATIONS-001 | Review which optional features this exact agent uses | Existing `--da-evidence` envelope, `feature_applicability`; true/false choices with null/omitted choices unresolved |
+| DA-CUSTOM-TOPICS-001 | Review selected-agent custom conversations and integration wiring | Target/version-bound manual review; supersedes DA use of historical per-topic trigger/integration families |
+| ENV-009 | Review custom Dataverse changes when present | Target/version-bound manual review |
+| EXT-002, EXT-002-ACL | Review Graph-source configuration and item access when used | Skipped for the maker; administrator evidence required, no maker Graph authentication; replaces per-source placeholder coverage |
+| WD-REF-001, WD-WF-CAT-001 | Review custom Workday configuration and enabled scenario coverage | Target/version-bound manual review, without employee transactions |
+| PUB-002 | Review a separately authorized promotion when applicable | Manual source/destination, artifact, approval and result evidence; no import probe |
+
+Feature-list review controls applicability only. It cannot override observed
+dependencies or satisfy enabled features' other requirements. Accepted external
+reviews preserve original Manual/Skipped diagnostics. Successful full-catalog
+export/READY verification remains pending a captured successful export response;
+the captured missing-content export warning must remain incomplete.
+
 ## 2b. ESS Solution Installation (ESS-SOLN-xxx)
 
 | ID           | Check                                                                      | Priority | Role              | Gate | Method                       | Doc Link                                                                                         |

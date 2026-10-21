@@ -67,6 +67,43 @@ def test_enabling_workday_does_not_enable_legacy_or_infer_other_integrations():
     assert entries["WD-WF-CAT-001"].applicability == DAApplicability.UNKNOWN
 
 
+@pytest.mark.parametrize("parent,keys", [
+    (DAFeature.WORKDAY, ("WD-SEC-003", "WD-WF-CAT-001")),
+    (DAFeature.KNOWLEDGE, ("EXT-002", "EXT-002-ACL")),
+])
+def test_confirmed_absent_parent_excludes_children_without_assuming_missing_features(parent, keys):
+    features = {parent: DAFeatureEvidence(False, "reviewed selected-agent inventory")}
+    before = dict(features)
+    entries = _by_key(features)
+    for key in keys:
+        assert entries[key].applicability == DAApplicability.NOT_APPLICABLE
+        assert "reviewed selected-agent inventory" in entries[key].evidence_source
+    assert entries["PRE-003"].applicability == DAApplicability.UNKNOWN
+    assert features == before
+
+
+def test_positive_child_establishes_parent_but_not_unrelated_absence():
+    entries = _by_key({
+        DAFeature.GRAPH_CONNECTOR: DAFeatureEvidence(True, "reviewed connected source"),
+    })
+    assert entries["CONFIG-013"].applicability == DAApplicability.APPLICABLE
+    assert "reviewed connected source" in entries["CONFIG-013"].evidence_source
+    assert entries["WD-SEC-003"].applicability == DAApplicability.UNKNOWN
+
+
+@pytest.mark.parametrize("integration", [DAFeature.WORKDAY, DAFeature.SERVICENOW])
+def test_known_external_integration_cannot_bypass_endpoint_review(integration):
+    evidence = {integration: DAFeatureEvidence(True, "selected dependency audit")}
+    entry = _by_key(evidence)["INFRA-003"]
+    assert entry.applicability == DAApplicability.APPLICABLE
+    assert "selected dependency audit" in entry.evidence_source
+    with pytest.raises(ValueError, match="requires external_endpoints"):
+        _by_key({
+            **evidence,
+            DAFeature.EXTERNAL_ENDPOINTS: DAFeatureEvidence(False, "conflicting review"),
+        })
+
+
 def test_da_review_and_manual_evidence_are_not_promoted_to_executable_passes():
     entries = _by_key({
         DAFeature.WORKDAY: DAFeatureEvidence(True, "selected-agent runtime"),

@@ -12,12 +12,14 @@ from pathlib import Path
 import re
 import shlex
 
+from .da_contract import DA_REVIEWABLE_FEATURES
 from .da_readiness import DA_EVIDENCE_SCHEMA
 from .runner import CheckResult, RunResult, _APP_ICON_DATA_URI, _REPORT_CSS, _mask_sensitive, _slug
 
 
 _BASE_FIELDS = {"observedAt", "source", "reviewerRole", "configurationRevision"}
 _GROUPS = {
+    "Confirm which features you use": ("DA-INTEGRATIONS-001",),
     "Licenses for automated tasks": ("LIC-FLOW-001", "LIC-FLOW-002"),
     "Workday connection settings": ("WD-CONN-AUTH-001", "WD-CONN-013", "WD-DA-ATTACH-001"),
     "Ask your Microsoft Entra administrator": (
@@ -47,6 +49,12 @@ _GROUP_STEPS = {
     "Confirm which features you use": "Confirm which features you use before completing their checks.",
 }
 _REVIEW_STEPS = {
+    "DA-INTEGRATIONS-001": (
+        "Review the services FlightCheck found and confirm which other features this agent uses.",
+        "Record Yes or No for each feature you can confirm. Leave anything you do not know unresolved.",
+        "Have the agent owner review the completed form and include it with the next full check. "
+        "Features marked Yes still need their own checks.",
+    ),
     "LIC-FLOW-001": (
         "Ask your licensing owner to list each automated task and the services it uses.",
         "Record the licensing arrangement that applies to each task.",
@@ -91,6 +99,7 @@ _REASONS = {
     "test_pane_is_not_published_employee_runtime": "Test with a signed-in employee in the published channel, not only in Copilot Studio.",
     "maker_test_evidence_invalid": "Include the Copilot Studio test result and the time it was tested.",
     "evidence_not_applicable_to_observed_requirement": "This review cannot be used for the check recorded in this report.",
+    "evidence_features_invalid_or_conflicting": "The feature choices are incomplete, unsupported or conflict with services already found. Review the feature form.",
 }
 _ISSUES = {
     "verified_configuration_snapshot_unavailable": "We could not confirm the agent settings needed to match reviews to this report.",
@@ -126,7 +135,8 @@ _CHECK_COPY = {
     "DA-SN-RUNTIME-001": ("Employee testing of ServiceNow tasks", "Test the ServiceNow tasks employees will use and record the results for this agent and version."),
     "DA-AGENT-001": ("Access to your agent", "Confirm that the selected agent can be opened in the intended environment."),
     "DA-CONTENT-001": ("Agent content", "Review whether FlightCheck could read the content of this agent."),
-    "DA-INTEGRATIONS-001": ("Services used by your agent", "Confirm which connected services this agent uses."),
+    "DA-INTEGRATIONS-001": ("Features included in this review", "Complete the feature review form for this agent. Confirm each choice without changing the services already found."),
+    "DA-CUSTOM-TOPICS-001": ("Custom conversations", "Review your custom conversations, when they start, the services they use and representative test results."),
     "DA-CONN-001": ("Agent connections", "Confirm that each service used directly by this agent has the right connection. See the shared connection issue above."),
     "SN-CONN-001": ("ServiceNow connections", "Confirm the ServiceNow connections used by this agent. See the shared connection issue above."),
     "ESS-SOLN-001": ("Employee Self-Service installation", "Ask your administrator to confirm the installation and version details for this agent."),
@@ -179,6 +189,28 @@ _CHECK_COPY = {
     "DA-PLAN-COVERAGE": ("Checks included in this report", "Review any required checks that FlightCheck could not complete."),
 }
 _FIELD_LABELS = {
+    "features": "Features used by this agent; confirm Yes or No for each choice",
+    "customDataverseComponents": "Custom Dataverse components used by this agent",
+    "solutionOwnership": "Solutions that own those custom components",
+    "customizationReview": "Review of the custom changes and deployment process",
+    "connectedSourceIds": "Connected search sources used by this agent",
+    "sourceConfigurationReview": "Review of the connected search setup",
+    "crawlAndIndexingResults": "Recent search processing results",
+    "itemPermissionReview": "Review of who may access the connected content",
+    "allowedAndDeniedAccessTests": "Tests of allowed and denied employee access",
+    "customWorkdaySettings": "Custom Workday settings used by this agent",
+    "scenarioBindings": "Workday tasks and connections used by those settings",
+    "configurationOwnerReview": "Review by the owner of those settings",
+    "enabledCustomScenarios": "Custom Workday tasks in use",
+    "scenarioCoverage": "Which custom Workday tasks the tests cover",
+    "readOnlyTestResults": "Results from the approved read-only tests",
+    "enabledCustomConversations": "Custom conversations in use",
+    "startingConditionsReview": "Review of when those conversations start",
+    "dependencyReview": "Review of the services those conversations use",
+    "sourceRealm": "Environment the changes came from",
+    "destinationRealm": "Environment the changes were moved to",
+    "promotionApproval": "Approval to move those changes",
+    "promotionResult": "Recorded result of moving the changes",
     "deploymentAudience": "Employees who will use the agent", "publishedAudience": "Employees who will use the published agent",
     "audienceEntitlements": "Licenses covering those employees", "audienceCoverage": "How those employees are covered",
     "audienceSizing": "Expected number of employees", "makerEntitlement": "Your license to build and edit",
@@ -279,12 +311,25 @@ def _kind(entry: dict, rows: list) -> str:
 def _template(assessment: dict, entry: dict) -> str:
     key = entry["checkpointId"]
     fields = set(entry["requiredEvidenceFields"]) - _BASE_FIELDS
-    details = {field: "" for field in sorted(fields)}
+    details: dict[str, object] = {field: "" for field in sorted(fields)}
+    if key == "DA-INTEGRATIONS-001":
+        states = {
+            item["feature"]: item["applicability"] for item in assessment["coverage"]
+            if item.get("feature")
+        }
+        details["features"] = {
+            feature.value: (
+                True if states.get(feature.value) == "applicable" else
+                False if states.get(feature.value) == "not_applicable" else None
+            )
+            for feature in sorted(DA_REVIEWABLE_FEATURES, key=lambda feature: feature.value)
+        }
     for field in {"employeeTestRunIds", "employeeTestRuns"} & fields:
         details[field] = []
     if "outcomes" in fields:
         details["outcomes"] = {}
     kind = (
+        "feature_applicability" if key == "DA-INTEGRATIONS-001" else
         "published_employee_runtime" if key in {"DA-RUNTIME-001", "DA-SN-RUNTIME-001"}
         else "maker_test_pane" if key == "WD-DA-MAKER-001" else "manual_attestation"
     )
@@ -460,7 +505,12 @@ def _requirement(
             '<details class="template"><summary>Review form for your administrator (JSON)</summary>'
             '<p>This form has not been reviewed. Complete it with the appropriate owner before submitting it. '
             'Copying it does not confirm that the check passed.</p>'
-            f'<textarea readonly aria-label="Review form for {_e(title)}" spellcheck="false">'
+            + (
+                '<p>For each feature, use <code>true</code> if used or <code>false</code> if not used. '
+                'Leave <code>null</code> for an unknown choice; its checks will remain outstanding.</p>'
+                if key == "DA-INTEGRATIONS-001" else ""
+            )
+            + f'<textarea readonly aria-label="Review form for {_e(title)}" spellcheck="false">'
             f'{_e(_template(assessment, entry))}</textarea>'
             '<button type="button" class="copy-template">Copy review form</button>'
             '<span class="copy-status" role="status"></span></details>'

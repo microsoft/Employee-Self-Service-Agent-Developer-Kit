@@ -47,6 +47,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from flightcheck.runner import (
     CheckResult,
     FlightCheckRunner,
+    RunResult,
+    execute_check,
     Priority,
     Role,
     ValidationContext,
@@ -2263,14 +2265,30 @@ def _prepare_da_integration_execution(runner, args, execution):
     """Read the selected DA once before composing additional integration clients."""
     from flightcheck import registry
     from flightcheck.checks._connection_dependencies import _Access, READ_ERRORS
-    from flightcheck.checks.da_integrations import discover_da_features
+    from flightcheck.checks.da_integrations import discover_da_features, run_da_integration_checks
     from flightcheck.da_execution import build_da_execution_plan
+    from flightcheck.da_readiness import reviewed_da_features
 
-    native_rows = run_native_agent_checks(runner)
+    native_rows = execute_check(runner, "Native Agent", run_native_agent_checks)
     passed = {row.checkpoint_id for row in native_rows if row.status == Status.PASSED.value}
     if not {"DA-AGENT-001", "DA-CONTENT-001"} <= passed:
         return execution, native_rows
     features = discover_da_features(runner)
+    runner._da_observed_features = dict(features)
+    records = getattr(args, "_da_evidence_records", None)
+    if any(record["checkpointId"] == "DA-INTEGRATIONS-001" for record in records or []):
+        package_rows = execute_check(runner, "Solution", run_solution_checks)
+        runner._da_prepared_results = {run_solution_checks: package_rows}
+        review_rows = [
+            row for row in run_da_integration_checks(runner)
+            if row.checkpoint_id == "DA-INTEGRATIONS-001"
+        ]
+        interim = RunResult(
+            scope="full", started="", results=[*native_rows, *package_rows, *review_rows],
+            validation_context=runner.validation_context,
+        )
+        features = reviewed_da_features(execution, interim, runner, records)
+        runner._da_feature_evidence = features
     execution = build_da_execution_plan(
         runner.config, runner.agent_slug, features=features, environment_url=runner.env_url,
     )
@@ -2887,12 +2905,15 @@ def _run_profile(args, *, da_execution=None):
             mark_available(registry.PP_ADMIN, canonical_username)
     runner.results.extend(_profile_client_blockers(client_availability))
 
+    prepared_results = dict(getattr(runner, "_da_prepared_results", {}))
+    if native_rows is not None:
+        prepared_results[run_native_agent_checks] = native_rows
     for label, fn in plan.ordered_fns:
-        if native_rows is not None and fn is run_native_agent_checks:
+        if fn in prepared_results:
             @wraps(fn)
-            def prepared_native(_runner):
-                return native_rows
-            runner.register(label, prepared_native)
+            def prepared_check(_runner, rows=prepared_results[fn]):
+                return rows
+            runner.register(label, prepared_check)
         else:
             runner.register(label, da_execution.guard_producer(fn) if da_execution else fn)
     family_contract = {}

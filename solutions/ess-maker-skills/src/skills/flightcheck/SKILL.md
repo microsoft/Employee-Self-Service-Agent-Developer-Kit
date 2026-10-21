@@ -287,11 +287,20 @@ Always show this first:
 
 Show `da_assessment.target`'s agent, deployment realm and service ring, its
 required/satisfied/defect/incomplete counts, and root `overall` separately as
-**Diagnostics**. Link the full HTML coverage matrix. Do not equate 149 catalog
+**Diagnostics**. Link the full HTML coverage matrix. Do not equate catalog
 definitions with executed checks or use a diagnostic READY as deployment
 approval. Accepted external evidence is reviewer-declared attestation, not
 automatic administrator/employee verification. It never changes Manual/Skipped
 statuses. A Dev assessment does not approve Test/Prod or organizational release.
+
+Standalone DA full's feature-list review uses `DA-INTEGRATIONS-001` and the
+existing `--da-evidence` envelope with `evidenceKind: feature_applicability`.
+Use the report's unreviewed form: true means used, false means confirmed unused,
+and null/omitted means unknown. Do not fill choices or approve reviews for the
+customer. Feature choices do not satisfy enabled features' health checks, cannot
+contradict observed dependencies, and expire with their target/version-bound
+review. Administrator checks remain Skipped/manual; do not request maker Graph
+authentication or run a promotion/import.
 
 **Local-only override:** use "Local validation completed - deployment readiness
 not assessed", retaining the actual diagnostic status. Do not call local READY

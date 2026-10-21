@@ -233,6 +233,29 @@ def _default_severity(status: str, priority: str) -> str:
     return "info"
 
 
+def execute_check(runner, category: str, fn: Callable, *, sequence: int = 0) -> list[CheckResult]:
+    """Use the same explicit error contract for staged and registered producers."""
+    try:
+        return fn(runner) or []
+    except Exception as e:
+        traceback.print_exc()
+        return [CheckResult(
+            checkpoint_id=(
+                f"EXEC-{sequence:03d}-"
+                f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}-ERR"
+            ),
+            category=category,
+            priority=Priority.HIGH.value,
+            status=Status.ERROR.value,
+            description=f"{category} validation",
+            result=f"Check failed with error: {e}",
+            remediation="Review permissions and retry. See terminal output for details.",
+            remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
+            evidence={"executionError": True, "category": category},
+            roles=[Role.ESS_MAKER.value],
+        )]
+
+
 class FlightCheckRunner:
     """Executes registered check functions and aggregates results."""
 
@@ -275,31 +298,7 @@ class FlightCheckRunner:
             self._check_fns,
             start=1,
         ):
-            try:
-                results = fn(self)
-                if results:
-                    self.results.extend(results)
-            except Exception as e:
-                self.results.append(CheckResult(
-                    checkpoint_id=(
-                        f"EXEC-{category_index:03d}-"
-                        f"{''.join(ch for ch in category.upper() if ch.isalnum())[:24]}"
-                        "-ERR"
-                    ),
-                    category=category,
-                    priority=Priority.HIGH.value,
-                    status=Status.ERROR.value,
-                    description=f"{category} validation",
-                    result=f"Check failed with error: {e}",
-                    remediation="Review permissions and retry. See terminal output for details.",
-                    remediation_id="FLIGHTCHECK-EXECUTION-ERROR",
-                    evidence={
-                        "executionError": True,
-                        "category": category,
-                    },
-                    roles=[Role.ESS_MAKER.value],
-                ))
-                traceback.print_exc()
+            self.results.extend(execute_check(self, category, fn, sequence=category_index))
 
         duration = time.time() - start
 

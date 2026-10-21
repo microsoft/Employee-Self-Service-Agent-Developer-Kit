@@ -10,10 +10,13 @@ confidence that real captures will be scrubbed correctly before write.
 
 from __future__ import annotations
 
+import io
 import re
 import sys
 from pathlib import Path
+import zipfile
 
+import pytest
 
 
 # Make tests/captures importable so we can poke at its internals.
@@ -29,6 +32,38 @@ from _common import (  # noqa: E402
     _scrub_headers,
     _scrub_json_keys,
 )
+
+
+def test_export_projection_removes_all_customer_archive_material(tmp_path):
+    from record_agentbuilder_export import _project_archive
+
+    source = tmp_path / "private.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.comment = b"private archive comment"
+        info = zipfile.ZipInfo("private-agent/private-topic.yml")
+        info.comment = b"private member comment"
+        info.compress_type = zipfile.ZIP_DEFLATED
+        archive.writestr(info, b"private instructions and employee information")
+    projected = _project_archive(source)
+    with zipfile.ZipFile(io.BytesIO(projected)) as archive:
+        assert archive.testzip() is None
+        assert archive.namelist() == ["redacted-0001.bin"]
+        assert archive.read(archive.namelist()[0]) == b"REDACTED"
+        assert archive.comment == b""
+        info = archive.infolist()[0]
+        assert info.comment == b"" and info.extra == b""
+        assert info.date_time == (2026, 1, 1, 0, 0, 0)
+        assert info.compress_type == zipfile.ZIP_DEFLATED
+
+
+def test_export_projection_does_not_turn_an_unsafe_archive_into_a_good_fixture(tmp_path):
+    from record_agentbuilder_export import _project_archive
+
+    source = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("../private.yml", "private content")
+    with pytest.raises(ValueError, match="unsafe entry"):
+        _project_archive(source)
 
 
 class TestRedactText:

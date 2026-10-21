@@ -18,6 +18,51 @@ from ..runner import (
 
 # These describe evidence to obtain, not claims that the evidence already exists.
 DA_MANUAL_REQUIREMENTS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "ENV-009": (
+        "Custom Dataverse changes for this agent",
+        "Have the Power Platform owner review the exact custom tables, solutions "
+        "and components used by this agent, their solution ownership and the "
+        "approved deployment process. An installed runtime package alone is "
+        "not evidence of customer customization.",
+        ("customDataverseComponents", "solutionOwnership", "customizationReview"),
+    ),
+    "EXT-002": (
+        "Connected search source setup",
+        "Ask the Microsoft 365 administrator to identify the exact connected "
+        "search sources used by this agent and review their configuration, "
+        "schema and recent crawl/indexing results. Do not authenticate the maker "
+        "to Graph or use legacy PVA source inventory.",
+        ("connectedSourceIds", "sourceConfigurationReview", "crawlAndIndexingResults"),
+    ),
+    "EXT-002-ACL": (
+        "Employee access to connected search content",
+        "Ask the Microsoft 365 administrator to review permissions for the "
+        "selected connected sources. Record representative allowed and denied "
+        "employee access tests; source presence alone does not establish item access.",
+        ("connectedSourceIds", "itemPermissionReview", "allowedAndDeniedAccessTests"),
+    ),
+    "WD-REF-001": (
+        "Custom Workday settings",
+        "Review the exact custom Workday settings used by this agent and their "
+        "mapping to its approved tasks, Workday tenant and connections. Do not "
+        "assume legacy Dataverse template names describe the DA configuration.",
+        ("customWorkdaySettings", "scenarioBindings", "configurationOwnerReview"),
+    ),
+    "WD-WF-CAT-001": (
+        "Custom Workday scenario coverage",
+        "Review the enabled custom Workday tasks, their intended users and "
+        "approved read-only test results. Record required permissions for write "
+        "tasks separately; this assessment does not submit employee changes.",
+        ("enabledCustomScenarios", "scenarioCoverage", "readOnlyTestResults"),
+    ),
+    "DA-CUSTOM-TOPICS-001": (
+        "Custom conversation review",
+        "Review the selected agent's enabled custom conversations, when they "
+        "start and the services they use. Record representative read-only tests "
+        "and check that dependencies are included in the connection assessment. "
+        "Do not create, activate or publish conversations during FlightCheck.",
+        ("enabledCustomConversations", "startingConditionsReview", "dependencyReview", "readOnlyTestResults"),
+    ),
     "DA-SN-RUNTIME-001": (
         "Manually configured ServiceNow employee validation",
         "Review target-bound tests for the selected ServiceNow scenarios and intended "
@@ -199,6 +244,7 @@ for _key, _title, _criterion, _field in (
     DA_MANUAL_REQUIREMENTS[_key] = (_title, f"{_action} {_criterion}", (*_fields, _field))
 
 DA_DEFERRED_ADMIN_CHECKS = frozenset({
+    "EXT-002", "EXT-002-ACL",
     "WD-ENTRA-SCOPE-001", "WD-ENTRA-CONSENT-001", "WD-ASSIGN-001",
     "WD-ENTRA-NAMEID-001", "WD-ENTRA-SIGNOPT-001", "WD-CONN-010", "WD-CONN-102",
     "WD-API-CLIENT-001", "WD-TENANT-001", "WD-SEC-003", "WD-NET-001",
@@ -258,9 +304,9 @@ def run_da_baseline_checks(runner) -> list[CheckResult]:
                 if declarative else "The selected target has no explicit DA context."
             ),
             remediation=(
-                "Keep the administrator workbook as supporting evidence. Role-aware "
+                "Keep the administrator review as supporting evidence. Role-aware "
                 "verification is deferred; do not grant administrator permissions just "
-                "to run FlightCheck."
+                f"to run FlightCheck. {action}"
                 if deferred else action
             ),
             evidence=evidence,

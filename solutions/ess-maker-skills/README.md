@@ -280,18 +280,17 @@ applicable. These include required evidence fields and `accepted: false`; setup
 completion, skip overrides and inventory counts cannot satisfy them. Dataverse
 provisioning is conditional on an actual Dataverse runtime dependency, not a
 universal native authoring prerequisite. Unknown feature applicability remains
-unresolved. The current catalog has 149 definitions: the original 142, four
-earlier additions, an explicit DA handoff requirement, selected-agent integration
-discovery and maker Workday Test-pane validation. These are definitions, not
-149 executable or mandatory deployment checks.
+unresolved. The current catalog has 150 definitions, including fixed DA
+handoff, feature-list, custom-conversation and maker Workday Test-pane reviews.
+Definitions are not a count of executable or mandatory deployment checks.
 
-**Current readiness limit:** some required features have no production
-applicability or approved check path yet. The full CLI therefore cannot reach
-deployment `READY` with the complete current catalog, even after all emitted
-manual reviews are completed. `--da-evidence` records reviewed evidence; it
-cannot declare those features applicable or supply missing checks. `READY`
-classifier tests using a reduced catalog do not establish a complete production
-sign-off path.
+**Current verification limit:** reviewed feature choices and approved required
+check paths are implemented. Complete-catalog CLI replay accepts reviewed scope
+and requirement evidence but retains an actual captured ALM export warning as
+`INCOMPLETE`. A successful export response has not been captured for that test
+target, so a healthy complete-catalog `READY` path is not yet verified end to end.
+Reduced-catalog classifier tests are not that proof. Do not publish, enroll or
+modify an agent merely to obtain a green assessment.
 
 DA full first verifies exact-agent access/content, then discovers active direct
 and invoked-flow dependencies and recomposes the selected integration plan.
@@ -422,6 +421,44 @@ roles. Populate every reported required field, placing `observedAt`, `source`,
 `reviewerRole` and `configurationRevision` in the envelope and other fields in
 `details`. Outcome is `satisfied` or `defect`. Evidence cannot replace automated
 verification, hide missing results, or override an automated failure.
+
+**Feature choices:** `DA-INTEGRATIONS-001` uses the same envelope with
+`evidenceKind: feature_applicability`. The report supplies an unreviewed form;
+complete its owner, reference, target/version and validity fields as above.
+Its `details` contains:
+
+```json
+{
+  "features": {
+    "teams": null,
+    "dataverse_customization": null,
+    "workday_customizations": null,
+    "workday_writes": null,
+    "knowledge": null,
+    "graph_connector": null,
+    "handoff": null,
+    "custom_topics": null,
+    "external_endpoints": null,
+    "alm_promotion": null
+  }
+}
+```
+
+Use boolean `true` for used and `false` for confirmed unused; `null` or an
+omitted choice stays unknown. Strings such as `"false"` are invalid. Reviewed
+choices cannot contradict observed dependencies or declare Workday, ServiceNow,
+connector, flow, Dataverse-runtime or revision-pin facts. A confirmed absent
+parent excludes its children; an unknown parent does not. Known Workday or
+ServiceNow use requires external-endpoint coverage. Contradictory declarations
+are rejected, not silently normalized.
+
+Feature review controls scope, not feature health: enabled features still need
+their separate checks and owner evidence. The required ALM metadata observation
+is read once and reused to bind the review before conditional checks are planned.
+The review is revalidated at the final decision; expiry or changed configuration
+removes its exclusions. Graph-source and Workday-administrator checks remain
+Skipped with external review requirements; the maker is not authenticated to
+Graph. Promotion evidence is reviewed without importing or promoting anything.
 
 Published employee evidence uses `evidenceKind: published_employee_runtime`:
 `DA-RUNTIME-001` requires `employeeTestRunIds`, and `DA-SN-RUNTIME-001` requires

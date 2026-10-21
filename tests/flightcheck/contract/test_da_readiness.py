@@ -5,7 +5,7 @@
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 import json
@@ -18,9 +18,15 @@ from flightcheck import cli, telemetry
 from flightcheck.checks._connection_dependencies import ConnectionAudit, Reference
 from flightcheck.checks.da_baseline import run_da_baseline_checks
 from flightcheck.checks.environment import run_connection_checks
-from flightcheck.da_contract import DAApplicability, DADisposition, DAFeature, DAFeatureEvidence
+from flightcheck.checks.da_integrations import run_da_integration_checks
+from flightcheck.da_contract import (
+    DAApplicability, DADisposition, DAFeature, DAFeatureEvidence, DA_REVIEWABLE_FEATURES,
+    build_da_coverage_plan,
+)
 from flightcheck.da_execution import build_da_execution_plan
-from flightcheck.da_readiness import build_da_assessment, load_da_evidence, DA_EVIDENCE_SCHEMA
+from flightcheck.da_readiness import (
+    build_da_assessment, load_da_evidence, reviewed_da_features, DA_EVIDENCE_SCHEMA,
+)
 from flightcheck.runner import (
     BUCKET_MANUAL, BUCKET_PASSED, CheckResult, FlightCheckRunner, Status,
     bucket_results, save_results,
@@ -65,10 +71,16 @@ def _case(*extra):
     }
     rows = [CheckResult(key, "Policy domain", "High", "Passed", key, "Domain assertion.")
             for key in plan.profile.checkpoint_ids if key not in {"PRE-005", "WD-DA-MAKER-001", "DA-RUNTIME-001"}]
-    wanted = {"PRE-005", "WD-DA-MAKER-001", "DA-RUNTIME-001", "WD-ENTRA-SCOPE-001"} & keys
+    wanted = {
+        "PRE-005", "WD-DA-MAKER-001", "DA-RUNTIME-001", "WD-ENTRA-SCOPE-001",
+        "DA-INTEGRATIONS-001",
+    } & keys
     # Use actual requirement metadata, not a fabricated external API response.
     manual = run_da_baseline_checks(runner)
     rows = [row for row in rows if row.checkpoint_id not in wanted] + manual
+    if "DA-INTEGRATIONS-001" in keys:
+        rows.extend(row for row in run_da_integration_checks(runner)
+                    if row.checkpoint_id == "DA-INTEGRATIONS-001")
     runner.register("Policy domain", lambda _runner: rows)
     result = runner.run()
     result.validation_context, result.profile = context, "da:full"
@@ -95,6 +107,155 @@ def _record(case, key="PRE-005", *, outcome="satisfied"):
             if field not in {"observedAt", "source", "reviewerRole", "configurationRevision"}
         },
     }
+
+
+def _feature_case(*extra):
+    case = _case("DA-INTEGRATIONS-001", "CONFIG-013", *extra)
+    case.runner._da_observed_features = {
+        feature: DAFeatureEvidence(False, "complete selected-agent dependency audit")
+        for feature in (
+            DAFeature.WORKDAY, DAFeature.SERVICENOW, DAFeature.CONNECTORS,
+            DAFeature.NATIVE_CONNECTIONS, DAFeature.POWER_AUTOMATE, DAFeature.DATAVERSE_RUNTIME,
+        )
+    }
+    record = _record(case, "DA-INTEGRATIONS-001")
+    record["evidenceKind"] = "feature_applicability"
+    record["details"] = {"features": {
+        feature.value: False for feature in DA_REVIEWABLE_FEATURES
+    }}
+    return case, record
+
+
+def test_reviewed_feature_choices_can_resolve_absence_without_claiming_feature_health():
+    case, record = _feature_case()
+    unknown = next(entry for entry in _assessment(case)["coverage"]
+                   if entry["checkpointId"] == "CONFIG-013")
+    assert unknown["applicability"] == "unknown"
+    assessed = _assessment(case, [record, _record(case)])
+    knowledge = next(entry for entry in assessed["coverage"]
+                     if entry["checkpointId"] == "CONFIG-013")
+    assert knowledge["evidenceState"] == "not_applicable"
+    assert "Reviewed feature applicability" in knowledge["evidenceSource"]
+    assert assessed["deploymentReadiness"] == "READY"
+    assert next(row for row in case.result.results
+                if row.checkpoint_id == "DA-INTEGRATIONS-001").status == "Manual"
+
+    record["details"]["features"]["knowledge"] = True
+    enabled = _assessment(case, [record, _record(case)])
+    knowledge = next(entry for entry in enabled["coverage"]
+                     if entry["checkpointId"] == "CONFIG-013")
+    assert knowledge["applicability"] == "applicable"
+    assert knowledge["evidenceState"] == "incomplete"
+    assert enabled["deploymentReadiness"] == "INCOMPLETE"
+
+
+@pytest.mark.parametrize("invalid", [
+    "target", "revision", "expired", "unreviewed", "role", "kind",
+    "observed_override", "not_boolean", "unknown_choice", "unknown_name",
+    "parent_conflict", "partial",
+])
+def test_invalid_or_partial_feature_reviews_do_not_exclude_unverified_checks(invalid):
+    case, record = _feature_case()
+    flags = record["details"]["features"]
+    if invalid == "target":
+        record["target"] = {**record["target"], "agentId": "other-agent"}
+    elif invalid == "revision":
+        record["configurationRevision"] = "stale"
+    elif invalid == "expired":
+        record["validUntil"] = "2026-10-21T01:30:00Z"
+    elif invalid == "unreviewed":
+        record["reviewed"] = False
+    elif invalid == "role":
+        record["reviewerRole"] = "Unapproved reviewer"
+    elif invalid == "kind":
+        record["evidenceKind"] = "manual_attestation"
+    elif invalid == "observed_override":
+        flags["workday"] = False
+    elif invalid == "not_boolean":
+        flags["knowledge"] = "false"
+    elif invalid == "unknown_choice":
+        flags["knowledge"] = None
+    elif invalid == "unknown_name":
+        flags["made_up_feature"] = False
+    elif invalid == "parent_conflict":
+        flags["workday_writes"] = True
+    else:
+        record["details"]["features"] = {"teams": False}
+    assessed = _assessment(case, [record, _record(case)])
+    knowledge = next(entry for entry in assessed["coverage"]
+                     if entry["checkpointId"] == "CONFIG-013")
+    assert knowledge["applicability"] == "unknown"
+    assert knowledge["evidenceState"] == "incomplete"
+    assert assessed["deploymentReadiness"] == "INCOMPLETE"
+    review = next(item for item in assessed["evidenceReviews"]
+                  if item["checkpointId"] == "DA-INTEGRATIONS-001")
+    assert review["accepted"] is (invalid in {"partial", "unknown_choice"})
+
+
+@pytest.mark.parametrize("invalidation", ["snapshot", "expiry"])
+def test_final_revalidation_rolls_back_previously_composed_feature_exclusions(invalidation):
+    case, record = _feature_case()
+    assert _assessment(case, [record])["evidenceReviews"][0]["accepted"]
+    case.plan = replace(case.plan, coverage=build_da_coverage_plan(
+        reviewed_da_features(case.plan, case.result, case.runner, [record], now=NOW),
+        catalog=tuple(entry.checkpoint for entry in case.plan.coverage),
+    ))
+    assert next(entry for entry in case.plan.coverage
+                if entry.checkpoint.key == "CONFIG-013").applicability == DAApplicability.NOT_APPLICABLE
+    if invalidation == "snapshot":
+        case.runner._da_native_snapshot["changeset"]["domain_revision"] = "changed"
+    assessed = build_da_assessment(
+        case.plan, case.result, case.runner, [record],
+        now=NOW + timedelta(days=2) if invalidation == "expiry" else NOW,
+    )
+    assert next(entry for entry in assessed["coverage"]
+                if entry["checkpointId"] == "CONFIG-013")["applicability"] == "unknown"
+    reason = "evidence_expired_or_future" if invalidation == "expiry" else "evidence_revision_mismatch"
+    assert reason in assessed["evidenceReviews"][0]["reasonCodes"]
+    assert assessed["deploymentReadiness"] == "INCOMPLETE"
+
+
+def test_review_cannot_disable_an_observed_enabled_feature():
+    case, record = _feature_case()
+    case.runner._da_observed_features[DAFeature.KNOWLEDGE] = DAFeatureEvidence(
+        True, "Positive selected-agent observation.",
+    )
+    assessed = _assessment(case, [record])
+    knowledge = next(entry for entry in assessed["coverage"]
+                     if entry["checkpointId"] == "CONFIG-013")
+    assert knowledge["applicability"] == "applicable"
+    assert knowledge["evidenceState"] == "incomplete"
+    assert "evidence_features_invalid_or_conflicting" in assessed["evidenceReviews"][0]["reasonCodes"]
+
+
+def test_review_confirmation_preserves_the_original_observation_provenance():
+    case, record = _feature_case()
+    observed = DAFeatureEvidence(True, "Positive selected-agent observation.")
+    case.runner._da_observed_features[DAFeature.KNOWLEDGE] = observed
+    record["details"]["features"]["knowledge"] = True
+    features = reviewed_da_features(case.plan, case.result, case.runner, [record], now=NOW)
+    assert features[DAFeature.KNOWLEDGE] is observed
+    assert case.runner._da_observed_features[DAFeature.KNOWLEDGE] is observed
+
+
+def test_feature_review_template_preserves_unknown_choices_and_requires_owner_review(tmp_path):
+    case, _ = _feature_case("WD-SEC-003")
+    case.result.da_assessment = _assessment(case)
+    save_results(case.result, str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+    records = [
+        json.loads(unescape(value))["records"][0]
+        for value in re.findall(r"<textarea[^>]*>(.*?)</textarea>", html, re.DOTALL)
+    ]
+    record = next(record for record in records if record["checkpointId"] == "DA-INTEGRATIONS-001")
+    assert record["evidenceKind"] == "feature_applicability"
+    assert record["reviewed"] is False
+    assert record["details"]["features"]["knowledge"] is None
+    assert record["details"]["features"]["workday_writes"] is False
+    assert set(record["details"]["features"]) == {feature.value for feature in DA_REVIEWABLE_FEATURES}
+    assert record["target"] == case.result.da_assessment["target"]
+    assert record["configurationRevision"] == case.result.da_assessment["configurationRevision"]
+    assert "Confirm which features you use" in html
 
 
 @pytest.mark.parametrize(
