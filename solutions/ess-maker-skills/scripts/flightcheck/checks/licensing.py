@@ -88,6 +88,7 @@ from auth import (
 
 from ..runner import CheckResult, Priority, Role, Status
 
+DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 PA_LICENSING_FAQ = (
     "https://learn.microsoft.com/power-platform/admin/power-automate-licensing/faqs"
 )

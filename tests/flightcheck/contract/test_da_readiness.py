@@ -15,7 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 from flightcheck import cli, telemetry
+from flightcheck.checks._connection_dependencies import ConnectionAudit, Reference
 from flightcheck.checks.da_baseline import run_da_baseline_checks
+from flightcheck.checks.environment import run_connection_checks
 from flightcheck.da_contract import DAApplicability, DADisposition, DAFeature, DAFeatureEvidence
 from flightcheck.da_execution import build_da_execution_plan
 from flightcheck.da_readiness import build_da_assessment, load_da_evidence, DA_EVIDENCE_SCHEMA
@@ -93,6 +95,64 @@ def _record(case, key="PRE-005", *, outcome="satisfied"):
             if field not in {"observedAt", "source", "reviewerRole", "configurationRevision"}
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("additional_connections", "warnings", "expected_status", "expected_readiness"),
+    [
+        (0, [], "Passed", "READY"),
+        (1, [], "Passed", "READY"),
+        (
+            1,
+            ["Selected-agent topic activation could not be verified."],
+            "Warning",
+            "INCOMPLETE",
+        ),
+    ],
+)
+def test_connection_readiness_ignores_unrelated_inventory_but_requires_complete_discovery(
+    additional_connections, warnings, expected_status, expected_readiness,
+):
+    case = _case()
+    case.runner.da_full_assessment = True
+    case.runner._da_connection_audit = ConnectionAudit(
+        references=[
+            Reference(
+                case.runner.config["agent"]["botId"],
+                "required-ref",
+                "/apis/shared_service-now",
+                "healthy-connection",
+            ),
+        ],
+        additional_connections=additional_connections,
+        warnings=list(warnings),
+    )
+
+    rows = run_connection_checks(case.runner)
+    connection = next(row for row in rows if row.checkpoint_id == "ENV-004")
+    assert connection.status == expected_status
+    assert connection.evidence["dependencyCoverageComplete"] is (not warnings)
+    assert "1 bound" in connection.result
+    if additional_connections:
+        assert "these may serve other agents" in connection.result
+    if warnings:
+        assert warnings[0] in connection.result
+        assert connection.remediation
+    else:
+        assert connection.remediation == ""
+
+    case.result.results = [
+        row for row in case.result.results if row.checkpoint_id != "ENV-004"
+    ] + rows
+    actual = _assessment(case, [_record(case)])
+    requirement = next(
+        entry for entry in actual["coverage"]
+        if entry["checkpointId"] == "ENV-004"
+    )
+
+    assert requirement["deploymentRequired"] is True
+    assert requirement["evidenceState"] == ("incomplete" if warnings else "satisfied")
+    assert actual["deploymentReadiness"] == expected_readiness
 
 
 def test_manual_check_does_not_make_green_diagnostics_deployment_ready():

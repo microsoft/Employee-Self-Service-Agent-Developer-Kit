@@ -12,7 +12,10 @@ import pytest
 
 from flightcheck import cli
 from flightcheck.checks import _connection_dependencies as dependencies
-from tests.flightcheck.checks.test_env_004_workday_coverage import dependency_case  # noqa: F401
+from tests.flightcheck.checks import test_env_004_workday_coverage as connection_tests
+
+
+dependency_case = connection_tests.dependency_case
 
 
 @pytest.mark.parametrize("existing_config", [False, True])

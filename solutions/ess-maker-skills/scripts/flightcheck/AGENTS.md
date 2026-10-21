@@ -354,7 +354,9 @@ and do the per-tier verification.
      external screen to open and which value to compare against. MANUAL is
      the canonical pattern for Workday / ServiceNow / SAP tenant-config
      validation that has no programmatic admin surface (see issue #84 for
-     the original SAML-NameID example). MANUAL does NOT fail readiness.
+     the original SAML-NameID example). MANUAL does not fail the diagnostic
+     verdict. DA full's separate deployment decision remains INCOMPLETE
+     until required manual evidence is accepted.
    - `ERROR` — the check itself crashed (the runner catches exceptions and
      sets this automatically)
 

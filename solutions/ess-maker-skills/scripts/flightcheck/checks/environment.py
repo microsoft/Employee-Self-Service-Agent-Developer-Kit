@@ -752,7 +752,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     if audit.failures or (grs_result is not None and grs_result.status == Status.FAILED.value):
         overall_status = Status.FAILED.value
     elif ((grs_result is not None and grs_result.status == Status.WARNING.value) or coverage_warning is not None
-          or audit.additional_connections):
+          or (audit.additional_connections and not da_full)):
         overall_status = Status.WARNING.value
     else:
         overall_status = Status.PASSED.value

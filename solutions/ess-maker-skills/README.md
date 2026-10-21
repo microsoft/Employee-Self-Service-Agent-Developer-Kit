@@ -198,6 +198,11 @@ ENV-004 follows active topics to their direct connector references and invoked P
 
 Topics with missing or unknown activation status, malformed dialogs, or unreadable dependency identities produce coverage warnings without discarding dependencies verified in other topics. Component `state: Active` does not substitute for an explicit topic `status`; unverified topics cannot establish a clean connection verdict.
 
+In DA full, unrelated additional connections do not downgrade a complete,
+healthy required-binding result or block readiness. Incomplete discovery and
+unverified required bindings still need investigation. Legacy connection
+reports retain their existing advisory Warning for additional connections.
+
 Native reads support the selected service ring. Flow administration and Dataverse environment discovery are currently verified only on the `prod` service ring; an affected dependency on another ring is reported as incomplete, never passed. The service ring is distinct from the agent's Dev/Test/Prod deployment realm. All calls are read-only. This checkpoint validates bindings and connection existence, not Workday credentials or business operations.
 
 `--scope environment` also accepts these standalone target flags. Other scope checks retain their own prerequisites. Configured runs without explicit agent IDs remain supported, including their existing optional release-commit comparison.
@@ -219,7 +224,7 @@ Version-tagged flat projections retain their tenant and sidecar values when
 those fields are absent from nested scope; explicitly supplied canonical
 fields still take precedence over aliases.
 
-**DA full-contract implementation (in progress):**
+**DA full assessment:**
 
 For an explicitly selected DA, standalone `--scope full` now compiles an
 exact-agent, read-only plan independently of whether Dataverse is configured.
@@ -249,6 +254,10 @@ custom-engine-owned results retains its existing behavior.
 An optional DA release-commit pin is checked in the verified assessment realm,
 not a legacy ALM realm alias or an implicit Dev default. The returned ALM
 agent ID, schema and realm must match before comparing its commit.
+Evidence freshness binds the inspected native snapshot, connection bindings and
+ALM metadata, not the implementation bodies or versions of invoked flows.
+Changes to those flow implementations are not independently version-pinned by
+this assessment.
 
 `scripts/flightcheck/da_contract.py` defines the DA coverage inventory and
 pure applicability planning. It separates existing evaluators, observations,
@@ -275,6 +284,14 @@ unresolved. The current catalog has 149 definitions: the original 142, four
 earlier additions, an explicit DA handoff requirement, selected-agent integration
 discovery and maker Workday Test-pane validation. These are definitions, not
 149 executable or mandatory deployment checks.
+
+**Current readiness limit:** some required features have no production
+applicability or approved check path yet. The full CLI therefore cannot reach
+deployment `READY` with the complete current catalog, even after all emitted
+manual reviews are completed. `--da-evidence` records reviewed evidence; it
+cannot declare those features applicable or supply missing checks. `READY`
+classifier tests using a reduced catalog do not establish a complete production
+sign-off path.
 
 DA full first verifies exact-agent access/content, then discovers active direct
 and invoked-flow dependencies and recomposes the selected integration plan.
@@ -426,9 +443,7 @@ references. Telemetry adds only readiness enums and coverage counts, not evidenc
 details, references or revision fingerprints. Approval is scoped to the selected
 realm, not cross-realm promotion or organizational GA sign-off.
 
-This remains an incremental implementation; integrated verification is the
-remaining work package. DA full
-rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
+DA full rejects `--alm-import-probe` and `--runtime-reachability`; these remain separate,
 explicitly authorized operations.
 
 **Legacy/custom-engine checks (not the DA full execution list):**

@@ -639,14 +639,16 @@ def test_admin_visible_connection_is_not_reported_missing(dependency_case):
     assert row.remediation == ""
 
 
-def test_additional_same_connector_connection_is_advisory_only(dependency_case):
+@pytest.mark.parametrize("da_full", [False, True])
+def test_additional_same_connector_connection_is_advisory_only(dependency_case, da_full):
+    dependency_case.runner.da_full_assessment = da_full
     extra = deepcopy(dependency_case.inventory[0])
     extra["name"] = "another-agents-connection"
     dependency_case.inventory.append(extra)
 
     row = _summary(dependency_case)
 
-    assert row.status == "Warning"
+    assert row.status == ("Passed" if da_full else "Warning")
     assert "1 additional connection(s)" in row.result
     assert "may serve other agents" in row.result
     assert row.remediation == ""

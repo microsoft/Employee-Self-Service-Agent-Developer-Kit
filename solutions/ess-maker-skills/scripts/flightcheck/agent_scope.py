@@ -30,6 +30,9 @@ def configured_agents(config: dict[str, Any]) -> list[dict[str, Any]]:
         raw_id = agent.get("botId")
         bot_id = raw_id.strip().casefold() if isinstance(raw_id, str) else ""
         if (slug and slug in known_slugs) or (bot_id and bot_id in known_ids):
+            # A canonical bot-ID alias still reserves its represented slug.
+            if slug:
+                known_slugs.add(slug)
             continue
         agents.append(agent)
         if slug:

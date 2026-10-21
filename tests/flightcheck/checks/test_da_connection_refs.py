@@ -78,6 +78,27 @@ def test_agent_bot_ids_does_not_substitute_stale_same_slug(canonical_id):
     assert reader.agent_bot_ids(config) == expected
 
 
+@pytest.mark.parametrize("alias_bot_id", [
+    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+])
+def test_duplicate_canonical_bot_id_reserves_stale_compatibility_slug(alias_bot_id):
+    canonical_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    config = {
+        "agents": [
+            {"slug": "hr", "botId": canonical_id},
+            {"slug": "hr-old", "botId": alias_bot_id},
+        ],
+        "agent": {
+            "slug": "hr-old",
+            "botId": "00000000-0000-0000-0000-000000009999",
+            "expectedGrsCommitSha": "stale",
+        },
+    }
+
+    assert reader.agent_bot_ids(config) == [canonical_id]
+
+
 def test_agent_bot_ids_retains_distinct_compatibility_subject():
     config = {
         "agents": [{"slug": "hr", "botId": "Current-ID"}],
